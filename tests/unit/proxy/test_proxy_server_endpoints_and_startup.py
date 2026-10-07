@@ -12071,7 +12071,7 @@ def _reset_runtime_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _runtime_callback_names() -> frozenset[str]:
     manager = litellm.logging_callback_manager
-    return frozenset(manager._get_callback_string(callback) for callback in manager._get_all_callbacks())
+    return frozenset(manager._get_callback_string(callback) for callback in manager.get_all_callbacks())
 
 
 @pytest.mark.parametrize("setting_key", ["success_callback", "failure_callback", "callbacks"])
@@ -12094,10 +12094,10 @@ def test_db_config_sync_unregisters_a_callback_the_stored_config_no_longer_lists
 
 def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.MonkeyPatch):
     import litellm.proxy.proxy_server as ps
-    from litellm.utils import _add_custom_logger_callback_to_specific_event
+    from litellm.utils import add_custom_logger_callback_to_specific_event
 
     _reset_runtime_callbacks(monkeypatch)
-    _add_custom_logger_callback_to_specific_event("langfuse_otel", "success")
+    add_custom_logger_callback_to_specific_event("langfuse_otel", "success")
     litellm.logging_callback_manager.add_litellm_success_callback("helicone")
     pc = ps.ProxyConfig()
 
@@ -12140,7 +12140,7 @@ def test_db_config_sync_registers_otel_v2_arize_next_to_otel(
     import litellm.proxy.proxy_server as ps
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
-    from litellm.utils import _add_custom_logger_callback_to_specific_event
+    from litellm.utils import add_custom_logger_callback_to_specific_event
 
     _reset_runtime_callbacks(monkeypatch)
     for extra_list in ("input_callback", "service_callback"):
@@ -12154,7 +12154,7 @@ def test_db_config_sync_registers_otel_v2_arize_next_to_otel(
     is_otel_v2_enabled.cache_clear()
     try:
         getattr(litellm.logging_callback_manager, f"add_litellm_{event}_callback")("helicone")
-        _add_custom_logger_callback_to_specific_event("otel", event)
+        add_custom_logger_callback_to_specific_event("otel", event)
         pc = ps.ProxyConfig()
         for _ in range(2):
             pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: ["arize"]}})
@@ -15342,7 +15342,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
     from litellm import Router
     from tests.unit.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
 
-    claude_tokenizer: Final = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+    claude_tokenizer: Final = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
 
     class SlowHubTokenizer:
         @staticmethod
@@ -15383,7 +15383,7 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
     from litellm import Router
     from litellm.types.router import DeploymentTypedDict
 
-    claude_tokenizer: Final[Tokenizer] = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+    claude_tokenizer: Final[Tokenizer] = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
     from_pretrained: Final = MagicMock(return_value=claude_tokenizer)
 
     def deployment(model_name: str, revision: str, auth_token: str | None) -> DeploymentTypedDict:

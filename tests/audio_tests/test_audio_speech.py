@@ -22,7 +22,7 @@ import litellm
 
 
 async def _run_audio_speech_litellm(sync_mode, model, api_base, api_key):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     speech_file_path = Path(__file__).parent / "speech.mp3"
 
     if sync_mode:
@@ -326,7 +326,7 @@ async def test_azure_ava_tts_async():
     """
     Test Azure AVA (Cognitive Services) Text-to-Speech with real API request.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     api_key = os.getenv("AZURE_TTS_API_KEY")
     api_base = os.getenv("AZURE_TTS_API_BASE")
 
@@ -380,7 +380,7 @@ async def test_runwayml_tts_async():
     """
     Test RunwayML Text-to-Speech with real API request.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     api_key = os.getenv("RUNWAYML_API_KEY")
     api_base = os.getenv("RUNWAYML_API_BASE")
 

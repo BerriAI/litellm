@@ -451,23 +451,35 @@ export function groupConversation(items: readonly ConversationItem[], spans: rea
   return build();
 }
 
-export function conversationWarnings(details: ReadonlyMap<string, SpanDetail>, complete: boolean): string[] {
+export function conversationWarnings(
+  details: ReadonlyMap<string, SpanDetail>,
+  complete: boolean,
+  toolSpanIds: ReadonlySet<string> = new Set(),
+): string[] {
   const warnings = [
     ...claudeCaptureWarnings(details),
     ...[...details.values()].flatMap((detail) =>
       detail.attributes["lens.capture.warning"] ? [detail.attributes["lens.capture.warning"]] : [],
     ),
   ];
-  if (
-    complete &&
-    ![...details.values()].some((detail) => detail.attributes["event.name"] === "assistant_response") &&
-    [...details.values()].some(
-      (detail) =>
-        detail.attributes["span.type"] === "llm_request" &&
-        !detail.output &&
-        !messages(detail.output, detail.output_ui, "assistant").length,
-    )
-  ) {
+  const hasAssistantText = [...details.values()].some(
+    (detail) =>
+      !toolSpanIds.has(detail.span_id) &&
+      messages(detail.output, detail.output_ui, "assistant").some(
+        (message) => message.role === "assistant" && message.content.trim(),
+      ),
+  );
+  const hasReplyEvent = [...details.values()].some(
+    (detail) => detail.attributes["event.name"] === "assistant_response",
+  );
+  const hasEmptyRequest = [...details.values()].some(
+    (detail) =>
+      detail.attributes["span.type"] === "llm_request" &&
+      !detail.output &&
+      !messages(detail.output, detail.output_ui, "assistant").length,
+  );
+  const missingReplies = !hasAssistantText && !hasReplyEvent && hasEmptyRequest;
+  if (complete && missingReplies) {
     warnings.push(
       "This Claude Code trace has no recorded assistant replies. Enable assistant response logs for future sessions.",
     );

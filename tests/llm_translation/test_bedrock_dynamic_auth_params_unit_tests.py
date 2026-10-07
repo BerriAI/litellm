@@ -15,7 +15,7 @@ from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
 
 def test_bedrock_completion_with_region_name():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = HTTPHandler()
 
     with patch.object(client, "post") as mock_post:
@@ -71,7 +71,7 @@ def test_bedrock_completion_with_region_name():
 
 
 def test_bedrock_completion_with_dynamic_authentication_params():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = HTTPHandler()
 
     with patch.object(client, "post") as mock_post:
@@ -119,7 +119,7 @@ def test_bedrock_completion_with_dynamic_authentication_params():
 
 
 def test_bedrock_completion_with_dynamic_bedrock_runtime_endpoint():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = HTTPHandler()
 
     with patch.object(client, "post") as mock_post:
