@@ -197,7 +197,7 @@ def _rust_responses_websocket_enabled(
     return decision(context) is not Decision.PYTHON
 
 
-from .http_handler import get_shared_realtime_ssl_context
+from .http_handler import get_shared_realtime_ssl_context, realtime_ssl_for_url
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -258,7 +258,7 @@ class _WebsocketsModule(Protocol):
         *,
         additional_headers: Mapping[str, str],
         max_size: int | None,
-        ssl: bool | str | ssl.SSLContext,
+        ssl: bool | str | ssl.SSLContext | None,
         open_timeout: float,
     ) -> Awaitable["ClientConnection"]: ...
 
@@ -6257,7 +6257,7 @@ class BaseLLMHTTPHandler:
         websockets_module: _WebsocketsModule,
         url: str,
         headers: dict,
-        ssl_context: bool | str | ssl.SSLContext,
+        ssl_context: bool | str | ssl.SSLContext | None,
         *,
         open_timeout: float = 8.0,
         max_attempts: int = 3,
@@ -6329,12 +6329,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            ssl_context = get_shared_realtime_ssl_context()
-            if url.startswith("wss://") and ssl_context is False:
-                # Keep TLS for wss:// while honoring SSL_VERIFY=False semantics.
-                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
+            ssl_context: Final = realtime_ssl_for_url(url)
             provider_backend: Final = await provider_config.open_backend(url, headers)
             backend_ws: Final = (
                 provider_backend

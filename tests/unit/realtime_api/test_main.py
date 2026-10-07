@@ -651,3 +651,40 @@ async def test_arealtime_drops_model_from_the_upstream_url_only_for_transcriptio
             query_params=client_query_params,
         )
     assert connect.url == expected_backend_url
+
+
+async def _vertex_health_check_connect_for(monkeypatch, api_base: str | None) -> _CapturingConnect:
+    async def mock_token_resolver(**kwargs):
+        return "access-token", kwargs["project_id"]
+
+    monkeypatch.setattr(realtime_main, "vertex_access_token_resolver", mock_token_resolver)
+    connect: Final = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gemini-3.8-live",
+            custom_llm_provider="vertex_ai",
+            api_key=None,
+            api_base=api_base,
+            model_params={
+                "vertex_project": "proj-1",
+                "vertex_credentials": "fake-credentials",
+                "vertex_location": "us",
+            },
+        )
+    return connect
+
+
+@pytest.mark.asyncio
+async def test_vertex_health_check_sends_no_tls_argument_to_a_plain_ws_api_base(monkeypatch):
+    connect: Final = await _vertex_health_check_connect_for(monkeypatch, "http://127.0.0.1:8080")
+    assert connect.url == "ws://127.0.0.1:8080/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    assert connect.kwargs["ssl"] is None
+
+
+@pytest.mark.asyncio
+async def test_vertex_health_check_keeps_tls_for_the_multi_region_host(monkeypatch):
+    connect: Final = await _vertex_health_check_connect_for(monkeypatch, None)
+    assert connect.url == (
+        "wss://aiplatform.us.rep.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    )
+    assert connect.kwargs["ssl"] is not None
