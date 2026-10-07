@@ -1,9 +1,12 @@
 import asyncio
+import importlib
 import json
+from types import ModuleType
 from typing import Final
 from unittest.mock import Mock
 
 import httpx
+import openai
 import pytest
 from openai import AsyncOpenAI, OpenAI
 
@@ -171,6 +174,62 @@ async def test_acompletion_streams_text_deltas_over_injected_transport():
             part.choices[0].finish_reason for part in reversed(chunks) if part.choices and part.choices[0].finish_reason
         )
         assert last_finish == "stop"
+
+
+def _sdk_httpx() -> ModuleType:
+    return importlib.import_module(openai.DefaultAsyncHttpxClient.__mro__[1].__module__)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_ends_a_finished_stream_cleanly_when_the_connection_drops_before_done():
+    """The body drops after the finish chunk and before [DONE], raised by whichever httpx the SDK
+    runs on (httpx2 on openai 3, which 3.25+ wraps in APIConnectionError); the stream still ends cleanly."""
+    sdk_httpx: Final = _sdk_httpx()
+
+    def chunk(delta: dict, finish: str | None) -> bytes:
+        body: Final = {
+            "id": "chatcmpl-drop",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "gpt-5.6",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+        }
+        return f"data: {json.dumps(body)}\n\n".encode()
+
+    class DroppedAfterFinish(sdk_httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield chunk({"role": "assistant", "content": "Hel"}, None)
+            yield chunk({"content": "lo"}, "stop")
+            raise sdk_httpx.ReadError("peer reset the connection before [DONE]")
+
+    def respond(request):
+        return sdk_httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=DroppedAfterFinish())
+
+    async with sdk_httpx.AsyncClient(transport=sdk_httpx.MockTransport(respond)) as http_client:
+        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
+        stream: Final = await litellm.acompletion(
+            model="openai/gpt-5.6",
+            api_key="transport-only",
+            client=client,
+            messages=[{"role": "user", "content": "dropped-stream-request"}],
+            stream=True,
+            num_retries=0,
+            max_retries=0,
+        )
+        chunks: Final = []
+
+        async def drain() -> None:
+            async for part in stream:
+                chunks.append(part)
+
+        await asyncio.wait_for(drain(), timeout=10)
+        assert (
+            "".join(part.choices[0].delta.content or "" for part in chunks if part.choices and part.choices[0].delta)
+            == "Hello"
+        )
+        assert [part.choices[0].finish_reason for part in chunks if part.choices and part.choices[0].finish_reason] == [
+            "stop"
+        ]
 
 
 @pytest.mark.asyncio

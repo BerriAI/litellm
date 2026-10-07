@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.custom_httpx.transport_errors import TransportErrorKind, classify_transport_error
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
@@ -2085,23 +2086,16 @@ class CustomStreamWrapper:
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             return await self._finalize_completed_stream(cache_hit=cache_hit)
-        except httpx.TimeoutException as e:  # if httpx read timeout error occues
-            traceback_exception = traceback.format_exc()
-            ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
-            traceback_exception += f"\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
-            if self.logging_obj is not None:
-                self._record_partial_usage_for_failure()
-                ## LOGGING
-                asyncio.create_task(
-                    self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
-                )
-            self._handle_stream_fallback_error(e)
-        except (httpx.ReadError, httpx.RemoteProtocolError) as e:
-            if self.received_finish_reason is None:
-                self._log_stream_failure_and_raise(e)
-            return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
-            self._log_stream_failure_and_raise(e)
+            match classify_transport_error(e):
+                case TransportErrorKind.TIMEOUT:
+                    self._log_stream_failure_and_raise(
+                        e, traceback_note=f"\nLiteLLM Default Request Timeout - {litellm.request_timeout}"
+                    )
+                case TransportErrorKind.DROPPED_CONNECTION if self.received_finish_reason is not None:
+                    return await self._finalize_completed_stream(cache_hit=cache_hit)
+                case TransportErrorKind.DROPPED_CONNECTION | None:
+                    self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":
         if self.sent_last_chunk is True:
@@ -2214,8 +2208,8 @@ class CustomStreamWrapper:
             # relies on aclose() or the best-effort __del__ guard.
             return processed_chunk
 
-    def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
-        traceback_exception: Final = traceback.format_exc()
+    def _log_stream_failure_and_raise(self, e: Exception, traceback_note: str = "") -> NoReturn:
+        traceback_exception: Final = traceback.format_exc() + traceback_note
         if self.logging_obj is not None:
             self._record_partial_usage_for_failure()
             ## LOGGING
