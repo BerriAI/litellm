@@ -188,13 +188,26 @@ def test_positional_answers_come_back_in_question_order_without_a_name() -> None
         {"type": "predicate", "name": None, "probability": 0.25},
         {"type": "predicate", "name": "q0", "probability": 0.75},
     ]
-    assert response.usage is not None
     assert response.usage.model_dump(mode="json") == {
         **_EXPECTED_USAGE,
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
     }
+
+
+def test_a_reply_without_a_model_reports_the_requested_model() -> None:
+    system_one: Final = SYSTEM_ONE_RESPONSE_ADAPTER.validate_python(
+        {k: v for k, v in _SYSTEM_ONE_RESPONSE.items() if k != "model"}
+    )
+
+    request: Final = _REQUEST_ADAPTER.validate_python(
+        {"model": "typesafe/jev-1.13.0", "input": _INPUT, "questions": _QUESTIONS}
+    )
+
+    response: Final = decisions_response(system_one, request, "typesafe")
+
+    assert response.model == "typesafe/jev-1.13.0"
 
 
 def test_a_choice_the_provider_left_out_of_probabilities_is_reported_at_zero() -> None:

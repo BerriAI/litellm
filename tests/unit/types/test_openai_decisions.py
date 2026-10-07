@@ -96,6 +96,22 @@ def test_requests_off_the_spec_are_rejected(field: str, value: object) -> None:
         _REQUEST_ADAPTER.validate_python({**_REQUEST, field: value})
 
 
+_OFF_SPEC_RESPONSE: Final[tuple[str, ...]] = ("model", "usage")
+
+
+@pytest.mark.parametrize("field", _OFF_SPEC_RESPONSE)
+def test_responses_missing_a_required_field_are_rejected(field: str) -> None:
+    with pytest.raises(ValidationError):
+        _RESPONSE_ADAPTER.validate_python({k: v for k, v in _RESPONSE.items() if k != field})
+
+
+def test_usage_without_token_details_is_rejected() -> None:
+    usage: Final = {"input_tokens": 120, "output_tokens": 12, "total_tokens": 132}
+
+    with pytest.raises(ValidationError):
+        _RESPONSE_ADAPTER.validate_python({**_RESPONSE, "usage": usage})
+
+
 def test_hidden_params_live_outside_the_wire_body() -> None:
     response: Final = _RESPONSE_ADAPTER.validate_python(_RESPONSE)
 

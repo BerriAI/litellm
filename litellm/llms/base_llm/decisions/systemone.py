@@ -22,6 +22,8 @@ from litellm.types.openai_decisions import (
     DecisionInputMessage,
     DecisionInputPart,
     DecisionQuestion,
+    DecisionsInputTokensDetails,
+    DecisionsOutputTokensDetails,
     DecisionsRequest,
     DecisionsResponse,
     DecisionsUsage,
@@ -198,14 +200,16 @@ def decisions_response(
     keys: Final = question_keys(request.questions, custom_llm_provider)
     usage: Final = system_one.usage if system_one.usage is not None else SystemOneUsage()
     return DecisionsResponse(
-        model=system_one.model,
+        model=system_one.model if system_one.model is not None else request.model,
         answers=[
             _answer_for(key, question, system_one.answers, custom_llm_provider)
             for key, question in zip(keys, request.questions, strict=True)
         ],
         usage=DecisionsUsage(
             input_tokens=usage.input_tokens,
+            input_tokens_details=DecisionsInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
             output_tokens=usage.output_tokens,
+            output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
             total_tokens=usage.input_tokens + usage.output_tokens,
         ),
     )
