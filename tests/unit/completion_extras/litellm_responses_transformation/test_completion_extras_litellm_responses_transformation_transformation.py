@@ -4642,3 +4642,67 @@ def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_br
     content = response[0]["content"]
     assert [block["type"] for block in content] == ["input_text", "input_text"]
     assert content[1]["prompt_cache_breakpoint"] == breakpoint_marker
+
+
+_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS: Final = (
+    {"type": "text", "text": "a string marker", "prompt_cache_breakpoint": "explicit"},
+    {"type": "text", "text": "an unknown mode", "prompt_cache_breakpoint": {"mode": "bogus"}},
+    {
+        "type": "input_audio",
+        "input_audio": {"data": "Zm9v", "format": "wav"},
+        "prompt_cache_breakpoint": ["explicit"],
+    },
+    {"type": "text", "text": "an extra key", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+    {"type": "text", "text": "well formed", "prompt_cache_breakpoint": {"mode": "explicit"}},
+)
+
+
+def test_convert_chat_completion_messages_to_responses_api_drops_malformed_prompt_cache_breakpoint_under_drop_params():
+    """Under drop_params a marker the Responses API would reject is dropped like any other unsupported value.
+
+    A well-formed marker still reaches the wire, and an extra key is dropped from an otherwise valid one.
+    """
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": list(_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS)}]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages, drop_params=True)
+
+    content = response[0]["content"]
+    assert [block.get("prompt_cache_breakpoint") for block in content] == [
+        None,
+        None,
+        None,
+        {"mode": "explicit"},
+        {"mode": "explicit"},
+    ]
+    assert all("prompt_cache_breakpoint" not in block for block in content[:3])
+
+
+def test_convert_chat_completion_messages_to_responses_api_keeps_malformed_prompt_cache_breakpoint_by_default():
+    """Without drop_params every marker goes out as written, and the provider judges a malformed one."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": list(_HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS)}]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    content = response[0]["content"]
+    assert [block["prompt_cache_breakpoint"] for block in content] == [
+        block["prompt_cache_breakpoint"] for block in _HAND_WRITTEN_PROMPT_CACHE_BREAKPOINT_BLOCKS
+    ]
+
+
+def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_breakpoint_carry():
+    """The per-request drop_params flag travels in litellm_params and has to reach the content converter."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": "explicit"}]}]
+
+    result = handler.transform_request(
+        model="gpt-6.1-sol",
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert "prompt_cache_breakpoint" not in result["input"][0]["content"][0]
