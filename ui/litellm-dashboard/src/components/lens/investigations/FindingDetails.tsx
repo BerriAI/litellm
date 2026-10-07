@@ -7,6 +7,7 @@ import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
+import { AddToDatasetButton } from "../datasets/AddToDatasetDialog";
 import { evidenceTarget } from "../model/findings";
 import { runTime } from "../model/format";
 import { findingAgents, findingKey, type OwnedFinding, sampledExecutions } from "../model/inbox";
@@ -19,6 +20,7 @@ export const ownedFindingKey = (owned: OwnedFinding): string => findingKey(owned
 
 export interface FindingDetailsProps {
   readonly finding: Finding;
+  readonly lensId?: string;
   readonly agents?: readonly string[];
   readonly sampledRuns: Sample["executions"];
   readonly readOnly: boolean;
@@ -29,6 +31,7 @@ export interface FindingDetailsProps {
 
 export function FindingDetails({
   finding,
+  lensId,
   agents = [],
   sampledRuns,
   readOnly,
@@ -58,6 +61,14 @@ export function FindingDetails({
             Found across {finding.investigation_runs.length} investigation{" "}
             {finding.investigation_runs.length === 1 ? "run" : "runs"}
           </p>
+        )}
+        {lensId && finding.evidence.length > 0 && (
+          <AddToDatasetButton
+            sources={[{ kind: "finding", lens_id: lensId, finding_ids: [finding.id] }]}
+            agentName={agents[0]}
+            label="Add evidence to dataset"
+            className="mt-1 self-start"
+          />
         )}
       </header>
       <div className="space-y-6 p-4">
@@ -184,6 +195,7 @@ export function FindingPanelBody({
         <FindingDetails
           key={ownedFindingKey(owned)}
           finding={owned.finding}
+          lensId={owned.lens.id}
           agents={findingAgents(owned.lens, owned.finding)}
           sampledRuns={sampledRuns ?? sampledExecutions(owned.lens)}
           readOnly={readOnly}

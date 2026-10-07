@@ -127,12 +127,12 @@ def _get_guardrails_list_response(
     """
     Helper function to get the guardrails list response
     """
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
 
     guardrail_configs: Final[list[GuardrailInfoResponse]] = []
     for guardrail in guardrails_config:
         litellm_params = guardrail.get("litellm_params") or {}
-        masked_params = _get_masked_values(
+        masked_params = get_masked_values(
             litellm_params,
             unmasked_length=4,
             number_of_asterisks=4,
@@ -241,7 +241,7 @@ async def list_guardrails_v2(
     }
     ```
     """
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
 
@@ -277,13 +277,13 @@ async def list_guardrails_v2(
                 if isinstance(litellm_params, LitellmParams)
                 else litellm_params
             ) or {}
-            masked_litellm_params_dict = _get_masked_values(
+            masked_litellm_params_dict = get_masked_values(
                 litellm_params_dict,
                 unmasked_length=4,
                 number_of_asterisks=4,
             )
             masked_litellm_params = (
-                BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+                BaseLitellmParams.model_validate(masked_litellm_params_dict) if masked_litellm_params_dict else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -318,13 +318,15 @@ async def list_guardrails_v2(
                 if isinstance(in_memory_litellm_params_raw, LitellmParams)
                 else in_memory_litellm_params_raw
             ) or {}
-            masked_in_memory_litellm_params = _get_masked_values(
+            masked_in_memory_litellm_params = get_masked_values(
                 in_memory_litellm_params_dict,
                 unmasked_length=4,
                 number_of_asterisks=4,
             )
             masked_in_memory_litellm_params_typed = (
-                BaseLitellmParams(**masked_in_memory_litellm_params) if masked_in_memory_litellm_params else None
+                BaseLitellmParams.model_validate(masked_in_memory_litellm_params)
+                if masked_in_memory_litellm_params
+                else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -866,12 +868,12 @@ async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> list[str]:
 
 
 def _row_to_submission_item(row: "LiteLLM_GuardrailsTable") -> GuardrailSubmissionItem:
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
 
     guardrail_info: Final = _parse_json_field(row.guardrail_info) or {}
     team_guardrail: Final = row.team_id is not None
     raw_params: Final = decrypt_guardrail_litellm_params(_parse_json_field(row.litellm_params) or {})
-    masked_params: Final = _get_masked_values(raw_params, unmasked_length=4, number_of_asterisks=4)
+    masked_params: Final = get_masked_values(raw_params, unmasked_length=4, number_of_asterisks=4)
     return GuardrailSubmissionItem(
         guardrail_id=row.guardrail_id,
         guardrail_name=row.guardrail_name,
@@ -1366,7 +1368,7 @@ async def get_guardrail_info(guardrail_id: str):
     ```
     """
 
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
     from litellm.proxy.proxy_server import prisma_client
     from litellm.types.guardrails import GUARDRAIL_DEFINITION_LOCATION
@@ -1396,12 +1398,14 @@ async def get_guardrail_info(guardrail_id: str):
             if isinstance(litellm_params, LitellmParams)
             else litellm_params
         ) or {}
-        masked_litellm_params_dict: Final = _get_masked_values(
+        masked_litellm_params_dict: Final = get_masked_values(
             result_litellm_params_dict,
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        masked_litellm_params = BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+        masked_litellm_params = (
+            BaseLitellmParams.model_validate(masked_litellm_params_dict) if masked_litellm_params_dict else None
+        )
 
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),

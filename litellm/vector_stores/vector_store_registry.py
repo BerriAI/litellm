@@ -86,7 +86,7 @@ class VectorStoreIndexRegistry:
     #########################################################
 
     @staticmethod
-    async def _get_vector_store_indexes_from_db(
+    async def get_vector_store_indexes_from_db(
         prisma_client: PrismaClient | None,
     ) -> list[LiteLLM_ManagedVectorStoreIndex]:
         """
@@ -104,6 +104,8 @@ class VectorStoreIndexRegistry:
                 )
                 vector_stores_from_db.append(_litellm_managed_vector_store)
         return vector_stores_from_db
+
+    _get_vector_store_indexes_from_db = get_vector_store_indexes_from_db
 
 
 class VectorStoreRegistry:
@@ -242,7 +244,7 @@ class VectorStoreRegistry:
         # Fall back to database if not found in memory
         if prisma_client is not None:
             try:
-                vector_stores_from_db: Final = await self._get_vector_stores_from_db(prisma_client=prisma_client)
+                vector_stores_from_db: Final = await self.get_vector_stores_from_db(prisma_client=prisma_client)
                 for db_vector_store in vector_stores_from_db:
                     if db_vector_store.get("vector_store_id") == vector_store_id:
                         # Add to in-memory registry for future use
@@ -499,7 +501,7 @@ class VectorStoreRegistry:
     #########################################################
 
     @staticmethod
-    async def _get_vector_stores_from_db(
+    async def get_vector_stores_from_db(
         prisma_client: PrismaClient | None,
     ) -> list[LiteLLM_ManagedVectorStore]:
         """
@@ -515,6 +517,8 @@ class VectorStoreRegistry:
                 _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(**_dict_vector_store)
                 vector_stores_from_db.append(_litellm_managed_vector_store)
         return vector_stores_from_db
+
+    _get_vector_stores_from_db = get_vector_stores_from_db
 
     def get_credentials_for_vector_store(self, vector_store_id: str) -> dict[str, object]:
         """

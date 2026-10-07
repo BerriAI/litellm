@@ -253,7 +253,7 @@ def test_get_model_info_custom_model_router():
     from litellm import Router
     from litellm import get_model_info
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     router = Router(
         model_list=[

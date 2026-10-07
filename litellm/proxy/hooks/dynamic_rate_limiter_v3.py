@@ -698,7 +698,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         - priority_model: Priority-specific token tracking
         """
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
@@ -709,7 +709,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         try:
             verbose_proxy_logger.debug("INSIDE dynamic rate limiter ASYNC SUCCESS LOGGING")
 
-            litellm_parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            litellm_parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
 
             # Get metadata from standard_logging_object
             standard_logging_object: Final = kwargs.get("standard_logging_object") or {}

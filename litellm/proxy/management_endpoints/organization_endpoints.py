@@ -76,7 +76,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
-from litellm.utils import _update_dictionary
+from litellm.utils import update_dictionary
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -770,7 +770,7 @@ async def update_organization(
         updated_metadata: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(
             updated_organization_row_json.get("metadata", {})
         )
-        merged_metadata: Final[Mapping[str, object]] = _update_dictionary(
+        merged_metadata: Final[Mapping[str, object]] = update_dictionary(
             existing_dict=cast(  # cast-ok: prisma de-serializes a Json column to the plain python dict it stores
                 "dict[str, object]", existing_metadata
             ).copy(),

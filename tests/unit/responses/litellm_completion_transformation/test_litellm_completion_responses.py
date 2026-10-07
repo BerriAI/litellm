@@ -1502,7 +1502,7 @@ class TestToolChoiceTransformation:
     def test_transform_tool_choice_for_responses_api_response(
         self, request_tool_choice: object, expected: str | dict[str, str]
     ) -> None:
-        result: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+        result: Final = LiteLLMCompletionResponsesConfig.transform_tool_choice_for_responses_api_response(
             request_tool_choice
         )
         assert result == expected
@@ -2966,7 +2966,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3008,7 +3008,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3033,7 +3033,7 @@ class TestUsageTransformation:
             ),
         )
 
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=usage
         )
 
@@ -3060,7 +3060,7 @@ class TestUsageTransformation:
             completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=10),
         )
 
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=usage
         )
         details = response_usage.input_tokens_details
@@ -3071,7 +3071,7 @@ class TestUsageTransformation:
 
         from litellm.responses.utils import ResponseAPILoggingUtils
 
-        back = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response_usage.model_dump())
+        back = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response_usage.model_dump())
         assert back.prompt_tokens_details.image_tokens == 150
         assert back.prompt_tokens_details.video_tokens == 50
 
@@ -3104,7 +3104,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3147,7 +3147,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3195,7 +3195,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3229,7 +3229,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3272,7 +3272,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3312,7 +3312,7 @@ class TestUsageTransformation:
             ],
         )
 
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3348,7 +3348,7 @@ class TestUsageTransformation:
             ],
         )
 
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3381,7 +3381,7 @@ class TestUsageTransformation:
             ],
         )
 
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3555,7 +3555,7 @@ class TestStreamingIDConsistency:
         mock_stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
         mock_logging_obj = Mock()
         mock_stream_wrapper.logging_obj = mock_logging_obj
-        mock_logging_obj._response_cost_calculator = Mock(return_value=0.001)
+        mock_logging_obj.response_cost_calculator = Mock(return_value=0.001)
 
         # Create the streaming iterator
         iterator = LiteLLMCompletionStreamingIterator(
@@ -3764,7 +3764,7 @@ class TestCompletedResponseLatchedOnStreamEnd:
 
         mock_wrapper = Mock(spec=litellm.CustomStreamWrapper)
         mock_wrapper.logging_obj = Mock()
-        mock_wrapper.logging_obj._response_cost_calculator = Mock(return_value=0.0)
+        mock_wrapper.logging_obj.response_cost_calculator = Mock(return_value=0.0)
         mock_wrapper.__aiter__ = Mock(return_value=mock_wrapper)
         mock_wrapper.__anext__ = Mock(side_effect=StopAsyncIteration)
 
