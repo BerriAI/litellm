@@ -373,8 +373,8 @@ def _gemini_peer(request: Request) -> Reply:
 
 _GEMINI: Final = "gemini/gemini-3.8-flash"
 _GEMINI_CACHE_WRITE: Final = [
-    ("GET", "/models/gemini-3.8-flash:cachedContents"),
-    ("POST", "/models/gemini-3.8-flash:cachedContents"),
+    ("GET", "/cachedContents"),
+    ("POST", "/cachedContents"),
     ("POST", "/models/gemini-3.8-flash:generateContent"),
 ]
 
