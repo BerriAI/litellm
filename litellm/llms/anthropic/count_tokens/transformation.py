@@ -13,9 +13,39 @@ from pydantic import JsonValue, TypeAdapter
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
+from litellm.types.llms.openai import ChatCompletionImageObject
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
+_IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
+
+
+def _count_image(block: JsonValue) -> JsonValue:
+    if not isinstance(block, dict) or block.get("type") != "image_url":
+        return block
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_image_obj
+
+    image_block: Final = _IMAGE_BLOCK.validate_python(block)
+    image_url: Final = image_block["image_url"]
+    source: Final = convert_to_anthropic_image_obj(
+        openai_image_url=image_url if isinstance(image_url, str) else image_url["url"],
+        format=image_url.get("format") if isinstance(image_url, dict) else None,
+    )
+    image: Final = _COUNT_REQUEST.validate_python({"type": "image", "source": source})
+    return {**{key: value for key, value in block.items() if key not in {"type", "image_url"}}, **image}
+
+
+def _count_block(block: JsonValue) -> JsonValue:
+    if not isinstance(block, dict) or block.get("type") != "tool_result":
+        return _count_image(block)
+    content: Final = block.get("content")
+    if not isinstance(content, list):
+        return block
+    return {**block, "content": [_count_image(part) for part in content]}
+
+
+def _count_content(content: JsonValue) -> JsonValue:
+    return [_count_block(block) for block in content] if isinstance(content, list) else content
 
 
 class AnthropicCountTokensConfig:
@@ -62,7 +92,7 @@ class AnthropicCountTokensConfig:
             MappingProxyType(
                 {
                     "model": model,
-                    "messages": messages,
+                    "messages": [{**message, "content": _count_content(message["content"])} for message in messages],
                     **MappingProxyType(
                         {key: value for key, value in (("system", system), ("tools", tools)) if value is not None}
                     ),
