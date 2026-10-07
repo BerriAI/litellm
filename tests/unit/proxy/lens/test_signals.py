@@ -131,6 +131,7 @@ class SignalDatabase:
     def __init__(self, config: SignalConfig) -> None:
         self.config: Final = config
         self.calls: Final[asyncio.Queue[str]] = asyncio.Queue()
+        self.claims: Final[asyncio.Queue[str]] = asyncio.Queue()
         self.saved: Final[asyncio.Queue[tuple[object, ...]]] = asyncio.Queue()
 
     async def query_raw(self, query: str, *args: object) -> object:
@@ -141,6 +142,7 @@ class SignalDatabase:
         if query.startswith('INSERT INTO "LiteLLM_LensTraceSignal"'):
             trace_id: Final = args[0]
             assert isinstance(trace_id, str)
+            await self.claims.put(trace_id)
             return (Row(data={"trace_id": trace_id}),)
         raise AssertionError(f"Unexpected query: {query}")
 
@@ -434,3 +436,46 @@ async def test_signal_tick_classifies_at_most_50_traces_and_persists_scores() ->
             error="",
         ),
     ) * 50
+
+
+@pytest.mark.asyncio
+async def test_signal_tick_skips_claims_and_writes_when_router_is_not_ready() -> None:
+    config: Final = SignalConfig(model="decision")
+    storage: Final = SignalStorage(
+        executions=(
+            ExecutionRow(
+                source="traces",
+                trace_id="trace",
+                team_id="",
+                name="trace",
+                start_time="",
+                span_count=1,
+                root_seen=1,
+                eligible=1,
+                selected=1,
+                selection_key="cursor",
+            ),
+        )
+    )
+    database: Final = SignalDatabase(config)
+
+    async def decide(
+        *,
+        model: str,
+        state: DecisionState,
+        questions: DecisionQuestions,
+        timeout: float,
+        metadata: Mapping[str, object],
+    ) -> object:
+        return {"answers": {}}
+
+    await run_signal_tick(
+        storage,
+        SignalRepository(database),
+        decide,
+        lambda: NOW,
+        router_ready=lambda: False,
+    )
+
+    assert database.claims.empty()
+    assert database.saved.empty()

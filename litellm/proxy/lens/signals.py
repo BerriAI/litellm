@@ -169,6 +169,7 @@ class DecisionsOutput(Record):
 DecisionState: TypeAlias = Mapping[str, object]
 DecisionQuestions: TypeAlias = Mapping[str, Mapping[str, str]]
 Clock: TypeAlias = Callable[[], datetime]
+RouterReady: TypeAlias = Callable[[], bool]
 
 
 class DecisionsCall(Protocol):
@@ -472,8 +473,9 @@ async def run_signal_tick(
     repository: SignalRepositoryProtocol | None,
     completion: DecisionsCall | None,
     clock: Clock,
+    router_ready: RouterReady = lambda: True,
 ) -> None:
-    if repository is None or completion is None:
+    if repository is None or completion is None or not router_ready():
         return
     now: Final = clock()
     config: Final = await repository.get_config()
@@ -505,12 +507,13 @@ async def run_signal_loop(
     repository: SignalRepositoryProtocol | None,
     completion: DecisionsCall | None,
     clock: Clock = lambda: datetime.now(timezone.utc),
+    router_ready: RouterReady = lambda: True,
 ) -> None:
     from litellm._logging import verbose_proxy_logger
 
     while True:
         try:
-            await run_signal_tick(storage, repository, completion, clock)
+            await run_signal_tick(storage, repository, completion, clock, router_ready)
         except Exception as error:
             verbose_proxy_logger.error("Lens signal tick failed: %s", redact_internal_details(str(error)))
         await asyncio.sleep(SIGNAL_INTERVAL_SECONDS)

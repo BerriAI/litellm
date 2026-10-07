@@ -583,7 +583,12 @@ from litellm.proxy.lens.dataset_endpoints import router as lens_dataset_router
 from litellm.proxy.lens.endpoints import router as lens_router
 from litellm.proxy.lens.repository import WriterDatabase
 from litellm.proxy.lens.signal_repository import SignalRepository
-from litellm.proxy.lens.signals import DecisionsCall, run_signal_loop
+from litellm.proxy.lens.signals import (
+    DecisionQuestions,
+    DecisionsCall,
+    DecisionState,
+    run_signal_loop,
+)
 from litellm.proxy.list_api.common import (
     ManagementProblem,
     problem_response,
@@ -1278,6 +1283,27 @@ async def _connect_to_count_stored_values() -> SupportsRawQueries:
     return client.writer_db
 
 
+async def _call_current_lens_signal_router(
+    *,
+    model: str,
+    state: DecisionState,
+    questions: DecisionQuestions,
+    timeout: float,
+    metadata: Mapping[str, object],
+) -> object:
+    current_router: Final = llm_router
+    if current_router is None:
+        raise RuntimeError("The proxy router is not initialized")
+    decisions: Final[DecisionsCall] = cast(DecisionsCall, current_router.adecisions)
+    return await decisions(
+        model=model,
+        state=state,
+        questions=questions,
+        timeout=timeout,
+        metadata=metadata,
+    )
+
+
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
@@ -1648,15 +1674,17 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
+        signal_completion: Final[DecisionsCall] = _call_current_lens_signal_router
         signal_task: Final = (
             asyncio.create_task(
                 run_signal_loop(
                     receiver.storage,
                     SignalRepository(WriterDatabase(writer_wrapper(prisma_client.db))),
-                    cast(DecisionsCall, llm_router.adecisions),
+                    signal_completion,
+                    router_ready=lambda: llm_router is not None,
                 )
             )
-            if receiver is not None and prisma_client is not None and llm_router is not None
+            if receiver is not None and prisma_client is not None
             else None
         )
 
