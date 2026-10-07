@@ -23,9 +23,12 @@ SIGNAL_RECLASSIFY_AFTER: Final = timedelta(minutes=5)
 SIGNAL_RETRY_FAILED_AFTER: Final = timedelta(minutes=30)
 SIGNAL_MAX_CONTENT_PAGES: Final = 3
 SIGNAL_PART_MAX_CHARS: Final = 2000
+SIGNAL_PART_HEAD_CHARS: Final = 800
+SIGNAL_PART_TAIL_CHARS: Final = 1200
 SIGNAL_TRANSCRIPT_MAX_CHARS: Final = 40000
 SIGNAL_TRANSCRIPT_HEAD_CHARS: Final = 15000
 SIGNAL_TRANSCRIPT_TAIL_CHARS: Final = 25000
+SIGNAL_MAX_SCAN_PAGES: Final = 10
 SIGNAL_TASK: Final = (
     "An AI agent run recorded as a trace. Judge only what the user and the agent said and did in these steps."
 )
@@ -86,10 +89,7 @@ class SignalConfig(Record):
         payload: Final = json.dumps(
             {
                 "model": self.model,
-                "signals": tuple(
-                    {"id": signal.id, "question": signal.question}
-                    for signal in self.signals
-                ),
+                "signals": tuple({"id": signal.id, "question": signal.question} for signal in self.signals),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -262,6 +262,14 @@ def _bounded_steps(steps: tuple[SignalStep, ...]) -> tuple[SignalStep, ...]:
     return (*head, marker, *tail)
 
 
+def _part_excerpt(content: str) -> str:
+    if len(content) <= SIGNAL_PART_MAX_CHARS:
+        return content
+    omitted: Final = len(content) - SIGNAL_PART_MAX_CHARS
+    marker: Final = f"\n[... {omitted} characters omitted ...]\n"
+    return f"{content[:SIGNAL_PART_HEAD_CHARS]}{marker}{content[-SIGNAL_PART_TAIL_CHARS:]}"
+
+
 async def _content_pages(
     reader: SourceReader,
     scope: Scope,
@@ -273,8 +281,7 @@ async def _content_pages(
         return ()
     content: Final = await reader.content(scope, execution, cursor)
     current: Final = tuple(
-        SignalStep(kind=part.kind, name=part.name, content=part.content[:SIGNAL_PART_MAX_CHARS])
-        for part in content.parts
+        SignalStep(kind=part.kind, name=part.name, content=_part_excerpt(part.content)) for part in content.parts
     )
     rest: Final = (
         await _content_pages(reader, scope, execution, content.next_cursor, pages_left - 1)
@@ -285,9 +292,7 @@ async def _content_pages(
 
 
 async def signal_state(reader: SourceReader, scope: Scope, execution: Execution) -> DecisionState:
-    steps: Final = _bounded_steps(
-        await _content_pages(reader, scope, execution, "", SIGNAL_MAX_CONTENT_PAGES)
-    )
+    steps: Final = _bounded_steps(await _content_pages(reader, scope, execution, "", SIGNAL_MAX_CONTENT_PAGES))
     return {
         "task": SIGNAL_TASK,
         "steps": tuple(step.model_dump(mode="json") for step in steps),
@@ -386,30 +391,6 @@ def trace_signals(
     )
 
 
-async def _claim_candidates(
-    repository: SignalRepositoryProtocol,
-    executions: tuple[Execution, ...],
-    config: SignalConfig,
-    now: datetime,
-    existing: Mapping[tuple[str, str], StoredTraceSignal],
-    limit: int,
-) -> tuple[tuple[Execution, datetime], ...]:
-    eligible: Final = tuple(
-        execution
-        for execution in executions
-        if candidate(execution, existing.get(signal_identity(execution)), config.key(), now)
-    )[:limit]
-    claimed_until: Final = now + SIGNAL_CLAIM_LEASE
-    results: Final = await asyncio.gather(
-        *(repository.claim(execution, config, claimed_until, now) for execution in eligible)
-    )
-    return tuple(
-        (execution, claimed_until)
-        for execution, was_claimed in zip(eligible, results, strict=True)
-        if was_claimed
-    )
-
-
 async def _process_claimed(
     classifier: SignalClassifier,
     repository: SignalRepositoryProtocol,
@@ -427,6 +408,65 @@ async def _process_claimed(
         verbose_proxy_logger.error("Lens signal result could not be stored: %s", redact_internal_details(str(error)))
 
 
+class _SignalScan:
+    def __init__(
+        self,
+        reader: SourceReader,
+        repository: SignalRepositoryProtocol,
+        scope: Scope,
+        config: SignalConfig,
+        now: datetime,
+        cursor: str,
+        limit: int,
+    ) -> None:
+        self.reader: Final = reader
+        self.repository: Final = repository
+        self.scope: Final = scope
+        self.config: Final = config
+        self.now: Final = now
+        self.cursor: str = cursor
+        self.limit: Final = limit
+        self.executions: tuple[Execution, ...] = ()
+        self.finished: bool = False
+
+    async def _read_page(self, start: int, end: int) -> tuple[tuple[Execution, ...], str | None]:
+        sample: Final = await self.reader.sample(
+            self.scope,
+            ActivitySelection(source="traces"),
+            start,
+            end,
+            page_size=SIGNAL_PAGE_SIZE,
+            cursor=self.cursor,
+        )
+        identities: Final = tuple(
+            TraceIdentity(trace_id=trace.trace_id, trace_ref=trace.trace_ref) for trace in sample.executions
+        )
+        existing_rows: Final = await self.repository.traces(identities)
+        existing: Final = MappingProxyType({signal_identity(row): row for row in existing_rows})
+        remaining: Final = self.limit - len(self.executions)
+        eligible: Final = tuple(
+            execution
+            for execution in sample.executions
+            if candidate(execution, existing.get(signal_identity(execution)), self.config.key(), self.now)
+        )[:remaining]
+        return eligible, sample.next_cursor
+
+    async def run(self) -> tuple[tuple[Execution, ...], str]:
+        start: Final = int((self.now - timedelta(hours=24)).timestamp() * 1000)
+        end: Final = int((self.now - timedelta(minutes=2)).timestamp() * 1000)
+        for _ in range(SIGNAL_MAX_SCAN_PAGES):
+            if self.finished or len(self.executions) >= self.limit:
+                break
+            eligible, next_cursor = await self._read_page(start, end)
+            self.executions = (*self.executions, *eligible)
+            if next_cursor is None:
+                self.cursor = ""
+                self.finished = True
+            else:
+                self.cursor = next_cursor
+        return self.executions, self.cursor
+
+
 async def _scan_pages(
     reader: SourceReader,
     repository: SignalRepositoryProtocol,
@@ -435,37 +475,11 @@ async def _scan_pages(
     now: datetime,
     cursor: str,
     remaining: int,
-) -> tuple[tuple[Execution, datetime], ...]:
+) -> tuple[tuple[Execution, ...], str]:
     if remaining <= 0:
-        return ()
-    start: Final = int((now - timedelta(hours=24)).timestamp() * 1000)
-    end: Final = int((now - timedelta(minutes=2)).timestamp() * 1000)
-    sample: Final = await reader.sample(
-        scope,
-        ActivitySelection(source="traces"),
-        start,
-        end,
-        page_size=SIGNAL_PAGE_SIZE,
-        cursor=cursor,
-    )
-    identities: Final = tuple(TraceIdentity(trace_id=trace.trace_id, trace_ref=trace.trace_ref) for trace in sample.executions)
-    existing_rows: Final = await repository.traces(identities)
-    existing: Final = MappingProxyType({signal_identity(row): row for row in existing_rows})
-    claimed: Final = await _claim_candidates(repository, sample.executions, config, now, existing, remaining)
-    next_page: Final = (
-        await _scan_pages(
-            reader,
-            repository,
-            scope,
-            config,
-            now,
-            sample.next_cursor,
-            remaining - len(claimed),
-        )
-        if sample.next_cursor is not None and len(claimed) < remaining
-        else ()
-    )
-    return (*claimed, *next_page)
+        return (), cursor
+    scan: Final = _SignalScan(reader, repository, scope, config, now, cursor, remaining)
+    return await scan.run()
 
 
 async def run_signal_tick(
@@ -474,32 +488,51 @@ async def run_signal_tick(
     completion: DecisionsCall | None,
     clock: Clock,
     router_ready: RouterReady = lambda: True,
-) -> None:
+    cursor: str = "",
+) -> str:
     if repository is None or completion is None or not router_ready():
-        return
+        return cursor
     now: Final = clock()
     config: Final = await repository.get_config()
     if not config.enabled:
-        return
+        return cursor
     reader: Final = SourceReader(storage)
     scope: Final = Scope(all_teams=True)
-    claimed: Final = await _scan_pages(
+    candidates: Final = await _scan_pages(
         reader,
         repository,
         scope,
         config,
         now,
-        "",
+        cursor,
         SIGNAL_MAX_PER_TICK,
     )
+    executions, next_cursor = candidates
     classifier: Final = SignalClassifier(reader, completion, clock)
     semaphore: Final = asyncio.Semaphore(SIGNAL_CONCURRENCY)
 
-    async def process(execution: Execution, claimed_until: datetime) -> None:
+    async def process(execution: Execution) -> None:
+        from litellm._logging import verbose_proxy_logger
+
         async with semaphore:
+            claimed_at: Final = classifier.clock()
+            claimed_until: Final = claimed_at + SIGNAL_CLAIM_LEASE
+            try:
+                claimed: Final = await repository.claim(execution, config, claimed_until, claimed_at)
+            except Exception as error:
+                verbose_proxy_logger.error("Lens signal claim failed: %s", redact_internal_details(str(error)))
+                return
+            if not claimed:
+                return
             await _process_claimed(classifier, repository, scope, execution, config, claimed_until)
 
-    await asyncio.gather(*(process(execution, claimed_until) for execution, claimed_until in claimed))
+    await asyncio.gather(*(process(execution) for execution in executions))
+    return next_cursor
+
+
+class _SignalLoopState:
+    def __init__(self) -> None:
+        self.cursor: str = ""
 
 
 async def run_signal_loop(
@@ -511,9 +544,17 @@ async def run_signal_loop(
 ) -> None:
     from litellm._logging import verbose_proxy_logger
 
+    state: Final = _SignalLoopState()
     while True:
         try:
-            await run_signal_tick(storage, repository, completion, clock, router_ready)
+            state.cursor = await run_signal_tick(
+                storage,
+                repository,
+                completion,
+                clock,
+                router_ready,
+                cursor=state.cursor,
+            )
         except Exception as error:
             verbose_proxy_logger.error("Lens signal tick failed: %s", redact_internal_details(str(error)))
         await asyncio.sleep(SIGNAL_INTERVAL_SECONDS)

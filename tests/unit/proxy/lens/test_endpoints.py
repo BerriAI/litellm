@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -74,6 +75,7 @@ class SignalStatusDatabase:
     def __init__(self, config: SignalConfig, rows: Mapping[str, StoredTraceSignal]) -> None:
         self.config: Final = config
         self.rows: Final = rows
+        self.saved: Final[asyncio.Queue[tuple[object, ...]]] = asyncio.Queue()
 
     async def query_raw(self, query: str, *args: object) -> object:
         if '"LiteLLM_LensSignalConfig"' in query:
@@ -88,7 +90,8 @@ class SignalStatusDatabase:
         )
 
     async def execute_raw(self, query: str, *args: object) -> int:
-        return 0
+        await self.saved.put(args)
+        return 1
 
 
 def signal_router() -> Router:
@@ -490,8 +493,7 @@ async def test_signal_endpoints_return_statuses_in_request_order_for_admin_viewe
     viewer: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
     request: Final = TraceFindingsRequest(
         traces=tuple(
-            TraceIdentity(trace_id=trace_id)
-            for trace_id in ("failed", "classified", "missing", "pending", "stale")
+            TraceIdentity(trace_id=trace_id) for trace_id in ("failed", "classified", "missing", "pending", "stale")
         )
     )
 
@@ -512,6 +514,44 @@ async def test_signal_endpoints_return_statuses_in_request_order_for_admin_viewe
 
 
 @pytest.mark.asyncio
+async def test_signal_endpoints_require_connected_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    with pytest.raises(HTTPException) as error:
+        await get_signals(auth)
+
+    assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_put_signals_saves_config_for_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    database: Final = SignalStatusDatabase(SignalConfig(), {})
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database))
+    monkeypatch.setattr(proxy_server, "llm_router", signal_router())
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    body: Final = SignalConfig(model="decision", threshold=0.7)
+
+    assert await put_signals(body, auth) == body
+
+    saved: Final = await database.saved.get()
+    assert saved[0] == "global"
+    assert isinstance(saved[1], str)
+    assert SignalConfig.model_validate_json(saved[1]) == body
+
+
+def test_signal_model_requires_a_ready_router() -> None:
+    with pytest.raises(HTTPException) as error:
+        validate_signal_model(SignalConfig(model="decision"), None)
+
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
 async def test_put_signals_rejects_non_admin_roles(role: LitellmUserRoles) -> None:
     auth: Final = UserAPIKeyAuth(user_role=role)
@@ -522,9 +562,7 @@ async def test_put_signals_rejects_non_admin_roles(role: LitellmUserRoles) -> No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ("chat", "unconfigured"))
-async def test_put_signals_rejects_chat_and_unknown_model_groups(
-    monkeypatch: pytest.MonkeyPatch, model: str
-) -> None:
+async def test_put_signals_rejects_chat_and_unknown_model_groups(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", signal_router())

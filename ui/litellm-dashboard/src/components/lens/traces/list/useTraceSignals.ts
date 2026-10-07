@@ -55,13 +55,14 @@ export function useTraceSignalFlags(
 ): SignalFlag[] {
   const api = useTracesApi(accessToken);
   const traces = [identity(trace)];
-  const query = useQuery({
+  const queryOptions = {
     queryKey: ["traceSignals", accessToken, traces],
     queryFn: () => api.signals(traces),
     enabled,
     staleTime: POLL_MS,
-    refetchInterval: enabled && api.live ? POLL_MS : false,
+    refetchInterval: enabled && api.live ? POLL_MS : (false as const),
     retry: false,
-  });
+  };
+  const query = useQuery<TraceSignals[]>(queryOptions);
   return enabled ? flaggedSignals(query.data?.[0]) : [];
 }

@@ -58,22 +58,21 @@ const uniqueId = (base: string, taken: ReadonlySet<string>, attempt = 1): string
   return taken.has(id) ? uniqueId(base, taken, attempt + 1) : id;
 };
 
-/** Saved signals keep their IDs so their history stays attached; new ones get an ID from their name. */
 export const signalIds = (rows: readonly SignalRow[]): string[] =>
   rows.reduce<string[]>((ids, row) => [...ids, uniqueId(row.id || slug(row.name), new Set(ids))], []);
 
 const rowProblems = (row: SignalRow, duplicateName: boolean): RowProblems => {
   const name = row.name.trim();
   const question = row.question.trim();
-  const nameProblem =
-    (!name && "Name the signal") ||
-    (name.length > MAX_NAME && `Keep the name under ${MAX_NAME} characters`) ||
-    (duplicateName && "Another signal has this name") ||
-    undefined;
-  const questionProblem =
-    (question.length < 3 && "Ask a yes or no question about the run") ||
-    (question.length > MAX_QUESTION && `Keep the question under ${MAX_QUESTION} characters`) ||
-    undefined;
+  const nameProblem = [
+    !name ? "Name the signal" : undefined,
+    name.length > MAX_NAME ? `Keep the name under ${MAX_NAME} characters` : undefined,
+    duplicateName ? "Another signal has this name" : undefined,
+  ].find((problem) => problem !== undefined);
+  const questionProblem = [
+    question.length < 3 ? "Ask a yes or no question about the run" : undefined,
+    question.length > MAX_QUESTION ? `Keep the question under ${MAX_QUESTION} characters` : undefined,
+  ].find((problem) => problem !== undefined);
   return { name: nameProblem, question: questionProblem };
 };
 

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { uiHref } from "@/utils/uiHref";
 
 import { useLensApi } from "../../data/LensServices";
 import { lensKeys, lensQueries } from "../../data/queries";
@@ -68,7 +69,10 @@ function SetupCallout({ hasModels }: { hasModels: boolean }) {
         ) : (
           <p className="text-xs text-muted-foreground">
             This proxy has no System 1 models yet. Add one with mode evaluation, for example typesafe/jev-latest, on{" "}
-            <Link href="/models-and-endpoints" className="font-medium text-foreground underline underline-offset-2">
+            <Link
+              href={uiHref("models-and-endpoints")}
+              className="font-medium text-foreground underline underline-offset-2"
+            >
               Models + Endpoints
             </Link>
             .
@@ -121,12 +125,26 @@ function SignalFields({
   );
 }
 
-function SignalForm({ saved }: { saved: SignalConfig }) {
+export function SignalForm({ saved }: { saved: SignalConfig }) {
   const api = useLensApi();
   const queryClient = useQueryClient();
   const modelId = useId();
   const thresholdId = useId();
   const [draft, setDraft] = useState<SignalDraft>(() => draftFrom(saved));
+  const [draftBase, setDraftBase] = useState<SignalConfig>(() => saved);
+  const [savedElsewhere, setSavedElsewhere] = useState(false);
+  const savedKey = JSON.stringify(saved);
+  const draftBaseKey = JSON.stringify(draftBase);
+  if (savedKey !== draftBaseKey) {
+    const draftIsDirty = JSON.stringify(configFrom(draft)) !== JSON.stringify(configFrom(draftFrom(draftBase)));
+    setDraftBase(saved);
+    if (draftIsDirty) {
+      setSavedElsewhere(true);
+    } else {
+      setDraft(draftFrom(saved));
+      setSavedElsewhere(false);
+    }
+  }
   const details = useQuery(lensQueries.modelDetails(api));
   const models = systemOneModels(details.data?.data ?? []);
   const options = models.map((info) => ({
@@ -136,12 +154,14 @@ function SignalForm({ saved }: { saved: SignalConfig }) {
   }));
   const problems = draftProblems(draft);
   const next = configFrom(draft);
-  const dirty = JSON.stringify(next) !== JSON.stringify(configFrom(draftFrom(saved)));
+  const dirty = JSON.stringify(next) !== JSON.stringify(configFrom(draftFrom(draftBase)));
   const save = useMutation({
     mutationFn: (config: SignalConfig) => api.saveSignalConfig(config),
     onSuccess: (config) => {
       queryClient.setQueryData(lensKeys.signalConfig(api.scope), config);
       setDraft(draftFrom(config));
+      setDraftBase(config);
+      setSavedElsewhere(false);
       void queryClient.invalidateQueries({ queryKey: ["traceSignals"] });
     },
   });
@@ -163,6 +183,11 @@ function SignalForm({ saved }: { saved: SignalConfig }) {
       ),
       ...custom,
     ]);
+  const loadLatest = () => {
+    setDraft(draftFrom(saved));
+    setDraftBase(saved);
+    setSavedElsewhere(false);
+  };
 
   return (
     <>
@@ -172,6 +197,14 @@ function SignalForm({ saved }: { saved: SignalConfig }) {
           {active ? `Flagging traces with ${saved.model}` : "Signals are off"}
         </p>
         {!saved.model && !details.isPending && <SetupCallout hasModels={models.length > 0} />}
+        {savedElsewhere && (
+          <div role="alert" className="flex items-center justify-between gap-3 rounded-md border p-3 text-sm">
+            <span>Signals were changed elsewhere</span>
+            <Button type="button" variant="outline" size="sm" onClick={loadLatest}>
+              Load latest
+            </Button>
+          </div>
+        )}
         <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_160px]">
           <div className="space-y-1.5">
             <label htmlFor={modelId} className="text-sm font-medium">

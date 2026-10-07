@@ -27,11 +27,8 @@ interface AgentTracesTableProps {
   findings: ReadonlyMap<string, TraceFindingState>;
   canViewFindings?: boolean;
   signals?: ReadonlyMap<string, TraceSignalState>;
-  /** Signals are configured, so every run has a System 1 classification to show. */
   showSignals?: boolean;
-  /** Show the Signals column; when signals are not configured it carries the setup link. */
   signalsColumn?: boolean;
-  /** Opens Lens Settings at the signals setup; omitted when the viewer cannot configure signals. */
   onSetUpSignals?: () => void;
   isLoading: boolean;
   error: Error | null;

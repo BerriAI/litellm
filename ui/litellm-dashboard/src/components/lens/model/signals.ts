@@ -17,7 +17,6 @@ export interface LibrarySignal {
   readonly question: string;
 }
 
-/** Ready-made signals. The first three match the proxy defaults so a fresh config shows them selected. */
 export const SIGNAL_LIBRARY: readonly LibrarySignal[] = [
   {
     id: "user_frustration",

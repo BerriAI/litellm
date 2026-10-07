@@ -71,9 +71,7 @@ class SignalRepository:
         claimed_until: datetime,
         now: datetime,
     ) -> bool:
-        data: Final = json.dumps(
-            {"status": "pending", "scores": {}, "model": config.model, "error": ""}
-        )
+        data: Final = json.dumps({"status": "pending", "scores": {}, "model": config.model, "error": ""})
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
                 """INSERT INTO "LiteLLM_LensTraceSignal" AS stored

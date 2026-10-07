@@ -46,7 +46,6 @@ interface AgentTracesSectionProps {
   readOnly?: boolean;
   canMintTracingKey?: boolean;
   canViewFindings?: boolean;
-  /** Opens Lens Settings at the signals setup; omitted when the viewer cannot configure signals. */
   onSetUpSignals?: () => void;
 }
 

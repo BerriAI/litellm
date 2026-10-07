@@ -3,6 +3,8 @@ import json
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from itertools import chain
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
 import pytest
@@ -13,6 +15,8 @@ from litellm.proxy.lens.repository import Database, Row
 from litellm.proxy.lens.signal_repository import SignalRepository
 from litellm.proxy.lens.signals import (
     DEFAULT_SIGNALS,
+    SIGNAL_CLAIM_LEASE,
+    SIGNAL_MAX_SCAN_PAGES,
     SIGNAL_TASK,
     DecisionQuestions,
     DecisionState,
@@ -24,6 +28,7 @@ from litellm.proxy.lens.signals import (
     SignalStep,
     StoredTraceSignal,
     candidate,
+    run_signal_loop,
     run_signal_tick,
     signal_state,
     trace_signals,
@@ -77,6 +82,7 @@ def part(identity: str, content: str) -> PartRow:
 def stored_trace(
     config_key: str,
     *,
+    trace_id: str = "trace",
     status: str = "classified",
     span_count: int = 1,
     claimed_until: datetime | None = None,
@@ -85,7 +91,7 @@ def stored_trace(
     error: str = "",
 ) -> StoredTraceSignal:
     return StoredTraceSignal(
-        trace_id="trace",
+        trace_id=trace_id,
         trace_ref="",
         config_key=config_key,
         span_count=span_count,
@@ -127,19 +133,67 @@ class SignalStorage:
         return ()
 
 
+class PagedSignalStorage(SignalStorage):
+    def __init__(self, pages: tuple[tuple[PartRow, ...], ...]) -> None:
+        super().__init__()
+        self.pages: Final = pages
+
+    async def lens_content(self, parameters: LensContentParams) -> Sequence[PartRow]:
+        index: Final = int(parameters.cursor) if parameters.cursor else 0
+        return self.pages[index]
+
+
+class PagedSampleStorage(SignalStorage):
+    def __init__(self, pages: tuple[tuple[ExecutionRow, ...], ...]) -> None:
+        super().__init__()
+        self.pages: Final = pages
+        self.cursors: Final[asyncio.Queue[str]] = asyncio.Queue()
+        self.page_by_cursor: Final = MappingProxyType(
+            {
+                "": 0,
+                **{page[-1].selection_key: index + 1 for index, page in enumerate(pages[:-1])},
+            }
+        )
+
+    async def lens_sample(self, parameters: LensSampleParams) -> Sequence[ExecutionRow]:
+        await self.cursors.put(parameters.after)
+        index: Final = self.page_by_cursor[parameters.after]
+        return self.pages[index]
+
+
 class SignalDatabase:
-    def __init__(self, config: SignalConfig) -> None:
+    def __init__(
+        self,
+        config: SignalConfig | None,
+        *,
+        stored_rows: tuple[StoredTraceSignal, ...] = (),
+        claim_result: bool = True,
+    ) -> None:
         self.config: Final = config
+        self.stored_rows: Final = stored_rows
+        self.claim_result: Final = claim_result
         self.calls: Final[asyncio.Queue[str]] = asyncio.Queue()
         self.claims: Final[asyncio.Queue[str]] = asyncio.Queue()
+        self.claim_args: Final[asyncio.Queue[tuple[object, ...]]] = asyncio.Queue()
         self.saved: Final[asyncio.Queue[tuple[object, ...]]] = asyncio.Queue()
 
     async def query_raw(self, query: str, *args: object) -> object:
         if '"LiteLLM_LensSignalConfig"' in query:
-            return (Row(data=self.config.model_dump(mode="json")),)
-        if query.startswith('SELECT jsonb_build_object'):
-            return ()
+            return () if self.config is None else (Row(data=self.config.model_dump(mode="json")),)
+        if query.startswith("SELECT jsonb_build_object"):
+            payload: Final = args[0]
+            assert isinstance(payload, str)
+            requested: Final = TypeAdapter(tuple[TraceIdentity, ...]).validate_json(payload)
+            identities: Final = tuple((trace.trace_id, trace.trace_ref) for trace in requested)
+            return tuple(
+                Row(data=stored.model_dump(mode="json"))
+                for stored in self.stored_rows
+                if (stored.trace_id, stored.trace_ref) in identities
+            )
         if query.startswith('INSERT INTO "LiteLLM_LensTraceSignal"'):
+            await self.claim_args.put(args)
+            if not self.claim_result:
+                return ()
             trace_id: Final = args[0]
             assert isinstance(trace_id, str)
             await self.claims.put(trace_id)
@@ -159,6 +213,33 @@ def saved_result(args: tuple[object, ...]) -> SignalData:
     payload: Final = args[1]
     assert isinstance(payload, str)
     return SignalData.model_validate_json(payload)
+
+
+@pytest.mark.asyncio
+async def test_signal_repository_reads_defaults_and_saves_the_global_config() -> None:
+    database: Final = SignalDatabase(None)
+    repository: Final = SignalRepository(database)
+    updated: Final = SignalConfig(model="decision", threshold=0.7)
+
+    assert await repository.get_config() == SignalConfig()
+    await repository.save_config(updated)
+
+    saved: Final = await database.saved.get()
+    assert saved[0] == "global"
+    assert isinstance(saved[1], str)
+    assert SignalConfig.model_validate_json(saved[1]) == updated
+
+
+@pytest.mark.asyncio
+async def test_signal_repository_reads_rows_and_reports_a_lost_claim() -> None:
+    config: Final = SignalConfig(model="decision")
+    row: Final = stored_trace(config.key())
+    database: Final = SignalDatabase(config, stored_rows=(row,), claim_result=False)
+    repository: Final = SignalRepository(database)
+
+    assert await repository.traces(()) == ()
+    assert await repository.traces((TraceIdentity(trace_id="trace"),)) == (row,)
+    assert not await repository.claim(execution("trace"), config, NOW + timedelta(minutes=5), NOW)
 
 
 def test_signal_config_hashes_questions_but_not_threshold_or_display_name() -> None:
@@ -234,6 +315,18 @@ def test_signal_config_rejects_duplicate_ids_and_non_finite_thresholds() -> None
             1,
             False,
         ),
+        (
+            stored_trace(
+                CURRENT_CONFIG_KEY,
+                status="pending",
+                claimed_until=(NOW - timedelta(minutes=1)).replace(tzinfo=None),
+                classified_at=None,
+            ),
+            1,
+            True,
+        ),
+        (stored_trace(CURRENT_CONFIG_KEY, span_count=2), 1, False),
+        (stored_trace(CURRENT_CONFIG_KEY, span_count=1, classified_at=None), 2, False),
     ),
 )
 def test_candidate_selection_respects_config_span_age_failure_age_and_claims(
@@ -322,6 +415,27 @@ async def test_missing_noul_answer_fails_while_unknown_and_non_noul_answers_are_
     assert attempt.error == "Decisions response omitted a configured noul answer"
 
 
+@pytest.mark.asyncio
+async def test_classifier_turns_decisions_errors_into_failed_attempts() -> None:
+    async def decide(
+        *,
+        model: str,
+        state: DecisionState,
+        questions: DecisionQuestions,
+        timeout: float,
+        metadata: Mapping[str, object],
+    ) -> object:
+        raise RuntimeError("decisions unavailable")
+
+    attempt: Final = await SignalClassifier(
+        SourceReader(SignalStorage(parts=(part("agent", "content"),))),
+        decide,
+        lambda: NOW,
+    ).classify(Scope(all_teams=True), execution("trace"), SignalConfig(model="decision"))
+
+    assert attempt == SignalAttempt(status="failed", model="decision", error="decisions unavailable")
+
+
 def test_signal_flags_use_current_threshold_and_current_display_name() -> None:
     config: Final = SignalConfig(model="decision")
     row: Final = stored_trace(
@@ -352,6 +466,17 @@ def test_signal_flags_use_current_threshold_and_current_display_name() -> None:
     assert not candidate(execution("trace"), row, high_threshold.key(), NOW)
 
 
+def test_signal_flags_report_stored_errors_even_when_the_status_is_classified() -> None:
+    config: Final = SignalConfig(model="decision")
+    row: Final = stored_trace(config.key(), status="classified", error="classification failed")
+
+    result: Final = trace_signals(TraceIdentity(trace_id="trace"), row, config)
+
+    assert result.status == "failed"
+    assert result.model == "decision"
+    assert result.classified_at == row.classified_at
+
+
 @pytest.mark.asyncio
 async def test_signal_state_caps_content_to_head_and_tail_with_omitted_step() -> None:
     parts: Final = tuple(part(str(index), chr(97 + index) * 2000) for index in range(30))
@@ -375,6 +500,53 @@ async def test_signal_state_caps_content_to_head_and_tail_with_omitted_step() ->
     assert marker == SignalStep(kind="omitted", name="", content="9 steps omitted")
     assert tail[0].content == "r" * 1000
     assert tail[-1].content == "~" * 2000
+
+
+@pytest.mark.asyncio
+async def test_signal_state_limits_content_pages_and_part_sizes() -> None:
+    pages: Final = tuple(
+        tuple(part(f"page-{page}-{index}", "x" * 2501 if index == 0 else "x") for index in range(39))
+        + (part(str(page + 1), "x"),)
+        for page in range(4)
+    )
+    state: Final = await signal_state(
+        SourceReader(PagedSignalStorage(pages)),
+        Scope(all_teams=True),
+        execution("trace"),
+    )
+    steps: Final = _SIGNAL_STEPS.validate_python(state["steps"])
+
+    assert len(steps) == 120
+    assert steps[0].content.startswith("x" * 800)
+    assert "[... 501 characters omitted ...]" in steps[0].content
+    assert steps[0].content.endswith("x" * 1200)
+    assert steps[-1].name == "3"
+    assert all(not step.name.startswith("page-3-") for step in steps)
+
+    small_state: Final = await signal_state(
+        SourceReader(SignalStorage(parts=(part("small", "ok"),))),
+        Scope(all_teams=True),
+        execution("trace"),
+    )
+    small_steps: Final = _SIGNAL_STEPS.validate_python(small_state["steps"])
+    assert small_steps == (SignalStep(kind="agent", name="small", content="ok"),)
+
+
+@pytest.mark.asyncio
+async def test_signal_state_part_excerpt_preserves_the_output_tail() -> None:
+    content: Final = "I" * 5000 + "OUTPUT: refused"
+    state: Final = await signal_state(
+        SourceReader(SignalStorage(parts=(part("result", content),))),
+        Scope(all_teams=True),
+        execution("trace"),
+    )
+    steps: Final = _SIGNAL_STEPS.validate_python(state["steps"])
+    excerpt: Final = steps[0].content
+    marker: Final = "\n[... 3015 characters omitted ...]\n"
+
+    assert marker in excerpt
+    assert excerpt.endswith("OUTPUT: refused")
+    assert len(excerpt) == 800 + len(marker) + 1200
 
 
 @pytest.mark.asyncio
@@ -424,18 +596,147 @@ async def test_signal_tick_classifies_at_most_50_traces_and_persists_scores() ->
 
     assert len(classified) == 50
     assert frozenset(traces) == frozenset(f"trace-{index}" for index in range(50))
-    assert saved_data == (
-        SignalData(
-            status="classified",
-            scores={
-                "user_frustration": 0.9,
-                "missing_capability": 0.6,
-                "repeated_request": 0.2,
-            },
-            model="decision",
-            error="",
-        ),
-    ) * 50
+    assert (
+        saved_data
+        == (
+            SignalData(
+                status="classified",
+                scores={
+                    "user_frustration": 0.9,
+                    "missing_capability": 0.6,
+                    "repeated_request": 0.2,
+                },
+                model="decision",
+                error="",
+            ),
+        )
+        * 50
+    )
+
+
+@pytest.mark.asyncio
+async def test_signal_tick_claims_with_worker_start_time_and_skips_lost_claims() -> None:
+    config: Final = SignalConfig(model="decision")
+    executions: Final = tuple(
+        ExecutionRow(
+            source="traces",
+            trace_id=f"trace-{index}",
+            team_id="",
+            name=f"trace-{index}",
+            start_time="",
+            span_count=1,
+            root_seen=1,
+            eligible=2,
+            selected=2,
+            selection_key=f"cursor-{index}",
+        )
+        for index in range(2)
+    )
+    database: Final = SignalDatabase(config, claim_result=False)
+    repository: Final = SignalRepository(database)
+
+    class AdvancingClock:
+        def __init__(self) -> None:
+            self.values: Final = tuple(NOW + timedelta(minutes=index) for index in range(3))
+            self.index: int = 0
+
+        def __call__(self) -> datetime:
+            value: Final = self.values[self.index]
+            self.index += 1
+            return value
+
+    async def decide(
+        *,
+        model: str,
+        state: DecisionState,
+        questions: DecisionQuestions,
+        timeout: float,
+        metadata: Mapping[str, object],
+    ) -> object:
+        return {"answers": {}}
+
+    await run_signal_tick(SignalStorage(executions=executions), repository, decide, AdvancingClock())
+
+    claims: Final = tuple(database.claim_args.get_nowait() for _ in range(database.claim_args.qsize()))
+
+    def claim_times(args: tuple[object, ...]) -> tuple[datetime, datetime]:
+        claimed_until: Final = args[4]
+        claimed_at: Final = args[6]
+        assert isinstance(claimed_until, datetime)
+        assert isinstance(claimed_at, datetime)
+        return claimed_until, claimed_at
+
+    times: Final = tuple(claim_times(claim) for claim in claims)
+    assert database.calls.empty()
+    assert database.saved.empty()
+    assert all(claimed_until == claimed_at + SIGNAL_CLAIM_LEASE for claimed_until, claimed_at in times)
+    assert all(claimed_at != NOW for _, claimed_at in times)
+
+
+@pytest.mark.asyncio
+async def test_signal_tick_resumes_after_ten_pages_and_resets_after_a_short_page() -> None:
+    config: Final = SignalConfig(model="decision")
+
+    def sample_page(page: int) -> tuple[ExecutionRow, ...]:
+        return tuple(
+            ExecutionRow(
+                source="traces",
+                trace_id=f"trace-{page}-{index}",
+                team_id="",
+                name=f"trace-{page}-{index}",
+                start_time="",
+                span_count=1,
+                root_seen=1,
+                eligible=2500,
+                selected=2500,
+                selection_key=f"page-{page}-{index}",
+            )
+            for index in range(100)
+        )
+
+    pages: Final = tuple(sample_page(page) for page in range(25))
+    all_rows: Final = tuple(chain.from_iterable(pages))
+    stored_rows: Final = tuple(stored_trace(CURRENT_CONFIG_KEY, trace_id=row.trace_id) for row in all_rows)
+    storage: Final = PagedSampleStorage(pages)
+    database: Final = SignalDatabase(config, stored_rows=stored_rows)
+    repository: Final = SignalRepository(database)
+
+    async def decide(
+        *,
+        model: str,
+        state: DecisionState,
+        questions: DecisionQuestions,
+        timeout: float,
+        metadata: Mapping[str, object],
+    ) -> object:
+        return {"answers": {}}
+
+    first_cursor: Final = await run_signal_tick(storage, repository, decide, lambda: NOW)
+    first_calls: Final = tuple(storage.cursors.get_nowait() for _ in range(storage.cursors.qsize()))
+    second_cursor: Final = await run_signal_tick(
+        storage,
+        repository,
+        decide,
+        lambda: NOW,
+        cursor=first_cursor,
+    )
+    second_calls: Final = tuple(storage.cursors.get_nowait() for _ in range(storage.cursors.qsize()))
+
+    assert len(first_calls) == SIGNAL_MAX_SCAN_PAGES
+    assert first_cursor
+    assert len(second_calls) == SIGNAL_MAX_SCAN_PAGES
+    assert second_calls[0] == first_cursor
+    assert second_cursor
+
+    short_storage: Final = PagedSampleStorage((pages[0][:50],))
+    short_database: Final = SignalDatabase(config, stored_rows=stored_rows[:50])
+    short_cursor: Final = await run_signal_tick(
+        short_storage,
+        SignalRepository(short_database),
+        decide,
+        lambda: NOW,
+    )
+    assert short_cursor == ""
 
 
 @pytest.mark.asyncio
@@ -479,3 +780,151 @@ async def test_signal_tick_skips_claims_and_writes_when_router_is_not_ready() ->
 
     assert database.claims.empty()
     assert database.saved.empty()
+
+
+@pytest.mark.asyncio
+async def test_signal_tick_skips_missing_dependencies_and_disabled_configs() -> None:
+    storage: Final = SignalStorage()
+
+    await run_signal_tick(storage, None, None, lambda: NOW)
+
+    database: Final = SignalDatabase(SignalConfig())
+
+    async def decide(
+        *,
+        model: str,
+        state: DecisionState,
+        questions: DecisionQuestions,
+        timeout: float,
+        metadata: Mapping[str, object],
+    ) -> object:
+        raise AssertionError("disabled signal config should not call Decisions")
+
+    await run_signal_tick(storage, SignalRepository(database), decide, lambda: NOW)
+    assert database.claims.empty()
+    assert database.saved.empty()
+
+
+class FailingStoreDatabase(SignalDatabase):
+    async def execute_raw(self, query: str, *args: object) -> int:
+        raise RuntimeError("store unavailable")
+
+
+@pytest.mark.asyncio
+async def test_signal_tick_continues_when_storing_a_result_fails() -> None:
+    config: Final = SignalConfig(model="decision")
+    execution_row: Final = ExecutionRow(
+        source="traces",
+        trace_id="trace",
+        team_id="",
+        name="trace",
+        start_time="",
+        span_count=1,
+        root_seen=1,
+        eligible=1,
+        selected=1,
+        selection_key="cursor",
+    )
+    database: Final = FailingStoreDatabase(config)
+
+    async def decide(
+        *,
+        model: str,
+        state: DecisionState,
+        questions: DecisionQuestions,
+        timeout: float,
+        metadata: Mapping[str, object],
+    ) -> object:
+        return {
+            "answers": {
+                "user_frustration": {"type": "noul", "noul": 0.9},
+                "missing_capability": {"type": "noul", "noul": 0.6},
+                "repeated_request": {"type": "noul", "noul": 0.2},
+            }
+        }
+
+    await run_signal_tick(
+        SignalStorage(executions=(execution_row,)),
+        SignalRepository(database),
+        decide,
+        lambda: NOW,
+    )
+
+    assert await database.claims.get() == "trace"
+    assert database.saved.empty()
+
+
+class FailingSignalRepository:
+    def __init__(self) -> None:
+        self.started: Final = asyncio.Event()
+
+    async def get_config(self) -> SignalConfig:
+        self.started.set()
+        await asyncio.sleep(0)
+        raise RuntimeError("tick failed")
+
+
+@pytest.mark.asyncio
+async def test_signal_loop_continues_after_a_tick_error() -> None:
+    repository: Final = FailingSignalRepository()
+
+    async def decide(
+        *,
+        model: str,
+        state: DecisionState,
+        questions: DecisionQuestions,
+        timeout: float,
+        metadata: Mapping[str, object],
+    ) -> object:
+        return {"answers": {}}
+
+    task: Final = asyncio.create_task(run_signal_loop(SignalStorage(), repository, decide, lambda: NOW))
+    await repository.started.wait()
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_proxy_signal_call_resolves_the_current_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    async def first_decisions(
+        *,
+        model: str,
+        state: DecisionState,
+        questions: DecisionQuestions,
+        timeout: float,
+        metadata: Mapping[str, object],
+    ) -> object:
+        return "first"
+
+    async def second_decisions(
+        *,
+        model: str,
+        state: DecisionState,
+        questions: DecisionQuestions,
+        timeout: float,
+        metadata: Mapping[str, object],
+    ) -> object:
+        return "second"
+
+    async def call_current_router() -> object:
+        return await proxy_server._call_current_lens_signal_router(
+            model="decision",
+            state={"task": "task"},
+            questions={},
+            timeout=60,
+            metadata={"tags": ["test"]},
+        )
+
+    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(adecisions=first_decisions))
+    assert await call_current_router() == "first"
+
+    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace(adecisions=second_decisions))
+    assert await call_current_router() == "second"
+
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    with pytest.raises(RuntimeError, match="router is not initialized"):
+        await call_current_router()
