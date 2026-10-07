@@ -21,12 +21,15 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from itertools import chain, product
 from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import pytest
 from _pytest.mark.structures import ParameterSet
 from e2e_config import unique_marker
+from e2e_metadata import Capability as SubjectCapability
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from llm_translation.conversational_matrix import (
     GREETING_PROMPT,
@@ -79,8 +82,7 @@ def _cells(
             id=f"{surface}-{route}",
             marks=pytest.mark.covers(f"llm.{surface}.{route}.{capability}.{streaming}.works"),
         )
-        for surface in SURFACES
-        for route in routes
+        for surface, route in product(SURFACES, routes)
     )
 
 
@@ -143,8 +145,20 @@ def _weather_tool() -> ChatCompletionToolParam:
     }
 
 
+def _subject(mode: Mode, *, tools: bool, route: Route | None = None) -> Subject:
+    return Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=route,
+        providers=(Provider.OLLAMA,),
+        models=(OLLAMA_MODEL,),
+        capabilities=(SubjectCapability.FUNCTION_CALLING,) if tools else (),
+        mode=mode,
+    )
+
+
 class TestOllamaConversation:
     @pytest.mark.parametrize("cell", _cells("basic", "nonstream"))
+    @meta(_subject(Mode.NONSTREAM, tools=False))
     def test_reply_carries_assistant_text_and_usage(
         self,
         cell: Cell,
@@ -162,6 +176,7 @@ class TestOllamaConversation:
         assert reply.call_id_header, f"{cell.id}: x-litellm-call-id header missing"
 
     @pytest.mark.parametrize("cell", _cells("basic", "stream"))
+    @meta(_subject(Mode.STREAM, tools=False))
     def test_stream_delivers_text_usage_and_a_terminal_event(
         self,
         cell: Cell,
@@ -177,6 +192,7 @@ class TestOllamaConversation:
         assert streamed.usage_reported, f"{cell.id}: stream never reported usage"
 
     @pytest.mark.parametrize("cell", _cells("tool_use", "nonstream"))
+    @meta(_subject(Mode.NONSTREAM, tools=True))
     def test_tool_call_is_returned_named_and_addressable(
         self,
         cell: Cell,
@@ -187,6 +203,7 @@ class TestOllamaConversation:
         _ = _weather_call(cell, surfaces[cell.surface], resources.key(), aliases[cell.route])
 
     @pytest.mark.parametrize("cell", _cells("multi_turn", "nonstream", routes=("ollama_chat",)))
+    @meta(_subject(Mode.NONSTREAM, tools=True))
     def test_tool_result_round_trip_reaches_the_model(
         self,
         cell: Cell,
@@ -205,6 +222,7 @@ class TestOllamaConversation:
 
 class TestOllamaStreamedToolCall:
     @pytest.mark.parametrize("route", _streamed_tool_cells())
+    @meta(_subject(Mode.STREAM, tools=True, route=Route.CHAT_COMPLETIONS))
     def test_tool_call_streams_as_tool_call_deltas(
         self,
         route: OllamaRoute,
@@ -227,14 +245,17 @@ class TestOllamaStreamedToolCall:
         )
         choices: Final = tuple(chunk.choices[0] for chunk in chunks if chunk.choices)
         text: Final = "".join(choice.delta.content or "" for choice in choices)
-        functions: Final = tuple(
-            call.function for choice in choices for call in choice.delta.tool_calls or () if call.function is not None
-        )
+        deltas: Final = tuple(chain.from_iterable(choice.delta.tool_calls or () for choice in choices))
+        call_ids: Final = tuple(delta.id for delta in deltas if delta.id)
+        indexes: Final = frozenset(delta.index for delta in deltas)
+        functions: Final = tuple(delta.function for delta in deltas if delta.function is not None)
         names: Final = tuple(function.name for function in functions if function.name)
         arguments: Final = "".join(function.arguments or "" for function in functions)
         finish_reasons: Final = tuple(choice.finish_reason for choice in choices if choice.finish_reason is not None)
 
         assert names == (WEATHER_TOOL_NAME,), f"{route}: streamed tool names {names}, text={text!r}"
+        assert len(call_ids) == 1, f"{route}: expected one streamed tool call id, got {call_ids}"
+        assert indexes == {0}, f"{route}: streamed tool call deltas used indexes {sorted(indexes)}"
         assert WEATHER_TOOL_NAME not in text, f"{route}: the tool call leaked into assistant text: {text!r}"
         location: Final = WeatherArgs.model_validate(cast(object, json.loads(arguments))).location
         assert "paris" in location.lower(), f"{route}: streamed tool arguments lost the location: {arguments!r}"
