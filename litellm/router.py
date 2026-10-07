@@ -57,20 +57,20 @@ class Router(_RouterSurface):
 
     if not TYPE_CHECKING:
 
-        def __init__(self, *args, **kwargs):  # kwargs-ok: forwards PythonRouter.__init__'s signature
+        def __init__(self, *args, **kwargs) -> None:  # kwargs-ok: forwards PythonRouter.__init__'s signature
             object.__setattr__(self, "backend", select_backend(args, kwargs))
 
         __init__.__signature__ = inspect.signature(PythonRouter.__init__)
 
-        def __getattr__(self, name):
+        def __getattr__(self, name: str) -> object:
             if name == "backend":
                 raise AttributeError(name)
             return getattr(self.backend, name)
 
-        def __setattr__(self, name, value):
+        def __setattr__(self, name: str, value: object) -> None:
             setattr(self.backend, name, value)
 
-        def __delattr__(self, name):
+        def __delattr__(self, name: str) -> None:
             delattr(self.backend, name)
 
 

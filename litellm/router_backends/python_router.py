@@ -3559,8 +3559,8 @@ class PythonRouter:
                 self._ageneric_api_call_with_fallbacks_responses_attempt
             )
             if e.generated_content and not e.is_pre_first_chunk:
-                initial_kwargs["input"] = (
-                    PythonRouter._build_responses_continuation_input(  # rebind-ok: fallback hop input
+                initial_kwargs["input"] = (  # rebind-ok: fallback hop input
+                    PythonRouter._build_responses_continuation_input(
                         initial_kwargs.get("input"),
                         e.generated_content,
                     )
