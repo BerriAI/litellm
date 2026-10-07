@@ -391,6 +391,19 @@ class LensRepository:
             'UPDATE "LiteLLM_LensWorker" SET data=$1::jsonb WHERE id=$2', worker.model_dump_json(), worker.id
         )
 
+    async def configure_service_worker(self, worker: Worker, token_hash: str) -> Worker:
+        rows: Final = _ROWS.validate_python(
+            await self.db.query_raw(
+                'INSERT INTO "LiteLLM_LensWorker" AS existing (id,token_hash,data) VALUES ($1,$2,$3::jsonb) '
+                'ON CONFLICT (token_hash) DO UPDATE '
+                "SET data=jsonb_set(EXCLUDED.data, '{id}', to_jsonb(existing.id)) RETURNING data",
+                worker.id,
+                token_hash,
+                worker.model_dump_json(),
+            )
+        )
+        return Worker.model_validate(rows[0].data)
+
     async def set_worker_billing(self, worker_id: str, key_id: str) -> Worker | None:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(

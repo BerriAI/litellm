@@ -15,6 +15,8 @@ export function workerSetupCommand(address: string, token: string, image: string
     "  --security-opt no-new-privileges --add-host host.docker.internal:host-gateway",
     `  -e ${quote("LITELLM_URL=" + address)}`,
     `  -e ${quote("LENS_WORKER_TOKEN=" + token)}`,
+    "  -p 127.0.0.1:4318:4318 --memory 2g --cpus 2",
+    "  -e LITELLM_LENS_SERVICE_TOKEN -e CLICKHOUSE_URL",
     `  ${quote(image)}`,
   ].join(" \\\n");
 }

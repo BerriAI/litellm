@@ -44,6 +44,20 @@ class IngestionSnapshot(Record):
 class IngestionKeyCreated(Record):
     key: str
     record: IngestionKey
+    active: bool = False
+
+
+class ServiceStatus(Record):
+    storage_ready: bool = False
+    credentials_ready: bool = False
+    release: str = ""
+    protocol_version: int = 0
+
+
+class ServiceConnection(Record):
+    url: str
+    connected: bool
+    status: ServiceStatus
 
 
 def new_key(request: IngestionKeyRequest, user_id: str) -> IngestionKeyCreated:

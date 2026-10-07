@@ -19,6 +19,12 @@ function InstallSteps({ address, created }: { address: string; created: WorkerCr
   const command = workerSetupCommand(address, created.token, created.image);
   const copyCommand = useCopy();
   const copyToken = useCopy();
+  if (created.managed)
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        Connecting your Lens service… This page updates automatically. Check the service logs if it does not connect.
+      </p>
+    );
   return (
     <>
       <Button variant="default" className="w-full gap-2" onClick={() => copyCommand.mutate(command)}>
@@ -80,7 +86,9 @@ export function WorkerInstall({ address, created, connected, children, className
       <SettingsCard {...props} data-slot="worker-install" className={cn("flex flex-col gap-5", className)}>
         <header className="space-y-1">
           <h3 className="text-base font-semibold">Run the worker</h3>
-          <p className="text-sm text-muted-foreground">Run this command on a server with Docker.</p>
+          <p className="text-sm text-muted-foreground">
+            Your Lens service connects automatically. A separately hosted worker can use the Docker command.
+          </p>
         </header>
         <InstallSteps address={address} created={created} />
       </SettingsCard>

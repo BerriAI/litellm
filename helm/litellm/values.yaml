@@ -641,6 +641,21 @@ lensWorker:
   tokenSecret:
     name: ""
     key: token
+  serviceTokenSecret:
+    name: ""
+    key: service-token
+  clickhouseSecret:
+    name: ""
+    key: url
+  publicUrl: ""
+  service:
+    port: 4318
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    annotations: {}
+    tls: []
   url: ""
   tmpSizeLimit: 1Gi
   resources:

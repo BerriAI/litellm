@@ -23,6 +23,7 @@ struct Identity {
 #[derive(Deserialize)]
 struct JobIdentity {
     id: String,
+    attempts: u64,
 }
 
 impl Worker {
@@ -48,7 +49,8 @@ impl Worker {
         if claim.is_err() || !validator.is_valid(&payload) {
             let identity: Identity = serde_json::from_value(payload)?;
             let client =
-                JobClient::new(self.control.clone(), &identity.lens_id, &identity.job.id, 1)?;
+                JobClient::new(self.control.clone(), &identity.lens_id, &identity.job.id, 1)?
+                    .with_attempt(identity.job.attempts);
             self.failure(&client, "The worker could not read this investigation. Update the worker to match the gateway, then retry.").await?;
             return Ok(true);
         }
@@ -58,7 +60,8 @@ impl Worker {
             &claim.lens_id,
             &claim.job.id,
             claim.job.settings.concurrency.get() as usize,
-        )?;
+        )?
+        .with_attempt(u64::try_from(claim.job.attempts).map_err(|_| Error::InvalidRequest)?);
         let work = async {
             let sample: wire::Sample = client.get("sample").await?;
             claim.reviews = Some(client.get("reviews").await?);

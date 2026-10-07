@@ -33,8 +33,11 @@ impl Config {
         {
             return Err(Error::Configuration("LITELLM_URL"));
         }
-        let worker_token = required("LENS_WORKER_TOKEN")?;
         let service_token = required("LITELLM_LENS_SERVICE_TOKEN")?;
+        let worker_token = std::env::var("LENS_WORKER_TOKEN")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| service_token.clone());
         if service_token.len() < 32 {
             return Err(Error::Configuration(
                 "LITELLM_LENS_SERVICE_TOKEN must contain at least 32 characters",
@@ -51,7 +54,7 @@ impl Config {
             release: required("LITELLM_RELEASE_TAG")?,
             storage: StorageConfig::new(
                 std::env::var("CLICKHOUSE_DATABASE").unwrap_or_else(|_| "litellm".into()),
-                &required("CLICKHOUSE_URL")?,
+                &clickhouse_url()?,
                 std::env::var("AGENT_TRACING_RETENTION_DAYS")
                     .unwrap_or_else(|_| "14".into())
                     .parse()
@@ -60,6 +63,21 @@ impl Config {
             )?,
         })
     }
+}
+
+fn clickhouse_url() -> Result<String, Error> {
+    if let Ok(url) = required("CLICKHOUSE_URL") {
+        return Ok(url);
+    }
+    let mut url = url::Url::parse("http://localhost:8123")
+        .map_err(|_| Error::Configuration("CLICKHOUSE_HOST"))?;
+    url.set_host(Some(&required("CLICKHOUSE_HOST")?))
+        .map_err(|_| Error::Configuration("CLICKHOUSE_HOST"))?;
+    url.set_username(&std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".into()))
+        .map_err(|_| Error::Configuration("CLICKHOUSE_USER"))?;
+    url.set_password(Some(&required("CLICKHOUSE_PASSWORD")?))
+        .map_err(|_| Error::Configuration("CLICKHOUSE_PASSWORD"))?;
+    Ok(url.into())
 }
 
 pub fn http_client() -> Result<Client, Error> {

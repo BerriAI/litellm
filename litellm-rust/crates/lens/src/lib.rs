@@ -81,14 +81,96 @@ impl State {
 }
 
 pub fn router(state: Arc<State>) -> Router {
-    Router::new()
+    let public = Router::new()
         .route("/health/live", get(|| async { StatusCode::OK }))
         .route("/health/ready", get(ready))
         .route("/v1/traces", post(traces))
         .route("/v1/logs", post(logs))
-        .route("/internal/read", post(read))
-        .route("/internal/spend", post(spend))
+        .route("/v1/traces/receipt", post(receipt))
+        .layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(tower_http::cors::Any)
+                .allow_methods([http::Method::POST, http::Method::GET])
+                .allow_headers([
+                    http::header::AUTHORIZATION,
+                    http::header::CONTENT_TYPE,
+                    http::header::CONTENT_ENCODING,
+                ]),
+        );
+    public
+        .merge(
+            Router::new()
+                .route("/internal/read", post(read))
+                .route("/internal/spend", post(spend))
+                .route("/internal/credentials", post(credentials))
+                .route("/internal/status", get(status)),
+        )
         .with_state(state)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptRequest {
+    trace_id: String,
+    #[serde(default)]
+    span_ids: Vec<String>,
+}
+
+async fn receipt(
+    AppState(state): AppState<Arc<State>>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<Json<Value>, Error> {
+    let tenant = state.credentials.tenant(&headers)?;
+    state.require_storage()?;
+    let _permit = state
+        .read_slots
+        .try_acquire()
+        .map_err(|_| Error::Unavailable)?;
+    let body = tokio::time::timeout(Duration::from_secs(5), to_bytes(body, 64 * 1024))
+        .await
+        .map_err(|_| Error::Unavailable)?
+        .map_err(|_| Error::TooLarge)?;
+    let request: ReceiptRequest =
+        serde_json::from_slice(&body).map_err(|_| Error::InvalidRequest)?;
+    let received = litellm_traces_clickhouse::trace_received(
+        &state.storage.client,
+        state.storage.config.storage().reader(),
+        &tenant,
+        &request.trace_id,
+        &request.span_ids,
+    )
+    .await?;
+    Ok(Json(serde_json::json!({"received": received})))
+}
+
+async fn status(
+    AppState(state): AppState<Arc<State>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, Error> {
+    auth::authorize_service(&headers, &state.service_token)?;
+    Ok(Json(serde_json::json!({
+        "storage_ready": state.schema_ready.load(Ordering::Acquire),
+        "credentials_ready": state.credentials.ready(),
+        "release": std::env::var("LITELLM_RELEASE_TAG").unwrap_or_default(),
+        "protocol_version": wire::PROTOCOL_VERSION,
+    })))
+}
+
+async fn credentials(
+    AppState(state): AppState<Arc<State>>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<StatusCode, Error> {
+    auth::authorize_service(&headers, &state.service_token)?;
+    let body = tokio::time::timeout(Duration::from_secs(5), to_bytes(body, 8 * 1024 * 1024))
+        .await
+        .map_err(|_| Error::Unavailable)?
+        .map_err(|_| Error::TooLarge)?;
+    state
+        .credentials
+        .replace(serde_json::from_slice(&body).map_err(|_| Error::InvalidRequest)?)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn ready(AppState(state): AppState<Arc<State>>) -> StatusCode {

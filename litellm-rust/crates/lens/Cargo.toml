@@ -30,6 +30,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["signal", "sync", "process", "io-util"] }
 tracing.workspace = true
+tower-http = { version = "0.6.11", features = ["cors"] }
 url.workspace = true
 unicode-casefold = "0.2"
 

@@ -51,13 +51,13 @@ async fn run() -> Result<(), litellm_lens::Error> {
         config.worker_token.clone(),
     );
     let storage = Storage::new(config.storage, client.clone(), config.service_token.clone());
-    let state = Arc::new(State::new(storage, config.service_token));
+    let state = Arc::new(State::new(storage, config.service_token.clone()));
     let listener = tokio::net::TcpListener::bind(config.address).await?;
     let auth_task = tokio::spawn(auth::refresh_loop(
         state.credentials.clone(),
         client,
-        control.url("lens/worker/ingestion-credentials")?,
-        config.worker_token,
+        control.url("lens/internal/ingestion-credentials")?,
+        config.service_token,
     ));
     let provision_task = tokio::spawn(provision(state.clone()));
     let mut worker = tokio::spawn(Worker::new(control, config.release).serve());

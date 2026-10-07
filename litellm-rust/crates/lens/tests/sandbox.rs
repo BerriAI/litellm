@@ -29,7 +29,7 @@ fn workspace() -> Workspace {
 }
 
 fn request(code: &str) -> wire::PythonRequest {
-    serde_json::from_value(json!({"code": code})).unwrap()
+    serde_json::from_value(json!({"action": "python", "code": code})).unwrap()
 }
 
 fn succeeded(reply: &Value) {

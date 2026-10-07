@@ -4,7 +4,7 @@ kind: Deployment
 metadata:
   name: {{ include "litellm.fullname" . }}-lens-worker
   labels:
-    {{- include "litellm.commonLabels" . | nindent 4 }}
+    {{- include "litellm.labels" . | nindent 4 }}
     app.kubernetes.io/component: lens-worker
 spec:
   replicas: {{ .Values.lensWorker.replicaCount }}
@@ -15,7 +15,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "litellm.commonLabels" . | nindent 8 }}
+        {{- include "litellm.labels" . | nindent 8 }}
         app.kubernetes.io/component: lens-worker
     spec:
       automountServiceAccountToken: false
@@ -41,7 +41,7 @@ spec:
               drop: [ALL]
           env:
             - name: LITELLM_URL
-              value: {{ .Values.lensWorker.url | default (printf "http://%s:%v" (include "litellm.backend.fullname" .) .Values.backend.service.port) | quote }}
+              value: {{ .Values.lensWorker.url | default (printf "http://%s:%v" (include "litellm.fullname" .) .Values.service.port) | quote }}
             - name: LITELLM_LENS_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:

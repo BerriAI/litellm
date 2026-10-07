@@ -14,6 +14,7 @@ pub struct Control {
     base: Url,
     token: Arc<str>,
     model_slots: Arc<Semaphore>,
+    attempt: Option<u64>,
 }
 
 impl Control {
@@ -26,6 +27,7 @@ impl Control {
             base,
             token: token.into(),
             model_slots: Arc::new(Semaphore::new(16)),
+            attempt: None,
         }
     }
 
@@ -50,6 +52,10 @@ impl Control {
             .timeout(timeout);
         let request = match body {
             Some(body) => request.json(body),
+            None => request,
+        };
+        let request = match self.attempt {
+            Some(attempt) => request.header("x-litellm-lens-attempt", attempt),
             None => request,
         };
         let mut response = request.send().await?;
@@ -141,6 +147,11 @@ pub struct JobClient {
 }
 
 impl JobClient {
+    pub fn with_attempt(mut self, attempt: u64) -> Self {
+        self.control.attempt = Some(attempt);
+        self
+    }
+
     pub fn new(
         control: Control,
         lens_id: &str,
