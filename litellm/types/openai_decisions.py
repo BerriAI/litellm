@@ -33,7 +33,7 @@ class DecisionInputMessage(DecisionsObjectBase):
     type: Literal["message"] | None = None
 
 
-DecisionsInput: TypeAlias = str | Sequence[DecisionInputMessage]
+DecisionInput: TypeAlias = str | Sequence[DecisionInputMessage]
 
 
 class DecisionChoice(DecisionsObjectBase):
@@ -75,7 +75,7 @@ DecisionQuestions: TypeAlias = Sequence[DecisionQuestion]
 
 
 class DecisionsRequestBody(DecisionsObjectBase):
-    input: DecisionsInput
+    input: DecisionInput
     questions: DecisionQuestions
     safety_identifier: str | None = None
 
@@ -130,27 +130,27 @@ DecisionAnswer: TypeAlias = Annotated[
 ]
 
 
-class DecisionsInputTokensDetails(DecisionsObjectBase):
+class DecisionInputTokensDetails(DecisionsObjectBase):
     cached_tokens: int
     cache_write_tokens: int
 
 
-class DecisionsOutputTokensDetails(DecisionsObjectBase):
+class DecisionOutputTokensDetails(DecisionsObjectBase):
     reasoning_tokens: int
 
 
-class DecisionsUsage(DecisionsObjectBase):
+class DecisionUsage(DecisionsObjectBase):
     input_tokens: int
-    input_tokens_details: DecisionsInputTokensDetails
+    input_tokens_details: DecisionInputTokensDetails
     output_tokens: int
-    output_tokens_details: DecisionsOutputTokensDetails
+    output_tokens_details: DecisionOutputTokensDetails
     total_tokens: int
 
 
 class DecisionsResponse(DecisionsObjectBase):
     model: str
     answers: Sequence[DecisionAnswer]
-    usage: DecisionsUsage
+    usage: DecisionUsage
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 

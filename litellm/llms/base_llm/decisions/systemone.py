@@ -19,16 +19,16 @@ from litellm.types.openai_decisions import (
     ChoiceQuestion,
     DecisionAnswer,
     DecisionChoice,
+    DecisionInput,
     DecisionInputMessage,
     DecisionInputPart,
+    DecisionInputTokensDetails,
+    DecisionOutputTokensDetails,
     DecisionQuestion,
-    DecisionsInput,
-    DecisionsInputTokensDetails,
-    DecisionsOutputTokensDetails,
     DecisionsRequest,
     DecisionsRequestBody,
     DecisionsResponse,
-    DecisionsUsage,
+    DecisionUsage,
     PredicateAnswer,
     PredicateQuestion,
     ScoreAnswer,
@@ -115,7 +115,7 @@ def _positional_key(index: int, taken: frozenset[str]) -> str:
     return next(key for key in candidates if key not in taken)
 
 
-def _state(input_value: DecisionsInput, custom_llm_provider: str) -> str:
+def _state(input_value: DecisionInput, custom_llm_provider: str) -> str:
     if isinstance(input_value, str):
         return input_value
     return "\n".join(_message_text(message, custom_llm_provider) for message in input_value)
@@ -235,12 +235,12 @@ def _score_probabilities(question: ScoreQuestion, answer: SystemOneScoreAnswer) 
     ]
 
 
-def _usage(usage: SystemOneUsage | None) -> DecisionsUsage:
+def _usage(usage: SystemOneUsage | None) -> DecisionUsage:
     counted: Final = usage if usage is not None else SystemOneUsage()
-    return DecisionsUsage(
+    return DecisionUsage(
         input_tokens=counted.input_tokens,
-        input_tokens_details=DecisionsInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
+        input_tokens_details=DecisionInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
         output_tokens=counted.output_tokens,
-        output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
+        output_tokens_details=DecisionOutputTokensDetails(reasoning_tokens=0),
         total_tokens=counted.input_tokens + counted.output_tokens,
     )
