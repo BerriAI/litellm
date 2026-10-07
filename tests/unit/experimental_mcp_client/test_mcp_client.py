@@ -73,14 +73,26 @@ def _initialized(instructions: str | None = None) -> InitializeResult:
 class _MockTransportClient(MCPClient):
     """An MCPClient whose streamable-HTTP transport runs on an httpx2 MockTransport."""
 
-    def __init__(self, respond, **kwargs):
+    def __init__(
+        self,
+        respond,
+        *,
+        http_transport: httpx2.AsyncBaseTransport | None = None,
+        transport_context: Callable[[str, httpx2.AsyncClient], _TransportContext] | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self._respond = respond
+        self._http_transport = http_transport
+        self._transport_context = transport_context
 
     def _create_transport_context(self) -> tuple[_TransportContext, httpx2.AsyncClient]:
-        http_client: Final = self._create_httpx_client_factory(transport=httpx2.MockTransport(self._respond))(
+        transport: Final = self._http_transport or httpx2.MockTransport(self._respond)
+        http_client: Final = self._create_httpx_client_factory(transport=transport)(
             headers=self._get_auth_headers(), timeout=httpx2.Timeout(self.timeout)
         )
+        if self._transport_context is not None:
+            return self._transport_context(self.server_url, http_client), http_client
         return streamable_http_client(self.server_url, http_client=http_client), http_client
 
 
@@ -3561,29 +3573,37 @@ async def test_optional_discovery_retains_freshness_across_pages(
         }
         return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": listing_result})
 
-    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", protocol_version="2026-07-28")
     clock: Final = _ManualClockLoop()
-    transport_ctx, http_client = client._create_transport_context()
-    original_close: Final = http_client.aclose
+
+    class CleanupTransport(httpx2.AsyncBaseTransport):
+        def __init__(self) -> None:
+            self._transport = httpx2.MockTransport(respond)
+
+        async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+            return await self._transport.handle_async_request(request)
+
+        async def aclose(self) -> None:
+            await self._transport.aclose()
+            if cleanup_phase == "http_client":
+                clock.advance(cleanup_seconds)
 
     @asynccontextmanager
-    async def transport_with_cleanup() -> AsyncIterator[_TransportStreams]:
-        async with transport_ctx as streams:
+    async def transport_with_cleanup(url: str, http_client: httpx2.AsyncClient) -> AsyncIterator[_TransportStreams]:
+        async with streamable_http_client(url, http_client=http_client) as streams:
             yield streams
         if cleanup_phase == "transport":
             clock.advance(cleanup_seconds)
 
-    async def close_http_client() -> None:
-        await original_close()
-        if cleanup_phase == "http_client":
-            clock.advance(cleanup_seconds)
+    client: Final = _MockTransportClient(
+        respond,
+        http_transport=CleanupTransport(),
+        transport_context=transport_with_cleanup,
+        server_url="https://example.com/mcp",
+        protocol_version="2026-07-28",
+    )
 
     try:
-        with (
-            patch.object(client, "_create_transport_context", return_value=(transport_with_cleanup(), http_client)),
-            patch.object(http_client, "aclose", side_effect=close_http_client),
-            patch.object(mcp_client_module, "time", Mock(monotonic=clock.time)),
-        ):
+        with patch.object(mcp_client_module, "time", Mock(monotonic=clock.time)):
             result: Final = await getattr(client, "list_" + kind + "_result")(raise_on_error=True)
     finally:
         clock.close()

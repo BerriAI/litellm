@@ -15427,6 +15427,28 @@ async def test_discovery_cache_isolates_forwarded_credentials_and_static_auth_ca
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
+@pytest.mark.parametrize("header", ("Authorization", "X-LiteLLM-API-Key"))
+@pytest.mark.parametrize("identified", (False, True))
+async def test_discovery_cache_isolates_keyless_admission_credentials(
+    kind: str, header: str, identified: bool
+) -> None:
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
+    server: Final = _discovery_server().model_copy(update={"static_headers": {"Authorization": "Bearer upstream"}})
+    auth: Final = UserAPIKeyAuth(team_id="shared-team", user_id="known-user" if identified else None)
+    operation: Final = {
+        "prompts": manager.get_prompts_from_server,
+        "resources": manager.get_resources_from_server,
+        "templates": manager.get_resource_templates_from_server,
+    }[kind]
+    with _mcp_upstream(upstream.respond):
+        for credential in ("Bearer first", "Bearer second", "Bearer first"):
+            assert len(await operation(server, auth, raw_headers={header: credential})) == 1
+        assert upstream.initializes == (1 if identified else 2)
+
+
+@pytest.mark.asyncio
 async def test_discovery_cache_coalesces_and_survives_waiter_cancellation() -> None:
     import respx
 

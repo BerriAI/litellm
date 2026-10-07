@@ -4528,6 +4528,7 @@ class MCPServerManager:
         stdio_env: dict[str, str] | None,
         subject_token: str | None,
         credential_fingerprint: str | None = None,
+        raw_headers: Mapping[str, str] | None = None,
     ) -> _DiscoveryKey:
         identity: Final = (
             user_api_key_auth.model_dump(
@@ -4547,7 +4548,7 @@ class MCPServerManager:
         material: Final = json.dumps(
             (
                 _configuration_identity(server),
-                _admission_identity(user_api_key_auth, None) if user_api_key_auth is not None else None,
+                _admission_identity(user_api_key_auth, raw_headers) if user_api_key_auth is not None else None,
                 identity,
                 mcp_auth_header,
                 extra_headers,
@@ -4670,7 +4671,14 @@ class MCPServerManager:
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
+                server,
+                user_api_key_auth,
+                mcp_auth_header,
+                headers,
+                stdio_env,
+                subject_token,
+                credential_fingerprint,
+                raw_headers=raw_headers,
             )
 
             async def fetch() -> ListPromptsResult:
@@ -4718,7 +4726,14 @@ class MCPServerManager:
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
+                server,
+                user_api_key_auth,
+                mcp_auth_header,
+                headers,
+                stdio_env,
+                subject_token,
+                credential_fingerprint,
+                raw_headers=raw_headers,
             )
 
             async def fetch() -> ListResourcesResult:
@@ -4766,7 +4781,14 @@ class MCPServerManager:
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
+                server,
+                user_api_key_auth,
+                mcp_auth_header,
+                headers,
+                stdio_env,
+                subject_token,
+                credential_fingerprint,
+                raw_headers=raw_headers,
             )
 
             async def fetch() -> ListResourceTemplatesResult:
