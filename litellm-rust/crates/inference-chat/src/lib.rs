@@ -6,7 +6,7 @@ mod common_utils;
 pub mod constants;
 pub(crate) mod handler;
 mod prepare;
-use litellm_llms_types::formats::chat::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use prepare::{prepare_provider_request, resolve_request};
 
 use litellm_auth::AuthServices;

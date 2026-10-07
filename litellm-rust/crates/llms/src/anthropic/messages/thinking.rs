@@ -1,6 +1,6 @@
 use litellm_llms_types::{
     formats::{
-        chat::ReasoningEffort,
+        chat_completions::ReasoningEffort,
         messages::{
             EffortLevel, MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig,
             ThinkingDisplay,

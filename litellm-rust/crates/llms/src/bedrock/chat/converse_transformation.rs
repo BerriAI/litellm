@@ -8,7 +8,7 @@ use litellm_core_utils::{
     core_helpers::unix_now,
     prompt_templates::factory::{Conversation, TurnRole, build_conversation},
 };
-use litellm_llms_types::formats::chat::{
+use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
     ChatCompletionsUsage, ChatMessage, ChatMessageContent,
 };

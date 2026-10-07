@@ -1,5 +1,5 @@
 use litellm_llms_types::{
-    formats::chat::{
+    formats::chat_completions::{
         ChatContentPart, ChatLogprobs, ChatMediaUrl, ChatMessageContent, ReasoningEffort,
     },
     recognized::Recognized,

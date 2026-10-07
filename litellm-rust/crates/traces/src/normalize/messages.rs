@@ -9,7 +9,7 @@ use std::{
     io,
 };
 
-use litellm_llms_types::{formats::chat::ChatMessageContent, recognized::Recognized};
+use litellm_llms_types::{formats::chat_completions::ChatMessageContent, recognized::Recognized};
 
 use super::{CallEvidence, CallKey, attr};
 

@@ -1,4 +1,4 @@
-use litellm_llms_types::formats::chat::ChatMessage;
+use litellm_llms_types::formats::chat_completions::ChatMessage;
 use rstest::rstest;
 use serde_json::json;
 

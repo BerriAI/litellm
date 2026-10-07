@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
 use strum::IntoStaticStr;
 
-use crate::formats::chat::ReasoningEffort;
+use crate::formats::chat_completions::ReasoningEffort;
 use crate::recognized::Recognized;
 
 use super::{

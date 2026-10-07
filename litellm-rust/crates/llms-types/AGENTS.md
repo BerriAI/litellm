@@ -1,6 +1,6 @@
 # structure
 
-- `formats/{messages,chat,responses,ocr,audio_transcription,batches}` owns shared API payloads; `chat` means Chat Completions
+- `formats/{messages,chat_completions,responses,ocr,audio_transcription,batches}` owns shared API payloads; `chat_completions` owns Chat Completions
 - Split larger formats by content, request, response and streaming; keep small contracts in one file
 - `providers/` owns shared provider wire extensions; `headers`, `json_schema`, `recognized` and `serde_compat` are format-independent data helpers
 
