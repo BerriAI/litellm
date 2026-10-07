@@ -25,7 +25,7 @@ def test_audio_embedding_request() -> None:
         "embeddingDimension": 1024,
         "audio": {"format": "mp3", "source": {"s3Location": {"uri": "s3://my-bucket/audio.mp3"}}},
     }
-    request: Final = config._transform_request(
+    request: Final = config.transform_request(
         input="s3://my-bucket/audio.mp3", inference_params=inference_params, async_invoke_route=False
     )
     params: Final = request["singleEmbeddingParams"]
@@ -39,7 +39,7 @@ def test_data_url_audio_parsing() -> None:
     """Test that data URL audio files are properly parsed."""
     config: Final = AmazonNovaEmbeddingConfig()
     audio_data_url: Final = "data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAA"
-    request: Final = config._transform_request(input=audio_data_url, inference_params={}, async_invoke_route=False)
+    request: Final = config.transform_request(input=audio_data_url, inference_params={}, async_invoke_route=False)
     params: Final = request["singleEmbeddingParams"]
     assert "audio" in params
     assert params["audio"]["format"] == "mp3"
@@ -50,7 +50,7 @@ def test_data_url_image_parsing() -> None:
     """Test that data URL images are properly parsed and transformed."""
     config: Final = AmazonNovaEmbeddingConfig()
     jpeg_data_url: Final = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAASABIAAD"
-    request: Final = config._transform_request(
+    request: Final = config.transform_request(
         input=jpeg_data_url, inference_params={"dimensions": 1024}, async_invoke_route=False
     )
     params: Final = request["singleEmbeddingParams"]
@@ -66,7 +66,7 @@ def test_data_url_jpg_format_conversion() -> None:
     """Test that jpg format is converted to jpeg."""
     config: Final = AmazonNovaEmbeddingConfig()
     jpg_data_url: Final = "data:image/jpg;base64,/9j/4AAQSkZJRg"
-    request: Final = config._transform_request(input=jpg_data_url, inference_params={}, async_invoke_route=False)
+    request: Final = config.transform_request(input=jpg_data_url, inference_params={}, async_invoke_route=False)
     params: Final = request["singleEmbeddingParams"]
     assert params["image"]["format"] == "jpeg"
 
@@ -75,7 +75,7 @@ def test_data_url_png_image_parsing() -> None:
     """Test that data URL PNG images are properly parsed."""
     config: Final = AmazonNovaEmbeddingConfig()
     png_data_url: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
-    request: Final = config._transform_request(input=png_data_url, inference_params={}, async_invoke_route=False)
+    request: Final = config.transform_request(input=png_data_url, inference_params={}, async_invoke_route=False)
     params: Final = request["singleEmbeddingParams"]
     assert "image" in params
     assert params["image"]["format"] == "png"
@@ -86,7 +86,7 @@ def test_data_url_video_parsing() -> None:
     """Test that data URL videos are properly parsed."""
     config: Final = AmazonNovaEmbeddingConfig()
     video_data_url: Final = "data:video/mp4;base64,AAAAIGZ0eXBpc29t"
-    request: Final = config._transform_request(input=video_data_url, inference_params={}, async_invoke_route=False)
+    request: Final = config.transform_request(input=video_data_url, inference_params={}, async_invoke_route=False)
     params: Final = request["singleEmbeddingParams"]
     assert "video" in params
     assert params["video"]["format"] == "mp4"
@@ -96,7 +96,7 @@ def test_data_url_video_parsing() -> None:
 def test_default_embedding_dimension() -> None:
     """Test default embedding dimension is 3072."""
     config: Final = AmazonNovaEmbeddingConfig()
-    request: Final = config._transform_request(input="Test text", inference_params={}, async_invoke_route=False)
+    request: Final = config.transform_request(input="Test text", inference_params={}, async_invoke_route=False)
     params: Final = request["singleEmbeddingParams"]
     assert params["embeddingDimension"] == 3072
 
@@ -104,7 +104,7 @@ def test_default_embedding_dimension() -> None:
 def test_default_embedding_purpose() -> None:
     """Test default embedding purpose is GENERIC_INDEX."""
     config: Final = AmazonNovaEmbeddingConfig()
-    request: Final = config._transform_request(input="Test text", inference_params={}, async_invoke_route=False)
+    request: Final = config.transform_request(input="Test text", inference_params={}, async_invoke_route=False)
     params: Final = request["singleEmbeddingParams"]
     assert params["embeddingPurpose"] == "GENERIC_INDEX"
 
@@ -120,7 +120,7 @@ def test_image_embedding_request() -> None:
         "embeddingDimension": 1024,
         "image": {"format": "png", "source": {"bytes": image_data}, "detailLevel": "STANDARD_IMAGE"},
     }
-    request: Final = config._transform_request(
+    request: Final = config.transform_request(
         input=image_data, inference_params=inference_params, async_invoke_route=False
     )
     params: Final = request["singleEmbeddingParams"]
@@ -141,7 +141,7 @@ def test_text_embedding_async_request() -> None:
         "text": {"value": "Long text content...", "segmentationConfig": {"maxLengthChars": 10000}},
         "output_s3_uri": "s3://my-bucket/output/",
     }
-    request: Final = config._transform_request(
+    request: Final = config.transform_request(
         input="Long text content...",
         inference_params=inference_params,
         async_invoke_route=True,
@@ -168,7 +168,7 @@ def test_text_embedding_sync_request() -> None:
         "embedding_dimension": 1024,
         "truncation_mode": "END",
     }
-    request: Final = config._transform_request(
+    request: Final = config.transform_request(
         input="Hello, world!", inference_params=inference_params, async_invoke_route=False
     )
     assert request["schemaVersion"] == "nova-multimodal-embed-v1"
@@ -193,7 +193,7 @@ def test_video_embedding_request() -> None:
             "embeddingMode": "AUDIO_VIDEO_COMBINED",
         },
     }
-    request: Final = config._transform_request(
+    request: Final = config.transform_request(
         input="s3://my-bucket/video.mp4", inference_params=inference_params, async_invoke_route=False
     )
     params: Final = request["singleEmbeddingParams"]
@@ -208,7 +208,7 @@ def test_async_invoke_response() -> None:
     """Test async invoke response transformation."""
     config: Final = AmazonNovaEmbeddingConfig()
     response: Final = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"}
-    result: Final = config._transform_async_invoke_response(response, model="amazon.nova-2-multimodal-embeddings-v1:0")
+    result: Final = config.transform_async_invoke_response(response, model="amazon.nova-2-multimodal-embeddings-v1:0")
     assert result.model == "amazon.nova-2-multimodal-embeddings-v1:0"
     assert len(result.data) == 1
     assert result.data[0].embedding == []
@@ -233,7 +233,7 @@ def test_image_embedding_response_with_image_count() -> None:
             },
         }
     ]
-    result: Final = config._transform_response(
+    result: Final = config.transform_response(
         response_list=response_list, model="amazon.nova-2-multimodal-embeddings-v1:0", batch_data=batch_data
     )
     assert result.usage is not None
@@ -248,7 +248,7 @@ def test_multiple_embeddings_response() -> None:
         {"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3]}]},
         {"embeddings": [{"embeddingType": "TEXT", "embedding": [0.4, 0.5, 0.6]}]},
     ]
-    result: Final = config._transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
+    result: Final = config.transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
     assert len(result.data) == 2
     assert result.data[0].embedding == [0.1, 0.2, 0.3]
     assert result.data[1].embedding == [0.4, 0.5, 0.6]
@@ -260,7 +260,7 @@ def test_nova_embedding_backward_compat_no_batch_data() -> None:
     """Test that Nova transformer works without batch_data (backward compatibility)."""
     config: Final = AmazonNovaEmbeddingConfig()
     response_list: Final = [{"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]}]}]
-    result: Final = config._transform_response(
+    result: Final = config.transform_response(
         response_list=response_list, model="amazon.nova-2-multimodal-embeddings-v1:0"
     )
     assert result.usage is not None
@@ -272,7 +272,7 @@ def test_text_embedding_response() -> None:
     """Test text embedding response transformation."""
     config: Final = AmazonNovaEmbeddingConfig()
     response_list: Final = [{"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]}]}]
-    result: Final = config._transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
+    result: Final = config.transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
     assert result.model == "amazon.nova-2-multimodal-embeddings-v1:0"
     assert len(result.data) == 1
     assert result.data[0].embedding == [0.1, 0.2, 0.3, 0.4, 0.5]
@@ -298,7 +298,7 @@ def test_text_embedding_response_no_image_count() -> None:
             },
         }
     ]
-    result: Final = config._transform_response(
+    result: Final = config.transform_response(
         response_list=response_list, model="amazon.nova-2-multimodal-embeddings-v1:0", batch_data=batch_data
     )
     assert result.usage is not None
@@ -316,7 +316,7 @@ def test_video_embedding_response_separate_mode() -> None:
             ]
         }
     ]
-    result: Final = config._transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
+    result: Final = config.transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
     assert len(result.data) == 2
     assert result.data[0].embedding == [0.1, 0.2, 0.3]
     assert result.data[1].embedding == [0.4, 0.5, 0.6]

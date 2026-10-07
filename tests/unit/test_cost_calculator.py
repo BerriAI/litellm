@@ -2692,7 +2692,7 @@ def test_gemini_cache_tokens_details_no_negative_values():
         }
     }
 
-    usage = VertexGeminiConfig._calculate_usage(completion_response)
+    usage = VertexGeminiConfig.calculate_usage(completion_response)
 
     # Text tokens should be non-cached text only: 9402 - 9393 = 9
     assert usage.prompt_tokens_details.text_tokens == 9, (
@@ -2741,7 +2741,7 @@ def test_gemini_without_cache_tokens_details():
         }
     }
 
-    usage = VertexGeminiConfig._calculate_usage(completion_response)
+    usage = VertexGeminiConfig.calculate_usage(completion_response)
 
     # Should use promptTokensDetails values directly
     assert usage.prompt_tokens_details.text_tokens == 6

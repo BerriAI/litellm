@@ -136,13 +136,13 @@ def test_azure_ai_agents_config_get_agent_id():
 
     config = AzureAIAgentsConfig()
 
-    agent_id = config._get_agent_id("azure_ai/agents/asst_abc123", {})
+    agent_id = config.get_agent_id("azure_ai/agents/asst_abc123", {})
     assert agent_id == "asst_abc123"
 
-    agent_id = config._get_agent_id("azure_ai/agents/asst_abc123", {"agent_id": "asst_override"})
+    agent_id = config.get_agent_id("azure_ai/agents/asst_abc123", {"agent_id": "asst_override"})
     assert agent_id == "asst_override"
 
-    agent_id = config._get_agent_id("azure_ai/agents/asst_abc123", {"assistant_id": "asst_assistant"})
+    agent_id = config.get_agent_id("azure_ai/agents/asst_abc123", {"assistant_id": "asst_assistant"})
     assert agent_id == "asst_assistant"
 
 

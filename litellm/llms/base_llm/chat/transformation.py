@@ -146,6 +146,13 @@ class BaseConfig(ABC):
             ]
         return optional_params
 
+    def add_tools_to_optional_params(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        tools: list[ChatCompletionToolParam],  # mutable-ok: mirrors override contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._add_tools_to_optional_params(optional_params, tools)
+
     def translate_developer_role_to_system_role(
         self,
         messages: list[AllMessageValues],

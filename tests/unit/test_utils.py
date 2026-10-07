@@ -7895,7 +7895,7 @@ def test_async_http_handler(mock_async_client):
     event_hooks = {"request": [lambda r: r]}
     concurrent_limit = 2
 
-    with mock.patch.object(AsyncHTTPHandler, "_create_async_transport") as mock_create_transport:
+    with mock.patch.object(AsyncHTTPHandler, "create_async_transport") as mock_create_transport:
         mock_transport = mock.MagicMock()
         mock_create_transport.return_value = mock_transport
 

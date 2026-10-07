@@ -1,4 +1,4 @@
-"""Unit tests for ``BedrockBatchesHandler._handle_model_invocation_job_status``.
+"""Unit tests for ``BedrockBatchesHandler.handle_model_invocation_job_status``.
 
 These cover the upstream support for retrieving Bedrock bulk batch jobs
 (``arn:aws:bedrock:<region>:<acct>:model-invocation-job/<id>``) — the ARN
@@ -143,7 +143,7 @@ def test_predict_output_file_uri_returns_none_when_missing_input(missing_arg):
 def test_handle_model_invocation_job_status_completed(patched_boto3):
     fake_client, boto_client_factory = patched_boto3
 
-    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     fake_client.get_model_invocation_job.assert_called_once_with(jobIdentifier=JOB_ARN)
 
@@ -175,7 +175,7 @@ def test_completed_job_maps_provider_record_counts(patched_boto3, success_count,
         "errorRecordCount": error_count,
     }
 
-    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.request_counts is not None
     assert (batch.request_counts.total, batch.request_counts.completed, batch.request_counts.failed) == (
@@ -189,7 +189,7 @@ def test_missing_record_counts_leave_request_counts_none(patched_boto3):
     fake_client, _ = patched_boto3
     fake_client.get_model_invocation_job.return_value = _fake_boto3_response()
 
-    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.request_counts is None
 
@@ -198,7 +198,7 @@ def test_total_without_success_count_leaves_request_counts_none(patched_boto3):
     fake_client, _ = patched_boto3
     fake_client.get_model_invocation_job.return_value = {**_fake_boto3_response(), "totalRecordCount": 100}
 
-    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.request_counts is None
 
@@ -211,7 +211,7 @@ def test_missing_error_count_maps_to_zero_failed(patched_boto3):
         "successRecordCount": 100,
     }
 
-    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.request_counts is not None
     assert (batch.request_counts.total, batch.request_counts.completed, batch.request_counts.failed) == (100, 100, 0)
@@ -237,11 +237,9 @@ def test_missing_error_count_maps_to_zero_failed(patched_boto3):
 )
 def test_status_mapping(patched_boto3, bedrock_status, openai_status):
     fake_client, _ = patched_boto3
-    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(
-        status=bedrock_status
-    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status=bedrock_status)
 
-    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.status == openai_status
     # output_file_id is only populated for terminal-completed jobs, so callers
@@ -254,9 +252,7 @@ def test_status_mapping(patched_boto3, bedrock_status, openai_status):
 
 def test_explicit_region_overrides_arn(patched_boto3):
     _, boto_client_factory = patched_boto3
-    BedrockBatchesHandler._handle_model_invocation_job_status(
-        batch_id=JOB_ARN, aws_region_name="eu-central-1"
-    )
+    BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN, aws_region_name="eu-central-1")
     _, kwargs = boto_client_factory.call_args
     assert kwargs["region_name"] == "eu-central-1"
 
@@ -267,7 +263,7 @@ def test_failure_message_propagates(patched_boto3):
     failed_response["message"] = "Input file failed validation"
     fake_client.get_model_invocation_job.return_value = failed_response
 
-    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.status == "failed"
     assert batch.failed_at == int(END_TIME.timestamp())
@@ -287,7 +283,7 @@ def test_completed_with_unpredictable_output_uri_stays_none(patched_boto3):
     incomplete_response["inputDataConfig"] = {"s3InputDataConfig": {"s3Uri": ""}}
     fake_client.get_model_invocation_job.return_value = incomplete_response
 
-    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.status == "completed"
     # output_file_id MUST be None (not the bare prefix) — that's the whole
@@ -302,11 +298,9 @@ def test_completed_with_unpredictable_output_uri_stays_none(patched_boto3):
 
 def test_cancelled_status_sets_cancelled_at(patched_boto3):
     fake_client, _ = patched_boto3
-    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(
-        status="Stopped"
-    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="Stopped")
 
-    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.status == "cancelled"
     assert batch.cancelled_at == int(END_TIME.timestamp())
@@ -317,11 +311,9 @@ def test_cancelled_status_sets_cancelled_at(patched_boto3):
 
 def test_expired_status_sets_expired_at(patched_boto3):
     fake_client, _ = patched_boto3
-    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(
-        status="Expired"
-    )
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response(status="Expired")
 
-    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.status == "expired"
     assert batch.expired_at == int(END_TIME.timestamp())
@@ -336,18 +328,14 @@ def test_logging_obj_pre_and_post_call_invoked(patched_boto3):
     _, _ = patched_boto3
     logging_obj = MagicMock()
 
-    BedrockBatchesHandler._handle_model_invocation_job_status(
-        batch_id=JOB_ARN, logging_obj=logging_obj
-    )
+    BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN, logging_obj=logging_obj)
 
     logging_obj.pre_call.assert_called_once()
     logging_obj.post_call.assert_called_once()
 
     pre_kwargs = logging_obj.pre_call.call_args.kwargs
     assert pre_kwargs["input"] == JOB_ARN
-    assert pre_kwargs["additional_args"]["complete_input_dict"] == {
-        "jobIdentifier": JOB_ARN
-    }
+    assert pre_kwargs["additional_args"]["complete_input_dict"] == {"jobIdentifier": JOB_ARN}
     # Logged URL must use the bare job id, not the full ARN, so it doesn't
     # double the `model-invocation-job/` segment or embed colons in the path.
     assert pre_kwargs["additional_args"]["api_base"] == (
@@ -375,7 +363,7 @@ def test_missing_boto3_raises_helpful_import_error():
 
     with patch("builtins.__import__", side_effect=fake_import):
         with pytest.raises(ImportError, match="pip install boto3"):
-            BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+            BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
 
 def test_logging_url_uses_bare_id_when_only_id_passed(patched_boto3):
@@ -384,7 +372,7 @@ def test_logging_url_uses_bare_id_when_only_id_passed(patched_boto3):
     _, _ = patched_boto3
     logging_obj = MagicMock()
 
-    BedrockBatchesHandler._handle_model_invocation_job_status(
+    BedrockBatchesHandler.handle_model_invocation_job_status(
         batch_id=JOB_ID, aws_region_name="us-west-2", logging_obj=logging_obj
     )
 
@@ -535,7 +523,7 @@ def test_handle_model_invocation_job_status_builds_the_client_from_the_tagged_se
         return fake_bedrock
 
     with patch("boto3.client", side_effect=boto3_client):
-        batch = BedrockBatchesHandler._handle_model_invocation_job_status(
+        batch = BedrockBatchesHandler.handle_model_invocation_job_status(
             batch_id=JOB_ARN,
             aws_access_key_id="AKIABATCHSTATUSCALLER",
             aws_secret_access_key="pod-caller-secret",
@@ -609,7 +597,7 @@ def test_retrieve_signs_with_deployment_credentials_when_env_bearer_token_is_set
     recorder: Final = _AuthorizationRecorder(_fake_boto3_response())
 
     with patch("botocore.httpsession.URLLib3Session.send", recorder.send):
-        batch = BedrockBatchesHandler._handle_model_invocation_job_status(
+        batch = BedrockBatchesHandler.handle_model_invocation_job_status(
             batch_id=JOB_ARN,
             aws_access_key_id="AKIADEPLOYMENTKEY",
             aws_secret_access_key="deployment-secret",

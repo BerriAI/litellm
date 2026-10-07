@@ -24,7 +24,7 @@ async def test_get_openai_compatible_provider_info():
         api_base,
         dynamic_api_key,
         custom_llm_provider,
-    ) = config._get_openai_compatible_provider_info(
+    ) = config.get_openai_compatible_provider_info(
         model="azure_ai/gpt-4o-mini",
         api_base="https://my-base",
         api_key="my-key",
@@ -58,7 +58,7 @@ def test_foundry_base_keeps_azure_ai_provider(model: str, api_base: str, expecte
         _,
         _,
         custom_llm_provider,
-    ) = config._get_openai_compatible_provider_info(
+    ) = config.get_openai_compatible_provider_info(
         model=model,
         api_base=api_base,
         api_key="my-key",

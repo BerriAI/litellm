@@ -612,7 +612,7 @@ def test_map_tool_helper():
 
     tool = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
 
-    result, _ = config._map_tool_helper(tool)
+    result, _ = config.map_tool_helper(tool)
     assert result is not None
     assert result["name"] == "web_search"
     assert result["max_uses"] == 5
@@ -1428,7 +1428,7 @@ def test_tool_search_regex_mapping():
 
     tool = {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}
 
-    mapped_tool, mcp_server = config._map_tool_helper(tool)
+    mapped_tool, mcp_server = config.map_tool_helper(tool)
 
     assert mapped_tool is not None
     assert mapped_tool["type"] == "tool_search_tool_regex_20251119"
@@ -1442,7 +1442,7 @@ def test_tool_search_bm25_mapping():
 
     tool = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
 
-    mapped_tool, mcp_server = config._map_tool_helper(tool)
+    mapped_tool, mcp_server = config.map_tool_helper(tool)
 
     assert mapped_tool is not None
     assert mapped_tool["type"] == "tool_search_tool_bm25_20251119"
@@ -1564,7 +1564,7 @@ def test_defer_loading_preserved_in_transformation():
         "defer_loading": True,
     }
 
-    mapped_tool, mcp_server = config._map_tool_helper(tool)
+    mapped_tool, mcp_server = config.map_tool_helper(tool)
 
     assert mapped_tool is not None
     assert mapped_tool.get("defer_loading") is True
@@ -1668,7 +1668,7 @@ def test_allowed_callers_field_preservation():
         "allowed_callers": ["code_execution_20250825"],
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool_with_allowed_callers)
+    transformed_tool, _ = config.map_tool_helper(tool_with_allowed_callers)
     assert transformed_tool is not None
     assert "allowed_callers" in transformed_tool
     assert transformed_tool["allowed_callers"] == ["code_execution_20250825"]
@@ -1756,7 +1756,7 @@ def test_code_execution_20250825_tool_type():
 
     tool = {"type": "code_execution_20250825", "name": "code_execution"}
 
-    transformed_tool, _ = config._map_tool_helper(tool)
+    transformed_tool, _ = config.map_tool_helper(tool)
     assert transformed_tool is not None
     assert transformed_tool["type"] == "code_execution_20250825"
     assert transformed_tool["name"] == "code_execution"
@@ -1781,7 +1781,7 @@ def test_allowed_callers_in_function_field():
         },
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool)
+    transformed_tool, _ = config.map_tool_helper(tool)
     assert transformed_tool is not None
     assert "allowed_callers" in transformed_tool
     assert transformed_tool["allowed_callers"] == ["code_execution_20250825"]
@@ -1812,7 +1812,7 @@ def test_input_examples_field_preservation():
         ],
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool_with_examples)
+    transformed_tool, _ = config.map_tool_helper(tool_with_examples)
     assert transformed_tool is not None
     assert "input_examples" in transformed_tool
     assert len(transformed_tool["input_examples"]) == 2
@@ -1870,7 +1870,7 @@ def test_input_examples_in_function_field():
         },
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool)
+    transformed_tool, _ = config.map_tool_helper(tool)
     assert transformed_tool is not None
     assert "input_examples" in transformed_tool
     assert len(transformed_tool["input_examples"]) == 2
@@ -1897,7 +1897,7 @@ def test_input_examples_with_other_features():
         "allowed_callers": ["code_execution_20250825"],
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool)
+    transformed_tool, _ = config.map_tool_helper(tool)
     assert transformed_tool is not None
     assert "input_examples" in transformed_tool
     assert "defer_loading" in transformed_tool
@@ -1925,7 +1925,7 @@ def test_input_examples_empty_list_not_added():
         "input_examples": [],
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool)
+    transformed_tool, _ = config.map_tool_helper(tool)
     assert transformed_tool is not None
     # Empty list should not be added
     assert "input_examples" not in transformed_tool or len(transformed_tool.get("input_examples", [])) == 0
@@ -2199,7 +2199,7 @@ def test_anthropic_drop_params_false_forwards_to_unsupported_model():
     ],
 )
 def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is True
+    assert AnthropicConfig.model_supports_effort_param(model, "anthropic") is True
 
 
 @pytest.mark.parametrize(
@@ -2212,7 +2212,7 @@ def test_anthropic_model_supports_effort_param_recognizes_supporting_models(mode
     ],
 )
 def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is False
+    assert AnthropicConfig.model_supports_effort_param(model, "anthropic") is False
 
 
 @pytest.mark.parametrize(
@@ -2536,7 +2536,7 @@ def test_supports_effort_level_handles_provider_prefixes(model, level, expected)
     ],
 )
 def test_validate_effort_for_model_centralises_per_model_gating(model, effort, expect_error):
-    err = AnthropicConfig._validate_effort_for_model(model, effort, "anthropic")
+    err = AnthropicConfig.validate_effort_for_model(model, effort, "anthropic")
     if expect_error:
         assert err is not None
         assert effort in err
@@ -2811,7 +2811,7 @@ def test_is_adaptive_thinking_model_is_sourced_from_cost_map(local_model_cost_ma
     fallback for ids the cost map cannot resolve. The dated Claude 4.0 names stay
     non-adaptive because the date suffix is not read as a minor version, while 4.8/4.9/5.x
     are covered without a code change."""
-    assert AnthropicConfig._is_adaptive_thinking_model(model, "anthropic") is expected
+    assert AnthropicConfig.is_adaptive_thinking_model(model, "anthropic") is expected
 
 
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias(
@@ -4417,7 +4417,7 @@ def test_map_tool_helper_enforces_object_type_when_missing():
     }
 
     original_params = tool["function"]["parameters"].copy()
-    result, _ = config._map_tool_helper(tool)
+    result, _ = config.map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert "properties" in result["input_schema"]
@@ -4448,7 +4448,7 @@ def test_map_tool_helper_enforces_object_type_when_wrong_type():
     }
 
     original_params = tool["function"]["parameters"].copy()
-    result, _ = config._map_tool_helper(tool)
+    result, _ = config.map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}, (
@@ -4482,7 +4482,7 @@ def test_map_tool_helper_preserves_valid_object_schema():
         },
     }
 
-    result, _ = config._map_tool_helper(tool)
+    result, _ = config.map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert "city" in result["input_schema"]["properties"]
@@ -4504,7 +4504,7 @@ def test_map_tool_helper_empty_parameters_get_default():
         },
     }
 
-    result, _ = config._map_tool_helper(tool)
+    result, _ = config.map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}
@@ -4563,7 +4563,7 @@ def test_advisor_tool_map_tool_helper():
         "name": "advisor",
         "model": "claude-opus-4-6",
     }
-    returned_tool, mcp_server = config._map_tool_helper(tool)  # type: ignore
+    returned_tool, mcp_server = config.map_tool_helper(tool)  # type: ignore
     assert returned_tool is not None
     assert returned_tool["type"] == "advisor_20260301"
     assert returned_tool["model"] == "claude-opus-4-6"
@@ -4580,7 +4580,7 @@ def test_advisor_tool_map_tool_helper_with_optional_fields():
         "max_uses": 3,
         "caching": {"type": "ephemeral", "ttl": "5m"},
     }
-    returned_tool, _ = config._map_tool_helper(tool)  # type: ignore
+    returned_tool, _ = config.map_tool_helper(tool)  # type: ignore
     assert returned_tool is not None
     assert returned_tool["max_uses"] == 3
     assert returned_tool["caching"] == {"type": "ephemeral", "ttl": "5m"}
@@ -4591,7 +4591,7 @@ def test_advisor_tool_map_tool_helper_missing_model():
     config = AnthropicConfig()
     tool = {"type": "advisor_20260301", "name": "advisor"}
     with pytest.raises(ValueError, match="valid model"):
-        config._map_tool_helper(tool)  # type: ignore
+        config.map_tool_helper(tool)  # type: ignore
 
 
 def test_advisor_beta_header_injected():
@@ -5519,7 +5519,7 @@ def test_map_tool_helper_inlines_components_schemas_refs():
         },
     }
 
-    transformed, _ = config._map_tool_helper(tool)
+    transformed, _ = config.map_tool_helper(tool)
 
     assert transformed is not None
     schema = transformed["input_schema"]
@@ -5559,7 +5559,7 @@ def test_map_tool_helper_inlines_legacy_definitions_refs():
         },
     }
 
-    transformed, _ = config._map_tool_helper(tool)
+    transformed, _ = config.map_tool_helper(tool)
 
     assert transformed is not None
     schema = transformed["input_schema"]
@@ -5590,7 +5590,7 @@ def test_map_tool_helper_preserves_native_dollar_defs():
         },
     }
 
-    transformed, _ = config._map_tool_helper(tool)
+    transformed, _ = config.map_tool_helper(tool)
 
     assert transformed is not None
     schema = transformed["input_schema"]
@@ -5622,7 +5622,7 @@ def test_map_tool_helper_does_not_mutate_caller_dict():
     }
     snapshot = copy.deepcopy(tool)
 
-    config._map_tool_helper(tool)
+    config.map_tool_helper(tool)
 
     assert tool == snapshot, "caller's tool dict was mutated in place"
 
@@ -5662,7 +5662,7 @@ def test_map_tool_helper_collision_prefers_definitions_over_components_schemas()
         },
     }
 
-    transformed, _ = config._map_tool_helper(tool)
+    transformed, _ = config.map_tool_helper(tool)
 
     assert transformed is not None
     expected = {"type": "string", "description": "from-definitions"}
@@ -5860,7 +5860,7 @@ def test_namespace_tool_flat_nested_tools_are_extracted():
             ],
         }
     ]
-    anthropic_tools, _ = config._map_tools(tools)
+    anthropic_tools, _ = config.map_tools(tools)
     assert len(anthropic_tools) == 1
     assert anthropic_tools[0]["name"] == "close_agent"
 
@@ -5911,7 +5911,7 @@ def test_namespace_tool_nested_tools_are_extracted():
             },
         },
     ]
-    anthropic_tools, mcp_servers = config._map_tools(tools)
+    anthropic_tools, mcp_servers = config.map_tools(tools)
     names = [t["name"] for t in anthropic_tools]
     assert "close_agent" in names
     assert "resume_agent" in names
@@ -6327,7 +6327,7 @@ def _eager_chat_tool(**extra: object) -> dict[str, object]:
 
 @pytest.mark.parametrize("flag", [True, False])
 def test_eager_input_streaming_passed_through_from_tool_top_level(flag):
-    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming=flag))
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(_eager_chat_tool(eager_input_streaming=flag))
 
     assert mapped_tool == {
         "name": "write_file",
@@ -6339,7 +6339,7 @@ def test_eager_input_streaming_passed_through_from_tool_top_level(flag):
 
 
 def test_eager_input_streaming_passed_through_from_function():
-    mapped_tool, _ = AnthropicConfig()._map_tool_helper(
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(
         {"type": "function", "function": _eager_chat_function(eager_input_streaming=True)}
     )
 
@@ -6348,14 +6348,14 @@ def test_eager_input_streaming_passed_through_from_function():
 
 
 def test_eager_input_streaming_absent_stays_absent():
-    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool())
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(_eager_chat_tool())
 
     assert "eager_input_streaming" not in mapped_tool
 
 
 def test_eager_input_streaming_rejects_non_boolean():
     with pytest.raises(litellm.BadRequestError, match="eager_input_streaming must be a boolean"):
-        AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming="true"))
+        AnthropicConfig().map_tool_helper(_eager_chat_tool(eager_input_streaming="true"))
 
 
 def test_eager_input_streaming_not_set_on_computer_use_tool():
@@ -6365,7 +6365,7 @@ def test_eager_input_streaming_not_set_on_computer_use_tool():
         "eager_input_streaming": True,
     }
 
-    mapped_tool, _ = AnthropicConfig()._map_tool_helper(computer_tool)
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(computer_tool)
 
     assert mapped_tool["type"] == "computer_20250124"
     assert "eager_input_streaming" not in mapped_tool
@@ -7148,7 +7148,7 @@ def test_anthropic_tool_helper(cache_control_location):
     else:
         tool["cache_control"] = {"type": "ephemeral"}
 
-    tool, _ = AnthropicConfig()._map_tool_helper(tool=tool)
+    tool, _ = AnthropicConfig().map_tool_helper(tool=tool)
 
     assert tool["cache_control"] == {"type": "ephemeral"}
 
@@ -7196,7 +7196,7 @@ def test_convert_tool_response_to_message_with_values():
         )
     ]
 
-    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is not None
     assert message.content == '{"name": "John", "age": 30}'
@@ -7221,7 +7221,7 @@ def test_convert_tool_response_to_message_without_values():
         )
     ]
 
-    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is not None
     assert message.content == '{"name": "John", "age": 30}'
@@ -7238,7 +7238,7 @@ def test_convert_tool_response_to_message_invalid_json():
         )
     ]
 
-    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is not None
     assert message.content == "invalid json"
@@ -7255,14 +7255,15 @@ def test_convert_tool_response_to_message_no_arguments():
         )
     ]
 
-    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is None
 
 
 def test_anthropic_tool_with_image():
-    from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
     import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 
     b64_data = "iVBORw0KGgoAAAANSUhEu6U3//C9t/fKv5wDgpP1r5796XwC4zyH1D565bHGDqbY85AMb0nIQe+u3J390Xbtb9XgXxcK0/aqRXpdYcwgARbCN03FJk"
     image_url = f"data:image/png;base64,{b64_data}"
@@ -7521,7 +7522,7 @@ def test_map_stop_sequences(stop_input, expected_output, drop_params, monkeypatc
     """Test the _map_stop_sequences method of AnthropicConfig"""
     monkeypatch.setattr(litellm, "drop_params", drop_params)
     config = AnthropicConfig()
-    result = config._map_stop_sequences(stop_input)
+    result = config.map_stop_sequences(stop_input)
     assert result == expected_output
 
 

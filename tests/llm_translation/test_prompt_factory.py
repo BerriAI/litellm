@@ -5,6 +5,7 @@ import pytest
 
 
 from typing import List
+from unittest.mock import MagicMock, patch
 
 # from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 import litellm
@@ -13,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     anthropic_pt,
     claude_2_1_pt,
+    convert_to_anthropic_image_obj,
     convert_to_anthropic_tool_invoke,
     convert_url_to_base64,
     create_anthropic_image_param,
@@ -25,10 +27,19 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
-    _gemini_convert_messages_with_history,
+    gemini_convert_messages_with_history,
 )
 from litellm.types.llms.openai import AllMessageValues
-from unittest.mock import MagicMock, patch
+
+
+
+
+
+
+
+
+
+
 
 
 # codellama_prompt_format()
@@ -40,6 +51,56 @@ def test_convert_url_to_img():
     )
 
     assert "image/jpeg" in response_url
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def test_alternating_roles_e2e():
@@ -119,6 +180,8 @@ def test_alternating_roles_e2e():
         )
 
 
+
+
 def test_convert_generic_image_chunk_to_openai_image_obj():
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_generic_image_chunk_to_openai_image_obj,
@@ -132,13 +195,93 @@ def test_convert_generic_image_chunk_to_openai_image_obj():
     print(image_obj)
 
 
+
+
+
+
 # ============ Server Tool Use Reconstruction Tests ============
 # Fixes: https://github.com/BerriAI/litellm/issues/17737
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ============ parse_tool_call_arguments Tests ============
 # Tests for the shared utility that parses tool call JSON arguments
 
 
+
+
+
+
+
+
+
+
 # ============ _attempt_json_repair Tests ============
 # Tests for the JSON repair utility that fixes truncated tool call arguments
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

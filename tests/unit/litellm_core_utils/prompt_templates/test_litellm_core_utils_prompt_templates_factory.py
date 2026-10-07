@@ -54,7 +54,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import get_completion_messages
-from litellm.llms.vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
+from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -146,6 +146,36 @@ def test_ollama_pt_simple_messages():
     assert isinstance(result, dict)
     assert result["prompt"] == expected_prompt
     assert result["images"] == []
+
+
+@pytest.mark.parametrize(
+    ("assistant_content", "rendered_prefix"),
+    [("", ""), ("Checking calc.py", "Checking calc.py\n")],
+)
+def test_ollama_pt_renders_tool_calls_in_function_prompt_format(assistant_content: str, rendered_prefix: str):
+    messages: Final = [
+        {"role": "user", "content": "Fix calc.py"},
+        {
+            "role": "assistant",
+            "content": assistant_content,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": '{"filePath": "calc.py"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "def add(a, b): return a - b"},
+    ]
+
+    result: Final = ollama_pt(model="gemma4:31b", messages=messages)
+
+    assert result["prompt"] == (
+        "### User:\nFix calc.py\n\n"
+        f'### Assistant:\n{rendered_prefix}{{"name": "read", "arguments": {{"filePath": "calc.py"}}}}\n\n'
+        "### User:\ndef add(a, b): return a - b\n\n"
+    )
 
 
 def test_ollama_pt_consecutive_user_messages():
@@ -5148,7 +5178,7 @@ def test_vertex_only_image_user_message():
         },
     ]
 
-    response = _gemini_convert_messages_with_history(messages=messages, model="gemini-1.5-pro")
+    response = gemini_convert_messages_with_history(messages=messages, model="gemini-1.5-pro")
 
     expected_response = [
         {
@@ -5179,7 +5209,7 @@ def test_no_messages_yields_user_text():
     """
     messages: List[AllMessageValues] = []
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     expected_output = [{"role": "user", "parts": [{"text": " "}]}]
 

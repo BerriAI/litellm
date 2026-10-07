@@ -71,7 +71,7 @@ def test_hosted_vllm_responses_create_with_string_input():
     mock_client = _make_mock_http_client(_make_mock_responses_api_response("I'm doing well, thanks!"))
 
     with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
         return_value=mock_client,
     ):
         response = litellm.responses(

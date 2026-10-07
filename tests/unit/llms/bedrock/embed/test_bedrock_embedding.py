@@ -848,7 +848,7 @@ def test_titan_multimodal_embedding_image_cost_tracking():
     # Simulate batch_data with an image request (inputImage key set by _transform_request)
     batch_data = [{"inputImage": "/9j/4AAQSkZJRg=="}]
 
-    result = config._transform_response(
+    result = config.transform_response(
         response_list=response_list,
         model="amazon.titan-embed-image-v1",
         batch_data=batch_data,
@@ -877,7 +877,7 @@ def test_titan_multimodal_embedding_text_no_image_count():
     # Text-only request — no inputImage key
     batch_data = [{"inputText": "hello world"}]
 
-    result = config._transform_response(
+    result = config.transform_response(
         response_list=response_list,
         model="amazon.titan-embed-image-v1",
         batch_data=batch_data,
@@ -904,7 +904,7 @@ def test_titan_multimodal_embedding_backward_compat_no_batch_data():
     ]
 
     # Call without batch_data — should not break
-    result = config._transform_response(
+    result = config.transform_response(
         response_list=response_list,
         model="amazon.titan-embed-image-v1",
     )
@@ -1291,13 +1291,16 @@ def test_marengo_2_7_embedding_keeps_the_flat_payload():
 
 def test_marengo_usage_counts_text_requests_and_images_across_a_batch():
     duck = {"mediaType": "image", "base64String": "ZHVjaw=="}
-    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+    response = TwelveLabsMarengoEmbeddingConfig().transform_response(
         response_list=[marengo_3_embedding_response, marengo_3_embedding_response, marengo_3_embedding_response],
         model="us.twelvelabs.marengo-embed-3-0-v1:0",
         batch_data=[
             {"inputType": "text", "text": {"inputText": "a duck"}},
             {"inputType": "image", "image": {"mediaSource": {"base64String": "ZHVjaw=="}}},
-            {"inputType": "multi_input", "multi_input": {"mediaSources": [{"name": "a", **duck}, {"name": "b", **duck}]}},
+            {
+                "inputType": "multi_input",
+                "multi_input": {"mediaSources": [{"name": "a", **duck}, {"name": "b", **duck}]},
+            },
         ],
     )
 
@@ -1308,7 +1311,7 @@ def test_marengo_usage_counts_text_requests_and_images_across_a_batch():
 
 
 def test_marengo_usage_without_request_data_bills_nothing():
-    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+    response = TwelveLabsMarengoEmbeddingConfig().transform_response(
         response_list=[marengo_3_embedding_response], model="us.twelvelabs.marengo-embed-3-0-v1:0"
     )
 
@@ -1318,7 +1321,7 @@ def test_marengo_usage_without_request_data_bills_nothing():
 
 
 def test_marengo_response_items_without_an_embedding_are_skipped():
-    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+    response = TwelveLabsMarengoEmbeddingConfig().transform_response(
         response_list=[{"data": [{"embeddingOption": "visual-text", "startSec": 0.0}, {"embedding": [0.1, 0.2, 0.3]}]}],
         model="us.twelvelabs.marengo-embed-3-0-v1:0",
     )

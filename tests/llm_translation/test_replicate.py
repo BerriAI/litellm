@@ -19,7 +19,8 @@ from litellm.llms.replicate.chat.handler import (
 class TestReplicateStartingStatus:
     """Test that Replicate handler correctly handles 'starting' status for DeepSeek models"""
 
-    @patch("litellm.llms.replicate.chat.handler._get_httpx_client")
+
+    @patch("litellm.llms.replicate.chat.handler.get_httpx_client")
     def test_sync_completion_handles_starting_status(self, mock_get_client):
         """Test that sync completion polls correctly when status is 'starting'"""
         # Mock the sync HTTP client
@@ -53,7 +54,9 @@ class TestReplicateStartingStatus:
             "status": "succeeded",
             "output": ["Hello", " DeepSeek!"],
         }
-        get_response_succeeded.text = json.dumps(get_response_succeeded.json.return_value)
+        get_response_succeeded.text = json.dumps(
+            get_response_succeeded.json.return_value
+        )
         get_response_succeeded.headers = {}
 
         # Configure mock to return different responses
@@ -89,6 +92,12 @@ class TestReplicateStartingStatus:
 
         # Verify GET was called multiple times
         assert mock_client.get.call_count >= 1
+
+
+class TestReplicateOutputFormats:
+    """Test that Replicate handler handles different output formats from models"""
+
+
 
 
 # Integration test (requires actual API key - skip in CI)

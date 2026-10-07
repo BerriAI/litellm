@@ -842,18 +842,13 @@ def test_bedrock_nova_topk(top_k_param):
         captured_data = result
         return result
 
-    with patch(
-        "litellm.AmazonConverseConfig._transform_request", side_effect=mock_transform
-    ):
+    with patch("litellm.AmazonConverseConfig._transform_request", side_effect=mock_transform):
         litellm.completion(**data)
 
         # Assert that additionalRequestParameters exists and contains topK
         assert "additionalModelRequestFields" in captured_data
         assert "inferenceConfig" in captured_data["additionalModelRequestFields"]
-        assert (
-            captured_data["additionalModelRequestFields"]["inferenceConfig"]["topK"]
-            == 10
-        )
+        assert captured_data["additionalModelRequestFields"]["inferenceConfig"]["topK"] == 10
 
 
 def test_bedrock_cross_region_inference(monkeypatch):

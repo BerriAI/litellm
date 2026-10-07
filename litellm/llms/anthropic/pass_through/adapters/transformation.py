@@ -1502,7 +1502,7 @@ class LiteLLMAnthropicMessagesAdapter:
         return cls._first_positive_prompt_tokens_detail_value(usage, ("web_search_requests",))
 
     @classmethod
-    def _translate_openai_usage_to_anthropic_usage_delta(cls, usage: Usage) -> UsageDelta:
+    def translate_openai_usage_to_anthropic_usage_delta(cls, usage: Usage) -> UsageDelta:
         cache_read_input_tokens: Final = cls._get_cache_read_input_tokens(usage)
         cache_creation_input_tokens: Final = cls._get_cache_creation_input_tokens(usage)
         web_search_requests: Final = cls._get_web_search_request_count(usage)
@@ -1526,12 +1526,16 @@ class LiteLLMAnthropicMessagesAdapter:
             )
         return usage_delta
 
+    _translate_openai_usage_to_anthropic_usage_delta = translate_openai_usage_to_anthropic_usage_delta
+
     @classmethod
-    def _translate_openai_usage_to_anthropic_usage(cls, usage: Usage) -> AnthropicUsage:
+    def translate_openai_usage_to_anthropic_usage(cls, usage: Usage) -> AnthropicUsage:
         return cast(
             AnthropicUsage,
-            cls._translate_openai_usage_to_anthropic_usage_delta(usage),
+            cls.translate_openai_usage_to_anthropic_usage_delta(usage),
         )
+
+    _translate_openai_usage_to_anthropic_usage = translate_openai_usage_to_anthropic_usage
 
     def translate_openai_response_to_anthropic(
         self,
@@ -1576,7 +1580,7 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         # extract usage
         usage: Final[Usage] = getattr(response, "usage")
-        message_usage: Final = self._translate_openai_usage_to_anthropic_usage(usage)
+        message_usage: Final = self.translate_openai_usage_to_anthropic_usage(usage)
         polyfill_iterations: Final = polyfill_result.iterations_usage if polyfill_result is not None else None
         anthropic_usage: Final[AnthropicUsage] = (
             TypeAdapter(AnthropicUsage).validate_python(
@@ -1616,7 +1620,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return translated_obj
 
-    def _translate_streaming_openai_chunk_to_anthropic_content_block(
+    def translate_streaming_openai_chunk_to_anthropic_content_block(
         self, choices: list[OpenAIStreamingChoice | StreamingChoices]
     ) -> tuple[
         Literal["text", "tool_use", "thinking"],
@@ -1675,6 +1679,10 @@ class LiteLLMAnthropicMessagesAdapter:
                 return "thinking", ChatCompletionThinkingBlock(type="thinking", thinking="", signature="")
 
         return "text", TextBlock(type="text", text="")
+
+    _translate_streaming_openai_chunk_to_anthropic_content_block = (
+        translate_streaming_openai_chunk_to_anthropic_content_block
+    )
 
     def _translate_streaming_openai_chunk_to_anthropic(
         self, choices: list[OpenAIStreamingChoice | StreamingChoices]
@@ -1748,7 +1756,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     else None
                 )
             if litellm_usage_chunk is not None:
-                usage_delta = self._translate_openai_usage_to_anthropic_usage_delta(litellm_usage_chunk)
+                usage_delta = self.translate_openai_usage_to_anthropic_usage_delta(litellm_usage_chunk)
             else:
                 usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
             message_block: Final = MessageBlockDelta(

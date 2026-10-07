@@ -1,17 +1,24 @@
 import json
 import os
 from datetime import datetime
-from unittest.mock import AsyncMock
-
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from base_llm_unit_tests import BaseLLMChatTest, BaseReasoningLLMTests
 
-from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
-from litellm import completion
-from unittest.mock import patch
-from litellm.llms.xai.chat.transformation import XAIChatConfig, XAI_API_BASE
-from base_llm_unit_tests import BaseReasoningLLMTests, BaseLLMChatTest
+from litellm import Choices, EmbeddingResponse, Message, ModelResponse, Usage, completion
+from litellm.llms.xai.chat.transformation import XAI_API_BASE, XAIChatConfig
+
+
+
+
+
+
+
+
+
+
 
 
 def test_xai_message_name_filtering():
@@ -88,13 +95,21 @@ def test_xai_streaming_with_include_usage():
         assert usage_chunk is not None, "Should receive usage in streaming chunks"
 
         # Verify usage has expected fields
-        assert hasattr(usage_chunk.usage, "prompt_tokens"), "Usage should have prompt_tokens"
-        assert hasattr(usage_chunk.usage, "completion_tokens"), "Usage should have completion_tokens"
-        assert hasattr(usage_chunk.usage, "total_tokens"), "Usage should have total_tokens"
+        assert hasattr(
+            usage_chunk.usage, "prompt_tokens"
+        ), "Usage should have prompt_tokens"
+        assert hasattr(
+            usage_chunk.usage, "completion_tokens"
+        ), "Usage should have completion_tokens"
+        assert hasattr(
+            usage_chunk.usage, "total_tokens"
+        ), "Usage should have total_tokens"
 
         # Verify usage values are positive
         assert usage_chunk.usage.prompt_tokens > 0, "prompt_tokens should be positive"
-        assert usage_chunk.usage.completion_tokens > 0, "completion_tokens should be positive"
+        assert (
+            usage_chunk.usage.completion_tokens > 0
+        ), "completion_tokens should be positive"
         assert usage_chunk.usage.total_tokens > 0, "total_tokens should be positive"
 
         print(f"✓ Successfully received usage in streaming chunk: {usage_chunk.usage}")

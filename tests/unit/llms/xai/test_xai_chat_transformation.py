@@ -155,14 +155,14 @@ class TestXAIUsageNormalization:
     def test_preserves_reasoning_tokens_in_total_usage(self):
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=200)
 
-        XAIChatConfig._normalize_openai_compatible_usage_totals(usage)
+        XAIChatConfig.normalize_openai_compatible_usage_totals(usage)
 
         assert usage.total_tokens == 200
 
     def test_preserves_reasoning_tokens_in_streaming_usage(self):
         usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 200}
 
-        XAIChatConfig._normalize_openai_compatible_usage_totals(usage)
+        XAIChatConfig.normalize_openai_compatible_usage_totals(usage)
 
         assert usage["total_tokens"] == 200
 
@@ -367,15 +367,15 @@ class TestXAIReportedCost:
 
 def test_xai_chat_config_get_openai_compatible_provider_info():
     config = XAIChatConfig()
-    api_base, api_key = config._get_openai_compatible_provider_info(api_base=None, api_key=None)
+    api_base, api_key = config.get_openai_compatible_provider_info(api_base=None, api_key=None)
     assert api_base == XAI_API_BASE
     assert api_key == os.environ.get("XAI_API_KEY")
     custom_api_key = "test_api_key"
-    api_base, api_key = config._get_openai_compatible_provider_info(api_base=None, api_key=custom_api_key)
+    api_base, api_key = config.get_openai_compatible_provider_info(api_base=None, api_key=custom_api_key)
     assert api_base == XAI_API_BASE
     assert api_key == custom_api_key
     with patch.dict("os.environ", {"XAI_API_BASE": "https://env.x.ai/v1", "XAI_API_KEY": "env_api_key"}):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://env.x.ai/v1"
         assert api_key == "env_api_key"
 

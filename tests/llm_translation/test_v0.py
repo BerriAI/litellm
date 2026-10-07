@@ -11,6 +11,14 @@ import litellm
 from litellm.llms.v0.chat.transformation import V0ChatConfig
 
 
+
+
+
+
+
+
+
+
 @pytest.mark.asyncio
 async def test_v0_completion_call():
     """Test completion call with v0 provider (requires V0_API_KEY)"""
@@ -33,3 +41,5 @@ async def test_v0_completion_call():
         if "v0" not in str(e) and "provider" not in str(e).lower():
             # Re-raise if it's not a provider-related error
             raise
+
+

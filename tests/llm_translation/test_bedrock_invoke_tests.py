@@ -3,6 +3,7 @@ import pytest
 import os
 
 import litellm
+from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 
 
 _LITELLM_LOGO_IMAGE_URL = (
@@ -72,3 +73,9 @@ class TestBedrockInvokeNovaJson(BaseLLMChatTest):
                 "Live Bedrock Nova response-schema E2E tests cannot run under VCR replay"
             )
         super().test_json_response_pydantic_obj()
+
+
+
+
+
+

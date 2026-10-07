@@ -16,7 +16,7 @@ We mock only true I/O / auth seams:
     header is forwarded.
   * ``_check_custom_proxy`` - returns ``(None, url)``; we let it pass the
     computed default url straight through so we can assert the request URL.
-  * the httpx client factories (``_get_httpx_client`` /
+  * the httpx client factories (``get_httpx_client`` /
     ``get_async_httpx_client``) and the SSRF wrappers (``safe_get`` /
     ``async_safe_get``) - the network calls. We assert which seam fired with
     what URL/headers/body, and that the response is parsed into the litellm
@@ -121,7 +121,7 @@ def test_create_batch_sync_posts_and_parses():
     client = MagicMock()
     client.post.return_value = _http_response()
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         out = h.create_batch(
             _is_async=False,
             create_batch_data=CREATE_DATA,
@@ -156,7 +156,7 @@ def test_create_batch_async_returns_coroutine_and_uses_async_client():
     sync_client = MagicMock()
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=sync_client),
+        patch(f"{HMOD}.get_httpx_client", return_value=sync_client),
         patch(f"{HMOD}.get_async_httpx_client", return_value=async_client),
     ):
         coro = h.create_batch(
@@ -187,7 +187,7 @@ def test_create_batch_sync_does_not_resolve_publisher_models():
     client.post.return_value = _http_response()
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.get_httpx_client", return_value=client),
         patch(f"{HMOD}.safe_get") as safe_get,
     ):
         out = h.create_batch(
@@ -234,7 +234,7 @@ def test_create_batch_sync_resolves_fine_tuned_endpoint_to_tuned_model():
     client.post.return_value = _http_response()
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.get_httpx_client", return_value=client),
         patch(f"{HMOD}.safe_get", return_value=_endpoint_get_response()) as safe_get,
     ):
         out = h.create_batch(
@@ -300,7 +300,7 @@ def test_create_batch_sync_endpoint_resolution_error_raises():
     resolve_response.text = "endpoint not found"
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.get_httpx_client", return_value=client),
         patch(f"{HMOD}.safe_get", return_value=resolve_response),
     ):
         with pytest.raises(VertexAIError) as exc_info:
@@ -325,7 +325,7 @@ def test_create_batch_custom_endpoint_raises_400_without_io():
     h = _make_handler()
     client = MagicMock()
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         with pytest.raises(VertexAIError) as exc_info:
             h.create_batch(
                 _is_async=False,
@@ -350,7 +350,7 @@ def test_create_batch_sync_endpoint_without_deployed_model_raises_400():
     client = MagicMock()
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.get_httpx_client", return_value=client),
         patch(f"{HMOD}.safe_get", return_value=_endpoint_get_response(deployed_models=[])),
     ):
         with pytest.raises(VertexAIError) as exc_info:
@@ -381,7 +381,7 @@ def test_create_batch_sync_httpstatuserror_propagates():
         "boom", request=request, response=err_response
     )
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         with pytest.raises(httpx.HTTPStatusError):
             h.create_batch(
                 _is_async=False,
@@ -400,7 +400,7 @@ def test_create_batch_input_file_id_without_model_raises_400_before_post():
     h = _make_handler()
     client = MagicMock()
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         with pytest.raises(VertexAIError) as exc_info:
             h.create_batch(
                 _is_async=False,
@@ -428,7 +428,7 @@ def test_retrieve_batch_sync_uses_safe_get_with_batch_id_url():
     sync_client = MagicMock()
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=sync_client),
+        patch(f"{HMOD}.get_httpx_client", return_value=sync_client),
         patch(f"{HMOD}.safe_get", return_value=_http_response()) as safe_get,
     ):
         out = h.retrieve_batch(
@@ -458,7 +458,7 @@ def test_retrieve_batch_async_returns_coroutine_uses_async_safe_get():
     async_client = MagicMock()
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
+        patch(f"{HMOD}.get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.get_async_httpx_client", return_value=async_client),
         patch(
             f"{HMOD}.async_safe_get",
@@ -487,7 +487,7 @@ def test_retrieve_batch_async_returns_coroutine_uses_async_safe_get():
 def test_retrieve_batch_sync_non_200_raises():
     h = _make_handler()
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
+        patch(f"{HMOD}.get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.safe_get", return_value=_http_response(status_code=404)),
     ):
         with pytest.raises(VertexAIError, match="Error: 404"):
@@ -512,7 +512,7 @@ def test_retrieve_batch_sync_invokes_logging_pre_call():
     logging_obj = MagicMock(spec=LiteLLMLogging)
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
+        patch(f"{HMOD}.get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.safe_get", return_value=_http_response()),
     ):
         h.retrieve_batch(
@@ -551,7 +551,7 @@ def test_list_batches_sync_passes_pagination_params():
     client = MagicMock()
     client.get.return_value = _http_response(json_body=_list_response())
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         out = h.list_batches(
             _is_async=False,
             after="cursor-xyz",
@@ -580,7 +580,7 @@ def test_list_batches_sync_omits_unset_pagination_params():
     client = MagicMock()
     client.get.return_value = _http_response(json_body={"batchPredictionJobs": []})
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         out = h.list_batches(
             _is_async=False,
             after=None,
@@ -608,7 +608,7 @@ def test_list_batches_async_returns_coroutine():
     sync_client = MagicMock()
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=sync_client),
+        patch(f"{HMOD}.get_httpx_client", return_value=sync_client),
         patch(f"{HMOD}.get_async_httpx_client", return_value=async_client),
     ):
         coro = h.list_batches(
@@ -635,7 +635,7 @@ def test_list_batches_sync_non_200_raises():
     client = MagicMock()
     client.get.return_value = _http_response(status_code=500)
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         with pytest.raises(VertexAIError, match="Error: 500"):
             h.list_batches(
                 _is_async=False,
@@ -663,7 +663,7 @@ def test_cancel_batch_sync_posts_cancel_then_retrieves():
         json_body=_vertex_job_response(state="JOB_STATE_CANCELLED")
     )
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         out = h.cancel_batch(
             _is_async=False,
             batch_id=BATCH_ID,
@@ -699,7 +699,7 @@ def test_cancel_batch_async_returns_coroutine_posts_then_retrieves():
     )
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
+        patch(f"{HMOD}.get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.get_async_httpx_client", return_value=async_client),
     ):
         coro = h.cancel_batch(
@@ -728,7 +728,7 @@ def test_cancel_batch_sync_retrieve_non_200_raises():
     client.post.return_value = _http_response(json_body={})
     client.get.return_value = _http_response(status_code=404)
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         with pytest.raises(VertexAIError, match="Error: 404"):
             h.cancel_batch(
                 _is_async=False,
@@ -757,7 +757,7 @@ def test_cancel_batch_sync_proxy_url_without_cancel_suffix_uses_rsplit_branch():
         json_body=_vertex_job_response(state="JOB_STATE_CANCELLED")
     )
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         out = h.cancel_batch(
             _is_async=False,
             batch_id=BATCH_ID,
@@ -785,7 +785,7 @@ def test_cancel_batch_sync_httpstatuserror_logged_and_reraised():
         "boom", request=request, response=err_response
     )
 
-    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+    with patch(f"{HMOD}.get_httpx_client", return_value=client):
         with pytest.raises(httpx.HTTPStatusError):
             h.cancel_batch(
                 _is_async=False,
@@ -812,7 +812,7 @@ def test_create_batch_async_httpstatuserror_logged_and_reraised():
     )
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
+        patch(f"{HMOD}.get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.get_async_httpx_client", return_value=async_client),
     ):
         coro = h.create_batch(
@@ -832,7 +832,7 @@ def test_create_batch_async_httpstatuserror_logged_and_reraised():
 def test_async_retrieve_batch_non_200_raises():
     h = _make_handler()
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
+        patch(f"{HMOD}.get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.get_async_httpx_client", return_value=MagicMock()),
         patch(
             f"{HMOD}.async_safe_get",
@@ -860,7 +860,7 @@ def test_async_retrieve_batch_invokes_logging_pre_call():
     logging_obj = MagicMock(spec=LiteLLMLogging)
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
+        patch(f"{HMOD}.get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.get_async_httpx_client", return_value=MagicMock()),
         patch(
             f"{HMOD}.async_safe_get",
@@ -889,7 +889,7 @@ def test_async_list_batches_non_200_raises():
     async_client.get = AsyncMock(return_value=_http_response(status_code=500))
 
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
+        patch(f"{HMOD}.get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.get_async_httpx_client", return_value=async_client),
     ):
         coro = h.list_batches(
@@ -921,7 +921,7 @@ def test_async_cancel_batch_httpstatuserror_and_retrieve_non_200():
     )
     async_client.get = AsyncMock()
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
+        patch(f"{HMOD}.get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.get_async_httpx_client", return_value=async_client),
     ):
         coro = h.cancel_batch(
@@ -943,7 +943,7 @@ def test_async_cancel_batch_httpstatuserror_and_retrieve_non_200():
     async_client2.post = AsyncMock(return_value=_http_response(json_body={}))
     async_client2.get = AsyncMock(return_value=_http_response(status_code=404))
     with (
-        patch(f"{HMOD}._get_httpx_client", return_value=MagicMock()),
+        patch(f"{HMOD}.get_httpx_client", return_value=MagicMock()),
         patch(f"{HMOD}.get_async_httpx_client", return_value=async_client2),
     ):
         coro = h.cancel_batch(

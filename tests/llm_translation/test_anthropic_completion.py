@@ -26,8 +26,11 @@ from litellm import (
     adapter_completion,
 )
 from litellm.types.llms.anthropic import AnthropicResponse
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import GenericStreamingChunk, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
+from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+from httpx import Headers
 from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
 
@@ -233,6 +236,16 @@ anthropic_chunk_list = [
 ]
 
 
+
+
+
+
+
+
+
+
+
+
 @pytest.mark.parametrize(
     "tool_type, tool_config, message_content",
     [
@@ -282,6 +295,12 @@ def test_anthropic_tool_use(tool_type, tool_config, message_content):
         assert resp is not None
     except litellm.InternalServerError:
         pass
+
+
+
+
+
+
 
 
 from litellm import completion
@@ -375,6 +394,25 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     test_image_url = None
     test_image_url_string = None
     test_web_search = None
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+
 
 
 
@@ -577,6 +615,8 @@ def test_anthropic_custom_headers():
         assert "computer-use-2025-01-24" in headers["anthropic-beta"]
 
 
+
+
 @pytest.mark.parametrize(
     "optional_params",
     [
@@ -751,6 +791,8 @@ async def test_claude_tool_use_with_anthropic_acreate():
 
     async for chunk in response:
         print(chunk)
+
+
 
 
 def test_anthropic_streaming():
@@ -929,6 +971,34 @@ def test_anthropic_via_responses_api():
 
     print(f"✓ All {len(events_seen)} events matched expected structure")
     print(f"✓ Received {text_delta_count} text delta chunks")
+
+
+
+
+
+
+def _make_transform_request(optional_params: dict, litellm_params: dict) -> dict:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    return AnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def test_anthropic_basic_completion_replay():

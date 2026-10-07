@@ -110,3 +110,5 @@ def test_amazon_nova_canvas_image_gen():
     print(f"response cost: {response._hidden_params['response_cost']}")
 
     assert response._hidden_params["response_cost"] > 0
+
+

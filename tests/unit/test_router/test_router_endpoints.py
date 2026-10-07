@@ -161,7 +161,7 @@ async def test_moderation_endpoint_with_api_base():
         ]
     )
 
-    with patch("litellm.main.openai_chat_completions._get_openai_client") as mock_get_client:
+    with patch("litellm.main.openai_chat_completions.get_openai_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {

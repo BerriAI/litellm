@@ -1,7 +1,12 @@
+import copy
+import logging
 import time
 from datetime import datetime
+from unittest import mock
 
 from dotenv import load_dotenv
+
+from litellm.types.utils import StandardCallbackDynamicParams
 
 load_dotenv()
 import os
@@ -9,13 +14,23 @@ import os
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.litellm_core_utils.duration_parser import get_last_day_of_month
+from litellm.litellm_core_utils.duration_parser import (
+    get_last_day_of_month,
+    _extract_from_regex,
+)
 from litellm.utils import (
     check_valid_key,
+    get_llm_provider,
+    get_supported_openai_params,
+    get_token_count,
     get_valid_models,
+    trim_messages,
+    validate_environment,
 )
-from unittest.mock import MagicMock, patch
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
@@ -32,13 +47,21 @@ def reset_mock_cache():
 # test_basic_trimming()
 
 
+
+
 # test_basic_trimming_no_max_tokens_specified()
+
+
 
 
 # test_multiple_messages_trimming()
 
 
+
+
 # test_multiple_messages_no_trimming()
+
+
 
 
 # test_large_trimming()
@@ -463,6 +486,17 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
         )
 
 
+def test_get_valid_models_default(monkeypatch):
+    """
+    Ensure that the default models is used when error retrieving from model api.
+
+    Prevent regression for existing usage.
+    """
+    from litellm.utils import get_valid_models
+
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-9876")
+    valid_models = get_valid_models()
+    assert len(valid_models) > 0
 
 
 
@@ -626,6 +660,9 @@ async def test_add_custom_logger_callback_to_specific_event_with_duplicates_call
 
 
 
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.utils import get_applied_guardrails
+from unittest.mock import Mock
 
 
 
@@ -638,6 +675,14 @@ async def test_add_custom_logger_callback_to_specific_event_with_duplicates_call
 
 
 
+def test_get_provider_audio_transcription_config():
+    from litellm.utils import ProviderConfigManager
+    from litellm.types.utils import LlmProviders
+
+    for provider in LlmProviders:
+        config = ProviderConfigManager.get_provider_audio_transcription_config(
+            model="whisper-1", provider=provider
+        )
 
 
 
@@ -672,22 +717,9 @@ def test_get_valid_models_from_dynamic_api_key():
     assert "anthropic/claude-sonnet-4-6" in valid_models
 
 
-def test_get_valid_models_default(monkeypatch):
-    """
-    Ensure that the default models is used when error retrieving from model api.
-
-    Prevent regression for existing usage.
-    """
-    from litellm.utils import get_valid_models
-
-    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-9876")
-    valid_models = get_valid_models()
-    assert len(valid_models) > 0
 
 
-def test_get_provider_audio_transcription_config():
-    from litellm.utils import ProviderConfigManager
-    from litellm.types.utils import LlmProviders
 
-    for provider in LlmProviders:
-        ProviderConfigManager.get_provider_audio_transcription_config(model="whisper-1", provider=provider)
+
+
+

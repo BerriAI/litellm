@@ -148,20 +148,18 @@ PROVIDER_MAPPING_RESPONSE = {
 
 @pytest.fixture
 def mock_provider_mapping():
-    with patch(
-        "litellm.llms.huggingface.chat.transformation._fetch_inference_provider_mapping"
-    ) as mock:
+    with patch("litellm.llms.huggingface.chat.transformation.fetch_inference_provider_mapping") as mock:
         mock.return_value = PROVIDER_MAPPING_RESPONSE
         yield mock
 
 
 @pytest.fixture(autouse=True)
 def clear_lru_cache():
-    from litellm.llms.huggingface.common_utils import _fetch_inference_provider_mapping
+    from litellm.llms.huggingface.common_utils import fetch_inference_provider_mapping
 
-    _fetch_inference_provider_mapping.cache_clear()
+    fetch_inference_provider_mapping.cache_clear()
     yield
-    _fetch_inference_provider_mapping.cache_clear()
+    fetch_inference_provider_mapping.cache_clear()
 
 
 @pytest.fixture

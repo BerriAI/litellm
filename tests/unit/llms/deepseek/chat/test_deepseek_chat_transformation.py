@@ -228,7 +228,7 @@ class TestDeepSeekVisionMultimodalContent:
         }
 
     def test_user_image_list_forwarded_on_vision_model(self):
-        result = self.config._transform_messages([self._image_message()], model=self.VISION_MODEL)
+        result = self.config.transform_messages([self._image_message()], model=self.VISION_MODEL)
 
         assert isinstance(result[0]["content"], list)
         assert result[0]["content"][0]["type"] == "text"
@@ -236,13 +236,13 @@ class TestDeepSeekVisionMultimodalContent:
         assert result[0]["content"][1]["image_url"]["url"] == "https://example.com/image.jpg"
 
     def test_image_list_collapsed_on_non_vision_model(self):
-        result = self.config._transform_messages([self._image_message()], model=self.NON_VISION_MODEL)
+        result = self.config.transform_messages([self._image_message()], model=self.NON_VISION_MODEL)
 
         assert result[0]["content"] == "what is in this image?"
 
     def test_image_list_collapsed_on_non_user_roles_even_on_vision_model(self):
         for role in ("assistant", "system"):
-            result = self.config._transform_messages([self._image_message(role=role)], model=self.VISION_MODEL)
+            result = self.config.transform_messages([self._image_message(role=role)], model=self.VISION_MODEL)
 
             assert result[0]["content"] == "what is in this image?"
 
@@ -257,7 +257,7 @@ class TestDeepSeekVisionMultimodalContent:
             }
         ]
 
-        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.VISION_MODEL)
 
         assert result[0]["content"] == "transcribe this"
 
@@ -272,7 +272,7 @@ class TestDeepSeekVisionMultimodalContent:
             }
         ]
 
-        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.VISION_MODEL)
 
         assert result[0]["content"] == "what is this"
 
@@ -287,7 +287,7 @@ class TestDeepSeekVisionMultimodalContent:
             }
         ]
 
-        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.VISION_MODEL)
 
         assert isinstance(result[0]["content"], str)
         assert result[0]["content"] == "Hello world"
@@ -296,7 +296,7 @@ class TestDeepSeekVisionMultimodalContent:
         message = self._image_message()
         message["search_results"] = [{"source": "kb", "content": [{"text": "article body"}]}]
 
-        result = self.config._transform_messages([message], model=self.VISION_MODEL)
+        result = self.config.transform_messages([message], model=self.VISION_MODEL)
 
         content = result[0]["content"]
         assert isinstance(content, list)
@@ -313,7 +313,7 @@ class TestDeepSeekVisionMultimodalContent:
             }
         ]
 
-        result = self.config._transform_messages(messages, model=self.NON_VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.NON_VISION_MODEL)
 
         assert result[0]["content"] == "context: kbarticle body"
 
@@ -328,7 +328,7 @@ class TestDeepSeekVisionMultimodalContent:
             }
         ]
 
-        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.VISION_MODEL)
 
         assert result[0]["content"] == "what is this?"
 
@@ -340,7 +340,7 @@ class TestDeepSeekVisionMultimodalContent:
             }
         ]
 
-        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.VISION_MODEL)
 
         assert result[0]["content"] == "hi"
 
@@ -353,7 +353,7 @@ class TestDeepSeekVisionMultimodalContent:
                 }
             ]
 
-            result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+            result = self.config.transform_messages(messages, model=self.VISION_MODEL)
 
             assert result[0]["content"] == "hi"
 
@@ -368,7 +368,7 @@ class TestDeepSeekVisionMultimodalContent:
             }
         ]
 
-        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.VISION_MODEL)
 
         content = result[0]["content"]
         assert isinstance(content, list)
@@ -386,7 +386,7 @@ class TestDeepSeekVisionMultimodalContent:
             }
         ]
 
-        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.VISION_MODEL)
 
         assert result[0]["content"] == "hi"
 
@@ -400,21 +400,21 @@ class TestDeepSeekVisionMultimodalContent:
             }
         ]
 
-        result = self.config._transform_messages(messages, model=self.NON_VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.NON_VISION_MODEL)
 
         assert result[0]["content"] == "summarize the docskbarticle body"
 
     def test_plain_string_content_message_unchanged(self):
         messages = [{"role": "user", "content": "hello"}]
 
-        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.VISION_MODEL)
 
         assert result[0] is messages[0]
 
     def test_empty_content_list_untouched(self):
         messages = [{"role": "user", "content": []}]
 
-        result = self.config._transform_messages(messages, model=self.NON_VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.NON_VISION_MODEL)
 
         assert result[0]["content"] == []
 
@@ -431,7 +431,7 @@ class TestDeepSeekVisionMultimodalContent:
             self._image_message(),
         ]
 
-        result = self.config._transform_messages(messages, model=self.VISION_MODEL)
+        result = self.config.transform_messages(messages, model=self.VISION_MODEL)
 
         assert isinstance(result[0]["content"], list)
         assert result[1]["content"] == "and then?"

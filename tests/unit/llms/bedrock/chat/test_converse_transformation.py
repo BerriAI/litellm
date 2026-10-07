@@ -412,7 +412,7 @@ def test_transform_tool_call_with_cache_control():
         },
     ]
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2079,7 +2079,7 @@ async def test_transformation_directly():
     messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2183,7 +2183,7 @@ def test_transform_request_with_multiple_tools():
     messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2243,7 +2243,7 @@ def test_transform_request_with_computer_tool_only():
     ]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2279,7 +2279,7 @@ def test_transform_request_with_bash_tool_only():
     messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2315,7 +2315,7 @@ def test_transform_request_with_text_editor_tool():
     messages = [{"role": "user", "content": "Edit this text file"}]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2367,7 +2367,7 @@ def test_transform_request_with_function_tool():
     ]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -3761,7 +3761,7 @@ def test_request_metadata_transformation():
     ]
 
     # Transform request with requestMetadata
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": request_metadata},
@@ -3787,7 +3787,7 @@ def test_request_metadata_validation():
     }
 
     # Should not raise exception
-    config.transform_request(
+    config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
@@ -3799,7 +3799,7 @@ def test_request_metadata_validation():
     too_many_items = {f"key_{i}": f"value_{i}" for i in range(17)}
 
     with pytest.raises(Exception, match="maximum of 16 items") as exc_info:
-        config.transform_request(
+        config._transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": too_many_items},
@@ -3821,7 +3821,7 @@ def test_request_metadata_key_constraints():
     invalid_metadata = {long_key: "value"}
 
     with pytest.raises(Exception, match=r"(?i)key length|256 characters"):
-        config.transform_request(
+        config._transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
@@ -3833,7 +3833,7 @@ def test_request_metadata_key_constraints():
     invalid_metadata = {"": "value"}
 
     with pytest.raises(Exception, match=r"(?i)key length|empty"):
-        config.transform_request(
+        config._transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
@@ -3853,7 +3853,7 @@ def test_request_metadata_value_constraints():
     invalid_metadata = {"key": long_value}
 
     with pytest.raises(Exception, match=r"(?i)value length|256 characters"):
-        config.transform_request(
+        config._transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
@@ -3865,7 +3865,7 @@ def test_request_metadata_value_constraints():
     valid_metadata = {"key": ""}
 
     # Should not raise exception
-    config.transform_request(
+    config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
@@ -3888,7 +3888,7 @@ def test_request_metadata_character_pattern():
     }
 
     # Should not raise exception
-    config.transform_request(
+    config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
@@ -3923,7 +3923,7 @@ def test_request_metadata_with_other_params():
     ]
 
     # Transform request with multiple parameters including request_metadata
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={
@@ -3953,7 +3953,7 @@ def test_request_metadata_empty():
     messages = [{"role": "user", "content": "Hello!"}]
 
     # Empty dict should be allowed
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": {}},
@@ -3972,7 +3972,7 @@ def test_request_metadata_not_provided():
     messages = [{"role": "user", "content": "Hello!"}]
 
     # No requestMetadata provided
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={},
@@ -5011,7 +5011,7 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -5050,7 +5050,7 @@ def test_parallel_tool_calls_flag_decoupled_from_ttl_pricing(monkeypatch):
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -5079,7 +5079,7 @@ def test_parallel_tool_calls_older_model_drops_disable_flag():
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -5108,7 +5108,7 @@ def test_parallel_tool_calls_emits_typed_auto_tool_choice(parallel_tool_calls, e
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -5142,7 +5142,7 @@ def test_parallel_tool_calls_with_explicit_tool_choice_omits_conflicting_type(to
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -5165,7 +5165,7 @@ def test_tool_choice_type_kept_when_no_tool_config_choice_conflicts():
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=[{"role": "user", "content": "What's the weather in SF and NYC?"}],
         optional_params=optional_params,
@@ -5792,7 +5792,7 @@ def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model,
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-    body = AmazonConverseConfig().transform_request(
+    body = AmazonConverseConfig()._transform_request(
         model=model,
         messages=[
             {"role": "system", "content": [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]},
@@ -6646,7 +6646,7 @@ def test_converse_top_k_dropped_for_models_that_removed_it():
     transform must strip it for models that removed sampling params (#30064)."""
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-fable-5",
         messages=[{"role": "user", "content": "hello"}],
         optional_params={"top_k": 40},
@@ -6662,7 +6662,7 @@ def test_converse_top_k_raises_without_drop_params(monkeypatch):
     config = AmazonConverseConfig()
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
-        config.transform_request(
+        config._transform_request(
             model="us.anthropic.claude-fable-5",
             messages=[{"role": "user", "content": "hello"}],
             optional_params={"top_k": 40},
@@ -6674,7 +6674,7 @@ def test_converse_top_k_raises_without_drop_params(monkeypatch):
 def test_converse_top_k_forwarded_on_models_that_accept_it():
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
         optional_params={"top_k": 40},
@@ -6693,7 +6693,7 @@ def test_converse_top_k_zero_raises_without_drop_params(monkeypatch):
     config = AmazonConverseConfig()
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
-        config.transform_request(
+        config._transform_request(
             model="us.anthropic.claude-fable-5",
             messages=[{"role": "user", "content": "hello"}],
             optional_params={"top_k": 0},
@@ -6705,7 +6705,7 @@ def test_converse_top_k_zero_raises_without_drop_params(monkeypatch):
 def test_converse_top_k_zero_forwarded_on_models_that_accept_it():
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
         optional_params={"top_k": 0},
@@ -6941,7 +6941,7 @@ def test_transform_request_no_tools_with_tool_history_succeeds_24158(monkeypatch
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={},
@@ -6962,7 +6962,7 @@ def test_transform_request_tool_unsupported_model_no_toolconfig_27138(monkeypatc
     monkeypatch.setattr(litellm, "modify_params", True)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="meta.llama3-2-3b-instruct-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={},
@@ -6981,7 +6981,7 @@ def test_transform_request_empty_tools_with_tool_history(monkeypatch, tools_valu
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={"tools": tools_value},
@@ -6998,7 +6998,7 @@ def test_transform_request_tool_result_only_history(monkeypatch):
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=[
             {"role": "user", "content": "hi"},
@@ -7021,7 +7021,7 @@ def test_transform_request_neutralized_tool_output_is_guarded(monkeypatch):
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=[
             {"role": "user", "content": "look it up"},
@@ -7061,7 +7061,7 @@ def test_transform_request_neutralized_tool_output_guarded_mid_history(monkeypat
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=[
             {"role": "user", "content": "look it up"},
@@ -7123,7 +7123,7 @@ def test_transform_request_with_tools_still_builds_toolconfig(monkeypatch):
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={
@@ -7153,7 +7153,7 @@ def test_transform_request_flag_off_restores_raise(monkeypatch):
     config = AmazonConverseConfig()
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="without `tools="):
-        config.transform_request(
+        config._transform_request(
             model="us.anthropic.claude-opus-4-5-20251101-v1:0",
             messages=_orphaned_tool_history_messages(),
             optional_params={},
@@ -7169,7 +7169,7 @@ def test_transform_request_flag_off_with_modify_params_restores_dummy_tool(monke
     monkeypatch.setattr(litellm, "modify_params", True)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={},
@@ -7187,7 +7187,7 @@ def test_transform_request_flag_on_is_default(monkeypatch):
     config = AmazonConverseConfig()
 
     assert litellm.bedrock_neutralize_orphaned_tool_blocks is True
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={},
@@ -7366,7 +7366,7 @@ def test_legacy_thinking_translated_to_adaptive_on_adaptive_only_converse(model,
         model=model,
         drop_params=False,
     )
-    request = config.transform_request(
+    request = config._transform_request(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
         optional_params=optional_params,
@@ -8073,7 +8073,7 @@ def test_flagged_model_replays_a_byte_identical_prefix_around_a_mid_conversation
     user turn in place; hoisting it into ``system`` would change the prefix every
     signed thinking block in the history is bound to."""
     requests = [
-        AmazonConverseConfig().transform_request(
+        AmazonConverseConfig()._transform_request(
             model="bedrock/us.anthropic.claude-fable-5-1",
             messages=copy.deepcopy(turn),
             optional_params={},
@@ -8977,7 +8977,7 @@ def test_bedrock_image_embedding_transformation():
         "inference_params": {},
     }
 
-    transformed_request = AmazonTitanMultimodalEmbeddingG1Config()._transform_request(**args)
+    transformed_request = AmazonTitanMultimodalEmbeddingG1Config().transform_request(**args)
     assert (
         transformed_request["inputImage"]
         == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="

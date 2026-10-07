@@ -3,10 +3,12 @@ Tests for Lambda AI provider integration
 """
 
 import os
+from unittest import mock
 
 import pytest
 
 import litellm
+from litellm.llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 
 
 

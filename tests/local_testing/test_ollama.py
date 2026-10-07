@@ -105,14 +105,12 @@ async def test_async_ollama_ssl_verify(stream):
     except Exception as e:
         print(e)
 
-    client: AsyncHTTPHandler = litellm.in_memory_llm_clients_cache.get_cache(
-        "async_httpx_clientssl_verify_Falseollama"
-    )
+    client: AsyncHTTPHandler = litellm.in_memory_llm_clients_cache.get_cache("async_httpx_clientssl_verify_Falseollama")
 
     # check client
     print("type of transport in client=", type(client.client._transport))
     print("vars in transport in client=", vars(client.client._transport))
-    litellm_created_session = client.client._transport._get_valid_client_session()
+    litellm_created_session = client.client._transport.get_valid_client_session()
     print("litellm_created_session=", litellm_created_session)
     # check session ssl
     print("litellm_created_session ssl=", litellm_created_session.connector._ssl)

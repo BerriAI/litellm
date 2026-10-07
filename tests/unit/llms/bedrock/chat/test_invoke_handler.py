@@ -95,7 +95,7 @@ def test_transform_tool_calls_index():
     decoder = AWSEventStreamDecoder(model="test")
     parsed_chunks = []
     for chunk in chunks:
-        parsed_chunk = decoder._chunk_parser(chunk)
+        parsed_chunk = decoder.chunk_parser(chunk)
         parsed_chunks.append(parsed_chunk)
     tool_call_chunks1 = parsed_chunks[8:12]
     tool_call_chunks2 = parsed_chunks[13:17]
@@ -186,7 +186,7 @@ def test_transform_tool_calls_index_with_optional_arg_func():
     decoder = AWSEventStreamDecoder(model="test")
     parsed_chunks = []
     for chunk in chunks:
-        parsed_chunk = decoder._chunk_parser(chunk)
+        parsed_chunk = decoder.chunk_parser(chunk)
         parsed_chunks.append(parsed_chunk)
     tool_call_chunks = parsed_chunks[11:14]
     for tool_call_hunk in tool_call_chunks:
@@ -350,7 +350,7 @@ def _converse_stream_wrapper(events, model=CONVERSE_MODEL):
     async def bedrock_stream():
         decoder = AWSEventStreamDecoder(model=model)
         for event in events:
-            yield decoder._chunk_parser(chunk_data=event)
+            yield decoder.chunk_parser(chunk_data=event)
 
     return CustomStreamWrapper(
         completion_stream=bedrock_stream(),
@@ -526,7 +526,7 @@ def test_nova_invoke_filter_allowed_fields():
 def test_nova_invoke_streaming_chunk_parsing():
     decoder: Final = AWSEventStreamDecoder(model="bedrock/invoke/us.amazon.nova-micro-v1:0")
 
-    text_result: Final = decoder._chunk_parser(
+    text_result: Final = decoder.chunk_parser(
         {
             "contentBlockDelta": {
                 "delta": {"text": "Hello, how can I help?"},
@@ -539,7 +539,7 @@ def test_nova_invoke_streaming_chunk_parsing():
     assert not text_result.choices[0].finish_reason
     assert text_result.choices[0].delta.tool_calls is None
 
-    tool_start_result: Final = decoder._chunk_parser(
+    tool_start_result: Final = decoder.chunk_parser(
         {
             "contentBlockDelta": {
                 "start": {"toolUse": {"name": "get_weather", "toolUseId": "tool_1"}},
@@ -554,7 +554,7 @@ def test_nova_invoke_streaming_chunk_parsing():
     assert tool_start_result.choices[0].delta.tool_calls[0].function.name == "get_weather"
     assert tool_start_result.choices[0].delta.tool_calls[0].id == "tool_1"
 
-    tool_args_result: Final = decoder._chunk_parser(
+    tool_args_result: Final = decoder.chunk_parser(
         {
             "contentBlockDelta": {
                 "delta": {"toolUse": {"input": '{"location": "New York"}'}},
@@ -567,7 +567,7 @@ def test_nova_invoke_streaming_chunk_parsing():
     assert tool_args_result.choices[0].delta.tool_calls is not None
     assert tool_args_result.choices[0].delta.tool_calls[0].function.arguments == '{"location": "New York"}'
 
-    stop_result: Final = decoder._chunk_parser({"contentBlockDelta": {"stopReason": "tool_use"}})
+    stop_result: Final = decoder.chunk_parser({"contentBlockDelta": {"stopReason": "tool_use"}})
     assert stop_result.choices[0].finish_reason == "tool_calls"
 
 

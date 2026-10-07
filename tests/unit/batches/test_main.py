@@ -117,7 +117,7 @@ def test_create__openai_dispatch_and_payload(seams):
     # DISPATCH + RESULT
     assert result is seams.openai.create_batch.return_value
     _assert_only(seams.openai.create_batch, seams, "create_batch")
-    seams.bedrock_arn._handle_async_invoke_status.assert_not_called()
+    seams.bedrock_arn.handle_async_invoke_status.assert_not_called()
 
     # PAYLOAD - request object built from the call, sync flag off.
     kw = seams.openai.create_batch.call_args.kwargs
@@ -265,8 +265,8 @@ def test_retrieve__bedrock_async_invoke_arn(seams):
     arn = "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"
     result = bm.retrieve_batch(batch_id=arn, custom_llm_provider="bedrock")
 
-    seams.bedrock_arn._handle_async_invoke_status.assert_called_once()
-    assert result is seams.bedrock_arn._handle_async_invoke_status.return_value
+    seams.bedrock_arn.handle_async_invoke_status.assert_called_once()
+    assert result is seams.bedrock_arn.handle_async_invoke_status.return_value
     # provider instances untouched.
     for m in _all_seam_methods(seams, "retrieve_batch"):
         m.assert_not_called()
@@ -276,9 +276,9 @@ def test_retrieve__bedrock_model_invocation_job_arn(seams):
     arn = "arn:aws:bedrock:us-east-1:123456789012:model-invocation-job/xyz789"
     result = bm.retrieve_batch(batch_id=arn, custom_llm_provider="bedrock")
 
-    seams.bedrock_arn._handle_model_invocation_job_status.assert_called_once()
-    assert result is seams.bedrock_arn._handle_model_invocation_job_status.return_value
-    seams.bedrock_arn._handle_async_invoke_status.assert_not_called()
+    seams.bedrock_arn.handle_model_invocation_job_status.assert_called_once()
+    assert result is seams.bedrock_arn.handle_model_invocation_job_status.return_value
+    seams.bedrock_arn.handle_async_invoke_status.assert_not_called()
 
 
 def test_retrieve__unsupported_provider_raises_badrequest(seams):
