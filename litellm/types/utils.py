@@ -4549,6 +4549,7 @@ class LlmProviders(str, Enum):
     PRISM = "prism"
     OPENINFER = "openinfer"
     INFERENCEAPIS = "inferenceapis"
+    HOSTINGER_ROUTER = "hostinger_router"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
