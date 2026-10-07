@@ -18,6 +18,7 @@ mod configuration;
 mod error;
 mod export;
 mod layer;
+pub mod payload;
 #[cfg(feature = "posthog")]
 mod posthog;
 mod processing;
@@ -34,7 +35,7 @@ pub use posthog::PostHogSink;
 pub use processing::{DiagnosticInput, DiagnosticOutput, Policy, Processor};
 pub use redaction::{REDACTED, SecretRedactor};
 pub use runtime::Diagnostics;
-pub use shape::{PayloadShape, ShapeLimits};
+pub use shape::{PayloadShape, ShapeLimits, ShapeSource, ShapeVisitor};
 pub use tracing::{Level, Metadata, debug, error, info, trace, warn};
 
 pub struct ByteChunk<'a>(&'a [u8]);

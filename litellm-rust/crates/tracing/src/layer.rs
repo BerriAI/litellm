@@ -116,6 +116,7 @@ where
             }
         }
         event.record(&mut record);
+        crate::payload::project(&mut record);
         self.0.emit(&record);
     }
 

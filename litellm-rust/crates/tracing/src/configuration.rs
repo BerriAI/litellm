@@ -140,6 +140,7 @@ fn required(
 #[serde(default, deny_unknown_fields)]
 pub struct DiagnosticsConfig {
     pub enabled: bool,
+    pub payload_shapes: bool,
     pub service_name: String,
     pub policy: DiagnosticPolicy,
     pub destinations: Vec<DestinationConfig>,
@@ -149,6 +150,7 @@ impl Default for DiagnosticsConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            payload_shapes: false,
             service_name: "litellm".into(),
             policy: DiagnosticPolicy::default(),
             destinations: vec![],
