@@ -901,6 +901,8 @@ class ContentFilterConfigModel(LiteLLMBaseModel):
 
 MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
 
+LoggingOnlyScope = Literal["input", "output", "both"]
+
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
@@ -1142,6 +1144,14 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    logging_only_scope: LoggingOnlyScope | None = Field(
+        default=None,
+        description=(
+            "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' "
+            "(default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking."
+        ),
+    )
+
     @field_validator(
         "mode",
         "default_action",
@@ -1310,6 +1320,7 @@ class GuardrailUIAddGuardrailSettings(LiteLLMBaseModel):
     supported_actions: list[str]
     supported_modes: list[str]
     supported_modes_by_provider: dict[str, list[str]]
+    providers_without_directional_logging_only_scope: tuple[str, ...]
     pii_entity_categories: list[PiiEntityCategoryMap]
     content_filter_settings: dict[str, object] | None = None
 

@@ -100,7 +100,7 @@ _MCP_EVENT_HOOKS: Final = frozenset(
 )
 
 
-def _configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
+def configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
     if isinstance(mode, str):
         return (mode,)
     if isinstance(mode, list):
@@ -114,7 +114,7 @@ def _configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
 
 
 def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
-    hooks: Final = _configured_event_hooks(mode)
+    hooks: Final = configured_event_hooks(mode)
     return bool(hooks) and all(hook in _MCP_EVENT_HOOKS for hook in hooks)
 
 
