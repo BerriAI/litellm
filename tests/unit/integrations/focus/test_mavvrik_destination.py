@@ -482,8 +482,8 @@ async def test_export_window_passes_max_rows_as_limit(monkeypatch):
     db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())  # empty deliver
 
     engine_mock = MagicMock()
-    engine_mock._database = db_mock
-    engine_mock._destination.deliver = AsyncMock()
+    engine_mock.database = db_mock
+    engine_mock.destination.deliver = AsyncMock()
     logger._engine = engine_mock
 
     window = FocusTimeWindow(
@@ -530,8 +530,8 @@ async def test_run_scheduled_export_catches_up_missed_dates():
     db_mock = MagicMock()
     db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())
     engine_mock = MagicMock()
-    engine_mock._database = db_mock
-    engine_mock._destination = dest_mock
+    engine_mock.database = db_mock
+    engine_mock.destination = dest_mock
     logger._engine = engine_mock
 
     await logger._run_scheduled_export()
@@ -571,8 +571,8 @@ async def test_run_scheduled_export_no_catchup_when_marker_is_current():
     db_mock = MagicMock()
     db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())
     engine_mock = MagicMock()
-    engine_mock._database = db_mock
-    engine_mock._destination = dest_mock
+    engine_mock.database = db_mock
+    engine_mock.destination = dest_mock
     logger._engine = engine_mock
 
     await logger._run_scheduled_export()
@@ -602,8 +602,8 @@ async def test_run_scheduled_export_skips_catchup_when_marker_is_unparseable():
     db_mock = MagicMock()
     db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())
     engine_mock = MagicMock()
-    engine_mock._database = db_mock
-    engine_mock._destination = dest_mock
+    engine_mock.database = db_mock
+    engine_mock.destination = dest_mock
     logger._engine = engine_mock
 
     await logger._run_scheduled_export()
@@ -729,8 +729,8 @@ async def test_catchup_capped_at_max_catchup_days():
     db_mock = MagicMock()
     db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())
     engine_mock = MagicMock()
-    engine_mock._database = db_mock
-    engine_mock._destination = dest_mock
+    engine_mock.database = db_mock
+    engine_mock.destination = dest_mock
     logger._engine = engine_mock
 
     await logger._run_scheduled_export()

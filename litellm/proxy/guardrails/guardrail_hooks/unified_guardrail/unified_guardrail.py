@@ -18,7 +18,7 @@ from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.cost_calculator import _infer_call_type
+from litellm.cost_calculator import infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
@@ -96,7 +96,7 @@ def resolve_endpoint_translation(
         route_call_types[0].value
         if route_call_types
         else (
-            _infer_call_type(call_type=None, completion_response=first_response_item)
+            infer_call_type(call_type=None, completion_response=first_response_item)
             if first_response_item is not None
             else None
         )
@@ -340,7 +340,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             if call_types is not None and len(call_types) > 0:
                 call_type = call_types[0]
         if call_type is None:
-            call_type = _infer_call_type(call_type=None, completion_response=response)
+            call_type = infer_call_type(call_type=None, completion_response=response)
 
         if call_type is None:
             litellm_logging_obj: Final = data.get("litellm_logging_obj")
@@ -1213,7 +1213,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                         call_type = call_types[0].value
 
                 if call_type is None:
-                    call_type = _infer_call_type(call_type=None, completion_response=item)
+                    call_type = infer_call_type(call_type=None, completion_response=item)
 
                 # If call type not supported, just pass through all chunks
                 if call_type is None or CallTypes(call_type) not in mappings:

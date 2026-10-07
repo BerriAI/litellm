@@ -24,7 +24,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.enterprise.enterprise_hooks.blocked_user_list import (
-    _ENTERPRISE_BlockedUserList,
+    ENTERPRISE_BlockedUserList,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     new_user,
@@ -101,7 +101,7 @@ async def test_block_user_check(prisma_client):
 
     litellm.blocked_user_list = ["user_id_1"]
 
-    blocked_user_obj = _ENTERPRISE_BlockedUserList(
+    blocked_user_obj = ENTERPRISE_BlockedUserList(
         prisma_client=litellm.proxy.proxy_server.prisma_client
     )
 

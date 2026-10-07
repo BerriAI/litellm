@@ -1011,7 +1011,7 @@ async def test_openai_compatible_custom_api_video(provider):
 def test_lm_studio_completion(monkeypatch):
     monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     try:
         completion(
             api_key="fake-key",
@@ -1259,7 +1259,7 @@ def test_completion_openai():
 @pytest.mark.flaky(retries=3, delay=1)
 def test_completion_openai_pydantic(model, api_version):
     try:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         from pydantic import BaseModel
 
         messages = [
@@ -3611,7 +3611,7 @@ def test_completion_novita_ai_dynamic_params(api_key):
 def test_deepseek_reasoning_content_completion():
     try:
         litellm.set_verbose = True
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         resp = litellm.completion(
             timeout=5,
             model="deepseek/deepseek-reasoner",
@@ -3624,7 +3624,7 @@ def test_deepseek_reasoning_content_completion():
 
 
 def test_qwen_text_completion():
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     resp = litellm.completion(
         model="text-completion-openai/gpt-5.4-nano",
         messages=[{"content": "hello", "role": "user"}],
@@ -3692,7 +3692,7 @@ def test_completion_o3_mini_temperature():
 
 
 def test_completion_gpt_4o_empty_str():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from openai import OpenAI
     from unittest.mock import MagicMock
 

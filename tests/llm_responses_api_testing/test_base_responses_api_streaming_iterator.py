@@ -148,7 +148,7 @@ class TestBaseResponsesAPIStreamingIterator:
 
         with patch.object(
             ResponsesAPIRequestUtils,
-            "_update_responses_api_response_id_with_model_id",
+            "update_responses_api_response_id_with_model_id",
             return_value=updated_response,
         ) as mock_update_id:
             # Process the chunk
@@ -218,7 +218,7 @@ class TestBaseResponsesAPIStreamingIterator:
         }
 
         with patch.object(
-            ResponsesAPIRequestUtils, "_update_responses_api_response_id_with_model_id"
+            ResponsesAPIRequestUtils, "update_responses_api_response_id_with_model_id"
         ) as mock_update_id:
             # Process the chunk
             result = iterator._process_chunk(json.dumps(test_chunk_data))
@@ -584,7 +584,7 @@ class TestBaseResponsesAPIStreamingIterator:
         with (
             patch.object(
                 ResponsesAPIRequestUtils,
-                "_update_responses_api_response_id_with_model_id",
+                "update_responses_api_response_id_with_model_id",
                 return_value=mock_responses_api_response,
             ),
             patch(
@@ -661,7 +661,7 @@ class TestBaseResponsesAPIStreamingIterator:
         with (
             patch.object(
                 ResponsesAPIRequestUtils,
-                "_update_responses_api_response_id_with_model_id",
+                "update_responses_api_response_id_with_model_id",
                 return_value=mock_responses_api_response,
             ),
             patch("asyncio.create_task") as mock_create_task,
