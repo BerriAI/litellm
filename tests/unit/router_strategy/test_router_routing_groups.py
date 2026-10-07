@@ -20,7 +20,7 @@ import litellm
 from litellm import Router
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup, RoutingStrategy
+from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, ModelInfo, RoutingGroup, RoutingStrategy
 from litellm.utils import Rules, function_setup
 
 
@@ -1666,6 +1666,18 @@ def test_as_routing_group_row_strips_access_groups():
     row = Router._as_routing_group_row(source)
     assert row["model_info"] == {"id": "d1"}
     assert source["model_info"]["access_groups"] == ["restricted"]
+
+
+def test_as_routing_group_row_accepts_a_model_info_instance():
+    source = {"model_name": "member", "model_info": ModelInfo(id="d1")}
+    row = Router._as_routing_group_row(source)
+    assert isinstance(row["model_info"], dict)
+    assert row["model_info"]["id"] == "d1"
+
+
+def test_as_routing_group_row_defaults_a_missing_model_info_to_empty():
+    row = Router._as_routing_group_row({"model_name": "member"})
+    assert row["model_info"] == {}
 
 
 @pytest.mark.asyncio

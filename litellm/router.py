@@ -318,6 +318,7 @@ from litellm.types.router import (
     RoutingStrategy,
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
+    deployment_model_info_as_dict,
     holds_secret_pointer,
 )
 from litellm.types.services import ServiceTypes
@@ -9913,12 +9914,7 @@ class Router:
                     if isinstance(v, str) and v.startswith("os.environ/") and not holds_secret_pointer(k):
                         _litellm_params[k] = get_secret(v)
 
-            _raw_model_info = model.pop("model_info", {})
-            _model_info: dict = (
-                _raw_model_info.model_dump(exclude_none=True)
-                if hasattr(_raw_model_info, "model_dump")
-                else (_raw_model_info or {})
-            )
+            _model_info: dict = deployment_model_info_as_dict(model.pop("model_info", {}))
 
             declared_id = None if _model_info.get("id") is None else str(_model_info["id"])
 
@@ -11356,7 +11352,7 @@ class Router:
 
             # Cache nested dict access to avoid repeated temporary dict allocations
             model_litellm_params = model.get("litellm_params", {})
-            model_info_dict = model.get("model_info", {})
+            model_info_dict = deployment_model_info_as_dict(model.get("model_info"))
 
             # get model tpm
             _deployment_tpm: int | None = None
@@ -11418,7 +11414,7 @@ class Router:
                     supported_openai_params = []
 
                 # Get mode from database model_info if available, otherwise default to "chat"
-                db_model_info = model.get("model_info", {})
+                db_model_info = deployment_model_info_as_dict(model.get("model_info"))
                 mode = db_model_info.get("mode", "chat")
                 input_cost_per_token = _cost_value_as_float(db_model_info.get("input_cost_per_token"))
                 output_cost_per_token = _cost_value_as_float(db_model_info.get("output_cost_per_token"))
@@ -12136,7 +12132,7 @@ class Router:
         model_names: Final = []
 
         for deployment in deployments:
-            model_info = deployment.get("model_info")
+            model_info = deployment_model_info_as_dict(deployment.get("model_info"))
             if self._is_team_specific_model(model_info):
                 team_model_name = self._get_team_specific_model(deployment=deployment, team_id=team_id)
                 if team_model_name:
@@ -12244,7 +12240,7 @@ class Router:
             str: The `team_public_model_name` if team_id matches
             None: If team_id doesn't match or no team info exists
         """
-        model_info: Final[dict | None] = deployment.get("model_info") or {}
+        model_info: Final[dict | None] = deployment_model_info_as_dict(deployment.get("model_info"))
         if model_info is None:
             return None
         if team_id == model_info.get("team_id"):
@@ -12340,9 +12336,8 @@ class Router:
         the group, so inheriting them here would let a key holding a member's
         access group list and call the whole group.
         """
-        raw_model_info: Final = deployment.get("model_info") or {}
-        model_info_dict: Final = raw_model_info if isinstance(raw_model_info, dict) else raw_model_info.model_dump()
-        model_info: Final = {k: v for k, v in model_info_dict.items() if k != "access_groups"}
+        raw_model_info: Final = deployment_model_info_as_dict(deployment.get("model_info"))
+        model_info: Final = {k: v for k, v in raw_model_info.items() if k != "access_groups"}
         return {**deployment, "model_info": model_info}
 
     TIER_PARAMS_NEVER_DROPPED: Final = frozenset(all_litellm_params) | frozenset(

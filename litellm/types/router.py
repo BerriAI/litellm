@@ -725,6 +725,22 @@ class DeploymentTypedDict(TypedDict, total=False):
 SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
 
 
+def deployment_model_info_as_dict(
+    model_info: dict[str, object] | ModelInfo | None,
+) -> dict[str, object]:
+    """Normalize a deployment's ``model_info`` to a plain dict.
+
+    ``DeploymentTypedDict.model_info`` holds either a mapping or a ``ModelInfo``
+    instance, so every reader that needs dict semantics normalizes here instead
+    of calling ``.get`` or ``.items`` on the union.
+    """
+    if isinstance(model_info, dict):
+        return model_info
+    if isinstance(model_info, ModelInfo):
+        return model_info.model_dump(exclude_none=True)
+    return {}
+
+
 class Deployment(LiteLLMBaseModel):
     model_name: str
     litellm_params: LiteLLM_Params

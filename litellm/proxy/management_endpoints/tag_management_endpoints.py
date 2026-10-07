@@ -225,7 +225,7 @@ async def get_deployments_by_model(model: str, llm_router: "Router") -> list["De
     """
     Get all deployments by model
     """
-    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, deployment_model_info_as_dict
 
     # Check if model id
     deployment: Final = llm_router.get_deployment(model_id=model)
@@ -240,7 +240,7 @@ async def get_deployments_by_model(model: str, llm_router: "Router") -> list["De
         Deployment(
             model_name=deployment["model_name"],
             litellm_params=LiteLLM_Params(**deployment["litellm_params"]),
-            model_info=ModelInfo(**deployment.get("model_info") or {}),
+            model_info=ModelInfo(**deployment_model_info_as_dict(deployment.get("model_info"))),
         )
         for deployment in deployments
     ]
