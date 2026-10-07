@@ -137,6 +137,8 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
         _OPTIONAL_PresidioPIIMasking,
     )
 
+    stable_tokens: Final[bool | None] = getattr(litellm_params, "presidio_stable_tokens", None)
+    token_salt: Final[str | None] = getattr(litellm_params, "presidio_token_salt", None)
     explicit_filter_scope: Final = litellm_params.presidio_filter_scope
     filter_scope: Final = explicit_filter_scope or ("input" if _is_mcp_only_mode(litellm_params.mode) else "both")
     run_input: Final = filter_scope in ("input", "both")
@@ -156,6 +158,8 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             presidio_anonymizer_api_base=litellm_params.presidio_anonymizer_api_base,
             presidio_language=litellm_params.presidio_language,
             presidio_entities_deny_list=litellm_params.presidio_entities_deny_list,
+            presidio_stable_tokens=stable_tokens,
+            presidio_token_salt=token_salt,
             apply_to_output=False,
             timeout=litellm_params.timeout,
             _callback_role="scan",
