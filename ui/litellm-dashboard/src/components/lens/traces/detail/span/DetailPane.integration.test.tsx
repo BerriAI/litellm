@@ -250,7 +250,7 @@ describe("DetailPane", () => {
     } as unknown as TracesApi;
     const deps = { queryClient: testQueryClient, traces, accessToken: "sk-test", concurrency: 1 };
     const prefetcher = createTracePrefetcher(deps);
-    await prefetcher.warm([{ traceId: "t1" }]);
+    await prefetcher.warm([{ ref: { traceId: "t1" }, span: true }]);
     expect(agentTraceSpanCall).toHaveBeenCalledTimes(1);
 
     renderWithProviders(
