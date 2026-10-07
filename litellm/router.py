@@ -3049,7 +3049,7 @@ class Router:
                 # Preserve hidden params (including litellm_overhead_time_ms) from original response
                 model_response_hidden_params: Final = get_hidden_params(model_response)
                 if model_response_hidden_params is not None:
-                    self._hidden_params = model_response_hidden_params.copy()
+                    self._hidden_params = dict(model_response_hidden_params)
 
             def __aiter__(self):
                 return self
@@ -3668,7 +3668,7 @@ class Router:
                 self._sync_generator = sync_generator
                 model_response_hidden_params: Final = get_hidden_params(model_response)
                 if model_response_hidden_params is not None:
-                    self._hidden_params = model_response_hidden_params.copy()
+                    self._hidden_params = dict(model_response_hidden_params)
 
             def __iter__(self):
                 return self
