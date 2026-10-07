@@ -580,7 +580,7 @@ async def test_protocol_listing_does_not_report_success_when_every_server_requir
 async def test_streamable_http_listing_returns_late_oauth_challenge(
     monkeypatch: pytest.MonkeyPatch, stateful: bool, path: str, json_response: bool, protocol: str, method: str
 ) -> None:
-    from litellm.proxy._experimental.mcp_server import server
+    from litellm.proxy._experimental.mcp_server import catalog, server
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing, ServerListFault
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -597,18 +597,22 @@ async def test_streamable_http_listing_returns_late_oauth_challenge(
         relayable=True,
     )
     listing: Final = AsyncMock(return_value=AggregateToolListing([], {"github": fault}, {"github": fault}))
-    if method != "tools/list":
-        listing.side_effect = MCPUpstreamAuthError(
+    monkeypatch.setattr(server.operations, "_list_mcp_tools", listing)
+    challenged: Final = MagicMock()
+    challenged.server_id = "github"
+    challenged.name = "github"
+    challenged.server_name = "github"
+    challenged.alias = "github"
+    challenged.short_prefix = None
+    challenged.extra_headers = None
+    challenged.is_client_forwarded_token = True
+    optional_page: Final = AsyncMock(
+        side_effect=MCPUpstreamAuthError(
             401, 'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/github"', "github"
         )
-    list_function: Final = {
-        "tools/list": "_list_mcp_tools",
-        "prompts/list": "_list_mcp_prompts",
-        "resources/list": "_list_mcp_resources",
-        "resources/templates/list": "_list_mcp_resource_templates",
-    }[method]
-    monkeypatch.setattr(server.operations, list_function, listing)
-    monkeypatch.setattr(server.operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[]))
+    )
+    monkeypatch.setattr(catalog, "fetch_optional_catalog_page", optional_page)
+    monkeypatch.setattr(server.operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[challenged]))
     monkeypatch.setattr(server.operations, "_raise_if_initialize_grants_no_mcp_servers", AsyncMock())
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
@@ -662,7 +666,7 @@ async def test_streamable_http_listing_returns_late_oauth_challenge(
             response.headers["www-authenticate"]
             == 'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/github"'
         )
-        listing.assert_awaited_once()
+        (listing if method == "tools/list" else optional_page).assert_awaited_once()
     finally:
         await server.shutdown_session_managers()
 

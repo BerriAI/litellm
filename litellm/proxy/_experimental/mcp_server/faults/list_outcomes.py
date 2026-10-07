@@ -76,6 +76,7 @@ class AggregateToolListing(NamedTuple):
     tools: list[MCPTool]
     outcomes: dict[str, ServerOutcome]
     outcomes_by_server_id: dict[str, ServerOutcome]
+    next_cursor: str | None = None
 
 
 def listing_auth_error(outcomes: Mapping[str, ServerOutcome]) -> MCPUpstreamAuthError | None:

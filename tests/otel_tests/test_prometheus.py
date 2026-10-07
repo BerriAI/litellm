@@ -2,6 +2,7 @@
 Unit tests for prometheus metrics
 """
 
+import os
 import pytest
 import aiohttp
 import asyncio
@@ -88,7 +89,7 @@ async def test_proxy_failure_metrics():
     async with aiohttp.ClientSession() as session:
         # Make a bad chat completion call
         status, response_text = await make_bad_chat_completion_request(
-            session, "sk-1234"
+            session, os.environ["LITELLM_MASTER_KEY"]
         )
 
         # Check if the request failed as expected
@@ -180,7 +181,7 @@ async def test_proxy_success_metrics():
     async with aiohttp.ClientSession() as session:
         # Make a good chat completion call
         status, response_text = await make_good_chat_completion_request(
-            session, "sk-1234"
+            session, os.environ["LITELLM_MASTER_KEY"]
         )
 
         # Check if the request succeeded as expected
@@ -293,7 +294,7 @@ async def test_proxy_fallback_metrics():
 
     async with aiohttp.ClientSession() as session:
         # Make a good chat completion call
-        await make_chat_completion_request_with_fallback(session, "sk-1234")
+        await make_chat_completion_request_with_fallback(session, os.environ["LITELLM_MASTER_KEY"])
 
         # Get metrics
         async with session.get("http://0.0.0.0:4000/metrics") as response:
@@ -354,7 +355,7 @@ async def create_test_team(
     """Create a new team and return the team_id"""
     url = "http://0.0.0.0:4000/team/new"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
     }
 
@@ -372,7 +373,7 @@ async def create_test_user(
     """Create a new user and return the user info"""
     url = "http://0.0.0.0:4000/user/new"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
     }
 
@@ -419,7 +420,7 @@ async def create_test_key(session: aiohttp.ClientSession, team_id: str) -> str:
     """Generate a new key for the team and return it"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
     }
     data = {
@@ -438,7 +439,7 @@ async def get_team_info(session: aiohttp.ClientSession, team_id: str) -> Dict[st
     """Fetch team info and return the response"""
     url = f"http://0.0.0.0:4000/team/info?team_id={team_id}"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
     }
 
     async with session.get(url, headers=headers) as response:
@@ -527,7 +528,7 @@ async def create_test_key_with_budget(
     """Generate a new key with budget constraints and return it"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
     }
     print("budget_data", budget_data)
@@ -562,7 +563,7 @@ async def get_user_info(session: aiohttp.ClientSession, user_id: str) -> Dict[st
     encoded_user_id = quote(user_id, safe="")
     url = f"http://0.0.0.0:4000/user/info?user_id={encoded_user_id}"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
     }
 
     async with session.get(url, headers=headers) as response:

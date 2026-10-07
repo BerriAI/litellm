@@ -1829,6 +1829,9 @@ if MCP_AVAILABLE:
             return exc
         return None
 
+    from litellm.proxy._experimental.mcp_server.catalog import catalog_operation
+
+    @catalog_operation(lambda: operations.global_mcp_server_manager)
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: list[str] | None,

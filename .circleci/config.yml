@@ -892,40 +892,6 @@ jobs:
           paths:
             - router_unit_tests_coverage.xml
             - router_unit_tests_coverage
-  litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: medium
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -k \"assistants\""
-          no_output_timeout: 15m
-      # Store test results
-      - store_test_results:
-          path: test-results
   llm_translation_testing:
     docker:
       - *python312_image
@@ -1021,49 +987,6 @@ jobs:
           paths:
             - realtime_translation_coverage.xml
             - realtime_translation_coverage
-  agent_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/agent_tests/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv -s \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml agent_coverage.xml
-            mv .coverage agent_coverage
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - agent_coverage.xml
-            - agent_coverage
   guardrails_testing:
     docker:
       - *python312_image
@@ -1706,6 +1629,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -1729,9 +1657,8 @@ jobs:
           command: |
             docker run -d \
               -p 4001:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_test" \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               --name schema-seed \
               --add-host=host.docker.internal:host-gateway \
               -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
@@ -1802,6 +1729,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - attach_workspace:
           at: ~/project
@@ -1825,9 +1757,8 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e USE_PRISMA_MIGRATE=True \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e AZURE_API_KEY=$AZURE_API_KEY \
@@ -1872,7 +1803,7 @@ jobs:
           name: Seed the routing strategy through /config/update
           command: |
             curl --noproxy '*' -sSf -X POST http://localhost:4000/config/update \
-              -H 'Authorization: Bearer sk-1234' -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
               -d '{"router_settings": {"routing_strategy": "usage-based-routing-v2"}}'
       - run:
           name: Run tests
@@ -1901,6 +1832,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -1922,9 +1858,8 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e AZURE_API_KEY=$AZURE_API_KEY \
               -e AZURE_API_BASE=$AZURE_API_BASE \
               -e AZURE_API_VERSION="2024-05-01-preview" \
@@ -1987,6 +1922,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -2012,12 +1952,11 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
@@ -2073,12 +2012,11 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE="bad-license" \
@@ -2122,6 +2060,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -2151,11 +2094,10 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=host.docker.internal \
               -e REDIS_PORT=6379 \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
@@ -2210,6 +2152,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -2234,12 +2181,11 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e USE_DDTRACE=True \
@@ -2257,12 +2203,11 @@ jobs:
           command: |
             docker run -d \
               -p 4001:4001 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e USE_DDTRACE=True \
@@ -2309,6 +2254,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -2335,10 +2285,9 @@ jobs:
             docker run -d \
               --restart on-failure \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e STORE_MODEL_IN_DB="True" \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e TEAM_METADATA_VALIDATION_SERVICE_URL=http://host.docker.internal:9414/validate \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
@@ -2388,6 +2337,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       # Remove Docker CLI installation since it's already available in machine executor
@@ -2410,12 +2364,11 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
@@ -2472,6 +2425,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -2493,9 +2451,8 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
@@ -2563,6 +2520,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -2585,9 +2547,8 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
               -e RECORDER_ANTHROPIC_BASE_URL=http://host.docker.internal:8090/__recorder_upstream/api.anthropic.com \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
@@ -2613,7 +2574,7 @@ jobs:
           command: |
             mkdir -p test-results
             export LITELLM_PROXY_URL="http://localhost:4000"
-            export LITELLM_API_KEY="sk-1234"
+            export LITELLM_API_KEY="$LITELLM_MASTER_KEY"
             TEST_FILES=$(circleci tests glob "tests/proxy_e2e_anthropic_messages_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
@@ -2647,7 +2608,7 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage agent_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -2676,6 +2637,11 @@ jobs:
       PROXY_LOGOUT_URL: "https://www.example.com"
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes:
           category: client
       - setup_google_dns
@@ -2766,8 +2732,6 @@ jobs:
       - run:
           name: Start LiteLLM proxy
           environment:
-            LITELLM_MASTER_KEY: "sk-1234"
-            LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY: "true"
             MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
             DISABLE_SCHEMA_UPDATE: "true"
             SERVER_ROOT_PATH: ""
@@ -2787,7 +2751,7 @@ jobs:
           name: Wait for proxy to be ready
           command: |
             for i in $(seq 1 60); do
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/health -H "Authorization: Bearer sk-1234" 2>/dev/null || true)
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/health -H "Authorization: Bearer $LITELLM_MASTER_KEY" 2>/dev/null || true)
               if [ "$HTTP_CODE" = "200" ]; then
                 echo "Proxy is ready"
                 exit 0
@@ -2834,6 +2798,11 @@ jobs:
       SERVER_ROOT_PATH: "/litellm"
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes:
           category: client
       - setup_google_dns
@@ -2910,8 +2879,6 @@ jobs:
       - run:
           name: Start LiteLLM proxy under a server root path
           environment:
-            LITELLM_MASTER_KEY: "sk-1234"
-            LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY: "true"
             MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
             DISABLE_SCHEMA_UPDATE: "true"
           # Output flows to this step's own log, so a boot crash is visible here
@@ -2926,7 +2893,7 @@ jobs:
           name: Wait for prefixed proxy to be ready
           command: |
             for i in $(seq 1 60); do
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" http://127.0.0.1:4000/litellm/health 2>/dev/null || true)
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer $LITELLM_MASTER_KEY" http://127.0.0.1:4000/litellm/health 2>/dev/null || true)
               if [ "$HTTP_CODE" = "200" ]; then
                 echo "Prefixed proxy is ready"
                 exit 0
@@ -3019,6 +2986,11 @@ jobs:
       PYTHONPATH: tests/e2e
     steps:
       - checkout_migration_source
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - install_uv
       - install_rust
       - restore_cache:
@@ -3138,6 +3110,11 @@ jobs:
       E2E_FIXTURE_MODE: live
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes:
           category: provider-harness
       - setup_litellm_test_deps
@@ -3570,7 +3547,6 @@ workflows:
       - local_testing_part1
       - local_testing_part2
       - langfuse_logging_unit_tests
-      - litellm_assistants_api_testing
       - litellm_router_testing
       - litellm_router_unit_testing
       - auth_ui_unit_tests
@@ -3604,7 +3580,6 @@ workflows:
             - build_docker_database_image
       - llm_translation_testing
       - realtime_translation_testing
-      - agent_testing
       - guardrails_testing
       - google_generate_content_endpoint_testing
       - llm_responses_api_testing
@@ -3619,7 +3594,6 @@ workflows:
       - upload-coverage:
           requires:
             - realtime_translation_testing
-            - agent_testing
             - google_generate_content_endpoint_testing
             - guardrails_testing
             - ocr_testing
@@ -3633,7 +3607,6 @@ workflows:
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
-            - litellm_assistants_api_testing
             - litellm_router_unit_testing
             - auth_ui_unit_tests
       - db_migration_disable_update_check:

@@ -573,6 +573,54 @@ class ContextWindowExceededError(BadRequestError):
         return _message
 
 
+class PaymentRequiredError(BadRequestError):
+    def __init__(
+        self,
+        message: str,
+        model: str,
+        llm_provider: str,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+    ) -> None:
+        response_is_valid: Final = (
+            response is not None
+            and isinstance(response, httpx.Response)
+            and hasattr(response, "_request")
+            and getattr(response, "_request", None) is not None
+        )
+        response_for_parent: Final = (
+            response
+            if response_is_valid
+            else httpx.Response(
+                status_code=402,
+                request=httpx.Request(method="GET", url="https://litellm.ai"),
+            )
+        )
+        super().__init__(
+            message=message,
+            model=model,
+            llm_provider=llm_provider,
+            response=response_for_parent,
+            litellm_debug_info=litellm_debug_info,
+        )
+        self.status_code = 402
+        self.message = f"litellm.PaymentRequiredError: {message}"
+
+    def __str__(self) -> str:
+        return (
+            self.message
+            + (f" LiteLLM Retried: {self.num_retries} times" if self.num_retries else "")
+            + (f", LiteLLM Max Retries: {self.max_retries}" if self.max_retries else "")
+        )
+
+    def __repr__(self) -> str:
+        return (
+            self.message
+            + (f" LiteLLM Retried: {self.num_retries} times" if self.num_retries else "")
+            + (f", LiteLLM Max Retries: {self.max_retries}" if self.max_retries else "")
+        )
+
+
 # sub class of bad request error - meant to help us catch guardrails-related errors on proxy.
 class RejectedRequestError(BadRequestError):
     def __init__(
@@ -977,6 +1025,7 @@ LITELLM_EXCEPTION_TYPES: Final = [
     PermissionDeniedError,
     RateLimitError,
     ContextWindowExceededError,
+    PaymentRequiredError,
     RejectedRequestError,
     ContentPolicyViolationError,
     InternalServerError,
