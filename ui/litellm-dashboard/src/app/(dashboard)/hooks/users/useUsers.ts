@@ -9,16 +9,33 @@ const userLookupKeys = createQueryKeys("userLookup");
 
 const DEFAULT_PAGE_SIZE = 50;
 
-export const useInfiniteUsers = (pageSize: number = DEFAULT_PAGE_SIZE, searchEmail?: string) => {
+export const useInfiniteUsers = (pageSize: number = DEFAULT_PAGE_SIZE, searchEmail?: string, searchAlias?: string) => {
   const { accessToken, userRole } = useAuthorized();
+  const filters = {
+    pageSize,
+    ...(searchEmail && { searchEmail }),
+    ...(searchAlias && { searchAlias }),
+  };
   return useInfiniteQuery<UserListResponse>({
-    queryKey: infiniteUsersKeys.list({
-      filters: {
-        pageSize,
-        ...(searchEmail && { searchEmail }),
-      },
-    }),
+    queryKey: infiniteUsersKeys.list({ filters }),
     queryFn: async ({ pageParam }) => {
+      if (searchAlias) {
+        return await userListCall(
+          accessToken!,
+          null,
+          pageParam as number,
+          pageSize,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          searchAlias,
+        );
+      }
       return await userListCall(
         accessToken!,
         null, // userIDs

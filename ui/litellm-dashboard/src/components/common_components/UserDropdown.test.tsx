@@ -65,13 +65,13 @@ describe("UserDropdown", () => {
   it("queries the first page of users with no search term", () => {
     render(<UserDropdown onChange={vi.fn()} />);
 
-    expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, undefined);
+    expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, undefined, undefined);
   });
 
   it("forwards the pageSize prop to the users query", () => {
     render(<UserDropdown onChange={vi.fn()} pageSize={25} />);
 
-    expect(mockUseInfiniteUsers).toHaveBeenCalledWith(25, undefined);
+    expect(mockUseInfiniteUsers).toHaveBeenCalledWith(25, undefined, undefined);
   });
 
   it("sends the typed query to the server instead of narrowing the loaded page", async () => {
@@ -79,10 +79,21 @@ describe("UserDropdown", () => {
     render(<UserDropdown onChange={vi.fn()} />);
 
     await user.click(combobox());
-    fireEvent.change(combobox(), { target: { value: "alice" } });
+    await user.type(combobox(), "alice");
 
-    await waitFor(() => expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, "alice"));
+    await waitFor(() => expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, "alice", undefined));
     expect(screen.getByText("bob@example.com (user-2)")).toBeInTheDocument();
+  });
+
+  it("searches by alias when alias search is selected", async () => {
+    const user = userEvent.setup();
+    render(<UserDropdown onChange={vi.fn()} searchField="alias" />);
+
+    expect(combobox()).toHaveAttribute("placeholder", "Search users by alias…");
+    await user.click(combobox());
+    await user.type(combobox(), "Alice");
+
+    await waitFor(() => expect(mockUseInfiniteUsers).toHaveBeenLastCalledWith(50, undefined, "Alice"));
   });
 
   it("labels a user by alias, falling back to email and then the bare id", async () => {
@@ -109,6 +120,17 @@ describe("UserDropdown", () => {
 
     expect(screen.getAllByText("Alice Admin (user-1)")).toHaveLength(1);
     expect(screen.getByText("bob@example.com (user-2)")).toBeInTheDocument();
+  });
+
+  it("pins the current user first, deduplicates it from results, and skips its lookup", async () => {
+    const user = userEvent.setup();
+    render(<UserDropdown onChange={vi.fn()} value="user-1" pinnedUser={ALIASED} />);
+
+    await user.click(combobox());
+
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent("Alice Admin (user-1) (you)");
+    expect(screen.getAllByText("Alice Admin (user-1) (you)")).toHaveLength(1);
+    expect(mockUseUserLookup).toHaveBeenLastCalledWith(null);
   });
 
   it("loads the next page once the list is scrolled near the bottom", async () => {

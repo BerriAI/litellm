@@ -1988,7 +1988,7 @@ def test_process_keys_for_user_info_handles_empty_keys(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_users_user_id_partial_match(mocker):
+async def test_get_users_user_list_filters_partial_user_id_and_alias(mocker):
     """
     Test that /user/list endpoint uses partial matching for single user_id
     and exact matching for multiple user_ids.
@@ -2058,6 +2058,27 @@ async def test_get_users_user_id_partial_match(mocker):
     assert "user_id" in captured_where_conditions
     assert "in" in captured_where_conditions["user_id"]
     assert captured_where_conditions["user_id"]["in"] == ["user1", "user2", "user3"]
+
+    captured_where_conditions.clear()
+    await get_users(
+        user_alias="bo",
+        page=1,
+        page_size=1,
+        user_api_key_dict=admin_key,
+        organization_ids=None,
+    )
+
+    assert captured_where_conditions["user_alias"] == {"contains": "bo", "mode": "insensitive"}
+
+    captured_where_conditions.clear()
+    await get_users(
+        page=1,
+        page_size=1,
+        user_api_key_dict=admin_key,
+        organization_ids=None,
+    )
+
+    assert "user_alias" not in captured_where_conditions
 
 
 def test_get_users_search_matches_user_id_or_email(mocker):

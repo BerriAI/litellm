@@ -134,6 +134,41 @@ describe("useInfiniteUsers", () => {
     expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, searchEmail);
   });
 
+  it("should pass searchAlias to userListCall and include it in the query key", async () => {
+    const searchAlias = "Alice";
+    const mockResponse = buildUserListResponse(1, 1, 1);
+    vi.mocked(userListCall).mockResolvedValue(mockResponse);
+
+    const { result } = renderHook(() => useInfiniteUsers(50, undefined, searchAlias), {
+      wrapper,
+    });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(userListCall).toHaveBeenCalledWith(
+      "test-access-token",
+      null,
+      1,
+      50,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      searchAlias,
+    );
+    expect(queryClient.getQueryCache().getAll()[0].queryKey).toEqual([
+      "infiniteUsers",
+      "list",
+      { params: { filters: { pageSize: 50, searchAlias } } },
+    ]);
+  });
+
   it("should pass null for searchEmail when not provided", async () => {
     const mockResponse = buildUserListResponse(1, 1);
     (userListCall as any).mockResolvedValue(mockResponse);

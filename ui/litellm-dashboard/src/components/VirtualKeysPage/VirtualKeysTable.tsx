@@ -3,6 +3,7 @@
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
@@ -19,6 +20,7 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Input } from "@/components/ui/input";
+import UserDropdown from "@/components/common_components/UserDropdown";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, functionalUpdate, OnChangeFn } from "@tanstack/react-table";
@@ -89,6 +91,7 @@ const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): strin
 
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const { data: fetchedOrganizations } = useOrganizations();
+  const { data: currentUser } = useCurrentUser();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const { data: fetchedTeams } = useAllTeams();
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
@@ -301,6 +304,15 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                       onValueChange={(value) => set("org_id", value ?? undefined)}
                       placeholder="Select an organization…"
                       emptyText="No organizations found"
+                    />
+                  </DataTableFilterField>
+                  <DataTableFilterField label="User Alias" id="user-alias-filter">
+                    <UserDropdown
+                      searchField="alias"
+                      pinnedUser={currentUser ?? null}
+                      id="user-alias-filter"
+                      value={get("user_id") as string | undefined}
+                      onChange={(id) => set("user_id", id ?? undefined)}
                     />
                   </DataTableFilterField>
                   <DataTableFilterField label="User ID">
