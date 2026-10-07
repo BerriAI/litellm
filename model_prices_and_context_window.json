@@ -15039,6 +15039,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "claude-haiku-4-5-20251001": {
+        "supports_web_search": true,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_creation_input_token_cost_batches": 6.25e-07,
@@ -15181,6 +15182,7 @@
         "source": "https://docs.anthropic.com/en/docs/about-claude/pricing"
     },
     "claude-sonnet-5": {
+        "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -15271,6 +15273,7 @@
         "supports_web_search": true
     },
     "claude-sonnet-4-6": {
+        "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -15344,6 +15347,7 @@
         "output_cost_per_token_batches": 7.5e-06
     },
     "claude-opus-4-5-20251101": {
+        "supports_web_search": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_creation_input_token_cost_batches": 3.125e-06,
@@ -15413,6 +15417,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-6": {
+        "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -15498,6 +15503,7 @@
         "prompt_cache_min_tokens": 4096
     },
     "claude-opus-4-7": {
+        "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -15585,6 +15591,7 @@
         "prompt_cache_min_tokens": 2048
     },
     "claude-fable-5": {
+        "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
@@ -15629,6 +15636,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-fable-5-1": {
+        "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
@@ -15674,6 +15682,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-5-5": {
+        "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_1hr": 8e-06,
@@ -15719,6 +15728,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-5": {
+        "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -15766,6 +15776,7 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-8": {
+        "supports_web_search": true,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -42381,6 +42392,38 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_web_search": true
+    },
+    "openrouter/anthropic/claude-haiku-5.5": {
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_1hr": 2e-07,
+        "input_cost_per_token_above_100k_tokens": 5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.5e-06,
+        "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_web_search": true,
+        "supports_sampling_params": false
     },
     "openrouter/anthropic/claude-haiku-4.5": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -80817,8 +80860,8 @@
             "us": 1.1
         },
         "supports_output_config": true,
-        "supports_forced_tool_use": false,
-        "thinking_always_on": true,
+        "supports_forced_tool_use": true,
+        "thinking_always_on": false,
         "prompt_cache_min_tokens": 512,
         "source": "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
         "supports_web_search": true,
