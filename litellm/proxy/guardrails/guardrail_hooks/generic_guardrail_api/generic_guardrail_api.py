@@ -6,11 +6,15 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import fnmatch
+import json
 import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 import httpx
+from pydantic import JsonValue
+from pydantic_core import to_jsonable_python
+from typing_extensions import TypeIs
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
@@ -19,9 +23,20 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
+)
+from litellm.proxy.guardrails._content_utils import same_json_ignoring_nulls
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.payload_policy import (
+    PayloadLoss,
+    accepted_rewrites,
+    raise_if_intervention_was_refused,
+    resolve_payload_policy,
+    restore_unseen_rows,
+    shape_payload,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -150,22 +165,52 @@ def _extract_inbound_headers(
     return None
 
 
+def _is_part_list(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: trivial isinstance narrowing
+    return isinstance(value, list)
+
+
+def _as_posted_json(value: object) -> JsonValue:
+    """httpx encodes the body with the stdlib codec, so the rows an echo is compared with must go through it too"""
+    posted: Final[JsonValue] = json.loads(  # pyright: ignore[reportAny]  # untyped stdlib parse of json.dumps output
+        json.dumps(value, default=to_jsonable_python)
+    )
+    return posted
+
+
+def _row_as_sent(dumped: JsonValue, caller: Mapping[str, object]) -> JsonValue:
+    """The request model dumps a part list holding any part it rejects as [], so such a row is sent with the
+    caller's content"""
+    caller_content: Final = caller.get("content")
+    if not isinstance(dumped, dict) or not _is_part_list(caller_content):
+        return dumped
+    dumped_content: Final = dumped.get("content")
+    if isinstance(dumped_content, list) and len(dumped_content) == len(caller_content):
+        return dumped
+    return {**dumped, "content": _as_posted_json(caller_content)}
+
+
+def _rows_as_sent(dumped_rows: JsonValue, caller_rows: Sequence[Mapping[str, object]] | None) -> JsonValue:
+    if caller_rows is None or not isinstance(dumped_rows, list):
+        return dumped_rows
+    return [_row_as_sent(dumped, caller) for dumped, caller in zip(dumped_rows, caller_rows, strict=True)]
+
+
 def _structured_rows_to_write_back(
     original_rows: Sequence[AllMessageValues] | None,
     shown_rows: Sequence[AllMessageValues] | None,
     returned_rows: Sequence[AllMessageValues],
 ) -> tuple[AllMessageValues, ...] | None:
     """The request model drops row keys its message types do not declare, so a
-    row the server echoes back verbatim is restored to the original row object.
+    row the server echoes back, null fields aside, is restored to the original row object.
     A server that echoes every row back unchanged has not rewritten anything
     per row, so its answer is read from texts, as it was before rows could be
     returned at all."""
     if original_rows is None or shown_rows is None or len(returned_rows) != len(original_rows):
         return tuple(returned_rows)
-    if all(returned == shown for shown, returned in zip(shown_rows, returned_rows)):
+    if all(same_json_ignoring_nulls(returned, shown) for shown, returned in zip(shown_rows, returned_rows)):
         return None
     return tuple(
-        original if returned == shown else returned
+        original if same_json_ignoring_nulls(returned, shown) else returned
         for original, shown, returned in zip(original_rows, shown_rows, returned_rows)
     )
 
@@ -204,9 +249,14 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        send_images: bool | None = None,
+        exclude_payload_fields: Sequence[str] | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.headers = headers or {}
         self.extra_headers = extra_headers or []
 
@@ -249,6 +299,12 @@ class GenericGuardrailAPI(CustomGuardrail):
         # "incremental_diff" emits them as synthetic deltas.
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
             "block_only" if streaming_transform_mode is None else streaming_transform_mode
+        )
+
+        self._payload_policy: Final = resolve_payload_policy(
+            send_images=send_images,
+            exclude_payload_fields=exclude_payload_fields,
+            guardrail_name=kwargs.get("guardrail_name"),
         )
 
         # Set supported event hooks
@@ -345,23 +401,42 @@ class GenericGuardrailAPI(CustomGuardrail):
         structured_messages: Sequence[AllMessageValues] | None,
         shown_messages: Sequence[AllMessageValues] | None,
         guardrail_response: GenericGuardrailAPIResponse,
+        loss: PayloadLoss,
+        posted: Mapping[str, JsonValue],
+        input_type: Literal["request", "response"],
     ) -> GenericGuardrailAPIInputs:
         # Action is NONE or no modifications needed
         return_inputs: Final = GenericGuardrailAPIInputs(texts=texts)
-        if guardrail_response.texts:
-            return_inputs["texts"] = guardrail_response.texts
-        if guardrail_response.images:
-            return_inputs["images"] = guardrail_response.images
+        name: Final = self.guardrail_name
+        accepted: Final = accepted_rewrites(guardrail_response, loss, guardrail_name=name)
+        if accepted.texts:
+            return_inputs["texts"] = accepted.texts
+        if accepted.images:
+            return_inputs["images"] = accepted.images
         elif images:
             return_inputs["images"] = images
-        if guardrail_response.tools:
-            return_inputs["tools"] = guardrail_response.tools
+        if accepted.tools:
+            return_inputs["tools"] = accepted.tools
         elif tools:
             return_inputs["tools"] = tools
         rows_to_write_back: Final = (
-            _structured_rows_to_write_back(structured_messages, shown_messages, guardrail_response.structured_messages)
-            if guardrail_response.structured_messages
+            restore_unseen_rows(
+                rows=_structured_rows_to_write_back(structured_messages, shown_messages, accepted.rows),
+                caller=structured_messages,
+                sent=shown_messages,
+                loss=loss,
+                guardrail_name=name,
+            )
+            if accepted.rows
             else None
+        )
+        raise_if_intervention_was_refused(
+            action=guardrail_response.action,
+            accepted=accepted,
+            posted=posted,
+            rows_written_back=rows_to_write_back is not None,
+            input_type=input_type,
+            guardrail_name=name,
         )
         if rows_to_write_back is not None:
             return_inputs["structured_messages"] = list(rows_to_write_back)
@@ -470,12 +545,15 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
 
             headers: Final = self._build_request_headers()
+            # The model's list content is a lazy iterator that this dump consumes, so it cannot be read again
+            dumped: Final[Mapping[str, JsonValue]] = guardrail_request.model_dump(mode="json")
+            sent_messages: Final = _rows_as_sent(dumped.get("structured_messages"), structured_messages)
+            request_json: Final = {**dumped, "structured_messages": sent_messages}
+            payload: Final = shape_payload(request_json, self._payload_policy)
 
-            # Make the API request
-            # Use mode="json" to ensure all iterables are converted to lists
             response: Final = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.model_dump(mode="json"),
+                json=payload.body,
                 headers=headers,
                 timeout=self.timeout,
             )
@@ -504,11 +582,14 @@ class GenericGuardrailAPI(CustomGuardrail):
                 images=images,
                 tools=tools,
                 structured_messages=structured_messages,
-                shown_messages=guardrail_request.structured_messages,
+                shown_messages=payload.sent_messages,
                 guardrail_response=guardrail_response,
+                loss=payload.loss,
+                posted=payload.body,
+                input_type=input_type,
             )
 
-        except GuardrailRaisedException:
+        except (GuardrailRaisedException, UnappliableRequestRewrite):
             raise
         except Timeout as e:
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)

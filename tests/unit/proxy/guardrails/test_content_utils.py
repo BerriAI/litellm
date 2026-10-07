@@ -1,12 +1,20 @@
 """Tests for the shared guardrail content extraction helpers."""
 
+import copy
+
+import pytest
+
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
+    image_part_url,
     is_non_conversational_call_type,
     is_string_batch_input,
     iter_message_text,
+    map_content_image_urls,
+    map_messages_image_urls,
+    same_json_ignoring_nulls,
     walk_user_text,
 )
 
@@ -741,3 +749,115 @@ def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_typ
     """A call type this module has never heard of must still be inspected —
     failing closed is the point of the deny-list."""
     assert is_non_conversational_call_type("some_future_call_type") is False
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "same"),
+    [
+        ({"role": "assistant", "thinking_blocks": None}, {"role": "assistant"}, True),
+        (
+            {"content": [{"type": "text", "text": "x", "cache_control": None}]},
+            {"content": [{"type": "text", "text": "x"}]},
+            True,
+        ),
+        ({"content": ("a", "b")}, {"content": ["a", "b"]}, True),
+        ({"content": "x"}, {"content": "y"}, False),
+        ({"role": "user", "name": "a"}, {"role": "user"}, False),
+        ([None], [], False),
+    ],
+    ids=[
+        "dropped_null_key",
+        "dropped_nested_null_key",
+        "tuple_as_list",
+        "changed_value",
+        "dropped_set_key",
+        "null_list_item",
+    ],
+)
+def test_same_json_ignoring_nulls_treats_only_a_dropped_null_field_as_no_change(
+    left: object, right: object, same: bool
+) -> None:
+    assert same_json_ignoring_nulls(left, right) is same
+    assert same_json_ignoring_nulls(right, left) is same
+
+
+# ── map_content_image_urls / map_messages_image_urls ─────────────────────────────
+
+
+def _omit(url: str) -> str:
+    return f"[omitted {len(url)}]"
+
+
+def test_map_messages_image_urls_covers_every_image_part_shape():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe"},
+                {"type": "image_url", "image_url": {"url": "data:AAA", "detail": "low"}},
+                {"type": "image_url", "image_url": "data:BBBB"},
+            ],
+        }
+    ]
+
+    assert map_messages_image_urls(messages, _omit) == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe"},
+                {"type": "image_url", "image_url": {"url": "[omitted 8]", "detail": "low"}},
+                {"type": "image_url", "image_url": "[omitted 9]"},
+            ],
+        }
+    ]
+
+
+def test_map_messages_image_urls_does_not_mutate_its_input():
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:AAA"}}]},
+        {"role": "user", "content": [{"type": "image_url", "image_url": "data:BBB"}]},
+    ]
+    snapshot = copy.deepcopy(messages)
+
+    map_messages_image_urls(messages, _omit)
+
+    assert messages == snapshot
+
+
+def test_map_content_image_urls_passes_non_image_parts_through_by_identity():
+    text_part = {"type": "text", "text": "describe"}
+    audio_part = {"type": "input_audio", "input_audio": {"data": "AAA", "format": "wav"}}
+    file_id_image = {"type": "input_image", "file_id": "file-1"}
+    content = [text_part, "bare text", audio_part, file_id_image]
+
+    mapped = map_content_image_urls(content, _omit)
+
+    assert all(after is before for after, before in zip(mapped, content, strict=True))
+
+
+def test_map_messages_image_urls_passes_messages_without_list_content_through_by_identity():
+    string_message = {"role": "user", "content": "just text"}
+    tool_call_message = {"role": "assistant", "content": None, "tool_calls": []}
+    messages = [string_message, tool_call_message]
+
+    mapped = map_messages_image_urls(messages, _omit)
+
+    assert mapped[0] is string_message
+    assert mapped[1] is tool_call_message
+    assert map_messages_image_urls(None, _omit) is None
+
+
+@pytest.mark.parametrize(
+    ("part", "url"),
+    [
+        ({"type": "image_url", "image_url": {"url": "data:AAA", "detail": "low"}}, "data:AAA"),
+        ({"type": "image_url", "image_url": "data:BBB"}, "data:BBB"),
+        ({"type": "image_url", "image_url": {"detail": "low"}}, None),
+        ({"type": "input_image", "image_url": "data:CCC"}, None),
+        ({"type": "text", "text": "data:DDD"}, None),
+        ("data:EEE", None),
+    ],
+    ids=["object", "bare_string", "no_url", "responses_shape", "text", "bare_text"],
+)
+def test_image_part_url_reads_only_chat_image_url_parts(part, url):
+    assert image_part_url(part) == url

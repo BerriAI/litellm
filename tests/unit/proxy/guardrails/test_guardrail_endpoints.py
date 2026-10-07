@@ -1,7 +1,7 @@
 import json
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,6 +17,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     RegisterGuardrailRequest,
     TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
+    _get_fields_from_model,
     apply_guardrail,
     approve_guardrail_submission,
     create_guardrail,
@@ -36,6 +37,7 @@ from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPIOptionalParams
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -559,6 +561,16 @@ def test_get_guardrails_list_response_includes_guardrail_id():
     )
 
     assert response.guardrails[0].guardrail_id == "stable-config-id"
+
+
+def test_exclude_payload_fields_stays_out_of_the_form_but_still_validates():
+    form_fields: Final = _get_fields_from_model(GenericGuardrailAPIOptionalParams)
+
+    assert "exclude_payload_fields" not in form_fields
+    assert "send_images" in form_fields
+    assert GenericGuardrailAPIOptionalParams(exclude_payload_fields=["request_headers"]).exclude_payload_fields == (
+        "request_headers",
+    )
 
 
 def test_get_provider_specific_params():
