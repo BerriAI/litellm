@@ -454,7 +454,9 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         }
 
     def _parse_timestamps_and_status(
-        self, response_data: dict[str, object], status_str: str  # mutable-ok: preserves private override signature
+        self,
+        response_data: dict[str, object],  # mutable-ok: preserves private override signature
+        status_str: str,
     ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
         """Helper to parse timestamps based on status."""
         import datetime
