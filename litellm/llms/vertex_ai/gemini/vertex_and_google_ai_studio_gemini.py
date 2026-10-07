@@ -2,6 +2,7 @@
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
 import json
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
@@ -9,6 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 import httpx
+from pydantic import JsonValue
 
 import litellm
 from litellm import verbose_logger
@@ -26,7 +28,7 @@ from litellm.constants import (
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    _encode_tool_call_id_with_signature,
+    encode_tool_call_id_with_signature,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -84,7 +86,7 @@ from litellm.utils import (
     supports_reasoning,
 )
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
+from ....utils import remove_additional_properties, remove_strict_from_schema
 from ..common_utils import (
     VertexAIError,
     _build_json_schema,
@@ -283,20 +285,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _is_gemini_3_or_newer(model: str) -> bool:
         """
-        Check if the model is Gemini 3 Pro or newer.
-
-        Gemini 3 models include:
-        - gemini-3-pro-preview
-        - gemini-3-flash
-        - gemini-3-flash-preview (Gemini 3 Flash)
-        - gemini-3.1-pro-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview
-        - gemini-3.5-flash
-        - Any future Gemini 3.x models
+        Check if the model is Gemini 3 or newer.
         """
-        # Check for Gemini 3 models
-        if "gemini-3" in model:
-            return True
-        return False
+        model_name: Final = model.split("/")[-1].lower()
+        is_vertex_fine_tuned_model: Final = model_name.isdigit() or (
+            model.startswith("gemini/") and not model_name.startswith("gemini-")
+        )
+        if not model_name or is_vertex_fine_tuned_model or model_name.startswith("gemma-"):
+            return False
+        # Pre-Gemini 3 models: gemini-1.x, gemini-2.x, gemini-pro, gemini-flash, gemini-exp
+        if re.match(r"^gemini-(?:[12](?:\.\d+)?|exp|(?:pro|flash)(?!-(?:lite-)?latest$))(?:-|$)", model_name):
+            return False
+        return True
 
     @staticmethod
     def _forward_gemini_function_call_id(model: str) -> bool:
@@ -347,9 +347,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if self._supports_penalty_parameters(model):
             supported_params.extend(["frequency_penalty", "presence_penalty"])
 
-        if supports_reasoning(model):
+        if supports_reasoning(model) or self._is_gemini_3_or_newer(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
+
         return supported_params
 
     def map_tool_choice_values(self, model: str, tool_choice: str | dict) -> ToolConfig | None:
@@ -611,9 +612,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         google_maps_retrieval_config: dict | None = None
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
-        value = _remove_additional_properties(value)
+        schema_value: Final[JsonValue] = cast(JsonValue, value)  # cast-ok: tool schemas come from JSON request data
+        remove_additional_properties(schema_value)
         # remove 'strict' from tools
-        value = _remove_strict_from_schema(value)
+        remove_strict_from_schema(schema_value)
 
         for tool in value:
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
@@ -778,7 +780,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def apply_response_schema_transformation(self, value: dict, optional_params: dict, model: str):
         new_value = deepcopy(value)
         # remove 'strict' from json schema (not supported by Gemini)
-        new_value = _remove_strict_from_schema(new_value)
+        new_value = remove_strict_from_schema(new_value)
 
         # Automatically use responseJsonSchema for Gemini 2.0+ models
         # responseJsonSchema uses standard JSON Schema format and supports additionalProperties
@@ -787,7 +789,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         if not use_json_schema:
             # For responseSchema, remove 'additionalProperties' (not supported)
-            new_value = _remove_additional_properties(new_value)
+            new_value = remove_additional_properties(new_value)
 
         # Handle response type
         if new_value.get("type") == "json_object":
@@ -871,8 +873,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _supports_minimal_thinking_level(model: str) -> bool:
         lowered: Final = model.lower()
-        is_gemini3flash: Final = "gemini-3" in lowered and "flash" in lowered
-        return is_gemini3flash and not is_explicitly_disabled_factory(
+        is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in lowered
+        return is_gemini3_or_newer_flash and not is_explicitly_disabled_factory(
             model=model, custom_llm_provider=None, key="supports_minimal_reasoning_effort"
         )
 
@@ -890,9 +892,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
-        is_gemini3flash: Final = model and ("flash" in model.lower() and "gemini-3" in model.lower())
         supports_minimal: Final = bool(model) and VertexGeminiConfig._supports_minimal_thinking_level(model)
-        is_gemini31pro: Final = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
             if supports_minimal:
                 return {"thinkingLevel": "minimal", "includeThoughts": True}
@@ -901,10 +901,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         elif reasoning_effort == "low":
             return {"thinkingLevel": "low", "includeThoughts": True}
         elif reasoning_effort == "medium":
-            if is_gemini31pro or is_gemini3flash:
-                return {"thinkingLevel": "medium", "includeThoughts": True}
-            else:
-                return {"thinkingLevel": "high", "includeThoughts": True}
+            return {"thinkingLevel": "medium", "includeThoughts": True}
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": True}
         elif reasoning_effort in ("disable", "none"):
@@ -1576,12 +1573,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 gemini_call_id = part["functionCall"].get("id")
 
                 if is_function_call is True:
-                    function_dict: dict[str, Any] = dict(_function_chunk)
-                    if thought_signature:
-                        if "provider_specific_fields" not in function_dict:
-                            function_dict["provider_specific_fields"] = {}
-                        function_dict["provider_specific_fields"]["thought_signature"] = thought_signature
-                    function = cast(ChatCompletionToolCallFunctionChunk, function_dict)
+                    function = (
+                        {**_function_chunk, "provider_specific_fields": {"thought_signature": thought_signature}}
+                        if thought_signature
+                        else {**_function_chunk}
+                    )
                 else:
                     _tool_response_chunk: ChatCompletionToolCallChunk = {
                         "id": f"call_{uuid.uuid4().hex[:28]}",
@@ -1597,7 +1593,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # Embed thought signature in ID for OpenAI client compatibility
                     if thought_signature:
                         _tool_response_chunk["provider_specific_fields"] = {"thought_signature": thought_signature}
-                        _tool_response_chunk["id"] = _encode_tool_call_id_with_signature(
+                        _tool_response_chunk["id"] = encode_tool_call_id_with_signature(
                             _tool_response_chunk["id"] or "", thought_signature
                         )
                     _tools.append(_tool_response_chunk)
@@ -2104,10 +2100,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> None:
         setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
         if grounding_metadata:
-            model_response._hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
+            model_response.hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
         setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)
         if url_context_metadata:
-            model_response._hidden_params["vertex_ai_url_context_metadata"] = url_context_metadata
+            model_response.hidden_params["vertex_ai_url_context_metadata"] = url_context_metadata
         setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)
         setattr(model_response, "vertex_ai_safety_results", safety_ratings)
         if safety_ratings:
@@ -2134,7 +2130,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     merged.append(value)
             if merged:
                 setattr(response, field_name, merged)
-                response._hidden_params[field_name] = merged
+                response.hidden_params[field_name] = merged
 
     @staticmethod
     def _convert_grounding_metadata_to_annotations(
@@ -2476,27 +2472,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ## ADD METADATA TO RESPONSE ##
 
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
+            model_response.hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
 
             setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)
 
-            model_response._hidden_params["vertex_ai_url_context_metadata"] = url_context_metadata
+            model_response.hidden_params["vertex_ai_url_context_metadata"] = url_context_metadata
 
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params["vertex_ai_safety_results"] = (
+            model_response.hidden_params["vertex_ai_safety_results"] = (
                 safety_ratings  # older approach - maintaining to prevent regressions
             )
 
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+            model_response.hidden_params["vertex_ai_citation_metadata"] = (
                 citation_metadata  # older approach - maintaining to prevent regressions
             )
 
             ## ADD TRAFFIC TYPE ##
             traffic_type: Final = completion_response.get("usageMetadata", {}).get("trafficType")
             if traffic_type:
-                model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
+                model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
             ## ADD SERVICE TIER ##
             if getattr(raw_response, "headers", None):
@@ -3227,7 +3223,7 @@ class ModelResponseIterator:
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
-            model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
+            model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
         service_tier: Final = self.response_headers.get("x-gemini-service-tier")
         if service_tier:
@@ -3284,7 +3280,7 @@ class ModelResponseIterator:
 
             setattr(model_response, "usage", usage)
 
-            model_response._hidden_params["is_finished"] = False
+            model_response.hidden_params["is_finished"] = False
             return model_response
 
         except json.JSONDecodeError:
@@ -3313,7 +3309,7 @@ class ModelResponseIterator:
         return self.chunk_parser(chunk=json_chunk)
 
     def handle_accumulated_json_chunk(self, chunk: str, is_final: bool = False) -> Optional["ModelResponseStream"]:
-        message: Final = (litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or "").replace("\n\n", "")
+        message: Final = (litellm.CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or "").replace("\n\n", "")
         self._json_buffer.append(message)
 
         # Mid-stream, defer parsing until the buffer's last byte can close a value:
@@ -3342,7 +3338,7 @@ class ModelResponseIterator:
 
     def _common_chunk_parsing_logic(self, chunk: str) -> Optional["ModelResponseStream"]:
         try:
-            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+            chunk = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
             if len(chunk) > 0:
                 """
                 Check if initial chunk valid json

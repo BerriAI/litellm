@@ -9,7 +9,7 @@ from httpx import Response
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _audio_or_image_in_message_content,
+    audio_or_image_in_message_content,
     convert_content_list_to_str,
     filter_value_from_dict,
 )
@@ -27,10 +27,10 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import _add_path_to_api_base, supports_tool_choice
+from litellm.utils import add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -193,9 +193,9 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path="/models/chat/completions")
+            new_url = add_path_to_api_base(api_base=api_base, ending_path="/models/chat/completions")
         else:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path="/chat/completions")
+            new_url = add_path_to_api_base(api_base=api_base, ending_path="/chat/completions")
 
         # Use the new query_params dictionary
         final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
@@ -245,7 +245,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 filter_value_from_dict(message_dict, field)
 
             # Do nothing if the message contains an image or audio
-            if _audio_or_image_in_message_content(message):
+            if audio_or_image_in_message_content(message):
                 continue
 
             texts = convert_content_list_to_str(message=message)
@@ -305,7 +305,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

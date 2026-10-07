@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/compl
 """
 
 from collections.abc import Coroutine, Mapping
-from typing import Any, Final, Literal, cast, overload
+from typing import Final, Literal, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -29,7 +29,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -41,7 +41,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Moonshot text-only models don't support content in list format.
         Multimodal models (kimi-k2.5, kimi-latest, etc.) accept the

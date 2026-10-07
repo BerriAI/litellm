@@ -10,7 +10,8 @@ API Reference:
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 import httpx
 
@@ -29,9 +30,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.utils import CustomStreamWrapper
 
@@ -205,7 +205,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         session_id: Final = self._get_session_id(optional_params)
 
         # Build the input
-        input_data: Final[dict[str, Any]] = {
+        input_data: Final[dict[str, str]] = {
             "message": prompt,
             "user_id": user_id,
         }
@@ -285,7 +285,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -366,6 +366,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         """Get a CustomStreamWrapper for synchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
@@ -424,6 +427,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         """Get a CustomStreamWrapper for asynchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
@@ -433,7 +439,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(llm_provider=cast(Any, "vertex_ai"), params={})
+            client = get_async_httpx_client(llm_provider="vertex_ai", params={})
 
         # Avoid logging sensitive api_base directly
         verbose_logger.debug("Making async streaming request to Vertex AI endpoint.")

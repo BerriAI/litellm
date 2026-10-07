@@ -18,7 +18,7 @@ import {
   type UsageUnits,
 } from "@/components/GuardrailsMonitor/usageUnits";
 import { Button } from "@/components/ui/button";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
@@ -282,20 +282,20 @@ export function GuardrailsOverview({
 
   return (
     <div>
-      <PageHeader
-        icon={<HeartPulse />}
-        title="Guardrails Monitor"
-        subtitle="Monitor guardrail performance across all requests"
-        utilities={
-          <>
-            {dateRangeControl}
-            <Button variant="outline" title="Coming soon">
-              <Download className="size-4" />
-              Export Data
-            </Button>
-          </>
-        }
-      />
+      <PageHeader>
+        <PageHeaderTitle>
+          <HeartPulse />
+          Guardrails Monitor
+        </PageHeaderTitle>
+        <PageHeaderDescription>Monitor guardrail performance across all requests</PageHeaderDescription>
+        <PageHeaderControls className="justify-end">
+          {dateRangeControl}
+          <Button variant="outline" title="Coming soon">
+            <Download className="size-4" />
+            Export Data
+          </Button>
+        </PageHeaderControls>
+      </PageHeader>
 
       <div className="mt-6 mb-6 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
         <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />

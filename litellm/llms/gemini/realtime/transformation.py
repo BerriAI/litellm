@@ -453,7 +453,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return normalized
 
     @staticmethod
-    def _finalize_gemini_live_setup(model: str, setup: dict[str, Any]) -> dict[str, Any]:
+    def _finalize_gemini_live_setup(model: str, setup: dict[str, object]) -> dict[str, object]:
         generation_config: Final = setup.get("generationConfig")
         if isinstance(generation_config, dict):
             modalities: Final = generation_config.get("responseModalities")
@@ -1070,7 +1070,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         else:
             _chat_completion_usage = get_empty_usage()
 
-        responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        responses_api_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             _chat_completion_usage,
         )
         _usage_dict: Final = responses_api_usage.model_dump()
@@ -1172,7 +1172,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def map_openai_event(
         self,
         key: str,
-        value: Any,
+        value: object,
         current_delta_type: ALL_DELTA_TYPES | None,
     ) -> OpenAIRealtimeEventTypes | ResponsesAPIStreamEvents:
         if isinstance(value, dict):
@@ -1496,7 +1496,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 else:
                     _tool_call_chat_completion_usage = get_empty_usage()
                 tool_call_responses_api_usage = (
-                    LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+                    LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
                         _tool_call_chat_completion_usage,
                     )
                 )

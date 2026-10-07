@@ -14,9 +14,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.utils import CustomStreamWrapper
 
@@ -160,7 +159,7 @@ class LangFlowConfig(BaseConfig):
 
         input_value: Final = self._get_last_user_message(messages)
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "input_value": input_value,
             "input_type": optional_params.get("input_type", "chat"),
             "output_type": optional_params.get("output_type", "chat"),
@@ -225,7 +224,7 @@ class LangFlowConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

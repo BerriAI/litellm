@@ -3,14 +3,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Final
+from typing import Final, NoReturn
 
 import httpx
 import pytest
 from pydantic import JsonValue
 
 import litellm
-from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import (
@@ -243,6 +242,21 @@ def test_native_ocr_maps_provider_400_with_public_provider_details(ocr_server: R
     assert caught.value.model == "mistral-ocr-latest"
     assert caught.value.llm_provider == "mistral"
     assert "invalid OCR request" in str(caught.value)
+
+
+def test_native_ocr_encodes_python_file_input_and_drops_unknown_arguments(ocr_server: RecordingServer) -> None:
+    response: Final = call_native_ocr(
+        ocr_server,
+        document={"type": "file", "file": BytesIO(b"abc"), "mime_type": "image/png"},
+        opaque_extension=object(),
+    )
+
+    assert response.pages[0].markdown == "native OCR response"
+    assert_native_request(ocr_server)
+    assert ocr_server.requests[0].body == {
+        "model": "mistral-ocr-latest",
+        "document": {"type": "image_url", "image_url": "data:image/png;base64,YWJj"},
+    }
 
 
 class TokenAbort(BaseException):
@@ -503,3 +517,150 @@ async def test_native_failures_raise_the_public_exception_class(
     assert len(ocr_server.requests) == failure.provider_requests
     if failure.cause is not None:
         assert isinstance(caught.value.__context__, failure.cause)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("ssl_verify", object()),
+        ("ssl_certificate", 1),
+        ("ssl_certificate", ""),
+        ("vertex_project", 1),
+        ("vertex_location", ["region"]),
+        ("user_url_allowed_hosts", ["example.test", 1]),
+    ],
+)
+async def test_native_settings_fail_before_provider_io(
+    ocr_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    asynchronous: bool,
+    name: str,
+    value: object,
+) -> None:
+    ocr_server.expected_requests = 0
+    monkeypatch.setattr(litellm, name, value)
+    with pytest.raises(ValueError, match=r"http_settings|provider_defaults|url_policy"):
+        await call_native(ocr_server, asynchronous, num_retries=0)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ssl_context_is_terminal_configuration(ocr_server: RecordingServer, asynchronous: bool) -> None:
+    import ssl
+
+    ocr_server.expected_requests = 0
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    with pytest.raises(ValueError, match=r"request\.ssl_verify.*SSLContext"):
+        await call_native(ocr_server, asynchronous, ssl_verify=context, num_retries=0)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_settings_preserve_protocol_failures(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    ocr_server.expected_requests = 0
+    failure: Final = LookupError("settings truth test failed")
+    cause: Final = RuntimeError("settings cause")
+
+    class RaisesBool:
+        def __bool__(self) -> bool:
+            raise failure from cause
+
+    monkeypatch.setattr(litellm, "force_ipv4", RaisesBool())
+    with pytest.raises(LookupError) as caught:
+        await call_native(ocr_server, asynchronous, num_retries=0)
+    assert caught.value is failure
+    assert caught.value.__cause__ is cause
+    assert caught.value.__traceback__ is not None
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_settings_observe_mutation_between_calls(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "force_ipv4", "yes")
+    monkeypatch.setattr(litellm, "http2", 1)
+    monkeypatch.setattr(litellm, "vertex_project", [])
+    monkeypatch.setattr(litellm, "vertex_location", 0)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", "EXAMPLE.TEST.")
+    response: Final = await call_native(ocr_server, asynchronous, num_retries=0)
+    assert response.pages[0].markdown == "native OCR response"
+    assert_native_request(ocr_server)
+    monkeypatch.setattr(litellm, "ssl_certificate", 1)
+    with pytest.raises(ValueError, match=r"http_settings\.ssl_certificate"):
+        await call_native(ocr_server, asynchronous, num_retries=0)
+    assert len(ocr_server.requests) == 1
+
+
+@pytest.mark.parametrize("required", [False, True])
+@pytest.mark.parametrize("failure", ["invalid", "live", "schema"])
+def test_native_projection_errors_never_select_python(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, required: bool, failure: str
+) -> None:
+    import dataclasses
+    import ssl
+
+    from litellm.rust_bridge import runtime, settings
+    from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
+    from litellm.rust_bridge.configuration import Rollout
+    from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR, LiteLLMOcrRequest
+
+    ocr_server.expected_requests = 0
+    snapshot: Final = dataclasses.replace(settings.http_settings(), user_agent=1)
+    if failure == "schema":
+        monkeypatch.setattr(settings, "http_settings", lambda: snapshot)
+    else:
+        monkeypatch.setattr(
+            litellm, "ssl_verify", ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT) if failure == "live" else object()
+        )
+    request: Final = LiteLLMOcrRequest(
+        model="mistral/mistral-ocr-latest",
+        document=OCR_DOCUMENT,
+        api_key="test-key",
+        api_base=ocr_server.base_url,
+        timeout=None,
+        custom_llm_provider="mistral",
+        extra_headers=None,
+        kwargs={},
+    )
+
+    def python_fallback() -> NoReturn:
+        pytest.fail("projection failures must not select Python")
+
+    with pytest.raises(RuntimeError if failure == "schema" else ValueError, match="http_settings"):
+        runtime.run(
+            RouteContext(Route.OCR, provider="mistral"),
+            binding=NATIVE_OCR,
+            native=lambda native: native(request, (), {}),
+            python=python_fallback,
+            rules=(RouteRule(Route.OCR, Rollout.RUST_REQUIRED if required else Rollout.RUST_OPT_OUT),),
+        )
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("present", [False, True], ids=["missing", "invalid-pem"])
+async def test_native_client_certificate_is_validated_before_io(
+    ocr_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    asynchronous: bool,
+    present: bool,
+) -> None:
+    ocr_server.expected_requests = 0
+    certificate: Final = tmp_path / "client.pem"
+    if present:
+        certificate.write_text("invalid certificate")
+    monkeypatch.setattr(litellm, "ssl_certificate", str(certificate))
+    with pytest.raises(ValueError, match=r"http_settings\.ssl_certificate.*PEM") as caught:
+        await call_native(ocr_server, asynchronous, num_retries=0)
+    assert str(certificate) not in str(caught.value)
+    assert ocr_server.requests == []
