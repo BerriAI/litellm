@@ -11,6 +11,7 @@ than an undercount (same call as the auto-router session rollup flush).
 from typing import TYPE_CHECKING, Final, Literal
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -40,22 +41,23 @@ def pending_shadow_eval_funnel_events() -> int:
 def record_shadow_eval_funnel_event(job_id: str, stage: ShadowEvalFunnelStage) -> None:
     """Count one skipped request for one job leg; synchronous so the hook's read-modify-
     write cannot interleave with the flush's snapshot on the shared event loop."""
-    counters: Final = _pending.setdefault(job_id, dict.fromkeys(FUNNEL_STAGES, 0))  # mutable-ok: queue entry
+    counters: Final = _pending.setdefault(job_id, dict.fromkeys(FUNNEL_STAGES, 0))
     counters[stage] += 1
 
 
 async def flush_shadow_eval_funnel(prisma_client: "PrismaClient") -> None:
     if not _pending:
         return
-    batch: Final = dict(_pending)  # mutable-ok: snapshot drained from the queue
+    batch: Final = dict(_pending)
     _pending.clear()
     for job_id, counters in batch.items():
         try:
-            await prisma_client.db.execute_raw(
-                _UPSERT_FUNNEL_SQL,
-                job_id,
-                *(counters[stage] for stage in FUNNEL_STAGES),
-            )
+            async with db_span("flush_shadow_eval_funnel", "LiteLLM_ShadowEvalFunnel"):
+                await prisma_client.db.execute_raw(
+                    _UPSERT_FUNNEL_SQL,
+                    job_id,
+                    *(counters[stage] for stage in FUNNEL_STAGES),
+                )
         except Exception as flush_err:  # noqa: BLE001  # drop this leg's batch: a repeated increment is worse than an undercount
             verbose_proxy_logger.error(
                 "Spend tracking - shadow eval funnel flush failed for job %s, %s dropped: %s",

@@ -51,6 +51,21 @@ pub struct AzureAuthInputs {
 }
 
 impl AzureAuthInputs {
+    pub fn default_credential_for_scope(scope: &str) -> Self {
+        Self {
+            azure_scope: ConfigValue::Value(Sourced::new(
+                scope.to_string(),
+                InputSource::Deployment,
+            )),
+            azure_credential: ConfigValue::Value(Sourced::new(
+                "DefaultAzureCredential".to_string(),
+                InputSource::Deployment,
+            )),
+            enable_azure_ad_token_refresh: Sourced::new(true, InputSource::Deployment),
+            ..Self::default()
+        }
+    }
+
     pub fn or_configured_token_refresh(self, enabled: bool) -> Self {
         if *self.enable_azure_ad_token_refresh.value() || !enabled {
             return self;
@@ -102,7 +117,12 @@ fn string_config(
         None => Ok(ConfigValue::Absent),
         Some(Value::Null) => Ok(ConfigValue::ExplicitNone(source)),
         Some(Value::String(value)) => Ok(ConfigValue::Value(Sourced::new(value.clone(), source))),
-        Some(_) => Err(Error::InvalidFieldType(name.to_string())),
+        Some(_) => Err(Error::InvalidConfiguration(
+            litellm_auth_types::ErrorDetail::InvalidType {
+                field: name.into(),
+                expected: "a string or null",
+            },
+        )),
     }
 }
 

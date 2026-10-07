@@ -7,18 +7,19 @@ storage backends (e.g., Azure Blob Storage) and managing associated metadata.
 
 import base64
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any, Final, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.llms.base_llm.files.storage_backend import BaseFileStorageBackend
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
-from litellm.types.utils import SpecialEnums
+from litellm.types.utils import ExtractedFileData, SpecialEnums
 
 
 class StorageBackendFileService:
@@ -34,7 +35,7 @@ class StorageBackendFileService:
 
     @staticmethod
     async def upload_file_to_storage_backend(
-        file_data: Mapping[str, Any],
+        file_data: ExtractedFileData,
         target_storage: str,
         target_model_names: Sequence[str],
         purpose: OpenAIFilesPurpose,
@@ -170,9 +171,8 @@ class StorageBackendFileService:
         )
 
         # Store storage metadata in hidden params
-        if not hasattr(file_object, "_hidden_params") or file_object._hidden_params is None:
-            file_object._hidden_params = {}
-        file_object._hidden_params.update(
+        file_object_hidden_params: Final = get_or_create_hidden_params(file_object)
+        file_object_hidden_params.update(
             {
                 "storage_backend": target_storage,
                 "storage_url": storage_url,
@@ -183,7 +183,7 @@ class StorageBackendFileService:
 
     @staticmethod
     def _create_unified_file_id(
-        file_type: str,
+        file_type: str | None,
         target_model_names: Sequence[str],
         file_id: str,
     ) -> str:
@@ -213,7 +213,7 @@ class StorageBackendFileService:
     @staticmethod
     async def _store_in_managed_files(
         file_object: OpenAIFileObject,
-        file_data: Mapping[str, Any],
+        file_data: ExtractedFileData,
         target_model_names: Sequence[str],
         target_storage: str,
         storage_url: str,

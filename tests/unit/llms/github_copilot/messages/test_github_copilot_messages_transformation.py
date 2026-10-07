@@ -272,13 +272,11 @@ def test_github_copilot_config_disables_anthropic_beta_filtering():
     because github_copilot has no entry in the beta headers config; a regression
     here would silently disable header-gated Anthropic features for Copilot."""
     from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
-    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
-        AnthropicMessagesConfig,
-    )
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
 
     config = GithubCopilotAnthropicMessagesConfig()
     assert config.should_filter_anthropic_beta_headers() is False
-    assert AnthropicMessagesConfig().should_filter_anthropic_beta_headers() is True
+    assert AzureAnthropicMessagesConfig().should_filter_anthropic_beta_headers() is True
 
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key"
@@ -310,7 +308,7 @@ def test_github_copilot_config_does_not_handle_web_search_natively():
     interception handler short-circuiting Copilot instead of routing to it, even
     though Copilot now has a BaseAnthropicMessagesConfig. The base Anthropic
     config (bedrock/vertex/anthropic path) must report True."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+    from litellm.llms.anthropic.pass_through.messages.transformation import (
         AnthropicMessagesConfig,
     )
 

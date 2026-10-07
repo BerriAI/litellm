@@ -1,19 +1,8 @@
-from base_llm_unit_tests import BaseLLMChatTest
 import pytest
+
 import litellm
 
-
 # Test implementations
-@pytest.mark.skip(reason="Deepseek API is hanging")
-class TestDeepSeekChatCompletion(BaseLLMChatTest):
-    def get_base_completion_call_args(self) -> dict:
-        return {
-            "model": "deepseek/deepseek-reasoner",
-        }
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
 
 
 @pytest.mark.parametrize("stream", [True, False])
@@ -24,7 +13,7 @@ def test_deepseek_mock_completion(stream):
     import litellm
     from litellm import completion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     response = completion(
         model="deepseek/deepseek-reasoner",
@@ -47,12 +36,13 @@ async def test_deepseek_provider_async_completion(stream):
     """
     Test that Deepseek provider requests are formatted correctly with the proper parameters
     """
-    import litellm
     import json
-    from unittest.mock import patch, AsyncMock, MagicMock
+    from unittest.mock import MagicMock, patch
+
+    import litellm
     from litellm import acompletion
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Set up the test parameters
     api_key = "fake_api_key"

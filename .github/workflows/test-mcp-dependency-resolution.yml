@@ -4,9 +4,28 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
+    paths:
+      - "**/pyproject.toml"
+      - "uv.lock"
+      - "uv.toml"
+      - ".python-version"
+      - "rust-toolchain.toml"
+      - "litellm-rust/**"
+      - "litellm/__init__.py"
+      - "litellm/proxy/proxy_server.py"
+      - "litellm/**/*mcp*"
+      - "litellm/**/*mcp*/**"
+      - "litellm/integrations/arize/**"
+      - "scripts/check_mcp_sdk_install.py"
+      - "tests/base_sdk_tests/**"
+      - ".github/workflows/test-mcp-dependency-resolution.yml"
+      - ".github/actions/detect-changes/**"
+      - ".github/actions/setup-uv-with-retries/**"
+      - ".github/actions/cache-cargo-build/**"
+      - ".github/scripts/detect_changes.sh"
+      - ".github/scripts/uv_sync_with_retries.sh"
+      - ".circleci/scripts/classify_changes.sh"
 
 permissions:
   contents: read
@@ -19,7 +38,7 @@ concurrency:
 jobs:
   resolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:

@@ -2,20 +2,31 @@ import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Final
+from typing import Final, Protocol
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm.proxy._types import LiteLLMRoutes
-
-if TYPE_CHECKING:
-    from litellm.proxy.utils import PrismaClient
+from litellm.types.llms.base import LiteLLMBaseModel
 
 UNKNOWN_CALL_TYPE: Final = "Unknown"
 INFO_ROUTES_JSON: Final = json.dumps(LiteLLMRoutes.info_routes.value)
 
 
-class CacheActivityGroup(BaseModel):
+class _SupportsQueryRaw(Protocol):
+    """The single database operation the cache-activity queries issue."""
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[object]: ...
+
+
+class _SupportsRawQueryDb(Protocol):
+    """A prisma client handle, narrowed to the raw-query surface used here."""
+
+    @property
+    def db(self) -> _SupportsQueryRaw: ...
+
+
+class CacheActivityGroup(LiteLLMBaseModel):
     call_type: str
     api_requests: int
     cache_hits: int
@@ -24,7 +35,7 @@ class CacheActivityGroup(BaseModel):
     generated_completion_tokens: int
 
 
-class CacheActivityTotals(BaseModel):
+class CacheActivityTotals(LiteLLMBaseModel):
     api_requests: int
     cache_hits: int
     failed_requests: int
@@ -32,19 +43,19 @@ class CacheActivityTotals(BaseModel):
     cache_hit_ratio: float
 
 
-class CacheActivityFilterOptions(BaseModel):
+class CacheActivityFilterOptions(LiteLLMBaseModel):
     key_aliases: list[str]
     models: list[str]
 
 
-class CacheActivityErrorBucket(BaseModel):
+class CacheActivityErrorBucket(LiteLLMBaseModel):
     call_type: str
     error_code: str
     error_class: str
     count: int
 
 
-class CacheActivityResponse(BaseModel):
+class CacheActivityResponse(LiteLLMBaseModel):
     groups: list[CacheActivityGroup]
     totals: CacheActivityTotals
     filter_options: CacheActivityFilterOptions
@@ -121,11 +132,11 @@ MODEL_OPTIONS_SQL: Final = """
 """
 
 
-class _KeyAliasRow(BaseModel):
+class _KeyAliasRow(LiteLLMBaseModel):
     key_alias: str
 
 
-class _ModelRow(BaseModel):
+class _ModelRow(LiteLLMBaseModel):
     model: str
 
 
@@ -150,7 +161,7 @@ def compute_totals(groups: Sequence[CacheActivityGroup]) -> CacheActivityTotals:
 
 
 async def get_cache_activity(
-    prisma_client: "PrismaClient",
+    prisma_client: _SupportsRawQueryDb,
     start_date: datetime,
     end_date: datetime,
     key_aliases: Sequence[str],

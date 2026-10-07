@@ -3,6 +3,7 @@ Tests for backend domain models.
 """
 
 from datetime import datetime, timezone
+from typing import Final
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -324,6 +325,8 @@ class TestUser:
         assert user_no_models.has_model_access("any-model")
 
     def test_password_hash_excluded_from_serialization(self):
+        import json
+
         from litellm.proxy._types import LiteLLM_UserTableWithKeyCount
 
         secret = "$2b$12$abcdefghijklmnopqrstuv"
@@ -331,12 +334,12 @@ class TestUser:
 
         assert user.password == secret
         assert "password" not in user.model_dump()
-        assert "password" not in user.model_dump_json()
+        assert "password" not in json.loads(user.model_dump_json())
 
         with_keys = LiteLLM_UserTableWithKeyCount(user_id="u1", user_email="a@b.c", password=secret, key_count=2)
         assert with_keys.password == secret
         assert "password" not in with_keys.model_dump()
-        assert "password" not in with_keys.model_dump_json()
+        assert "password" not in json.loads(with_keys.model_dump_json())
 
 
 class TestVerificationToken:
@@ -601,9 +604,46 @@ class TestManagedTables:
         assert table.custom_llm_provider == "openai"
 
 
+class TestProxyModelTableResponseSerialization:
+    """FastAPI validates an endpoint's return value against its response model with
+    ``from_attributes``, so an endpoint that returns an already-built row reaches the
+    ``mode="before"`` validator as the object itself rather than as a mapping."""
+
+    def test_validates_from_an_existing_instance(self):
+        from pydantic import TypeAdapter
+
+        built: Final = LiteLLM_ProxyModelTable(
+            model_id="m-1",
+            model_name="claude-sonnet-5-provider",
+            litellm_params={"model": "anthropic/claude-sonnet-5"},
+            blocked=True,
+        )
+
+        serialized = TypeAdapter(LiteLLM_ProxyModelTable | None).validate_python(built, from_attributes=True)
+
+        assert serialized is not None
+        assert serialized.model_id == "m-1"
+        assert serialized.blocked is True
+        assert serialized.litellm_params == {"model": "anthropic/claude-sonnet-5"}
+
+    def test_still_parses_json_string_columns(self):
+        """The DB stores these columns as JSON strings, which is why the validator exists."""
+        parsed: Final = LiteLLM_ProxyModelTable.model_validate(
+            {
+                "model_id": "m-2",
+                "model_name": "n",
+                "litellm_params": '{"model": "anthropic/claude-haiku-4-5"}',
+                "model_info": '{"id": "m-2"}',
+            }
+        )
+
+        assert parsed.litellm_params == {"model": "anthropic/claude-haiku-4-5"}
+        assert parsed.model_info == {"id": "m-2"}
+
+
 class TestAutoRouterSession:
     @staticmethod
-    def _row(estimated_baseline_models: dict[str, int]) -> LiteLLM_AutoRouterSession:
+    def _row(baseline_models: dict[str, int], estimated_turns: int = 3) -> LiteLLM_AutoRouterSession:
         return LiteLLM_AutoRouterSession(
             api_key="k",
             session_id="s",
@@ -617,9 +657,8 @@ class TestAutoRouterSession:
             saved_spend=0.24,
             classifier_cost=0.0,
             tier_turns={},
-            baseline_models={"legacy-baseline": 100},
-            savings_estimated_turns=sum(estimated_baseline_models.values()),
-            savings_estimated_baseline_models=estimated_baseline_models,
+            baseline_models=baseline_models,
+            savings_estimated_turns=estimated_turns,
         )
 
     def test_the_baseline_label_is_the_one_most_turns_were_priced_against(self):
@@ -631,5 +670,11 @@ class TestAutoRouterSession:
         assert self._row({"b-model": 1, "a-model": 1}).baseline_model == "b-model"
         assert self._row({"a-model": 1, "b-model": 1}).baseline_model == "b-model"
 
-    def test_a_row_without_current_estimates_has_no_baseline_label(self) -> None:
+    def test_a_row_without_recorded_baselines_has_no_baseline_label(self) -> None:
         assert self._row({}).baseline_model is None
+
+    def test_a_partial_comparison_across_baselines_has_no_baseline_label(self) -> None:
+        assert self._row({"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}, estimated_turns=2).baseline_model is None
+
+    def test_a_partial_comparison_against_one_baseline_keeps_its_label(self) -> None:
+        assert self._row({"anthropic/claude-opus-5": 3}, estimated_turns=1).baseline_model == "anthropic/claude-opus-5"

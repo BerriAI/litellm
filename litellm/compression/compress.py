@@ -62,7 +62,7 @@ def _build_retrieval_tools(keys: list[str], call_type: str) -> list[dict]:
     # module import for non-Anthropic call paths.
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    anthropic_tools, _mcp_servers = AnthropicConfig()._map_tools(openai_tools)
+    anthropic_tools, _mcp_servers = AnthropicConfig().map_tools(openai_tools)
     return cast(list[dict], anthropic_tools)
 
 
