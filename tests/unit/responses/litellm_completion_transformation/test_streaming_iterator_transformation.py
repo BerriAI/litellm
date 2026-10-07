@@ -696,7 +696,7 @@ async def test_streaming_events_share_the_chat_completion_response_id():
     response_ids = _response_ids(events)
     assert len(response_ids) == 3
     assert len(set(response_ids)) == 1
-    decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_ids[0])
+    decoded = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_ids[0])
     assert decoded["response_id"] == CHAT_COMPLETION_ID
     assert decoded["custom_llm_provider"] == "anthropic"
 
@@ -710,7 +710,7 @@ def test_sync_streaming_events_share_the_chat_completion_response_id():
     assert len(response_ids) == 3
     assert len(set(response_ids)) == 1
     assert (
-        ResponsesAPIRequestUtils._decode_responses_api_response_id(response_ids[0])["response_id"]
+        ResponsesAPIRequestUtils.decode_responses_api_response_id(response_ids[0])["response_id"]
         == CHAT_COMPLETION_ID
     )
 

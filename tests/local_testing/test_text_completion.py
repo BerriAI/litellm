@@ -4146,7 +4146,7 @@ def test_completion_vllm(provider):
 
 @pytest.mark.skip(reason="fireworks is having an active outage")
 def test_completion_fireworks_ai_multiple_choices():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.text_completion(
         model="fireworks_ai/llama-v3p1-8b-instruct",
         prompt=["halo", "hi", "halo", "hi"],

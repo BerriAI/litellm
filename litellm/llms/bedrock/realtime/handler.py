@@ -16,7 +16,7 @@ from typing import Final, NoReturn, Protocol, runtime_checkable
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm._logging import redact_string, verbose_proxy_logger
 from litellm.constants import (
     BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
     BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY,
@@ -192,9 +192,9 @@ def _pending_session_update(scope: Mapping[str, object]) -> str | None:
 
 def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseException) -> NoReturn:
     error: Final = _as_bedrock_error(failure)
-    verbose_proxy_logger.error("Bedrock Realtime: provider stream failed: %s", _redact_string(str(error)))
+    verbose_proxy_logger.error("Bedrock Realtime: provider stream failed: %s", redact_string(str(error)))
     if scope.get(BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY) is True:
-        scope[BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY] = _redact_string(str(error))
+        scope[BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY] = redact_string(str(error))
     raise error from failure
 
 

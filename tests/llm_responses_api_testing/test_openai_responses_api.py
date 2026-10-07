@@ -94,7 +94,7 @@ def validate_standard_logging_payload(
 
 @pytest.mark.asyncio
 def test_basic_openai_responses_api_streaming_with_logging():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.set_verbose = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
@@ -166,7 +166,7 @@ def validate_responses_match(slp_response, litellm_response):
 
 @pytest.mark.asyncio
 async def test_basic_openai_responses_api_non_streaming_with_logging():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.set_verbose = True
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
@@ -204,7 +204,7 @@ async def test_openai_responses_api_returns_headers(sync_mode):
 
     Related issue: LiteLLM responses API should return OpenAI headers like chat completions does
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.set_verbose = True
 
     if sync_mode:
@@ -459,7 +459,7 @@ def validate_stream_event(event):
 @pytest.mark.asyncio
 async def test_openai_responses_api_streaming_validation(sync_mode):
     """Test that validates each streaming event from the responses API"""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     event_types_seen = set()
 
@@ -499,7 +499,7 @@ async def test_openai_responses_litellm_router(sync_mode):
     """
     Test the OpenAI responses API with LiteLLM Router in both sync and async modes
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     router = litellm.Router(
         model_list=[
             {
@@ -544,7 +544,7 @@ async def test_openai_responses_litellm_router_streaming(sync_mode):
     """
     Test the OpenAI responses API with streaming through LiteLLM Router
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     router = litellm.Router(
         model_list=[
             {
@@ -652,7 +652,7 @@ async def test_openai_responses_litellm_router_no_metadata():
         # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         router = litellm.Router(
             model_list=[
                 {
@@ -750,7 +750,7 @@ async def test_openai_responses_litellm_router_with_metadata():
         # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         router = litellm.Router(
             model_list=[
                 {
@@ -832,7 +832,7 @@ async def test_openai_responses_litellm_router_with_prompt():
     ) as mock_post:
         mock_post.return_value = MockResponse(mock_response, 200)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         router = litellm.Router(
             model_list=[
                 {
@@ -950,7 +950,7 @@ async def test_openai_o1_pro_response_api(sync_mode):
         # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
 
         # Call o1-pro with max_output_tokens=20
@@ -1047,7 +1047,7 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
         # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
 
         # Verify the request was made correctly
@@ -1165,7 +1165,7 @@ def test_basic_computer_use_preview_tool_call():
         "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
         return_value=MockResponse(mock_response, 200),
     ) as mock_post:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
 
         # Call the responses API with computer_use_preview tool
@@ -1206,7 +1206,7 @@ def test_basic_computer_use_preview_tool_call():
 
 
 def test_mcp_tools_with_responses_api():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     MCP_TOOLS = [
         {
             "type": "mcp",
@@ -1269,7 +1269,7 @@ def test_mcp_tools_with_responses_api():
 @pytest.mark.asyncio
 async def test_openai_responses_api_field_types():
     """Test that specific fields in the response have the correct types"""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.set_verbose = True
 
     # Test with store=True
@@ -1473,7 +1473,7 @@ async def test_aresponses_service_tier_and_safety_identifier():
         # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
 
         # Call aresponses with service_tier and safety_identifier
@@ -1570,7 +1570,7 @@ async def test_openai_gpt5_reasoning_effort_parameter():
         # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
 
         # Call aresponses with reasoning_effort parameter
@@ -1611,7 +1611,7 @@ async def test_openai_responses_api_token_limit_error():
     carrying the provider's message. invalid_request_error is a non-retriable client
     error, so there is no MidStreamFallbackError wrapping.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Generate text with >400k tokens to trigger token limit error
     oversized_text = "This is a test sentence. " * 50000  # ~400k tokens
@@ -1633,7 +1633,7 @@ async def test_openai_responses_api_token_limit_error():
 
 async def test_openai_streaming_logging():
     """Test that OpenAI Responses API streaming logging is working correctly."""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.types.utils import Usage
 
@@ -1819,7 +1819,7 @@ async def test_openai_compact_responses_api(sync_mode):
     This test verifies that the compact_responses endpoint works correctly
     for compressing conversation history.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.set_verbose = True
 
     input_messages = [
