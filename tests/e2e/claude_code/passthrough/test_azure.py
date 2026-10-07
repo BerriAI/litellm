@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import pytest
 
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._passthrough import foundry_extra_env, run_passthrough_cell
 
 AZURE_MODELS = [
@@ -52,6 +53,15 @@ AZURE_MODELS = [
 
 
 @pytest.mark.skip(reason="stage red: /azure passthrough drops client headers (e.g. anthropic-version); product gap")
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.AZURE,),
+        models=tuple(AZURE_MODELS),
+        mode=Mode.STREAM,
+    )
+)
 def test_passthrough_azure(compat_result):
     """Drive the `claude` CLI through `{proxy}/azure` and assert a reply."""
     run_passthrough_cell(

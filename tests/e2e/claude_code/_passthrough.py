@@ -58,6 +58,8 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 import pytest
 
+from e2e_metadata import step
+
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -118,6 +120,10 @@ def foundry_extra_env(proxy_base_url: str) -> Dict[str, str]:
     }
 
 
+@step(
+    "Run Claude Code headless against {models} through the proxy's native provider passthrough route"
+    " and check every model replies"
+)
 def run_passthrough_cell(
     *,
     compat_result,

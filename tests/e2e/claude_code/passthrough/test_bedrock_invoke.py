@@ -23,6 +23,7 @@ cell.
 
 from __future__ import annotations
 
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._passthrough import bedrock_extra_env, run_passthrough_cell
 
 BEDROCK_INVOKE_MODELS = [
@@ -32,6 +33,15 @@ BEDROCK_INVOKE_MODELS = [
 ]
 
 
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_INVOKE_MODELS),
+        mode=Mode.STREAM,
+    )
+)
 def test_passthrough_bedrock_invoke(compat_result):
     """Drive the `claude` CLI through `{proxy}/bedrock` and assert a reply."""
     run_passthrough_cell(
