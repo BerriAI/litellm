@@ -2,7 +2,7 @@ import builtins
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Literal, Optional, TypeAlias, Union
+from typing import IO, TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
@@ -93,6 +93,9 @@ from litellm.types.responses.main import (
 
 from .base import CachedTokensDetails
 
+if TYPE_CHECKING:
+    from litellm.types.utils import Usage
+
 FileContent = IO[bytes] | bytes | PathLike
 
 FileTypes = (
@@ -120,6 +123,7 @@ class BinaryResponseSummary(TypedDict):
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     _hidden_params: dict
+    usage: "Usage | None"
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -132,6 +136,7 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     def __init__(self, response: httpx.Response) -> None:
         super().__init__(response)
         self._hidden_params = {}
+        self.usage = None
 
     def logging_summary(self) -> BinaryResponseSummary:
         return {

@@ -119,6 +119,7 @@ class SpeechToCompletionBridgeHandler:
         if isinstance(result, ModelResponse):
             return self.transformation_handler.transform_response(
                 model_response=result,
+                model=model,
                 response_format=requested_response_format if isinstance(requested_response_format, str) else None,
             )
         else:
