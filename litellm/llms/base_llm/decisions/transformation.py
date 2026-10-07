@@ -15,15 +15,6 @@ _RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-
 
 
 class BaseDecisionsConfig(ABC):
-    """A Decisions provider: where to send the request and how to translate it.
-
-    LiteLLM's public /v1/decisions shape is the Jev / System One wire contract, which is also what TypeSafe,
-    Perplexity, OpenRouter, Cloudflare Clef and Strands Decider speak, so the defaults pass the body through:
-    POST {api_base}{path} with {"model", "state", "questions"} and a Bearer header when a key is set. Providers
-    override the hooks whose wire shape differs (path, URL, model naming, response envelope, or the whole request
-    and response translation).
-    """
-
     path: str = "/v1/systemone"
     api_key_env: tuple[str, ...] = ()
     api_base_env: tuple[str, ...] = ()
