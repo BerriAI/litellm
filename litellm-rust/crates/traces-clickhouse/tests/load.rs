@@ -225,3 +225,104 @@ async fn lens_content_reads_scale_with_trace_not_retention(
     );
     Ok(())
 }
+
+const AGENT_RUNS: u64 = 2_000;
+const AGENT_PAGE: u64 = 50;
+
+async fn seed_spans(fixture: &SeededDatabase, select: &str) -> TestResult {
+    let query = format!(
+        "INSERT INTO {DATABASE}.otel_traces \
+         (Timestamp, TraceId, SpanId, ParentSpanId, SpanName, ServiceName, ObservationType, AgentName, \
+          TeamId, ApiKeyHash, Duration) {select}"
+    );
+    fixture
+        .database
+        .client
+        .post(&fixture.database.url)
+        .body(query)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
+async fn agent_page(
+    fixture: &SeededDatabase,
+    (start_ms, end_ms): (i64, i64),
+    query_id: &str,
+) -> TestResult<usize> {
+    let mut url = Connection::configured(&fixture.database.url, DATABASE, "default", "")?
+        .url()
+        .clone();
+    url.query_pairs_mut().append_pair("query_id", query_id);
+    let parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("user_id".into(), Parameter::Text(String::new())),
+        (
+            "team_ids".into(),
+            Parameter::Strings(vec!["load-team".into()]),
+        ),
+        ("start_ms".into(), Parameter::Integer(start_ms)),
+        ("end_ms".into(), Parameter::Integer(end_ms)),
+        ("cursor_ms".into(), Parameter::Integer(0)),
+        ("cursor_trace_id".into(), Parameter::Text(String::new())),
+        ("limit".into(), Parameter::Unsigned(AGENT_PAGE)),
+        ("agent".into(), Parameter::Text("load-agent".into())),
+    ]);
+    let response = execute_named_read(
+        &fixture.database.client,
+        &Connection::parse(url.as_str())?,
+        ReadQuery::ListTraces,
+        &parameters,
+    )
+    .await?;
+    let result: Value = serde_json::from_str(&response)?;
+    Ok(result["data"].as_array().ok_or("list rows")?.len())
+}
+
+#[rstest]
+#[tokio::test]
+async fn agent_filtered_list_reads_scale_with_window_not_later_spans(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    seed_spans(
+        &fixture,
+        &format!(
+            "SELECT now64(9) - toIntervalHour(36), concat('agent-run-', toString(number)), \
+             concat('agent-span-', toString(number)), '', 'invoke_agent load-agent', 'service', \
+             'agent', 'load-agent', 'load-team', '', 0 FROM numbers({AGENT_RUNS})"
+        ),
+    )
+    .await?;
+    let now_ms = time::OffsetDateTime::now_utc().unix_timestamp() * 1000;
+    let window = (now_ms - 48 * 3_600_000, now_ms - 24 * 3_600_000);
+    let before_id = format!("agent_list_before_{}", std::process::id());
+    assert_eq!(
+        agent_page(&fixture, window, &before_id).await?,
+        AGENT_PAGE as usize
+    );
+    let before = query_read_rows(&fixture, &before_id).await?;
+
+    seed_spans(
+        &fixture,
+        &format!(
+            "SELECT now64(9) - toIntervalSecond(number % 43200), 'later-run', \
+             concat('later-span-', toString(number)), '', 'invoke_agent load-agent', 'service', \
+             'agent', 'load-agent', 'load-team', '', 0 FROM numbers({})",
+            AGENT_RUNS * 50
+        ),
+    )
+    .await?;
+    let after_id = format!("agent_list_after_{}", std::process::id());
+    assert_eq!(
+        agent_page(&fixture, window, &after_id).await?,
+        AGENT_PAGE as usize
+    );
+    let after = query_read_rows(&fixture, &after_id).await?;
+    assert!(
+        after * 100 <= before * 105,
+        "read_rows grew from {before} to {after}"
+    );
+    Ok(())
+}
