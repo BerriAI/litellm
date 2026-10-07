@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_http::ClientVariant;
 use litellm_traces::{QueryScope, ReadQuery, Tenant, query::named::ReadAccessParams};
-use litellm_traces_cache::{ReadError, TraceReader};
+use litellm_traces_cache::{ReadError, TraceListQuery, TraceReader};
 use litellm_traces_clickhouse::{
     ClickHouseTraces, Config, Error, InsertTable, Parameter, QueryReaders,
 };
@@ -230,7 +230,11 @@ impl NativeTraceStorage {
         )
     }
 
-    #[pyo3(signature = (scope, start_ms, end_ms, cursor, limit))]
+    #[pyo3(signature = (scope, start_ms, end_ms, cursor, limit, agent))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "native trace methods take one scalar per Python argument"
+    )]
     fn list_traces<'py>(
         &self,
         py: Python<'py>,
@@ -239,6 +243,7 @@ impl NativeTraceStorage {
         end_ms: i64,
         cursor: Option<String>,
         limit: u32,
+        agent: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
@@ -248,7 +253,17 @@ impl NativeTraceStorage {
             async move {
                 let store = ClickHouseTraces::new(client, connection);
                 reader
-                    .list_traces(&store, &scope, start_ms, end_ms, cursor.as_deref(), limit)
+                    .list_traces(
+                        &store,
+                        &scope,
+                        TraceListQuery {
+                            start_ms,
+                            end_ms,
+                            cursor: cursor.as_deref(),
+                            limit,
+                            agent: &agent,
+                        },
+                    )
                     .await
             },
             map_read_error,
