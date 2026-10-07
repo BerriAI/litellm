@@ -36692,6 +36692,13 @@ export interface components {
              */
             akto_base_url?: string | null;
             /**
+             * Akto Metadata
+             * @description JSON object sent to Akto. 'policy_name': comma-separated Akto policies to enforce (empty enforces all). Example: {"policy_name": "PII Strict, Secrets"}.
+             */
+            akto_metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Akto Vxlan Id
              * @description Akto VXLAN ID. Env: AKTO_VXLAN_ID. Default: '0'.
              */
@@ -36909,6 +36916,11 @@ export interface components {
              */
             content_moderation_check?: boolean | null;
             /**
+             * Context Source
+             * @description Akto context the traffic belongs to: 'ENDPOINT' (Atlas) or 'AGENTIC' (Argus). Default: AGENTIC.
+             */
+            context_source?: ("ENDPOINT" | "AGENTIC") | null;
+            /**
              * Contextual Grounding From Messages
              * @description ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.
              * @default false
@@ -37010,6 +37022,11 @@ export interface components {
              * @default true
              */
             fail_on_error: boolean | null;
+            /**
+             * File Guardrail Timeout
+             * @description HTTP timeout in seconds for checking attached files. Default: 10.
+             */
+            file_guardrail_timeout?: number | null;
             /**
              * Gateway Name
              * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
