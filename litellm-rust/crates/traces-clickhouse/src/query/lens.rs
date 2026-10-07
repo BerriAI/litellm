@@ -209,6 +209,7 @@ pub struct LensContentParams {
     pub source: ContentSource,
     pub id: String,
     pub record_team: String,
+    pub start_time: String,
     pub trace_ref: String,
     pub cursor: String,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -252,6 +253,7 @@ pub struct LensEvidenceParams {
     pub source: ContentSource,
     pub id: String,
     pub record_team: String,
+    pub start_time: String,
     pub trace_ref: String,
     pub span: String,
     pub quote: String,
