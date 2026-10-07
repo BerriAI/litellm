@@ -19,7 +19,7 @@ import { flaggedSignals, isFlagged, type TraceSignalState } from "./useTraceSign
 import { SignalPills } from "../ui/SignalPills";
 import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
 import type { TraceSummary } from "../types";
-import { traceRefOf } from "../routing";
+import { type TraceRef, traceRefOf } from "../routing";
 import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "../utils";
 
 interface AgentTracesTableProps {
@@ -40,6 +40,8 @@ interface AgentTracesTableProps {
   onLoadMore: () => void;
   rangeEmpty?: boolean;
   onSetUpTracing: () => void;
+  onVisibleRunsChange?: (runs: readonly TraceRef[]) => void;
+  onRunIntent?: (run: TraceSummary) => void;
 }
 
 export const formatCost = (cost: number): string => {
@@ -326,6 +328,8 @@ export function AgentTracesTable({
   onLoadMore,
   rangeEmpty = false,
   onSetUpTracing,
+  onVisibleRunsChange,
+  onRunIntent,
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
@@ -355,6 +359,7 @@ export function AgentTracesTable({
               <InspectorTable.Body<TraceSummary>
                 className={bodyClassName(isPlaceholder)}
                 rowHeight={() => ROW_HEIGHT}
+                onVisibleRowsChange={(rows) => onVisibleRunsChange?.(rows.map((row) => traceRefOf(row.original)))}
                 after={
                   <>
                     {isLoading && SKELETON_ROWS.map((row) => <PlaceholderRow key={row} index={row} />)}
@@ -370,6 +375,7 @@ export function AgentTracesTable({
                       item={traceRefOf(row.original)}
                       data-testid="agent-trace-row"
                       data-flagged={flagged || undefined}
+                      onPointerEnter={() => onRunIntent?.(row.original)}
                       className={cn("h-9", flagged && FLAGGED_ROW)}
                     />
                   );

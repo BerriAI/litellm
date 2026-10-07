@@ -11,7 +11,8 @@ import { Tabs } from "@/components/ui/tabs";
 import { cn } from "@/lib/cva.config";
 
 import { useTracesApi } from "../../api";
-import { classifyTraceReadFailure, traceReadRetry, traceReadRetryDelay } from "../../list/traceReadFailure";
+import { classifyTraceReadFailure } from "../../list/traceReadFailure";
+import { TRACE_DETAIL_STALE_MS, traceDetailQuery, traceKeys } from "../../queries";
 import { type RunSelection, traceKey } from "../../routing";
 import type { Trace } from "../../types";
 import { PagingBanner } from "./PagingBanner";
@@ -96,19 +97,13 @@ function LoadedRun({
   const queryClient = useQueryClient();
   const [live, setLive] = useState(traces.live);
   const [manualRead, setManualRead] = useState(false);
-  const queryKey = ["agentTrace", traceId, traceRef, accessToken];
+  const queryKey = traceKeys.trace(accessToken, { traceId, traceRef });
   const traceQueryOptions = {
-    queryKey,
-    queryFn: ({ pageParam }: { pageParam: string | null }) => traces.trace(traceId, traceRef, pageParam),
-    initialPageParam: null as string | null,
-    getNextPageParam: (lastPage: Trace) => lastPage.next_cursor ?? undefined,
-    staleTime: 30_000,
+    ...traceDetailQuery(traces, accessToken, { traceId, traceRef }),
     refetchOnWindowFocus: live,
     refetchOnReconnect: live,
     refetchOnMount: true,
-    refetchInterval: live ? 30_000 : (false as const),
-    retry: traceReadRetry,
-    retryDelay: traceReadRetryDelay,
+    refetchInterval: live ? TRACE_DETAIL_STALE_MS : (false as const),
   };
   const traceQuery = useSuspenseInfiniteQuery(traceQueryOptions);
   const signals = useTraceSignalFlags(accessToken, { trace_id: traceId, trace_ref: traceRef }, showSignals);
@@ -125,7 +120,7 @@ function LoadedRun({
       if (refreshed.isError) return;
       const contentRef = refreshed.data?.pages[0].summary.trace_ref ?? traceRef;
       await queryClient.invalidateQueries({
-        queryKey: ["agentTraceSpan", traceId, contentRef],
+        queryKey: traceKeys.spans(traceId, contentRef),
         predicate: (query) => query.queryKey.at(-1) === accessToken,
       });
     });

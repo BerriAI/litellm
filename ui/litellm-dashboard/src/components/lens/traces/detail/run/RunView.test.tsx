@@ -14,6 +14,8 @@ import { RunView } from "./RunView";
 import { initialRunSelection } from "./useRunTree";
 import { tickLabel, timeTicks } from "../tree/timeline";
 import { traceShareUrl, useOpenTraceRouting } from "../../routing";
+import { traceDetailQuery } from "../../queries";
+import { createTracePrefetcher } from "../../list/tracePrefetch";
 import { agentHandoffText, liveTracesApi, TracesApiContext } from "../../api";
 import type { Span } from "../../types";
 import type { Trace } from "../../types";
@@ -587,6 +589,37 @@ describe("RunView", () => {
 
     await user.click(await screen.findByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
+  });
+
+  it("opens a run the list preloaded without a loading state or a second read", async () => {
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall).mockResolvedValue(research);
+    const ref = { traceId: research.summary.trace_id, traceRef: "" };
+    await testQueryClient.prefetchInfiniteQuery(traceDetailQuery(liveTracesApi("sk-test"), "sk-test", ref));
+    renderWithProviders(<RoutedRunView traceId={ref.traceId} accessToken="sk-test" onBack={vi.fn()} />);
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
+    expect(screen.queryByText("Loading trace…")).not.toBeInTheDocument();
+    expect(agentTraceCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the run again on open when its preload failed", async () => {
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall).mockRejectedValueOnce(new Error("Traces are temporarily unavailable"));
+    vi.mocked(agentTraceCall).mockResolvedValue(research);
+    const deps = {
+      queryClient: testQueryClient,
+      traces: liveTracesApi("sk-test"),
+      accessToken: "sk-test",
+      concurrency: 1,
+    };
+    const prefetcher = createTracePrefetcher(deps);
+    await prefetcher.warm([{ ref: { traceId: research.summary.trace_id }, span: true }]);
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
+    expect(screen.queryByText("Could not load trace")).not.toBeInTheDocument();
+    expect(agentTraceCall).toHaveBeenCalledTimes(2);
   });
 
   it("finds a step beyond a folded group's first page and reveals it after search clears", async () => {

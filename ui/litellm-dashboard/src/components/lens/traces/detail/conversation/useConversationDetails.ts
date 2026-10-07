@@ -1,7 +1,8 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { useTracesApi } from "../../api";
-import type { Span, SpanDetail, Trace } from "../../types";
+import { spanDetailQuery } from "../../queries";
+import type { Span, Trace } from "../../types";
 import { CONVERSATION_PAGE_SIZE, conversationSteps } from "./conversation";
 
 export function useConversationDetails(trace: Trace, accessToken: string) {
@@ -13,9 +14,7 @@ export function useConversationDetails(trace: Trace, accessToken: string) {
   const { trace_id: traceId, trace_ref: traceRef } = trace.summary;
   const spanQuery = useCallback(
     (span: Span) => ({
-      queryKey: ["agentTraceSpan", traceId, traceRef, span.span_id, accessToken],
-      queryFn: (): Promise<SpanDetail> => traces.span(traceId, span.span_id, traceRef),
-      staleTime: Infinity,
+      ...spanDetailQuery(traces, accessToken, { traceId, traceRef, spanId: span.span_id }),
       retry: false as const,
       retryOnMount: false,
     }),

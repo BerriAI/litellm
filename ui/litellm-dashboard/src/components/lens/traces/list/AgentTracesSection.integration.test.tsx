@@ -6,13 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/http/client";
 
 import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
+import researchTrace from "../__fixtures__/research_trace.json";
 import traceList from "../__fixtures__/trace_list.json";
 import AgentTracesPage from "./AgentTracesPage";
 import { filterRuns } from "./runSearch/runQuery";
 import type { RelativeRangeState } from "@/components/shared/timeRange/useRelativeRange";
 
 import { AgentTracesSection } from "./AgentTracesSection";
-import type { TraceFindingCount, TracePage, TraceSummary } from "../types";
+import { TRACE_PREFETCH_INTENT_MS, TRACE_PREFETCH_VISIBLE_ROWS } from "./tracePrefetch";
+import type { Trace, TraceFindingCount, TracePage, TraceSummary } from "../types";
 
 vi.mock("../../../networking", () => ({
   apiClient: { get: vi.fn(), post: vi.fn() },
@@ -32,9 +34,10 @@ vi.mock("../detail/run/RunView", () => ({
   ),
 }));
 
-import { agentTraceListCall, apiClient } from "../../../networking";
+import { agentTraceCall, agentTraceListCall, agentTraceSpanCall, apiClient } from "../../../networking";
 
 const runs = (traceList as TracePage).data as TraceSummary[];
+const research = researchTrace as Trace;
 
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
   new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
@@ -486,6 +489,105 @@ describe("AgentTracesSection", () => {
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
   });
 
+  describe("preloading", () => {
+    const many = (count: number, startTime = runs[0].start_time) =>
+      Array.from({ length: count }, (_, i) => ({
+        ...runs[0],
+        trace_id: `run-${i}`,
+        trace_ref: `ref-${i}`,
+        start_time: startTime,
+      }));
+    const requested = () => vi.mocked(agentTraceCall).mock.calls.map(([, traceId]) => traceId);
+    const spansRequested = () => vi.mocked(agentTraceSpanCall).mock.calls.map(([, traceId]) => traceId);
+    const ids = (...indexes: number[]) => indexes.map((i) => `run-${i}`);
+    const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => from + i);
+
+    beforeEach(() => {
+      vi.mocked(agentTraceCall).mockReset();
+      vi.mocked(agentTraceCall).mockImplementation(async (_token, traceId, traceRef) => ({
+        ...research,
+        summary: { ...research.summary, trace_id: traceId, trace_ref: traceRef },
+      }));
+      vi.mocked(agentTraceSpanCall).mockReset();
+      vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _traceId, spanId) => ({ span_id: spanId }));
+    });
+
+    it("warms a capped set of on-screen runs, then the open run's neighbours with their first step", async () => {
+      vi.mocked(agentTraceListCall).mockResolvedValue({ data: many(80), next_cursor: null });
+      renderSection();
+      const rows = await screen.findAllByTestId("agent-trace-row");
+
+      await waitFor(() => expect(agentTraceCall).toHaveBeenCalledTimes(TRACE_PREFETCH_VISIBLE_ROWS));
+      expect(requested()).toEqual(ids(...range(0, TRACE_PREFETCH_VISIBLE_ROWS)));
+      expect(vi.mocked(agentTraceCall).mock.calls[0]).toEqual(["sk-test", "run-0", "ref-0", null]);
+      expect(agentTraceSpanCall).not.toHaveBeenCalled();
+
+      fireEvent.click(rows[19]);
+      await waitFor(() => expect(spansRequested().sort()).toEqual(ids(18, 20)));
+      expect(requested().slice(TRACE_PREFETCH_VISIBLE_ROWS).sort()).toEqual(ids(18, 20));
+
+      const scroller = screen.getByTestId("runs-table");
+      scroller.scrollTop = 36 * 50;
+      fireEvent.scroll(scroller);
+      await waitFor(() => expect(agentTraceCall).toHaveBeenCalledTimes(2 * TRACE_PREFETCH_VISIBLE_ROWS + 2));
+      expect(requested().slice(-TRACE_PREFETCH_VISIBLE_ROWS).sort()).toEqual(
+        ids(...range(50, 50 + TRACE_PREFETCH_VISIBLE_ROWS)).sort(),
+      );
+      expect(new Set(requested()).size).toBe(requested().length);
+      expect(agentTraceSpanCall).toHaveBeenCalledTimes(2);
+    });
+
+    it("reads nothing ahead of time for runs that are still in progress", async () => {
+      vi.mocked(agentTraceListCall).mockResolvedValue({ data: many(30, new Date().toISOString()), next_cursor: null });
+      renderSection();
+      const rows = await screen.findAllByTestId("agent-trace-row");
+      fireEvent.click(rows[3]);
+      fireEvent.pointerEnter(rows[5]);
+      await new Promise((resolve) => setTimeout(resolve, TRACE_PREFETCH_INTENT_MS * 3));
+      expect(agentTraceCall).not.toHaveBeenCalled();
+      expect(agentTraceSpanCall).not.toHaveBeenCalled();
+    });
+
+    it("does not read the same runs again when the live list refreshes", async () => {
+      const page = many(30);
+      vi.mocked(agentTraceListCall).mockResolvedValue({ data: page, next_cursor: null });
+      renderSection();
+      await waitFor(() => expect(agentTraceCall).toHaveBeenCalledTimes(TRACE_PREFETCH_VISIBLE_ROWS));
+
+      const fresh = { ...page[0], trace_id: "new-run", trace_ref: "new-ref", start_time: new Date().toISOString() };
+      vi.mocked(agentTraceListCall).mockResolvedValue({ data: [fresh, ...page], next_cursor: null });
+      fireEvent.click(screen.getByRole("button", { name: "Refresh traces" }));
+      await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")[0]).toHaveTextContent("new-run"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(requested()).toEqual(ids(...range(0, TRACE_PREFETCH_VISIBLE_ROWS)));
+    });
+
+    it("warms a hovered run past the cap together with its first step", async () => {
+      vi.mocked(agentTraceListCall).mockResolvedValue({ data: many(30), next_cursor: null });
+      renderSection();
+      const rows = await screen.findAllByTestId("agent-trace-row");
+      await waitFor(() => expect(agentTraceCall).toHaveBeenCalledTimes(TRACE_PREFETCH_VISIBLE_ROWS));
+
+      fireEvent.pointerEnter(rows[15]);
+      await waitFor(() => expect(spansRequested()).toEqual(ids(15)));
+      expect(requested().at(-1)).toBe("run-15");
+    });
+
+    it("reads nothing while the Traces tab is inactive", async () => {
+      testQueryClient.setQueryData(["agentTraces", "sk-test", ROLLING_DAY.hours, ROLLING_DAY.anchorMs], {
+        pages: [{ data: many(30), next_cursor: null, window: { startMs: 0, endMs: Date.now() } }],
+        pageParams: [null],
+      });
+      renderWithProviders(<AgentTracesSection accessToken="sk-test" isActive={false} range={ROLLING_DAY} />);
+      const rows = await screen.findAllByTestId("agent-trace-row");
+      fireEvent.click(rows[3]);
+      fireEvent.pointerEnter(rows[10]);
+      await new Promise((resolve) => setTimeout(resolve, TRACE_PREFETCH_INTENT_MS * 3));
+      expect(agentTraceCall).not.toHaveBeenCalled();
+      expect(agentTraceSpanCall).not.toHaveBeenCalled();
+    });
+  });
+
   it("opens full screen from a shared link and drops it from the URL on close", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     const onUrlUpdate = vi.fn();
@@ -713,6 +815,25 @@ describe("AgentTracesPage", () => {
     act(() => resolveWeek({ ...(traceList as TracePage), data: runs.slice(0, 1) }));
     await waitFor(() => expect(screen.queryByRole("status", { name: "Loading results" })).not.toBeInTheDocument());
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
+  });
+
+  it("reads none of the previous range's runs while a newly picked range loads", async () => {
+    const shown = Array.from({ length: 30 }, (_, i) => ({ ...runs[0], trace_id: `run-${i}`, trace_ref: `ref-${i}` }));
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: shown, next_cursor: null });
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall).mockResolvedValue(research);
+    renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
+    const rows = await screen.findAllByTestId("agent-trace-row");
+    await waitFor(() => expect(agentTraceCall).toHaveBeenCalledTimes(TRACE_PREFETCH_VISIBLE_ROWS));
+
+    vi.mocked(agentTraceListCall).mockImplementation(() => new Promise<TracePage>(() => {}));
+    fireEvent.click(screen.getByRole("button", { name: "Time range" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last 7 days" }));
+    expect(await screen.findByRole("status", { name: "Loading results" })).toBeInTheDocument();
+    fireEvent.click(rows[20]);
+    fireEvent.pointerEnter(rows[25]);
+    await new Promise((resolve) => setTimeout(resolve, TRACE_PREFETCH_INTENT_MS * 3));
+    expect(agentTraceCall).toHaveBeenCalledTimes(TRACE_PREFETCH_VISIBLE_ROWS);
   });
 
   it("keeps the timeline on the shown runs' window while a narrower range loads", async () => {

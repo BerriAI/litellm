@@ -5,7 +5,16 @@ import "@/components/shared/DataTable/columnMeta";
 import { flexRender, type Row as TanStackRow, type Table as TanStackTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRight } from "lucide-react";
-import { createContext, Fragment, useContext, useState, type ComponentProps, type ReactNode } from "react";
+import {
+  createContext,
+  Fragment,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 
 import { Inspector } from "@/components/shared/Inspector";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -94,9 +103,10 @@ interface BodyProps<T> {
   readonly children: (row: TanStackRow<T>) => ReactNode;
   readonly after?: ReactNode;
   readonly className?: string;
+  readonly onVisibleRowsChange?: (rows: readonly TanStackRow<T>[]) => void;
 }
 
-function Body<T>({ rowHeight, children, after, className }: BodyProps<T>) {
+function Body<T>({ rowHeight, children, after, className, onVisibleRowsChange }: BodyProps<T>) {
   const { table, scroller } = useInspectorTable<T>();
   const rows = table.getRowModel().rows;
   const virtualizerOptions = {
@@ -108,6 +118,13 @@ function Body<T>({ rowHeight, children, after, className }: BodyProps<T>) {
   };
   const virtualizer = useVirtualizer(virtualizerOptions);
   const items = virtualizer.getVirtualItems();
+  const settled = virtualizer.isScrolling ? null : virtualizer.range;
+  const visibleRows = settled ? rows.slice(settled.startIndex, settled.endIndex + 1) : null;
+  const visibleKey = visibleRows?.map((row) => row.id).join("\n");
+  const reportVisible = useEffectEvent(() => {
+    if (visibleRows) onVisibleRowsChange?.(visibleRows);
+  });
+  useEffect(() => reportVisible(), [visibleKey]);
   const padTop = items[0]?.start ?? 0;
   const padBottom = virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0);
   return (

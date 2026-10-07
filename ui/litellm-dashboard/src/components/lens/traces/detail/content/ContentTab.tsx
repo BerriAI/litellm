@@ -1,9 +1,10 @@
 "use client";
 
-import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { skipToken, useQuery } from "@tanstack/react-query";
 
 import { useTracesApi } from "../../api";
-import type { Span, SpanDetail, UIContent } from "../../types";
+import { spanDetailQuery } from "../../queries";
+import type { Span, UIContent } from "../../types";
 import { parseMessages, prettyPayload } from "../../utils";
 import { Payload, TextBody } from "./PayloadBody";
 import { ToolArguments } from "./ToolContent";
@@ -17,13 +18,8 @@ const COLLAPSE_INPUT_ABOVE = 8;
 /** Shared lazy fetch of one span's full input / output / attributes. */
 export function useSpanDetail(accessToken: string, traceId: string, spanId: string | null, traceRef?: string) {
   const traces = useTracesApi(accessToken);
-  const queryOptions: UseQueryOptions<SpanDetail, Error> = {
-    queryKey: ["agentTraceSpan", traceId, traceRef, spanId, accessToken],
-    queryFn: () => traces.span(traceId, spanId as string, traceRef),
-    enabled: spanId !== null,
-    staleTime: Infinity,
-  };
-  return useQuery(queryOptions);
+  const query = spanDetailQuery(traces, accessToken, { traceId, traceRef, spanId: spanId ?? "" });
+  return useQuery(spanId === null ? { ...query, queryFn: skipToken } : query);
 }
 
 const messageCount = (raw: string, content: UIContent | undefined): number | undefined =>
