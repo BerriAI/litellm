@@ -165,6 +165,26 @@ describe("AgentTracesTable cost cell", () => {
   });
 });
 
+describe("AgentTracesTable input cell", () => {
+  it("shows the whole preview on one line instead of only its first line", () => {
+    const template = (traceList as TracePage).data[0] as TraceSummary;
+    renderWithProviders(
+      inList(
+        <AgentTracesTable
+          traces={[{ ...template, input_preview: "CURRENT USER REQUEST:\n\n- add feedback to Lens" }]}
+          findings={new Map()}
+          isLoading={false}
+          error={null}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
+    );
+    expect(screen.getByText("CURRENT USER REQUEST: - add feedback to Lens")).toBeInTheDocument();
+  });
+});
+
 describe("AgentTracesTable column picker", () => {
   const runs = (traceList as TracePage).data as TraceSummary[];
   const renderRuns = () =>
