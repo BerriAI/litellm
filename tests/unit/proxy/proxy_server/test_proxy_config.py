@@ -16,7 +16,7 @@ import re
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
@@ -2976,7 +2976,7 @@ def test_ProxyConfig__add_deployment_pinned_row_follows_the_cost_map_across_relo
     assert ProxyConfig()._add_deployment(db_models=[pinned, typed]) == 2
 
     monkeypatch.setitem(litellm.model_cost["gpt-5.6"], "input_cost_per_token", 1e-06)
-    router._replay_model_cost_registrations()
+    router.replay_model_cost_registrations()
 
     assert litellm.model_cost.get("pinned-row", {}).get("input_cost_per_token") is None
     assert router.get_deployment(model_id="pinned-row").model_info.input_cost_per_token is None
@@ -3008,7 +3008,7 @@ def test_ProxyConfig__add_deployment_ptu_row_with_a_cost_map_copy_still_bills_ze
     )
 
     assert ProxyConfig()._add_deployment(db_models=[ptu]) == 1
-    router._replay_model_cost_registrations()
+    router.replay_model_cost_registrations()
 
     assert litellm.model_cost["ptu-row"]["input_cost_per_token"] == 0.0
     assert litellm.model_cost["ptu-row"]["output_cost_per_token"] == 0.0
@@ -4278,6 +4278,7 @@ async def test_ProxyConfig__update_general_settings_leaves_first_registration_to
 async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries_the_stagger_offset(monkeypatch):
     """Once the scheduler is running the sync owns registration and the job it adds is staggered."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
 
     from litellm.proxy.common_utils.scheduled_job_stagger import _OffsetTrigger
 
@@ -4286,12 +4287,17 @@ async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries
     monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     pc = ProxyConfig()
+    pc.settings.load_yaml({"scheduled_job_stagger": {"offsets": {"spend_log_cleanup_job": 120}}})
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
     try:
         await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
         jobs = real_scheduler.get_jobs()
         assert [job.id for job in jobs] == ["spend_log_cleanup_job"]
-        assert isinstance(jobs[0].trigger, _OffsetTrigger), repr(jobs[0].trigger)
+        trigger: Final = jobs[0].trigger
+        assert isinstance(trigger, _OffsetTrigger), repr(trigger)
+        assert trigger.offset == timedelta(seconds=120)
+        assert isinstance(trigger.base, IntervalTrigger)
+        assert trigger.base.interval == timedelta(days=1)
     finally:
         real_scheduler.shutdown(wait=False)
 

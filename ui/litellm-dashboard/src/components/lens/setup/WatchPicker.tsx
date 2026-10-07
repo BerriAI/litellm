@@ -2,19 +2,32 @@
 
 import { useRef, useState, type KeyboardEvent } from "react";
 import { Check, Plus } from "lucide-react";
-import { watches } from "../model/watches";
+import { watches as defaultWatches } from "../model/watches";
 import { cn } from "@/lib/cva.config";
 
 const COLUMNS = 2;
+
+export interface PickerOption {
+  readonly id: string;
+  readonly name: string;
+  readonly summary: string;
+  readonly instruction?: string;
+}
 
 export function WatchPicker({
   selected,
   onChange,
   onAddCustom,
+  options: watches = defaultWatches,
+  label = "Watch for",
+  addDisabled = false,
 }: {
   selected: ReadonlySet<string>;
   onChange: (next: ReadonlySet<string>) => void;
   onAddCustom: () => void;
+  options?: readonly PickerOption[];
+  label?: string;
+  addDisabled?: boolean;
 }) {
   const [cursor, setCursor] = useState(0);
   const items = useRef<(HTMLButtonElement | null)[]>([]);
@@ -41,12 +54,12 @@ export function WatchPicker({
   return (
     <fieldset className="grid gap-2">
       <div className="flex items-baseline justify-between gap-3">
-        <legend className="text-sm font-medium">Watch for</legend>
+        <legend className="text-sm font-medium">{label}</legend>
         <span className="text-xs tabular-nums text-muted-foreground">
-          {selected.size} of {watches.length}
+          {watches.filter((watch) => selected.has(watch.id)).length} of {watches.length}
         </span>
       </div>
-      <div role="group" aria-label="Watch for" onKeyDown={onKey} className="grid grid-cols-2 gap-1.5">
+      <div role="group" aria-label={label} onKeyDown={onKey} className="grid grid-cols-2 gap-1.5">
         {watches.map((watch, index) => {
           const on = selected.has(watch.id);
           return (
@@ -57,7 +70,7 @@ export function WatchPicker({
               }}
               type="button"
               aria-pressed={on}
-              title={watch.instruction}
+              title={watch.instruction ?? watch.summary}
               tabIndex={index === cursor ? 0 : -1}
               data-state={on ? "active" : "inactive"}
               onFocus={() => setCursor(index)}
@@ -85,7 +98,8 @@ export function WatchPicker({
       <button
         type="button"
         onClick={onAddCustom}
-        className="flex items-center gap-2 justify-self-start rounded-md px-1 py-1 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        disabled={addDisabled}
+        className="flex items-center gap-2 justify-self-start rounded-md px-1 py-1 text-sm text-muted-foreground outline-none hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <Plus aria-hidden="true" className="size-4" />
         Add your own check

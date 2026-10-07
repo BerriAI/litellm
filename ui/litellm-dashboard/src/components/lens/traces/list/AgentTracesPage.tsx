@@ -12,6 +12,7 @@ export default function AgentTracesPage({
   readOnly = false,
   canMintTracingKey = false,
   canViewFindings = true,
+  onSetUpSignals,
   onInvestigate,
 }: {
   accessToken: string;
@@ -19,6 +20,7 @@ export default function AgentTracesPage({
   readOnly?: boolean;
   canMintTracingKey?: boolean;
   canViewFindings?: boolean;
+  onSetUpSignals?: () => void;
   onInvestigate?: (scope: InvestigateScope) => void;
 }) {
   const time = useRelativeRange(useTracesLive());
@@ -31,6 +33,7 @@ export default function AgentTracesPage({
         readOnly={readOnly}
         canMintTracingKey={canMintTracingKey}
         canViewFindings={canViewFindings}
+        onSetUpSignals={onSetUpSignals}
         onInvestigate={onInvestigate}
         timeControls={time}
       />

@@ -23,7 +23,7 @@ def test_lambda_ai_get_openai_compatible_provider_info():
 
     # Test with default values (no env vars set)
     with mock.patch.dict(os.environ, {}, clear=True):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://api.lambda.ai/v1"
         assert api_key is None
 
@@ -35,7 +35,7 @@ def test_lambda_ai_get_openai_compatible_provider_info():
             "LAMBDA_API_BASE": "https://custom.lambda.ai/v1",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://custom.lambda.ai/v1"
         assert api_key == "test-key"
 
@@ -44,9 +44,7 @@ def test_lambda_ai_get_openai_compatible_provider_info():
         os.environ,
         {"LAMBDA_API_KEY": "env-key", "LAMBDA_API_BASE": "https://env.lambda.ai/v1"},
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://param.lambda.ai/v1", "param-key"
-        )
+        api_base, api_key = config.get_openai_compatible_provider_info("https://param.lambda.ai/v1", "param-key")
         assert api_base == "https://param.lambda.ai/v1"
         assert api_key == "param-key"
 

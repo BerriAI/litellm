@@ -4,6 +4,9 @@ import sys
 from typing import Final
 
 import pytest
+from pydantic import ConfigDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _PROBE: Final = """
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -71,3 +74,19 @@ print(Holder(item=validated).model_dump_json(serialize_as_any=True), Holder(item
 
 def test_deferred_instances_created_without_their_own_init_still_serialize_as_any() -> None:
     assert _run_probe(_NESTED_PROBE, None) == '{"item":{"value":1}} {"item":{"value":2}}'
+
+
+def test_deferred_first_use_build_leaves_caller_locals_snapshot_untouched() -> None:
+    class DeferredProbe(LiteLLMBaseModel):
+        model_config = ConfigDict(defer_build=True)
+        value: int
+
+    def build(model: type[DeferredProbe]) -> list[str]:
+        local_vars: Final = locals()
+        later: Final = 1
+        _ = model(value=later)
+        return sorted(local_vars)
+
+    assert not DeferredProbe.__pydantic_complete__
+    assert build(DeferredProbe) == ["model"]
+    assert DeferredProbe.__pydantic_complete__

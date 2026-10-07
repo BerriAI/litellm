@@ -1,6 +1,7 @@
 "use client";
 
 import moment from "moment";
+import { skipToken, useQuery } from "@tanstack/react-query";
 import { RefreshCw, ScanSearch } from "lucide-react";
 import { traceAgentNames } from "../utils";
 import { useMemo, useState } from "react";
@@ -12,6 +13,10 @@ import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
 import { useTraceFindings } from "./useTraceFindings";
+import { useTraceSignals } from "./useTraceSignals";
+import { useOptionalLensApi } from "../../data/LensServices";
+import { lensKeys } from "../../data/queries";
+import { signalsConfigured } from "../../model/signals";
 import { type TraceRef, traceKey, traceRefOf, useOpenTraceRouting, useRunFilterRouting } from "../routing";
 import type { TraceSummary } from "../types";
 import { RunView } from "../detail/run/RunView";
@@ -42,6 +47,7 @@ interface AgentTracesSectionProps {
   readOnly?: boolean;
   canMintTracingKey?: boolean;
   canViewFindings?: boolean;
+  onSetUpSignals?: () => void;
   /** Starts an investigation over the runs the agent filter shows; offered only when that filter alone narrows them. */
   onInvestigate?: (scope: InvestigateScope) => void;
 }
@@ -70,6 +76,17 @@ function InvestigateAction({ onInvestigate, agent, query, status, range, zoom }:
       Investigate these runs
     </Button>
   );
+}
+
+function useSignalSetup(enabled: boolean) {
+  const api = useOptionalLensApi();
+  const config = useQuery({
+    queryKey: lensKeys.signalConfig(api?.scope ?? ""),
+    queryFn: api && enabled ? () => api.signalConfig() : skipToken,
+    staleTime: 5000,
+  });
+  const loaded = enabled && config.data !== undefined;
+  return { on: loaded && signalsConfigured(config.data), missing: loaded && !signalsConfigured(config.data) };
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -108,6 +125,7 @@ export function AgentTracesSection({
   readOnly = false,
   canMintTracingKey = false,
   canViewFindings,
+  onSetUpSignals,
   onInvestigate,
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
@@ -139,6 +157,8 @@ export function AgentTracesSection({
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
   const findings = useTraceFindings(accessToken, runs, isActive, canViewFindings);
+  const signalSetup = useSignalSetup(isActive && canViewFindings !== false);
+  const signals = useTraceSignals(accessToken, runs, isActive && signalSetup.on);
 
   const changeRange = (hours: number, apply: (hours: number) => void) => {
     setZoom(null);
@@ -203,6 +223,7 @@ export function AgentTracesSection({
               accessToken={accessToken}
               onBack={() => openRun(null)}
               embedded
+              showSignals={signalSetup.on}
             />
           )}
         </Inspector.Panel>
@@ -223,8 +244,9 @@ export function AgentTracesSection({
           />
           <TracingSetupAction available={traces.traces.length > 0} live={live} onSetup={() => setShowSetup(true)} />
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
+            className="h-full w-10 shrink-0 rounded-none border-l"
             aria-label="Refresh traces"
             title="Refresh traces"
             disabled={traces.isFetching}
@@ -233,15 +255,13 @@ export function AgentTracesSection({
             <RefreshCw className="size-3.5" />
           </Button>
           {timeControls && (
-            <div className="h-8 min-w-0 overflow-hidden rounded-md border [&>div]:h-full [&>div]:border-l-0">
-              <TimeRangeControls
-                range={range}
-                zoom={zoom}
-                onHoursChange={(hours) => changeRange(hours, timeControls.setHours)}
-                showLive={live}
-                onLiveChange={timeControls.setLive}
-              />
-            </div>
+            <TimeRangeControls
+              range={range}
+              zoom={zoom}
+              onHoursChange={(hours) => changeRange(hours, timeControls.setHours)}
+              showLive={live}
+              onLiveChange={timeControls.setLive}
+            />
           )}
         </RunsToolbar>
         <TraceCounts runs={filtered} />
@@ -250,6 +270,10 @@ export function AgentTracesSection({
           traces={runs}
           findings={findings}
           canViewFindings={canViewFindings}
+          signals={signals}
+          showSignals={signalSetup.on}
+          signalsColumn={signalSetup.on || signalSetup.missing}
+          onSetUpSignals={onSetUpSignals}
           isLoading={traces.isLoading || (checkHistory && history.isLoading)}
           error={traces.error}
           hasMore={traces.hasMore}
@@ -297,7 +321,13 @@ function TraceFooter({ runs, hasMore }: { runs: readonly TraceSummary[]; hasMore
 function TracingSetupAction({ available, live, onSetup }: { available: boolean; live: boolean; onSetup: () => void }) {
   if (!available) return null;
   return (
-    <Button variant="outline" size="sm" className="h-8 text-xs" disabled={!live} onClick={onSetup}>
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-full shrink-0 rounded-none border-l px-3 text-xs"
+      disabled={!live}
+      onClick={onSetup}
+    >
       Set up tracing
     </Button>
   );

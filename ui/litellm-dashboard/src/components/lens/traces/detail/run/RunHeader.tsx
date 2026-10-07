@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, Copy, Link, RefreshCw } from "lucide-react";
+import { ArrowLeft, Check, Copy, Link, ListTree, MessagesSquare, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useTimeout } from "usehooks-ts";
 
@@ -16,7 +16,8 @@ import { traceRefOf, traceShareUrl } from "../../routing";
 import { IdChip } from "../../ui/IdChip";
 import { SpanIcon } from "../../ui/SpanIcon";
 import { FrameworkLogo, traceFramework } from "../../ui/TraceFramework";
-import type { Trace } from "../../types";
+import type { SignalFlag, Trace } from "../../types";
+import { SignalPills } from "../../ui/SignalPills";
 import { fmtMs, fmtTok, traceAgentNames, traceDisplayName } from "../../utils";
 
 interface CopyButtonProps {
@@ -90,6 +91,7 @@ interface RunHeaderProps {
   live: boolean;
   canLive: boolean;
   onLiveChange: () => void;
+  signals?: readonly SignalFlag[];
 }
 
 /** Run identity, view switch and totals in two tight rows. */
@@ -103,6 +105,7 @@ export function RunHeader({
   live,
   canLive,
   onLiveChange,
+  signals = [],
 }: RunHeaderProps) {
   const { summary } = trace;
   const failed = summary.status === "error";
@@ -122,11 +125,13 @@ export function RunHeader({
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 @xl/run-header:ml-auto">
           <TabsList aria-label="Trace view" className="group-data-horizontal/tabs:h-7">
-            <TabsTrigger value="steps" className="px-2.5 text-xs">
+            <TabsTrigger value="steps" className="gap-1.5 px-2.5 text-xs">
+              <ListTree className="size-3.5" />
               Steps
             </TabsTrigger>
-            <TabsTrigger value="conversation" className="px-2.5 text-xs">
-              Conversation
+            <TabsTrigger value="thread" className="gap-1.5 px-2.5 text-xs">
+              <MessagesSquare className="size-3.5" />
+              Thread
             </TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-1.5">
@@ -160,6 +165,7 @@ export function RunHeader({
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
         <StatusPill failed={failed} />
+        {signals.length > 0 && <SignalPills flags={signals} showScore className="flex-wrap" />}
         <Stat label="Duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="Steps" value={summary.span_count.toLocaleString()} />
         <Stat label="Tokens" value={fmtTok(summary.input_tokens + summary.output_tokens)} />

@@ -19,7 +19,7 @@ def decode_managed_container_id_for_request(
     Returns:
         (original_container_id, resolved_provider, updated_litellm_params)
     """
-    decoded: Final = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    decoded: Final = ResponsesAPIRequestUtils.decode_container_id(container_id)
     original_container_id: Final = decoded.get("response_id", container_id)
 
     decoded_provider: Final = decoded.get("custom_llm_provider")
@@ -148,7 +148,7 @@ class ContainerRequestUtils:
 
         # Only encode if we have routing metadata
         if should_encode and response_obj and hasattr(response_obj, "id"):
-            encoded_id: Final = ResponsesAPIRequestUtils._build_container_id(
+            encoded_id: Final = ResponsesAPIRequestUtils.build_container_id(
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
                 container_id=response_obj.id,

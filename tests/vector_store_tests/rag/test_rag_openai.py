@@ -44,7 +44,7 @@ class TestRAGOpenAI(BaseRAGTest):
         """Test basic RAG query flow."""
         import asyncio
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         # First ingest a document
         filename, unique_id = self.get_unique_filename("rag_query")
@@ -91,7 +91,7 @@ class TestRAGOpenAI(BaseRAGTest):
         """Test RAG query with reranking."""
         import asyncio
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         # First ingest a document
         filename, unique_id = self.get_unique_filename("rag_query_rerank")

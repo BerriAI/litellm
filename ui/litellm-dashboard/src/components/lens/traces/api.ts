@@ -19,6 +19,7 @@ import type {
   TracePage,
   TraceFindingCount,
   TraceFindingsRequest,
+  TraceSignals,
 } from "./types";
 
 export interface TraceWindow {
@@ -38,6 +39,7 @@ export interface TracesApi {
   handoff(traceId: string, spanId?: string | null, traceRef?: string): TraceHandoff;
   list(window: TraceWindow): Promise<TracePage>;
   findings(traces: TraceFindingsRequest["traces"]): Promise<TraceFindingCount[]>;
+  signals(traces: TraceFindingsRequest["traces"]): Promise<TraceSignals[]>;
   anyRecorded(): Promise<boolean>;
   trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
   span(traceId: string, spanId: string, traceRef?: string): Promise<SpanDetail>;
@@ -79,6 +81,11 @@ export function liveTracesApi(accessToken: string): TracesApi {
     list: (window) => agentTraceListCall({ accessToken, ...window }),
     findings: (traces) =>
       apiClient.post<TraceFindingCount[]>("/lens/traces/findings", {
+        accessToken,
+        body: { traces } satisfies TraceFindingsRequest,
+      }),
+    signals: (traces) =>
+      apiClient.post<TraceSignals[]>("/lens/traces/signals", {
         accessToken,
         body: { traces } satisfies TraceFindingsRequest,
       }),

@@ -211,6 +211,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                     readOnly={readOnly}
                     canMintTracingKey={isAdmin}
                     canViewFindings={canViewInvestigations}
+                    onSetUpSignals={canConfigure ? showSettings : undefined}
                     onInvestigate={onInvestigate}
                   />
                 </TabsContent>

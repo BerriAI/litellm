@@ -2583,6 +2583,14 @@ def _should_check_db(key: str, last_db_access_time: LimitedSizeOrderedDict, db_c
     return False
 
 
+def _user_db_access_key(user_id: str) -> str:
+    return f"user_id:{user_id}"
+
+
+def forget_missing_user(user_id: str) -> None:
+    last_db_access_time.pop(_user_db_access_key(user_id), None)
+
+
 def _update_last_db_access_time(key: str, value: object | None, last_db_access_time: LimitedSizeOrderedDict):
     last_db_access_time[key] = (value, time.time())
 
@@ -2751,7 +2759,7 @@ async def get_user_object(
     if prisma_client is None:
         raise Exception("No db connected")
     try:
-        db_access_time_key: Final = f"user_id:{user_id}"
+        db_access_time_key: Final = _user_db_access_key(user_id)
         should_check_db: Final = bool(check_db_only) or _should_check_db(
             key=db_access_time_key,
             last_db_access_time=last_db_access_time,
@@ -4588,7 +4596,7 @@ def _can_object_call_model(
         litellm.model_alias_map[model]
         if model in litellm.model_alias_map
         else (
-            llm_router._get_model_from_alias(model)
+            llm_router.get_model_from_alias(model)
             if llm_router is not None and model in llm_router.model_group_alias
             else None
         )

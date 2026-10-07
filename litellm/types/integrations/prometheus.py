@@ -8,7 +8,7 @@ from typing import Any, ClassVar, Final, Literal, cast
 import litellm
 
 
-def _sanitize_prometheus_label_name(label: str) -> str:
+def sanitize_prometheus_label_name(label: str) -> str:
     """
     Sanitize a label name to comply with Prometheus label name requirements.
 
@@ -40,11 +40,14 @@ def _sanitize_prometheus_label_name(label: str) -> str:
     return sanitized
 
 
+_sanitize_prometheus_label_name = sanitize_prometheus_label_name
+
+
 # v1: single translate pass + escape loop (avoids chained str.replace allocations).
 _PROMETHEUS_LABEL_VALUE_TRANSLATE_V1: Final = str.maketrans("\n", " ", "\r\u2028\u2029")
 
 
-def _sanitize_prometheus_label_value(value: object | None) -> str | None:
+def sanitize_prometheus_label_value(value: object | None) -> str | None:
     """
     Same semantics as :func:`_sanitize_prometheus_label_value`, implemented with
     ``str.translate`` plus a single escape pass instead of chained ``replace``.
@@ -68,6 +71,9 @@ def _sanitize_prometheus_label_value(value: object | None) -> str | None:
         else:
             append(ch)
     return "".join(parts)
+
+
+_sanitize_prometheus_label_value = sanitize_prometheus_label_value
 
 
 @dataclass
@@ -410,6 +416,7 @@ def _resolve_deployment_and_latency_caller_identity_labels(
 
 class PrometheusMetricLabels:
     litellm_llm_api_latency_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -424,6 +431,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_llm_api_time_to_first_token_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -438,6 +446,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_request_total_latency_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -510,6 +519,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_deployment_latency_per_output_token = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
@@ -963,11 +973,11 @@ class PrometheusMetricLabels:
 
         # Add custom metadata labels
         custom_labels.extend(
-            [_sanitize_prometheus_label_name(metric) for metric in litellm.custom_prometheus_metadata_labels]
+            [sanitize_prometheus_label_name(metric) for metric in litellm.custom_prometheus_metadata_labels]
         )
 
         # Add custom tags labels
-        custom_labels.extend([_sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags])
+        custom_labels.extend([sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags])
 
         # Conditionally add stream label to litellm_proxy_total_requests_metric
         if (

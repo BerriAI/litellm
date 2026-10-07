@@ -588,7 +588,7 @@ class TestVertexAIPassThroughHandler:
 
         with (
             mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base.ensure_access_token_async"
             ) as mock_ensure_token,
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
@@ -1140,7 +1140,7 @@ class TestVertexAIPassThroughHandler:
                     end_time=end_time,
                     cache_hit=False,
                 )
-            recomputed: Final = logging_obj._response_cost_calculator(result=result["result"])
+            recomputed: Final = logging_obj.response_cost_calculator(result=result["result"])
             return result["kwargs"]["response_cost"], recomputed
 
         global_handler_cost, global_recomputed_cost = costs_for("global")
@@ -5502,7 +5502,7 @@ class TestVertexAILiveWebsocketPassthrough:
         ws_passthrough = AsyncMock()
 
         with (
-            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
             patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
         ):
             await passthrough_module.vertex_ai_live_websocket_passthrough(
@@ -5611,7 +5611,7 @@ class TestVertexAILiveWebsocketPassthrough:
         ws_passthrough = AsyncMock()
 
         with (
-            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
             patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
         ):
             await passthrough_module.vertex_ai_live_websocket_passthrough(
@@ -5643,7 +5643,7 @@ class TestVertexAILiveWebsocketPassthrough:
         ensure_token = AsyncMock(side_effect=Exception("Unable to find your credentials"))
 
         with (
-            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
             patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
         ):
             mock_proxy_logging.post_call_failure_hook = AsyncMock()

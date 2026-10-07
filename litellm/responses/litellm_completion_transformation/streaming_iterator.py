@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Any, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
@@ -487,7 +488,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return buffered
 
     def _with_encoded_response_id(self, response: ResponsesAPIResponse) -> ResponsesAPIResponse:
-        return ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+        return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
             responses_api_response=response,
             custom_llm_provider=self.custom_llm_provider,
             litellm_metadata=self.litellm_metadata,
@@ -519,7 +520,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if "text" in self.responses_api_request:
             response_created_event_data["text"] = self.responses_api_request["text"]
         response_created_event_data["tool_choice"] = (
-            LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+            LiteLLMCompletionResponsesConfig.transform_tool_choice_for_responses_api_response(
                 self.responses_api_request.get("tool_choice")
             )
         )
@@ -649,11 +650,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             ),
         )
         if response is not None and self._accumulated_provider_specific_fields:
-            if not hasattr(response, "_hidden_params") or response._hidden_params is None:
-                response._hidden_params = {}
-            response._hidden_params.setdefault("provider_specific_fields", {}).update(
-                self._accumulated_provider_specific_fields
+            response_hidden_params: Final = get_or_create_hidden_params(response)
+            provider_specific_fields: Final = cast(  # cast-ok: provider fields are stored as a mutable mapping
+                dict[str, object], response_hidden_params.setdefault("provider_specific_fields", {})
             )
+            provider_specific_fields.update(self._accumulated_provider_specific_fields)
         return response
 
     @staticmethod
@@ -760,7 +761,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         annotations: Final = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
         response_annotations: Final = (
-            LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                 annotations=annotations
             )
         )
@@ -787,7 +788,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)
 
         response_annotations: Final = (
-            LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                 annotations=annotations
             )
         )
@@ -1164,7 +1165,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self.sent_annotation_events = True
                 # Store annotation events to emit them one by one
                 if not hasattr(self, "_pending_annotation_events"):
-                    response_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+                    response_annotations = LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                         annotations=annotations
                     )
                     self._pending_annotation_events = []
