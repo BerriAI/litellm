@@ -1084,11 +1084,11 @@ class InteractionsAPIResponse(BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
 
@@ -1130,11 +1130,11 @@ class InteractionsAPIStreamingResponse(BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
 
@@ -1147,11 +1147,11 @@ class DeleteInteractionResult(BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
 
@@ -1164,11 +1164,11 @@ class CancelInteractionResult(BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
 

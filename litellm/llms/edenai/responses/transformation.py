@@ -33,16 +33,16 @@ class EdenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, object],  # mutable-ok: inherited contract
+        headers: dict[str, object],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
+    ) -> dict[str, object]:
         return authorized_headers(headers, litellm_params.api_key if litellm_params else None, model)
 
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        litellm_params: dict[str, object],
     ) -> str:
         return super().get_complete_url(api_base=resolve_api_base(api_base), litellm_params=litellm_params)
 
@@ -62,7 +62,7 @@ class EdenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return EdenAIException(message=error_message, status_code=status_code, headers=headers)
 

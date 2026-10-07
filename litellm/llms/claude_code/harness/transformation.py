@@ -164,7 +164,7 @@ def _message_blocks(event: Mapping[str, object]) -> Sequence[object]:
     message: Final = event.get("message")
     content: Final = message.get("content") if isinstance(message, Mapping) else None
     if isinstance(content, str):
-        return ({"type": "text", "text": content},)  # mutable-ok: JSON content block, like the stream's
+        return ({"type": "text", "text": content},)
     return content if isinstance(content, list) else ()
 
 
@@ -182,8 +182,7 @@ def _assistant_block_events(block: Mapping[str, Any], state: ClaudeCodeStreamSta
                 id=str(block.get("id", "")),
                 name=normalize_tool_name(native, NATIVE_TO_NORMALIZED),
                 native_name=native,
-                input=block.get("input")
-                or {},  # mutable-ok: ToolCall.input is a dict field; empty default for a missing input
+                input=block.get("input") or {},
                 builtin=not native.startswith("mcp__"),
             ),
         )
@@ -236,7 +235,7 @@ def _record_result(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> Se
     state.is_error = bool(event.get("is_error", False))
     result = event.get("result")
     state.result_text = result if isinstance(result, str) else None
-    state.errors = [str(e) for e in event.get("errors") or ()]  # mutable-ok: mirrors the JSON errors array
+    state.errors = [str(e) for e in event.get("errors") or ()]
     state.structured_output = event.get("structured_output")
     if event.get("session_id"):
         state.session_id = str(event["session_id"])
@@ -318,7 +317,7 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
             }
         )
         return HarnessSessionSetup(
-            persisted_dirs=[("projects", "claude_code/projects")],  # mutable-ok: tests compare to a list
+            persisted_dirs=[("projects", "claude_code/projects")],
             skills_dir="skills",
             env=env,
         )
@@ -335,7 +334,7 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
         schema = ctx.output.model_json_schema() if ctx.output is not None else None
         system_prompt: Final = build_system_prompt(ctx.instructions, schema)
         disallowed: Final = native_tool_names(ctx.disable_tools, NORMALIZED_TO_NATIVE)
-        config: Final = dict(options.config)  # mutable-ok: json.dumps needs a plain dict
+        config: Final = dict(options.config)
         settings: Final = json.dumps(config) if config else None
         argv: Final = (
             CLAUDE_BINARY,

@@ -390,9 +390,7 @@ class CatalogSnapshots:
             closed.set()
             self._staged_routing.reset(routing_token)
 
-    async def _stage_servers(
-        self, rows: Sequence[BaseModel], *, reuse_unchanged: bool
-    ) -> dict[str, MCPServer]:  # mutable-ok: assign_unique_short_prefix requires a dict registry
+    async def _stage_servers(self, rows: Sequence[BaseModel], *, reuse_unchanged: bool) -> dict[str, MCPServer]:
         from litellm.proxy._experimental.mcp_server.db import LiteLLM_MCPServerTable
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             carry_forward_resolved_oauth_endpoints,

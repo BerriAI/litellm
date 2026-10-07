@@ -73,18 +73,18 @@ _APPROVAL_DECISIONS: Final = ("approve", "reject")
 
 def chat_model_kwargs(
     ctx: SessionContext,
-) -> dict[str, Any]:  # mutable-ok: ChatLiteLLM constructor kwargs, splatted as **kwargs
+) -> dict[str, Any]:
     """ChatLiteLLM constructor kwargs for gateway or SDK mode."""
     if not ctx.model:
         raise ValueError("Harness.DEEPAGENTS needs model=")
     if ctx.gateway is not None:
-        return {  # mutable-ok: ChatLiteLLM constructor kwargs, splatted as **kwargs
+        return {
             "model": f"litellm_proxy/{ctx.model}",
             "api_base": ctx.gateway.api_base,
             "api_key": ctx.gateway.api_key,
             "extra_headers": gateway_headers(ctx),
         }
-    return {"model": ctx.model, "api_key": ctx.api_key, "api_base": ctx.api_base}  # mutable-ok: ChatLiteLLM kwargs
+    return {"model": ctx.model, "api_key": ctx.api_key, "api_base": ctx.api_base}
 
 
 def native_tool_name(name: str) -> str:
@@ -105,16 +105,11 @@ def blocked_tools(permissions: str, disable_tools: Sequence[str]) -> frozenset[s
     return disabled
 
 
-def interrupt_config(
-    permissions: str, blocked: frozenset[str]
-) -> dict[str, Any] | None:  # mutable-ok: deepagents create_deep_agent(interrupt_on=) takes a dict
+def interrupt_config(permissions: str, blocked: frozenset[str]) -> dict[str, Any] | None:
     """interrupt_on for permissions='ask': approve/reject every mutating built-in."""
     if permissions != "ask":
         return None
-    return {  # mutable-ok: deepagents interrupt_on config (dict of InterruptOnConfig with list allowed_decisions)
-        name: {"allowed_decisions": list(_APPROVAL_DECISIONS)}  # mutable-ok: deepagents InterruptOnConfig shape
-        for name in sorted(APPROVAL_TOOLS - blocked)
-    }
+    return {name: {"allowed_decisions": list(_APPROVAL_DECISIONS)} for name in sorted(APPROVAL_TOOLS - blocked)}
 
 
 def recursion_limit(ctx: SessionContext) -> int:
@@ -162,12 +157,12 @@ def stream_events(
 ) -> list[Event]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     """Text / Reasoning deltas for one streamed message chunk."""
     if getattr(message, "type", None) not in ("AIMessageChunk", "ai"):
-        return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+        return []
     reasoning = reasoning_text(message)
     text = content_text(getattr(message, "content", ""))
     reasoning_events: tuple[Event, ...] = (Reasoning(delta=reasoning),) if reasoning else ()
     text_events: tuple[Event, ...] = (Text(delta=text),) if text else ()
-    return [  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+    return [
         *reasoning_events,
         *text_events,
     ]
@@ -180,7 +175,7 @@ def tool_call_event(call: Mapping[str, object]) -> ToolCall:
         id=str(call.get("id") or ""),
         name=normalized_tool_name(native),
         native_name=native,
-        input=dict(args) if isinstance(args, Mapping) else {"args": args},  # mutable-ok: ToolCall.input is a dict
+        input=dict(args) if isinstance(args, Mapping) else {"args": args},
         builtin=native in BUILTIN_TOOLS,
     )
 
@@ -199,8 +194,8 @@ def update_events(
 ) -> list[Event]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     """ToolCall / ToolResult events from one `updates` stream chunk (node -> state delta)."""
     if not isinstance(update, Mapping):
-        return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
-    return list(  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+        return []
+    return list(
         itertools.chain.from_iterable(_message_events(message, skip_tools) for message in _node_messages(update))
     )
 
@@ -225,10 +220,10 @@ def interrupts_in(
     update: object,
 ) -> list[Any]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     if not isinstance(update, Mapping):
-        return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+        return []
     found = update.get("__interrupt__")
     items = tuple(found) if isinstance(found, (list, tuple)) else ()
-    return list(items)  # mutable-ok: list return; callers/tests compare to lists
+    return list(items)
 
 
 def final_ai_text(messages: Sequence[object]) -> str:
@@ -254,16 +249,16 @@ def approval_requests(
 ) -> list[Mapping[str, Any]]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     """action_requests of a HumanInTheLoopMiddleware interrupt payload."""
     if not isinstance(interrupt_value, Mapping):
-        return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+        return []
     requests = interrupt_value.get("action_requests")
     kept = tuple(r for r in requests if isinstance(r, Mapping)) if isinstance(requests, list) else ()
-    return list(kept)  # mutable-ok: list return; callers/tests compare to lists
+    return list(kept)
 
 
-def decision(allowed: bool, reason: str) -> dict[str, Any]:  # mutable-ok: LangGraph resume payload (HITL decision dict)
+def decision(allowed: bool, reason: str) -> dict[str, Any]:
     if allowed:
-        return {"type": "approve"}  # mutable-ok: LangGraph resume payload (HITL decision dict)
-    return {  # mutable-ok: LangGraph HITL decision
+        return {"type": "approve"}
+    return {
         "type": "reject",
         "message": reason or "The user denied this tool call.",
     }

@@ -124,7 +124,7 @@ class DockerSandbox:
         env_args = tuple(
             arg for key, value in self.env.items() for arg in ("-e", f"{key}={value}")
         )  # comprehension-ok: flattens (flag, value) pairs into argv
-        return [  # mutable-ok: argv is returned as a list, the shape callers and tests compare against
+        return [
             "run",
             "-d",
             "--rm",
@@ -150,7 +150,7 @@ class DockerSandbox:
         env_args = tuple(
             arg for key, value in (env.items() if env else ()) for arg in ("-e", f"{key}={value}")
         )  # comprehension-ok: flattens (flag, value) pairs into argv
-        return [  # mutable-ok: argv is returned as a list, the shape callers and tests compare against
+        return [
             "exec",
             "-i",
             "-w",
@@ -257,9 +257,7 @@ class DockerSandbox:
         self._processes.clear()
         if self.container_id is not None:
             container_id, self.container_id = self.container_id, None
-            await self._docker(
-                ["rm", "-f", container_id]  # mutable-ok: argv list, the shape _spawn records and tests assert on
-            )
+            await self._docker(["rm", "-f", container_id])
 
     async def __aenter__(self) -> DockerSandbox:
         await self.start()

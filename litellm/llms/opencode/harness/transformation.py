@@ -228,7 +228,7 @@ def permission_rules(permissions: PermissionMode, disable_tools: Sequence[str]) 
     # Denies go last (later keys win in opencode), so drop them from the mode rules first.
     kept: Final = ((key, value) for key, value in PERMISSION_RULES[permissions].items() if key not in denied)
     rules: Final = itertools.chain(kept, ((native, "deny") for native in denied))
-    return dict(rules)  # mutable-ok: opencode config JSON
+    return dict(rules)
 
 
 def build_opencode_config(
@@ -247,31 +247,31 @@ def build_opencode_config(
     validate_user_config(user)
     qualified = f"{OPENCODE_PROVIDER_ID}/{model}"
     extra_instructions: Final = (instructions_path,) if instructions_path else ()
-    instructions: Final = [*(user.get("instructions") or ()), *extra_instructions]  # mutable-ok: opencode config JSON
+    instructions: Final = [*(user.get("instructions") or ()), *extra_instructions]
     user_skills = _as_dict(user.get("skills"))
     extra_skills: Final = (skills_path,) if skills_path else ()
-    skill_paths: Final = [*(user_skills.get("paths") or ()), *extra_skills]  # mutable-ok: opencode config JSON
-    options: Final = {"baseURL": base_url, "apiKey": "{file:" + token_path + "}"}  # mutable-ok: opencode config JSON
-    models: Final[dict[str, Mapping[str, object]]] = {model: {}}  # mutable-ok: opencode config JSON
-    provider: Final = {  # mutable-ok: opencode config JSON
+    skill_paths: Final = [*(user_skills.get("paths") or ()), *extra_skills]
+    options: Final = {"baseURL": base_url, "apiKey": "{file:" + token_path + "}"}
+    models: Final[dict[str, Mapping[str, object]]] = {model: {}}
+    provider: Final = {
         "npm": OPENCODE_PROVIDER_NPM,
         "name": "LiteLLM",
         "options": options,
         "models": models,
     }
-    managed: Final = {  # mutable-ok: opencode config JSON
-        "provider": {OPENCODE_PROVIDER_ID: provider},  # mutable-ok: opencode config JSON
-        "enabled_providers": [OPENCODE_PROVIDER_ID],  # mutable-ok: opencode config JSON
+    managed: Final = {
+        "provider": {OPENCODE_PROVIDER_ID: provider},
+        "enabled_providers": [OPENCODE_PROVIDER_ID],
         "model": qualified,
         "small_model": qualified,
         "permission": permission_rules(permissions, disable_tools),
         "autoupdate": False,
         "share": "disabled",
     }
-    skills: Final = {**user_skills, "paths": skill_paths}  # mutable-ok: opencode config JSON
+    skills: Final = {**user_skills, "paths": skill_paths}
     optional: Final = (("instructions", instructions), ("skills", skills if skill_paths else None))
     present: Final = ((key, value) for key, value in optional if value)
-    return {**user, **managed, **dict(present)}  # mutable-ok: opencode config JSON
+    return {**user, **managed, **dict(present)}
 
 
 def build_instructions(ctx: SessionContext) -> str | None:

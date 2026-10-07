@@ -79,7 +79,7 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:  # mutable-ok: base class signature returns dict
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         return {
             **optional_params,
@@ -90,7 +90,7 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | Headers,  # mutable-ok: base class signature takes dict
+        headers: dict[str, object] | Headers,
     ) -> BaseLLMException:
         return XAIAudioTranscriptionError(message=error_message, status_code=status_code, headers=headers)
 
@@ -189,14 +189,14 @@ class XAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, object],  # mutable-ok: base class signature takes and returns dict
+        headers: dict[str, object],
         model: str,
         messages: Sequence[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:  # mutable-ok: base class signature returns dict
+    ) -> dict[str, object]:
         resolved_key: Final = XAIModelInfo.get_api_key(api_key)
         if resolved_key is None:
             raise ValueError("xAI API key is required. Set XAI_API_KEY environment variable.")

@@ -83,7 +83,7 @@ def _tool_input(item: Mapping[str, Any]) -> tuple[str, str, Mapping[str, object]
     if item_type == "command_execution":
         return "bash", "command_execution", MappingProxyType({"command": item.get("command", "")}), True
     if item_type == "file_change":
-        changes: Final = list(item.get("changes") or ())  # mutable-ok: JSON array, as codex reports it
+        changes: Final = list(item.get("changes") or ())
         return "edit", "apply_patch", MappingProxyType({"changes": changes}), True
     if item_type == "web_search":
         return "web_search", "web_search", MappingProxyType({"query": item.get("query", "")}), True
@@ -188,7 +188,7 @@ def _config_override(key: object, value: object) -> str:
 def config_overrides(config: Mapping[str, object]) -> Sequence[str]:
     """`-c` override strings for CodexOptions.config, rejecting managed keys."""
     overrides: Final = (_config_override(key, value) for key, value in config.items())
-    return list(overrides)  # mutable-ok: public helper; tests compare to a list
+    return list(overrides)
 
 
 def _flag_pairs(flag: str, values: Sequence[str]) -> tuple[str, ...]:
@@ -232,7 +232,7 @@ class CodexHarnessConfig(BaseCLIHarnessConfig):
         )
         return HarnessSessionSetup(
             files=files,
-            persisted_dirs=[("sessions", "codex/sessions")],  # mutable-ok: tests compare to a list
+            persisted_dirs=[("sessions", "codex/sessions")],
             skills_dir="skills",
             env=MappingProxyType({**options.env, CODEX_TOKEN_ENV: ctx.endpoint.token, "CODEX_HOME": private_dir}),
         )

@@ -148,7 +148,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         provider_params: Final[Mapping[str, object]] = MappingProxyType(
             {key: value for key, value in image_edit_optional_request_params.items() if key != "mask"}
         )
-        request_body: Final[dict[str, object]] = {  # mutable-ok: base class contract returns a dict
+        request_body: Final[dict[str, object]] = {
             "prompt": prompt,
             "image_urls": tuple(to_data_url(img) for img in images),
             **mask_field,

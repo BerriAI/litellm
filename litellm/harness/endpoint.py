@@ -303,7 +303,7 @@ def gateway_headers(
         for name, value in incoming.items()
         if name.lower() not in DROPPED_REQUEST_HEADERS and not name.lower().startswith("x-litellm-")
     )
-    metadata_json = json.dumps(dict(metadata), default=str) if metadata else None  # mutable-ok: for json.dumps
+    metadata_json = json.dumps(dict(metadata), default=str) if metadata else None
     metadata_header = (("x-litellm-spend-logs-metadata", metadata_json),) if metadata_json is not None else ()
     added = (
         ("authorization", f"Bearer {gateway.api_key}"),
@@ -333,15 +333,15 @@ def error_status(exc: BaseException) -> int:
     return 500
 
 
-def error_body(exc: BaseException, message: str) -> dict[str, dict[str, str]]:  # mutable-ok: JSONResponse body
-    return {"error": {"type": type(exc).__name__, "message": message}}  # mutable-ok: JSONResponse body
+def error_body(exc: BaseException, message: str) -> dict[str, dict[str, str]]:
+    return {"error": {"type": type(exc).__name__, "message": message}}
 
 
 def to_jsonable(obj: object) -> object:
     if hasattr(obj, "model_dump"):
         return obj.model_dump(mode="json", exclude_none=True)
     if isinstance(obj, Mapping):
-        return dict(obj)  # mutable-ok: plain-dict copy so json.dumps can serialize any Mapping
+        return dict(obj)
     return obj
 
 
@@ -457,9 +457,7 @@ class ModelEndpoint:
             return self._injected_client
         handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.AgentHarness,
-            params={  # mutable-ok: get_async_httpx_client takes a dict params argument
-                "timeout": HARNESS_ENDPOINT_REQUEST_TIMEOUT_SECONDS
-            },
+            params={"timeout": HARNESS_ENDPOINT_REQUEST_TIMEOUT_SECONDS},
         )
         return handler.client
 
@@ -494,17 +492,12 @@ class ModelEndpoint:
             Route(
                 f"{prefix}/{route}",
                 self._handle,
-                methods=["POST"],  # mutable-ok: Starlette Route takes a methods list
+                methods=["POST"],
             )
             for prefix, route in itertools.product(ROUTE_PREFIXES, POST_ROUTES)
         )
-        get_routes = tuple(
-            Route(f"{prefix}/models", self._models, methods=["GET"])  # mutable-ok: Starlette Route takes a methods list
-            for prefix in ROUTE_PREFIXES
-        )
-        return deps.applications.Starlette(
-            routes=[*post_routes, *get_routes]  # mutable-ok: Starlette takes a routes list
-        )
+        get_routes = tuple(Route(f"{prefix}/models", self._models, methods=["GET"]) for prefix in ROUTE_PREFIXES)
+        return deps.applications.Starlette(routes=[*post_routes, *get_routes])
 
     @property
     def _responses(self) -> _ResponsesModule:
@@ -521,7 +514,7 @@ class ModelEndpoint:
 
     def _unauthorized(self) -> Response:
         return self._json(
-            {"error": {"type": "authentication_error", "message": "invalid token"}},  # mutable-ok: JSONResponse body
+            {"error": {"type": "authentication_error", "message": "invalid token"}},
             401,
         )
 
@@ -536,9 +529,9 @@ class ModelEndpoint:
     async def _models(self, request: Request) -> Response:
         if not self._authorized(request):
             return self._unauthorized()
-        entry = {"id": self.model, "object": "model", "created": 0, "owned_by": "litellm"}  # mutable-ok: JSON body
+        entry = {"id": self.model, "object": "model", "created": 0, "owned_by": "litellm"}
         data = (entry,) if self.model else ()
-        return self._json({"object": "list", "data": data})  # mutable-ok: JSON response body for Starlette JSONResponse
+        return self._json({"object": "list", "data": data})
 
     async def _handle(self, request: Request) -> Response:
         if not self._authorized(request):
@@ -574,7 +567,7 @@ class ModelEndpoint:
         if self._client is None or self.gateway is None:
             raise HarnessError("gateway client is not started")
         if self.model:
-            body = {**body, "model": self.model}  # mutable-ok: JSON request body re-sent upstream via httpx json=
+            body = {**body, "model": self.model}
         upstream_request = self._client.build_request(
             "POST",
             f"{self.gateway.api_base}/v1/{route}",
@@ -626,10 +619,8 @@ class ModelEndpoint:
                 tokens = (0, 0)
         self._record(model, tokens[0], tokens[1], header_cost(upstream.headers))
 
-    def _sdk_kwargs(
-        self, body: Mapping[str, object]
-    ) -> dict[str, object]:  # mutable-ok: SDK call kwargs, mutated by _invoke_sdk then splatted
-        kwargs: dict[str, object] = {**body}  # mutable-ok: SDK call kwargs built from the JSON body, then overridden
+    def _sdk_kwargs(self, body: Mapping[str, object]) -> dict[str, object]:
+        kwargs: dict[str, object] = {**body}
         if self.model:
             kwargs["model"] = self.model
         if self.api_key:
@@ -641,14 +632,14 @@ class ModelEndpoint:
     async def _invoke_sdk(
         self,
         route: str,
-        kwargs: dict[str, Any],  # mutable-ok: injects stream_options into the SDK kwargs
+        kwargs: dict[str, Any],
     ) -> object:
         if route == ROUTE_MESSAGES:
             return await litellm.anthropic.messages.acreate(**kwargs)
         if route == ROUTE_CHAT:
             if kwargs.get("stream"):
-                stream_options = kwargs.get("stream_options") or {}  # mutable-ok: empty default for a JSON field
-                kwargs["stream_options"] = {  # mutable-ok: JSON field sent to litellm.acompletion
+                stream_options = kwargs.get("stream_options") or {}
+                kwargs["stream_options"] = {
                     "include_usage": True,
                     **stream_options,
                 }

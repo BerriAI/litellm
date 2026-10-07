@@ -88,7 +88,7 @@ def signoz_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | None
 
 def signoz_dynamic_headers(
     params: StandardCallbackDynamicParams,
-) -> dict[str, str]:  # mutable-ok: DYNAMIC_HEADERS_BY_CALLBACK returns a dict
+) -> dict[str, str]:
     key: Final = params.get("signoz_ingestion_key")
     if _tenant_endpoint_is_unusable(params) or not key:
         return {}

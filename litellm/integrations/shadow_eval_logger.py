@@ -847,7 +847,7 @@ class ShadowEvalLogger(CustomLogger):
         self._inflight_shadow_tasks: int = 0
         # Starts per job since the last cache fill, never decremented within a
         # generation; the refill absorbs written rows and resets.
-        self._job_starts: dict[str, int] = {}  # mutable-ok: per-generation counter
+        self._job_starts: dict[str, int] = {}
 
     async def _active_jobs(self) -> Mapping[tuple[str, str], tuple[ActiveShadowEvalJob, ...]]:
         """Active jobs by (target_type, target_id), cache-first. A target holds at most
@@ -1278,8 +1278,8 @@ class ShadowEvalLogger(CustomLogger):
         router: Final = self._router_provider()
         if router is None:
             return _CallFailure("no router configured on this pod")
-        shadow_metadata: Final[dict[str, object]] = (  # mutable-ok: router writes its routing decision back
-            sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_ROUTER_CALL_ORIGIN)
+        shadow_metadata: Final[dict[str, object]] = sanitized_forwardable_call_metadata(
+            parent_metadata, SHADOW_EVAL_ROUTER_CALL_ORIGIN
         )
         try:
             response: Final = await router.acompletion(

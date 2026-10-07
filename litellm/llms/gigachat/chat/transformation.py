@@ -111,14 +111,14 @@ class GigaChatConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: mutates in place per GigaChat OAuth setup
+        headers: dict,
         model: str,
         messages: Sequence[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: base class contract returns dict for httpx
+    ) -> dict:
         """
         Set up headers with OAuth token.
         """
@@ -153,10 +153,10 @@ class GigaChatConfig(BaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,  # mutable-ok: mutated in place per GigaChat mapping
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: base class contract returns dict
+    ) -> dict:
         """Map OpenAI parameters to GigaChat parameters."""
         for param, value in non_default_params.items():
             if param == "stream":
@@ -328,7 +328,7 @@ class GigaChatConfig(BaseConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict:  # mutable-ok: request payload sent to httpx
+    ) -> dict:
         """Transform OpenAI request to GigaChat format."""
         giga_messages: Final = self._transform_messages(messages)
 

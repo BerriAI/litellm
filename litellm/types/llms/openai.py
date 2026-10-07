@@ -122,11 +122,11 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     _hidden_params: dict
 
     @property
-    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, builtins.object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:
         self._hidden_params = hidden_params
 
     def __init__(self, response: httpx.Response) -> None:
@@ -416,11 +416,11 @@ class OpenAIFileObject(LiteLLMBaseModel):
     _hidden_params: dict = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
 
     @property
-    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, builtins.object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:
         self._hidden_params = hidden_params
 
     @model_serializer(mode="wrap")
@@ -1440,11 +1440,11 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, builtins.object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:
         self._hidden_params = hidden_params
 
     @field_validator("reasoning", mode="before")
@@ -1623,11 +1623,11 @@ class ResponseCompletedEvent(BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
 
@@ -2431,11 +2431,11 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:
         self._hidden_params = hidden_params
 
 
@@ -2601,11 +2601,11 @@ class OpenAIVideoObject(LiteLLMBaseModel):
     _hidden_params: dict[str, _JsonValue] = PrivateAttr(default={})
 
     @property
-    def hidden_params(self) -> dict[str, _JsonValue]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, _JsonValue]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:
         self._hidden_params = hidden_params
 
     def __contains__(self, key) -> bool:

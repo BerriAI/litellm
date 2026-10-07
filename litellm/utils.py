@@ -3266,7 +3266,7 @@ def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
     return None if is_generalized_model_info(info) else info
 
 
-_runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
+_runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}
 
 
 class _LiveDeploymentReplay:

@@ -290,14 +290,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     async def avalidate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        headers: dict,
         model: str,
         messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
-        optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
-        litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+    ) -> tuple[dict, str | None]:
         if type(self).validate_anthropic_messages_environment is not (
             AnthropicMessagesConfig.validate_anthropic_messages_environment
         ):
@@ -342,7 +342,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return auth_header
 
     @staticmethod
-    def _apply_env_auth_header(headers: dict, auth_header: Mapping[str, str] | None) -> None:  # mutable-ok: out-param
+    def _apply_env_auth_header(headers: dict, auth_header: Mapping[str, str] | None) -> None:
         if auth_header is None:
             return
         merged_beta: Final = merge_anthropic_beta_headers(
@@ -362,10 +362,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     def _finalize_messages_headers(
         self,
-        headers: dict,  # mutable-ok: out-param
-        optional_params: dict,  # mutable-ok: out-param
+        headers: dict,
+        optional_params: dict,
         messages: list[object],  # mutable-ok: mirrors the validate_anthropic_messages_environment contract
-    ) -> dict:  # mutable-ok: out-param
+    ) -> dict:
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:

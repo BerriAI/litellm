@@ -137,7 +137,7 @@ class _StreamRewriteObserver(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail.apply_guardrail
+        request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -175,7 +175,7 @@ class _ScannedTextRecorder(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail.apply_guardrail
+        request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -215,7 +215,7 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: matches CustomGuardrail.apply_guardrail
+        request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -268,9 +268,9 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
 def _prepare_hook_input(
     step: PipelineStep,
     callback: CustomGuardrail,
-    data: dict,  # mutable-ok: same request-payload shape the hooks mutate
-    raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
-) -> tuple[dict, bool]:  # mutable-ok: returns that same request-payload dict
+    data: dict,
+    raw_request_snapshot: dict | None,
+) -> tuple[dict, bool]:
     """Inject the step's guardrail name into metadata so should_run_guardrail() allows it,
     and pick the payload the step scans: a scan_raw_request step evaluates the pristine
     pre-pipeline snapshot instead of `data` (which earlier pass_data steps in this same
@@ -281,7 +281,7 @@ def _prepare_hook_input(
     data["metadata"]["guardrails"] = [step.guardrail]
 
     scans_raw_request: Final = callback.scan_raw_request
-    hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
+    hook_input: Final[dict] = (
         independent_snapshot(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
     )
     if hook_input is not data:
@@ -315,7 +315,7 @@ class PipelineExecutor:
         user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
         policy_name: str,
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict | None = None,
         streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
     ) -> PipelineExecutionResult:
@@ -431,7 +431,7 @@ class PipelineExecutor:
         callback: CustomGuardrail,
         endpoint_translation: "BaseTranslation",
         streaming_chunks: list[object],  # mutable-ok: shared buffered-stream chunks the translation rewrites in place
-        hook_input: dict[str, object],  # mutable-ok: same request-payload shape as data
+        hook_input: dict[str, object],
         user_api_key_dict: "UserAPIKeyAuth",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
     ) -> None:
@@ -490,7 +490,7 @@ class PipelineExecutor:
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict | None = None,
         streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
     ) -> tuple[
@@ -627,8 +627,8 @@ class PipelineExecutor:
 
 def _allow_result(
     step_results: Sequence[PipelineStepResult],
-    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+    working_data: dict,
+    request_data: dict,
 ) -> PipelineExecutionResult:
     """Build the terminal-allow result, propagating pipeline modifications without the per-step guardrail override."""
     restored: Final = _restore_request_guardrails(working_data, request_data)
@@ -640,9 +640,9 @@ def _allow_result(
 
 
 def _restore_request_guardrails(
-    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
-) -> dict:  # mutable-ok: merged back into the request dict, which downstream code mutates
+    working_data: dict,
+    request_data: dict,
+) -> dict:
     """
     Restore the request's own metadata["guardrails"] activation list.
 
@@ -674,7 +674,7 @@ def _recorded_guardrail_information(source: Mapping[str, object]) -> list[Standa
 
 
 def _append_guardrail_information(
-    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: dict[str, object],
     entries: Sequence[StandardLoggingGuardrailInformation],
 ) -> None:
     if not entries:
@@ -689,7 +689,7 @@ def _append_guardrail_information(
 
 def _carry_working_guardrail_information(
     working_data: Mapping[str, object],
-    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: dict[str, object],
 ) -> None:
     recorded: Final = _recorded_guardrail_information(working_data)
     existing: Final = _recorded_guardrail_information(request_data)

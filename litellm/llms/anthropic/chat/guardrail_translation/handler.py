@@ -719,7 +719,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     @staticmethod
     def _openai_system_message_to_anthropic(
         message: Mapping[str, object],
-    ) -> dict[str, object] | None:  # mutable-ok: API message payload
+    ) -> dict[str, object] | None:
         """Convert an OpenAI system message to the client's Anthropic-shaped entry."""
         content: Final = message.get("content")
         if isinstance(content, str):
@@ -733,7 +733,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             text = block.get("text")
             if not isinstance(text, str) or not text:
                 continue
-            anthropic_block: dict[str, object] = {  # mutable-ok: API message payload
+            anthropic_block: dict[str, object] = {
                 "type": "text",
                 "text": text,
             }
@@ -745,7 +745,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _fold_leading_systems_into_top_level(
-        data: dict[str, object],  # mutable-ok: API message payload
+        data: dict[str, object],
         leading_systems: Sequence[object],
         include_existing_system: bool,
     ) -> None:
@@ -826,7 +826,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _write_back_structured_messages(
-        data: dict,  # mutable-ok: API message payload
+        data: dict,
         structured_messages: list,  # mutable-ok: API message payload
         hoisted_system_message: object = None,
         preserve_system_messages: bool = False,
@@ -1070,7 +1070,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_input(
         self,
-        data: dict[str, object],  # mutable-ok: API message payload
+        data: dict[str, object],
         responses: Sequence[str],
         scanned: tuple[ScannedText, ...],
     ) -> None:

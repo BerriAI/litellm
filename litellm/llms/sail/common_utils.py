@@ -44,7 +44,7 @@ def _entry(key: str, value: object) -> Mapping[str, object]:
     return MappingProxyType({key: value})
 
 
-def json_body(mapping: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: HTTP bodies are plain dicts
+def json_body(mapping: Mapping[str, object]) -> dict[str, object]:
     return {key: _json_value(value) for key, value in mapping.items()}
 
 

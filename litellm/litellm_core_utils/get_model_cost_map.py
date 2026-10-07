@@ -213,7 +213,7 @@ def mark_litellm_import_complete() -> None:
 
 @dataclass(frozen=True, slots=True)
 class ModelCostMapReloaded:
-    model_cost_map: dict  # mutable-ok: adopted as litellm.model_cost, whose consumer contract is a plain mutable dict
+    model_cost_map: dict
     revision: str | None = None
     etag: str | None = None
 
@@ -557,7 +557,7 @@ def _finalize_loaded_model_cost_map(loaded: ModelCostMapReloaded) -> ModelCostMa
 
 
 def adopt_model_cost_map(
-    new_model_cost_map: dict,  # mutable-ok: public API preserves the mutable cost-map contract
+    new_model_cost_map: dict,
 ) -> int:
     import litellm
     from litellm import utils

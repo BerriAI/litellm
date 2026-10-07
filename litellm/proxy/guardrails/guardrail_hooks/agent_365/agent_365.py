@@ -193,7 +193,7 @@ class Agent365Guardrail(CustomGuardrail):
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
-        self._obo_token_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()  # mutable-ok: lock-guarded LRU
+        self._obo_token_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()
         self._obo_cache_lock = threading.Lock()
         verbose_proxy_logger.info("Initialized Microsoft Agent 365 guardrail: %s", guardrail_name)
 
@@ -210,9 +210,9 @@ class Agent365Guardrail(CustomGuardrail):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict,  # mutable-ok: hook contract; guardrail logging appends into the request metadata in place
+        data: dict,
         call_type: str,
-    ) -> Exception | str | dict | None:  # mutable-ok: CustomGuardrail.async_pre_call_hook contract
+    ) -> Exception | str | dict | None:
         if call_type not in _MCP_CALL_TYPES:
             return data
         if "mcp_tool_name" not in data:
@@ -294,12 +294,12 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_evaluate_error(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict,
         tool_name: str,
         assertion: str,
         response: httpx.Response,
         latency_ms: float,
-    ) -> dict | None:  # mutable-ok: returns the request data dict per hook contract on fail_open
+    ) -> dict | None:
         if response.status_code in (408, 429):
             self._handle_throttled(
                 data=data,
@@ -337,11 +337,11 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _enforce_verdict(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict,
         tool_name: str,
         response: httpx.Response,
         latency_ms: float,
-    ) -> dict:  # mutable-ok: returns the request data dict per hook contract
+    ) -> dict:
         try:
             parsed_verdict: Final = response.json()
         except ValueError:
@@ -404,7 +404,7 @@ class Agent365Guardrail(CustomGuardrail):
         self,
         data: Mapping[str, object],
         user_api_key_dict: "UserAPIKeyAuth",
-    ) -> dict[str, object]:  # mutable-ok: JSON body for AsyncHTTPHandler.post, which requires dict
+    ) -> dict[str, object]:
         tool_name: Final = str(data.get("mcp_tool_name") or "")
         arguments: Final = data.get("mcp_arguments")
         server_name: Final = str(data.get("mcp_server_name") or "litellm")
@@ -415,7 +415,7 @@ class Agent365Guardrail(CustomGuardrail):
             description=description if isinstance(description, str) and description else None,
             input_schema=_parse_tool_input_schema(data.get("mcp_input_schema")),
         )
-        payload: Final[dict[str, object]] = {  # mutable-ok: JSON body with optional fields added below
+        payload: Final[dict[str, object]] = {
             "tool": tool_reference.model_dump(by_alias=True, exclude_none=True),
             "serverName": server_name,
             "conversationId": self._resolve_conversation_id(data),
@@ -516,9 +516,9 @@ class Agent365Guardrail(CustomGuardrail):
     async def _post_allowing_error_status(
         self,
         url: str,
-        headers: dict[str, str],  # mutable-ok: AsyncHTTPHandler.post requires dict
-        data: dict[str, str] | None = None,  # mutable-ok: AsyncHTTPHandler.post requires dict
-        json: dict[str, object] | None = None,  # mutable-ok: AsyncHTTPHandler.post requires dict
+        headers: dict[str, str],
+        data: dict[str, str] | None = None,
+        json: dict[str, object] | None = None,
     ) -> httpx.Response:
         try:
             return await self.async_handler.post(
@@ -533,7 +533,7 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_caller_fault(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict,
         tool_name: str,
         status_code: int,
         reason: str,
@@ -556,7 +556,7 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_throttled(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict,
         tool_name: str,
         reason: str,
         latency_ms: float | None,
@@ -585,13 +585,13 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _handle_unavailable(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict,
         tool_name: str,
         reason: str,
         defender_status: str | None = None,
         correlation_id: str | None = None,
         latency_ms: float | None = None,
-    ) -> dict:  # mutable-ok: returns the request data dict per hook contract
+    ) -> dict:
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.error(
                 "Agent 365 guardrail (%s): %s; unreachable_fallback='fail_open', allowing tool call '%s' unscanned",
@@ -628,7 +628,7 @@ class Agent365Guardrail(CustomGuardrail):
 
     def _record_verdict(
         self,
-        data: dict[str, object],  # mutable-ok: standard guardrail logging appends into the request metadata in place
+        data: dict[str, object],
         verdict: str,
         guardrail_status: "GuardrailStatus",
         defender_status: str | None,
@@ -636,7 +636,7 @@ class Agent365Guardrail(CustomGuardrail):
         latency_ms: float | None,
         reason: str | None = None,
     ) -> None:
-        payload: Final[dict[str, object]] = {"verdict": verdict}  # mutable-ok: optional fields added below
+        payload: Final[dict[str, object]] = {"verdict": verdict}
         if defender_status:
             payload["defender_status"] = defender_status
         if correlation_id:

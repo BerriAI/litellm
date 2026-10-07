@@ -59,6 +59,6 @@ class TogetherAIRerankConfig:
 
     def transform_response(
         self,
-        response: dict[str, object],  # mutable-ok: mirrors override contract
+        response: dict[str, object],
     ) -> RerankResponse:
         return self._transform_response(response)

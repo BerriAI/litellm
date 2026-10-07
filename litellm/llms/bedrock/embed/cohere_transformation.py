@@ -46,6 +46,6 @@ class BedrockCohereEmbeddingConfig:
         self,
         model: str,
         input: list[str],  # mutable-ok: mirrors override contract
-        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+        inference_params: dict[str, object],
     ) -> CohereEmbeddingRequest:
         return self._transform_request(model, input, inference_params)

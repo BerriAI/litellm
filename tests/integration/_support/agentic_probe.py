@@ -26,7 +26,7 @@ class AgenticProbe(CustomLogger):
         stream: bool,
         custom_llm_provider: str,
         kwargs: Mapping[str, object],
-    ) -> tuple[bool, dict[str, object]]:  # mutable-ok: the CustomLogger hook contract returns a dict
+    ) -> tuple[bool, dict[str, object]]:
         out: Final = os.environ.get(OUT_ENVIRONMENT)
         if out:
             line: Final[Mapping[str, JsonValue]] = {

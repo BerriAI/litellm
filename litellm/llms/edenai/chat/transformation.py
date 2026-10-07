@@ -46,7 +46,7 @@ def _stream_options_with_usage(request: Mapping[str, object]) -> Mapping[str, ob
 
 
 class EdenAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
-    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:  # mutable-ok: inherited contract
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:
         parsed: Final = super().chunk_parser(chunk)
         cost: Final = reported_cost(chunk)
         usage: Final[object] = getattr(parsed, "usage", None)
@@ -76,11 +76,11 @@ class EdenAIChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: inherited contract
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
-        headers: dict[str, object],  # mutable-ok: inherited contract
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
-        request: Final[dict[str, object]] = super().transform_request(  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
+        request: Final[dict[str, object]] = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
         if not request.get("stream"):
@@ -93,10 +93,10 @@ class EdenAIChatConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict[str, object],  # mutable-ok: inherited contract
+        request_data: dict[str, object],
         messages: list[AllMessageValues],  # mutable-ok: inherited contract
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -121,7 +121,7 @@ class EdenAIChatConfig(OpenAIGPTConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return EdenAIException(message=error_message, status_code=status_code, headers=headers)
 

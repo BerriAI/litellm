@@ -104,7 +104,7 @@ class NvidiaNimPassthroughConfig(BasePassthroughConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: base class contract returns dict for httpx
+    ) -> dict[str, str]:
         if api_key is None:
             return dict(headers)
         return {

@@ -26,7 +26,7 @@ _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _RAW_DECODE_ADAPTER: Final = TypeAdapter(tuple[object, int])
 
 
-def gateway_headers(ctx: SessionContext) -> dict[str, str]:  # mutable-ok: acompletion(extra_headers=) requires dict
+def gateway_headers(ctx: SessionContext) -> dict[str, str]:
     metadata_json: Final = json.dumps(dict(ctx.metadata), default=str) if ctx.metadata else None
     return {
         "x-litellm-tags": f"harness,{ctx.harness.value}",
@@ -42,7 +42,7 @@ def normalize_tool_name(native_name: str, mapping: Mapping[str, str]) -> str:
 def native_tool_names(normalized: Sequence[str], mapping: Mapping[str, Sequence[str]]) -> Sequence[str]:
     """Native names for normalized tool names, de-duplicated, order kept."""
     expanded: Final = itertools.chain.from_iterable(mapping.get(name, (name,)) for name in normalized)
-    return list(dict.fromkeys(expanded))  # mutable-ok: public helper whose callers/tests compare against list literals
+    return list(dict.fromkeys(expanded))
 
 
 def last_json_object(text: str) -> str | None:
@@ -80,22 +80,22 @@ def strict_json_schema(schema: JSONValue, depth: int = 0) -> JSONValue:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(f"output schema is nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels")
     if isinstance(schema, list):
-        return [strict_json_schema(entry, depth + 1) for entry in schema]  # mutable-ok: JSON document output
+        return [strict_json_schema(entry, depth + 1) for entry in schema]
     if not isinstance(schema, dict):
         return schema
     entries: Final = ((key, strict_json_schema(value, depth + 1)) for key, value in schema.items())
-    result = dict(entries)  # mutable-ok: JSON document; "default" is popped below
+    result = dict(entries)
     if "$ref" in result:
-        return {"$ref": result["$ref"]}  # mutable-ok: JSONValue output is a plain JSON document
+        return {"$ref": result["$ref"]}
     result.pop("default", None)
     properties = result.get("properties")
     if result.get("type") == "object" or isinstance(properties, dict):
-        props = properties if isinstance(properties, dict) else {}  # mutable-ok: JSONValue object member
+        props = properties if isinstance(properties, dict) else {}
         required: Final[list[JSONValue]] = list(props)  # mutable-ok: JSON array in the output schema
         strict: Final[Mapping[str, JSONValue]] = MappingProxyType(
             {"properties": props, "required": required, "additionalProperties": False}
         )
-        result = {**result, **strict}  # mutable-ok: JSON document output
+        result = {**result, **strict}
     return result
 
 

@@ -51,14 +51,14 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
 
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the legacy base override signature
+        headers: dict,
         model: str,
         messages: list[Any],  # mutable-ok: mirrors the legacy base override signature
-        optional_params: dict,  # mutable-ok: mirrors the legacy base override signature
-        litellm_params: dict,  # mutable-ok: mirrors the legacy base override signature
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the legacy base override signature
+    ) -> tuple[dict, str | None]:
         return super().validate_anthropic_messages_environment(
             headers=headers,
             model=model,

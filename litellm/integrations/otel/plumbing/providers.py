@@ -624,12 +624,12 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._closed = False  # guarded by ``_lock``: an unlocked read races the teardown it gates
         self._draining = False  # guarded by ``_lock``: shutdown is flushing, nothing is held any more
         self._build: Final = processor_factory if processor_factory is not None else _destination_processor
-        self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
-        self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
-        self._exporting: dict[int, int] = {}  # mutable-ok: per-processor in-flight export count
-        self._pending: OrderedDict[int, _PendingTree] = OrderedDict()  # mutable-ok: bounded, by trace id
-        self._open: OrderedDict[int, int] = OrderedDict()  # mutable-ok: bounded, spans in flight by trace id
-        self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
+        self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()
+        self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()
+        self._exporting: dict[int, int] = {}
+        self._pending: OrderedDict[int, _PendingTree] = OrderedDict()
+        self._open: OrderedDict[int, int] = OrderedDict()
+        self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
@@ -730,7 +730,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         tree: Final = self._pending.pop(trace_id, None)
         if tree is None:
             return ()
-        verdicts: dict[_VerdictKey, bool] = {}  # mutable-ok: one draw per destination of this tree
+        verdicts: dict[_VerdictKey, bool] = {}
         for _, destination in tree.held:
             key = _verdict_key(trace_id, destination)
             if key not in verdicts:

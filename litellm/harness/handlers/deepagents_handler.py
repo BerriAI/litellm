@@ -91,7 +91,7 @@ def load_deps() -> DeepAgentsDeps:
     )
 
 
-_SHARED_CHECKPOINTER: dict[str, Any] = {}  # mutable-ok: process-wide lazy singleton slot for the in-memory checkpointer
+_SHARED_CHECKPOINTER: dict[str, Any] = {}
 
 
 def shared_checkpointer(deps: DeepAgentsDeps) -> BaseCheckpointSaver:
@@ -129,7 +129,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
         )
         self._agent = deps.create_deep_agent(
             model=build_chat_model(ctx, deps),
-            tools=list(ctx.tools),  # mutable-ok: deepagents create_deep_agent(tools=) takes a list
+            tools=list(ctx.tools),
             system_prompt=ctx.instructions,
             middleware=self._middleware(deps, blocked),
             subagents=self._subagents(ctx, deps, blocked),
@@ -166,39 +166,39 @@ class DeepAgentsHandler(BaseHarnessHandler):
     async def turn(self, ctx: SessionContext, prompt: str) -> AsyncIterator[Event]:
         agent, deps = self._require_agent()
         run_config = self._run_config(ctx, deps.backend.UsageCallback(ctx, ctx.model))
-        user_message = {"role": "user", "content": prompt}  # mutable-ok: LangGraph input message dict
-        payload: dict[str, object] | Command = {"messages": [user_message]}  # mutable-ok: LangGraph input state
+        user_message = {"role": "user", "content": prompt}
+        payload: dict[str, object] | Command = {"messages": [user_message]}
         while True:
             state = TurnState()
             async for event in self._stream_pass(agent, payload, run_config, state):
                 yield event
             if not state.interrupts:
                 break
-            resume: dict[str, object] = {}  # mutable-ok: Command(resume=) payload, filled per answered approval
+            resume: dict[str, object] = {}
             for interrupt in state.interrupts:
                 decisions: list[dict[str, Any]] = []  # mutable-ok: HITL decisions collected across awaited approvals
                 for request in approval_requests(getattr(interrupt, "value", None)):
                     approval = Approval(
                         tool=normalized_tool_name(str(request.get("name") or "")),
-                        input=dict(request.get("args") or ()),  # mutable-ok: Approval.input is a public dict field
+                        input=dict(request.get("args") or ()),
                     )
                     yield approval
                     decisions.append(decision(*await approval.wait()))
-                resume[interrupt.id] = {"decisions": decisions}  # mutable-ok: LangGraph HITL resume payload
+                resume[interrupt.id] = {"decisions": decisions}
             payload = deps.command_cls(resume=resume)
         await self._finish_turn(ctx, agent, run_config)
 
     async def _stream_pass(
         self,
         agent: CompiledStateGraph,
-        payload: dict[str, object] | Command,  # mutable-ok: LangGraph astream input type
+        payload: dict[str, object] | Command,
         run_config: RunnableConfig,
         state: TurnState,
     ) -> AsyncIterator[Event]:
         async for part in agent.astream(
             payload,
             run_config,
-            stream_mode=["messages", "updates"],  # mutable-ok: LangGraph stream_mode takes a list
+            stream_mode=["messages", "updates"],
         ):
             # A list stream_mode yields (mode, chunk) tuples; LangGraph's overloads don't say so.
             if not isinstance(part, tuple) or len(part) != 2:
@@ -232,13 +232,13 @@ class DeepAgentsHandler(BaseHarnessHandler):
             "recursion_limit": recursion_limit(ctx),
         }
         if usage_callback is not None:
-            run_config["callbacks"] = [usage_callback]  # mutable-ok: LangChain RunnableConfig.callbacks is a list
+            run_config["callbacks"] = [usage_callback]
         return run_config
 
     @staticmethod
     def _middleware(deps: DeepAgentsDeps, blocked: frozenset[str]) -> list[object]:  # mutable-ok: deepagents API
         filters = (deps.backend.ToolFilterMiddleware(blocked),) if blocked else ()
-        return list(filters)  # mutable-ok: deepagents create_deep_agent(middleware=) takes a list
+        return list(filters)
 
     def _subagents(
         self, ctx: SessionContext, deps: DeepAgentsDeps, blocked: frozenset[str]
@@ -249,13 +249,13 @@ class DeepAgentsHandler(BaseHarnessHandler):
         has_general = any(
             isinstance(s, Mapping) and s.get("name") == deps.subagent_defaults["name"] for s in user_subagents
         )
-        spec = {**deps.subagent_defaults, "middleware": self._middleware(deps, blocked)}  # mutable-ok: SubAgent dict
+        spec = {**deps.subagent_defaults, "middleware": self._middleware(deps, blocked)}
         general = (spec,) if blocked and not has_general else ()
-        return [*general, *user_subagents]  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
+        return [*general, *user_subagents]
 
     @staticmethod
     async def _install_skills(ctx: SessionContext) -> list[str] | None:  # mutable-ok: deepagents skills= takes a list
         if not ctx.skills:
             return None
         await copy_skills(ctx.sandbox, ctx.skills, f"{ctx.sandbox.workdir}/{SKILLS_DIR}")
-        return [f"/{SKILLS_DIR}/"]  # mutable-ok: deepagents create_deep_agent(skills=) takes a list
+        return [f"/{SKILLS_DIR}/"]

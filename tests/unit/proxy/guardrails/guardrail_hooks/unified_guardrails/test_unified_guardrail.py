@@ -82,7 +82,7 @@ class RewritingGuardrail(RecordingGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: CustomGuardrail.apply_guardrail contract
+        request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:

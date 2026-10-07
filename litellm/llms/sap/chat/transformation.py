@@ -53,9 +53,7 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 
-def validate_dict(
-    data: dict, model: type
-) -> dict:  # mutable-ok: pydantic validation boundary; both input and output are untyped wire dicts
+def validate_dict(data: dict, model: type) -> dict:
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 

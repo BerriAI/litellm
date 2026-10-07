@@ -525,7 +525,7 @@ def transcribe_media_duration_probe(aws_region_name: str, download_slots: asynci
 
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 
-    def sign_s3_get(url: str) -> dict[str, str]:  # mutable-ok: httpx request headers take a dict
+    def sign_s3_get(url: str) -> dict[str, str]:
         aws_request: Final = AWSRequest(method="GET", url=url)
         credentials: Final = BaseAWSLLM().get_credentials(aws_region_name=aws_region_name)
         S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)

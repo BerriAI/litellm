@@ -579,8 +579,8 @@ def safe_deep_copy(data):
 
 
 def independent_snapshot(
-    data: dict,  # mutable-ok: caller-defined request-payload shape
-) -> dict:  # mutable-ok: caller-defined request-payload shape
+    data: dict,
+) -> dict:
     """
     A copy of ``data`` whose top-level keys are deep-copied independently
     where possible -- always attempted, regardless of
@@ -771,13 +771,13 @@ _NO_HEADERS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class _CarriesHiddenParams(Protocol):
-    _hidden_params: dict[str, object]  # mutable-ok: the responses billed here keep hidden params in a plain dict
+    _hidden_params: dict[str, object]
 
     @property
-    def hidden_params(self) -> dict[str, object]: ...  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, object]: ...
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None: ...  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, object]) -> None: ...
 
 
 def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: float | None) -> None:
@@ -786,7 +786,7 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
         return
     hidden_params: Final = response.hidden_params
     additional_headers: Final[object] = hidden_params.get("additional_headers")
-    merged: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
+    merged: Final[dict[str, object]] = {
         **(additional_headers if isinstance(additional_headers, Mapping) else _NO_HEADERS),
         RESPONSE_COST_HEADER: cost,
     }
@@ -802,8 +802,8 @@ def set_provider_response_headers_in_hidden_params(
 ) -> None:
     hidden_params: Final = response.hidden_params
     existing_additional_headers: Final[object] = hidden_params.get("additional_headers")
-    raw_headers: Final[dict[str, str]] = dict(headers)  # mutable-ok: stored as the plain-dict hidden param
-    additional_headers: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
+    raw_headers: Final[dict[str, str]] = dict(headers)
+    additional_headers: Final[dict[str, object]] = {
         **process_response_headers(raw_headers),
         **(existing_additional_headers if isinstance(existing_additional_headers, Mapping) else _NO_HEADERS),
     }

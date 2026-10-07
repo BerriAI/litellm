@@ -519,7 +519,7 @@ def test_s3_v2_hour_layout_holds_when_another_logger_owns_cold_storage(gateway: 
     marker: Final = "s3hgcs" + uuid.uuid4().hex[:8]
     upstream: Final = CountingUpstream()
     lock: Final = threading.Lock()
-    puts: Final[dict[str, bytes]] = {}  # mutable-ok: filled per PUT by the bucket thread under lock
+    puts: Final[dict[str, bytes]] = {}
 
     def bucket_reply(request: Request) -> Reply:
         assert request.method == "PUT", request.method

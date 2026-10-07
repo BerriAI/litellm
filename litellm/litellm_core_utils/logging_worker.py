@@ -61,7 +61,7 @@ class LoggingWorker:
         self._queue: asyncio.Queue[LoggingTask] | None = None
         self._worker_task: asyncio.Task | None = None
         self._running_tasks: set[asyncio.Task] = set()
-        self._dequeued_tasks: dict[int, LoggingTask] = {}  # mutable-ok: refs so flush can rescue never-started tasks
+        self._dequeued_tasks: dict[int, LoggingTask] = {}
         self._sem: asyncio.Semaphore | None = None
         self._bound_loop: asyncio.AbstractEventLoop | None = None
         self._last_aggressive_clear_time: float = 0.0

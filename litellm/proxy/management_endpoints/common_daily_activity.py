@@ -982,7 +982,7 @@ def _fold_entity_rollups_sync(
     results: Sequence[DailySpendData],
     entity_rows: Sequence[EntityRollupRow],
     api_key_metadata: Mapping[str, KeyMetadataRow],
-    entity_metadata_field: Mapping[str, dict[str, object]] | None,  # mutable-ok: shared field shape
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
 ) -> None:
     """Write breakdown.entities onto the already-built per-day results."""
     by_date: Final = {day.date.strftime("%Y-%m-%d"): day for day in results}

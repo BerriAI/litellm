@@ -120,7 +120,7 @@ def sanitize_user_api_key_auth(auth: object) -> object:
     return auth
 
 
-def _sanitized(parent_metadata: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
+def _sanitized(parent_metadata: Mapping[str, object]) -> dict[str, object]:
     return {
         k: sanitize_user_api_key_auth(v) if k == _USER_API_KEY_AUTH_KEY else v
         for k, v in parent_metadata.items()
@@ -131,7 +131,7 @@ def _sanitized(parent_metadata: Mapping[str, object]) -> dict[str, object]:  # m
 def forwarded_internal_call_metadata(
     parent_metadata: Mapping[str, object] | None,
     call_origin: InternalCallOrigin,
-) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
+) -> dict[str, object]:
     """Parent metadata, minus its budget reservation, stamped with the sub-call's origin.
 
     For sub-calls made inside the parent request (classifier, embeddings), where the
@@ -158,7 +158,7 @@ def effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | No
 def sanitized_forwardable_call_metadata(
     parent_metadata: Mapping[str, object],
     call_origin: InternalCallOrigin,
-) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
+) -> dict[str, object]:
     """Just the caller's identity, stamped with the sub-call's origin.
 
     For sub-calls detached from the parent request (shadow eval), which outlive it and

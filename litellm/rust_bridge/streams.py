@@ -23,7 +23,7 @@ async def drive(execution: Execution) -> object:
 class Stream(AsyncIterator[object]):
     def __init__(self, execution: Execution, hidden_params: object = None) -> None:
         self._stream: Final = lifecycle.Stream(execution, hidden_params)
-        self._hidden_params: dict[str, object] = dict(_headers(hidden_params))  # mutable-ok: header writers mutate it
+        self._hidden_params: dict[str, object] = dict(_headers(hidden_params))
 
     def __aiter__(self) -> Stream:
         return self
@@ -38,7 +38,7 @@ class Stream(AsyncIterator[object]):
 class SyncStream(Iterator[object]):
     def __init__(self, execution: Execution, hidden_params: object = None) -> None:
         self._stream: Final = lifecycle.SyncStream(execution, hidden_params)
-        self._hidden_params: dict[str, object] = dict(_headers(hidden_params))  # mutable-ok: header writers mutate it
+        self._hidden_params: dict[str, object] = dict(_headers(hidden_params))
 
     def __iter__(self) -> SyncStream:
         return self

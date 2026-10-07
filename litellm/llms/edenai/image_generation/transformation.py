@@ -44,11 +44,11 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],  # mutable-ok: inherited contract
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
+    ) -> dict[str, object]:
         return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}
 
     def get_complete_url(
@@ -56,32 +56,32 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         return endpoint_url(api_base, "images/generations")
 
     def validate_environment(
         self,
-        headers: dict[str, object],  # mutable-ok: inherited contract
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: inherited contract
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
+    ) -> dict[str, object]:
         return json_headers(headers, api_key, model)
 
     def transform_image_generation_request(
         self,
         model: str,
         prompt: str,
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
-        headers: dict[str, object],  # mutable-ok: inherited contract
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         return {"model": model, "prompt": prompt, **optional_params}
 
     def transform_image_generation_response(
@@ -90,9 +90,9 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict[str, object],  # mutable-ok: inherited contract
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        request_data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -109,6 +109,6 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return EdenAIException(message=error_message, status_code=status_code, headers=headers)

@@ -65,11 +65,11 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,  # mutable-ok: base class signature
-        optional_params: dict,  # mutable-ok: base class signature
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: base class signature
+    ) -> dict:
         """
         Map OpenAI params to Voyage params
 
@@ -83,7 +83,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: base class signature
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,

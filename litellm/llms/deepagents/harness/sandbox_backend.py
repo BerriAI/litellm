@@ -314,7 +314,7 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
         except (InvalidGlobPatternError, ValueError, SandboxError) as e:
             return GlobResult(error=str(e), matches=None)
         if done.exit_code != 0 and not done.stdout:
-            return GlobResult(matches=[])  # mutable-ok: deepagents GlobResult.matches is typed list[FileInfo]
+            return GlobResult(matches=[])
         matches = sorted(
             (
                 FileInfo(path=self.to_virtual(real), is_dir=False)
@@ -353,9 +353,7 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
             return GrepResult(error=f"Path '{path or '/'}': {e}")
         if done.exit_code not in (0, 1) and not done.stdout:
             return GrepResult(error=f"Path '{path or '/'}': {done.stderr.strip() or 'grep failed'}")
-        matches = list(  # mutable-ok: GrepResult.matches is list[GrepMatch]
-            self._grep_matches(done.stdout, root, include)
-        )
+        matches = list(self._grep_matches(done.stdout, root, include))
         if max_count is not None and len(matches) > max_count:
             return GrepResult(matches=matches[:max_count], truncated=True)
         return GrepResult(matches=matches)
@@ -385,9 +383,7 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
         self,
         files: list[tuple[str, bytes]],  # mutable-ok: signature fixed by deepagents BackendProtocol
     ) -> list[FileUploadResponse]:  # mutable-ok: return type fixed by deepagents BackendProtocol
-        return [  # mutable-ok: BackendProtocol returns a list
-            await self._upload_one(path, data) for path, data in files
-        ]
+        return [await self._upload_one(path, data) for path, data in files]
 
     def upload_files(
         self,
@@ -407,7 +403,7 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
         self,
         paths: list[str],  # mutable-ok: signature fixed by deepagents BackendProtocol
     ) -> list[FileDownloadResponse]:  # mutable-ok: return type fixed by deepagents BackendProtocol
-        return [await self._download_one(path) for path in paths]  # mutable-ok: BackendProtocol returns a list
+        return [await self._download_one(path) for path in paths]
 
     def download_files(
         self,
@@ -464,11 +460,7 @@ class ToolFilterMiddleware(AgentMiddleware):  # pyright: ignore[reportUntypedBas
         return _FILTER_MIDDLEWARE_NAME
 
     def _filtered(self, request: ModelRequest) -> ModelRequest:
-        return request.override(
-            tools=[  # mutable-ok: ModelRequest.tools is a list
-                t for t in request.tools if _tool_name(t) not in self._blocked
-            ]
-        )
+        return request.override(tools=[t for t in request.tools if _tool_name(t) not in self._blocked])
 
     def wrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]

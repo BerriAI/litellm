@@ -441,7 +441,7 @@ class SharedRedisDouble:
     """
 
     def __init__(self) -> None:
-        self.store: dict = {}  # mutable-ok: stands in for Redis' own mutable keyspace
+        self.store: dict = {}
 
     def set_cache(self, key, value, **kwargs):
         self.store[key] = value

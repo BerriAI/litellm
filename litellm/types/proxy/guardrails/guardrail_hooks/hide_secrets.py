@@ -10,7 +10,7 @@ class HideSecretsGuardrailConfigModel(GuardrailConfigModel):
     on the detect-secrets library; ``detect_secrets_config`` overrides the
     bundled plugin set."""
 
-    detect_secrets_config: dict | None = Field(  # mutable-ok: UI type derivation maps dict to "object"
+    detect_secrets_config: dict | None = Field(
         default=None,
         description="Optional detect-secrets configuration (plugins_used, filters_used) overriding the bundled plugin set",
     )

@@ -431,7 +431,7 @@ def _sensitive_field(key: str) -> bool:
 
 def _redact_object(
     fields: Mapping[str, JsonValue],
-) -> dict[str, JsonValue]:  # mutable-ok: the standard JSON encoder requires dict objects
+) -> dict[str, JsonValue]:
     return {key: REDACTED if _sensitive_field(key) else value for key, value in fields.items()}
 
 

@@ -115,7 +115,7 @@ def _pre_masking_scope_indices(
 
 def _apply_redacted_messages_back_preserving_fields(
     guardrail: "LakeraAIGuardrail",
-    data: dict[str, object],  # mutable-ok: writes the redacted result back into the caller's request dict in place
+    data: dict[str, object],
     redacted_messages: Sequence[AllMessageValues],
 ) -> None:
     """Write masked content back to ``data["messages"]`` without losing fields
@@ -493,7 +493,7 @@ class LakeraAIGuardrail(CustomGuardrail):
 
     def _mask_unwritable_instructions_pii_in_place(
         self,
-        data: dict[str, object],  # mutable-ok: writes the redacted result back into the caller's request dict in place
+        data: dict[str, object],
         inspected_messages: Sequence[AllMessageValues],
         lakera_response: LakeraAIResponse | None,
         masked_entity_count: dict[str, int],

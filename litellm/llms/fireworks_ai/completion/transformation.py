@@ -54,9 +54,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
                 optional_params[k] = v
         return optional_params
 
-    def map_extra_body_params(
-        self, optional_params: Mapping[str, object], model: str
-    ) -> dict:  # mutable-ok: returned dict is spread into the OpenAI SDK call as kwargs
+    def map_extra_body_params(self, optional_params: Mapping[str, object], model: str) -> dict:
         raw_extra_body: Final = optional_params.get("extra_body")
         initial_body: Final = dict(raw_extra_body) if isinstance(raw_extra_body, dict) else {}
         stripped_body: Final = self._strip_unsupported_params(initial_body, model)
@@ -73,9 +71,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
         return base
 
     @staticmethod
-    def _strip_unsupported_params(
-        extra_body: Mapping[str, object], model: str
-    ) -> dict:  # mutable-ok: JSON request body
+    def _strip_unsupported_params(extra_body: Mapping[str, object], model: str) -> dict:
         stripped: Final = tuple(sorted(k for k in extra_body if k in _TEXT_COMPLETION_STRIP_PARAMS))
         if stripped:
             verbose_logger.debug(
@@ -88,7 +84,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
     @staticmethod
     def _move_native_params_into_extra_body(
         extra_body: Mapping[str, object], optional_params: Mapping[str, object]
-    ) -> dict:  # mutable-ok: JSON request body
+    ) -> dict:
         moved: Final = dict(extra_body)
         for key in ("response_format", "reasoning_effort", "thinking"):
             value = optional_params.get(key)
@@ -101,7 +97,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
 
     def _translate_chat_template_kwargs(
         self, extra_body: Mapping[str, object], optional_params: Mapping[str, object], model: str
-    ) -> dict:  # mutable-ok: JSON request body
+    ) -> dict:
         chat_template_kwargs: Final = extra_body.get("chat_template_kwargs")
         if chat_template_kwargs is None:
             return dict(extra_body)
@@ -139,7 +135,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
     @staticmethod
     def _translate_guided_into_extra_body(
         extra_body: Mapping[str, object], optional_params: Mapping[str, object]
-    ) -> dict:  # mutable-ok: JSON request body
+    ) -> dict:
         guided_response_format: Final = FireworksAIConfig.translate_guided_params(extra_body, optional_params)
         remaining: Final = {
             k: v for k, v in extra_body.items() if k not in ("guided_json", "guided_grammar", "guided_choice")

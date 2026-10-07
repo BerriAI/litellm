@@ -138,7 +138,7 @@ class NeverRunsExecutor(concurrent.futures.Executor):
     test can show the backlog stops growing instead of consuming memory for as long as traffic lasts."""
 
     def __init__(self) -> None:
-        self.submitted = 0  # mutable-ok: a test spy counting accepted work
+        self.submitted = 0
 
     def submit(self, fn, /, *args, **kwargs):
         self.submitted += 1
@@ -916,7 +916,9 @@ class TestAssertionGuards:
         poster = ScriptedPoster([token_response()])
 
         def reader(ref: str) -> str | None:
-            raise ImportError("the internal_issuer identity source needs PyJWT and cryptography: pip install 'litellm[proxy]'")
+            raise ImportError(
+                "the internal_issuer identity source needs PyJWT and cryptography: pip install 'litellm[proxy]'"
+            )
 
         result = make_engine(poster, reader=reader).get_token(make_spec())
 

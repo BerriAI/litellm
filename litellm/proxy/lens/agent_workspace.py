@@ -94,9 +94,7 @@ class EvidenceWorkspace:
     read_errors: set[str] = field(  # mutable-ok: preserve source diagnostics when concurrent agents recover
         default_factory=set
     )
-    verified_parts: dict[Evidence, TracePart] = field(  # mutable-ok: retain verified quote metadata for review previews
-        default_factory=dict
-    )
+    verified_parts: dict[Evidence, TracePart] = field(default_factory=dict)
 
     def with_reviews(self, records: tuple[ReviewRecord, ...]) -> "EvidenceWorkspace":
         return replace(self, reviews=records)

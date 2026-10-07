@@ -128,7 +128,7 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: base class contract returns dict for httpx
+    ) -> dict[str, str]:
         auth_headers: Final = get_azure_ai_auth_headers(
             api_key=api_key,
             litellm_params=litellm_params,

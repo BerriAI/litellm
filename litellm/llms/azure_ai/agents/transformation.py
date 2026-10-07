@@ -187,7 +187,7 @@ class AzureAIAgentsConfig(BaseConfig):
     def get_agent_id(
         self,
         model: str,
-        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],
     ) -> str:
         return self._get_agent_id(model, optional_params)
 

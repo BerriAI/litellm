@@ -49,14 +49,14 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: mutates in place to set OAuth headers
+        headers: dict,
         model: str,
         messages: Sequence[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: base class contract returns dict for httpx
+    ) -> dict:
         """
         Set up headers with OAuth token.
         """

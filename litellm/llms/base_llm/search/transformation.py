@@ -79,11 +79,11 @@ class SearchResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     @property
-    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+    def hidden_params(self) -> dict[str, builtins.object]:
         return self._hidden_params
 
     @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:
         self._hidden_params = hidden_params
 
 
@@ -206,12 +206,12 @@ class BaseSearchConfig:
 
     def sign_request(
         self,
-        headers: dict[str, str],  # mutable-ok: matches the request header dict every other hook on this base takes
-        optional_params: dict[str, object],  # mutable-ok: matches every other hook on this base
+        headers: dict[str, str],
+        optional_params: dict[str, object],
         request_data: dict[str, object] | list[dict[str, object]],  # mutable-ok: transform_search_request's body
         api_base: str,
         api_key: str | None = None,
-    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: the handler passes these headers straight to httpx
+    ) -> tuple[dict[str, str], bytes | None]:
         """
         OPTIONAL
 

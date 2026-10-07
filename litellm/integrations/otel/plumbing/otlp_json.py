@@ -66,7 +66,7 @@ class OTLPJsonSpanExporter(OTLPSpanExporter):
     def __init__(
         self,
         endpoint: str | None,
-        headers: dict[str, str],  # mutable-ok: SDK __init__ takes Dict
+        headers: dict[str, str],
         certificate_file: str | None = None,
         session: "requests.Session | None" = None,
     ) -> None:

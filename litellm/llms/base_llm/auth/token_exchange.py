@@ -653,7 +653,7 @@ class JwtBearerTokenExchangeEngine:
         self._shared_store: Final = shared_store
         self._wall_clock: Final = wall_clock
         self._lock: Final = threading.Lock()
-        self._entries: Final[dict[str, _Entry]] = {}  # mutable-ok: engine-owned map guarded by _lock
+        self._entries: Final[dict[str, _Entry]] = {}
 
     def get_token(self, spec: TokenExchangeSpec) -> ExchangeResult:
         """A follower whose leader published nothing re-classifies rather than recursing, so a

@@ -191,7 +191,7 @@ def find_canary(
     ``AssertionError``) instead of returning a partial, possibly clean, result.
     """
     data: Final = blob.encode() if isinstance(blob, str) else blob
-    found: Final[dict[str, Match]] = {}  # mutable-ok: first (shallowest) encoding per slot wins
+    found: Final[dict[str, Match]] = {}
     for match in _matches(data, canaries, "raw", 0, _Budget(budget_bytes)):
         found.setdefault(match.slot, match)
     return tuple(found.values())

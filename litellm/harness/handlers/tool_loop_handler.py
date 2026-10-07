@@ -89,7 +89,7 @@ def _normalize_tool_call(
     return _FunctionToolCall(id=call.id, name=call.custom.name, arguments=call.custom.input)
 
 
-def _parse_arguments(raw: str) -> tuple[dict[str, object], str | None]:  # mutable-ok: event input uses a dict
+def _parse_arguments(raw: str) -> tuple[dict[str, object], str | None]:
     text: Final = raw.strip()
     try:
         raw_decoded: object = _JSON_DECODER.raw_decode(text)
@@ -195,7 +195,7 @@ async def _execute_tool(tool: FunctionTool, arguments: Mapping[str, object]) -> 
     positional_args: Final = tuple(
         validated[parameter.name] for parameter in parameters if parameter.kind is inspect.Parameter.POSITIONAL_ONLY
     )
-    keyword_args: Final[dict[str, object]] = {  # mutable-ok: tool calls need keyword arguments
+    keyword_args: Final[dict[str, object]] = {
         parameter.name: validated[parameter.name]
         for parameter in parameters
         if parameter.kind is not inspect.Parameter.POSITIONAL_ONLY
@@ -268,7 +268,7 @@ class ToolLoopHandler(BaseHarnessHandler):
             tool_specs: list[ChatCompletionToolParam] = copy.deepcopy(  # mutable-ok: acompletion takes tool list
                 list(self._tool_specs)
             )
-            kwargs: dict[str, object] = {  # mutable-ok: acompletion takes keyword arguments
+            kwargs: dict[str, object] = {
                 **{key: value for key, value in self._completion_kwargs.items() if key not in {"messages", "tools"}},
                 "messages": messages,
                 **({"tools": tool_specs} if tool_specs else {}),

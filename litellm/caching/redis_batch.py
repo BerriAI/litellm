@@ -466,13 +466,13 @@ class RequestRedisBatches:
     )
 
     def __init__(self, post_call_deadline: float = POST_CALL_FLUSH_DEADLINE_SECONDS) -> None:
-        self._batches: Final[dict[object, RedisBatch]] = {}  # mutable-ok: lazily filled per backend
-        self._post_call: Final[dict[object, RedisBatch]] = {}  # mutable-ok: lazily filled per backend
+        self._batches: Final[dict[object, RedisBatch]] = {}
+        self._post_call: Final[dict[object, RedisBatch]] = {}
         self.post_call_deadline: Final = post_call_deadline
         self._deadline: asyncio.TimerHandle | None = None
         self._deadline_flush: asyncio.Task[None] | None = None
         # Reads declared early for a consumer that runs later in the request, keyed by consumer name.
-        self.prefetched: Final[dict[str, object]] = {}  # mutable-ok: armed pre-admission, taken at use
+        self.prefetched: Final[dict[str, object]] = {}
 
     def batch(self, redis_cache: RedisCache) -> RedisBatch:
         key: Final = _backend_key(redis_cache)

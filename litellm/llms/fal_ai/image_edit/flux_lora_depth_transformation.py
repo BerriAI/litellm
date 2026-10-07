@@ -32,7 +32,7 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: base class contract returns a dict
+    ) -> dict:
         return {
             PARAM_TRANSLATION.get(key, key): self._translate_value(key, value, model)
             for key, value in image_edit_optional_params.items()
@@ -43,7 +43,7 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,  # mutable-ok: base class contract
+        litellm_params: dict,
     ) -> str:
         base_url: Final = (api_base or get_secret_str("FAL_AI_API_BASE") or DEFAULT_BASE_URL).rstrip("/")
         return f"{base_url}/{FLUX_LORA_DEPTH_ENDPOINT}"
@@ -53,10 +53,10 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | None,
-        image_edit_optional_request_params: dict,  # mutable-ok: base class contract
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: base class contract
-    ) -> tuple[dict, RequestFiles]:  # mutable-ok: base class contract returns a dict
+        headers: dict,
+    ) -> tuple[dict, RequestFiles]:
         images: Final = tuple(img for img in (image if isinstance(image, list) else (image,)) if img is not None)
         if not images:
             raise ValueError("Fal AI image edit requires at least one input image")
@@ -65,7 +65,7 @@ class FalAIFluxLoraDepthEditConfig(FalAIImageEditConfig):
         provider_params: Final[Mapping[str, object]] = MappingProxyType(
             {key: value for key, value in image_edit_optional_request_params.items() if key != "mask"}
         )
-        request_body: Final[dict[str, object]] = {  # mutable-ok: base class contract returns a dict
+        request_body: Final[dict[str, object]] = {
             "prompt": prompt,
             "image_url": to_data_url(next(iter(images))),
             **provider_params,

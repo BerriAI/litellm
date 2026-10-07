@@ -20,9 +20,7 @@ def get_mistral_api_base(api_base: str | None) -> str:
     return resolved.removesuffix("/v1")
 
 
-def get_mistral_auth_headers(
-    headers: Mapping[str, str], api_key: str | None
-) -> dict[str, str]:  # mutable-ok: BaseConfig.validate_environment contract returns dict
+def get_mistral_auth_headers(headers: Mapping[str, str], api_key: str | None) -> dict[str, str]:
     resolved_key: Final = api_key or get_secret_str(MISTRAL_API_KEY_ENV_VAR)
     if resolved_key is None:
         raise ValueError(

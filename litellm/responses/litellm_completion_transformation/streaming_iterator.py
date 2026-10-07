@@ -127,7 +127,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._pending_tool_events: list[BaseLiteLLMOpenAIResponseObject] = []
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
-        self._tool_item_id_by_call_id: dict[str, str] = {}  # mutable-ok: filled per call id as tool call events stream
+        self._tool_item_id_by_call_id: dict[str, str] = {}
         self._tool_call_id_by_index: dict[int, str] = {}
         self._ambiguous_tool_call_indexes: set[int] = set()
         self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item
@@ -148,7 +148,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
             self.responses_api_request.get("tools")
         )
-        self._web_search_calls: dict[str, object] = {}  # mutable-ok: latest call by provider id
+        self._web_search_calls: dict[str, object] = {}
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:

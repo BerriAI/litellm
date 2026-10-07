@@ -199,7 +199,7 @@ class VertexAIBatchPrediction(VertexLLM):
     def _resolve_fine_tuned_endpoint_model(
         self,
         vertex_batch_request: VertexAIBatchPredictionJob,
-        headers: dict[str, str],  # mutable-ok: HTTPHandler.get only accepts dict headers
+        headers: dict[str, str],
         sync_handler: HTTPHandler,
         api_base: str | None,
         vertex_location: str,

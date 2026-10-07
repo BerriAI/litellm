@@ -255,7 +255,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         self, state: dict[str, object], question_ids: Sequence[str]
     ) -> _JevSystemOneResponse | None:
         """Returns the response, or None when the service failed and fail_open applies."""
-        payload: Final[dict[str, object]] = {  # mutable-ok: serialized to JSON by httpx
+        payload: Final[dict[str, object]] = {
             "model": self.jev_model,
             "state": state,
             "questions": {

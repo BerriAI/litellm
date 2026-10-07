@@ -19,9 +19,7 @@ class CacheControl(LiteLLMBaseModel):
     ttl: Literal["5m", "1h"] | None = None
 
     @model_serializer(mode="wrap")
-    def _serialize(
-        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+    def _serialize(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict:
         result = handler(self)
         if result.get("ttl") is None:
             result.pop("ttl", None)
@@ -34,9 +32,7 @@ class TextContent(LiteLLMBaseModel):
     cache_control: CacheControl | None = None
 
     @model_serializer(mode="wrap")
-    def _serialize(
-        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+    def _serialize(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict:
         result = handler(self)
         if result.get("cache_control") is None:
             result.pop("cache_control", None)
@@ -54,9 +50,7 @@ class ImageContent(LiteLLMBaseModel):
     cache_control: CacheControl | None = None
 
     @model_serializer(mode="wrap")
-    def _serialize(
-        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+    def _serialize(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict:
         result = handler(self)
         if result.get("cache_control") is None:
             result.pop("cache_control", None)

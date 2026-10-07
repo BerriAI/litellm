@@ -33,13 +33,8 @@ class TestPolicyMatcherPatternMatching:
 
     def test_matches_pattern_exact(self):
         """Test exact pattern matching."""
-        assert (
-            PolicyMatcher.matches_pattern("healthcare-team", ["healthcare-team"])
-            is True
-        )
-        assert (
-            PolicyMatcher.matches_pattern("finance-team", ["healthcare-team"]) is False
-        )
+        assert PolicyMatcher.matches_pattern("healthcare-team", ["healthcare-team"]) is True
+        assert PolicyMatcher.matches_pattern("finance-team", ["healthcare-team"]) is False
 
     def test_matches_pattern_wildcard(self):
         """Test wildcard pattern matching."""
@@ -59,33 +54,25 @@ class TestPolicyMatcherScopeMatching:
     def test_scope_matches_all_fields(self):
         """Test scope matches when all fields match."""
         scope = PolicyScope(teams=["healthcare-team"], keys=["*"], models=["gpt-4"])
-        context = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="any-key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="healthcare-team", key_alias="any-key", model="gpt-4")
         assert PolicyMatcher.scope_matches(scope, context) is True
 
     def test_scope_does_not_match_team(self):
         """Test scope doesn't match when team doesn't match."""
         scope = PolicyScope(teams=["healthcare-team"], keys=["*"], models=["*"])
-        context = PolicyMatchContext(
-            team_alias="finance-team", key_alias="any-key", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="finance-team", key_alias="any-key", model="gpt-4")
         assert PolicyMatcher.scope_matches(scope, context) is False
 
     def test_scope_matches_with_wildcard_patterns(self):
         """Test scope matches with wildcard patterns."""
         scope = PolicyScope(teams=["*"], keys=["dev-key-*"], models=["bedrock/*"])
-        context = PolicyMatchContext(
-            team_alias="any-team", key_alias="dev-key-123", model="bedrock/claude-3"
-        )
+        context = PolicyMatchContext(team_alias="any-team", key_alias="dev-key-123", model="bedrock/claude-3")
         assert PolicyMatcher.scope_matches(scope, context) is True
 
     def test_scope_global_wildcard(self):
         """Test global scope with all wildcards."""
         scope = PolicyScope(teams=["*"], keys=["*"], models=["*"])
-        context = PolicyMatchContext(
-            team_alias="any-team", key_alias="any-key", model="any-model"
-        )
+        context = PolicyMatchContext(team_alias="any-team", key_alias="any-key", model="any-model")
         assert PolicyMatcher.scope_matches(scope, context) is True
 
 
@@ -138,9 +125,7 @@ class TestPolicyMatcherScopeMatchingWithTags:
 
     def test_scope_tags_and_team_combined(self):
         """Test scope with both tags and team — both must match (AND logic)."""
-        scope = PolicyScope(
-            teams=["team-a"], keys=["*"], models=["*"], tags=["healthcare"]
-        )
+        scope = PolicyScope(teams=["team-a"], keys=["*"], models=["*"], tags=["healthcare"])
 
         # Both match
         context_both = PolicyMatchContext(
@@ -185,9 +170,7 @@ class TestPolicyMatcherWithAttachments:
         )
 
         # Test matching via the registry directly
-        context = PolicyMatchContext(
-            team_alias="healthcare-team", key_alias="k", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="healthcare-team", key_alias="k", model="gpt-4")
         attached = registry.get_attached_policies(context)
 
         assert "healthcare-policy" in attached
@@ -202,9 +185,7 @@ class TestPolicyMatcherWithAttachments:
             ]
         )
 
-        context = PolicyMatchContext(
-            team_alias="finance-team", key_alias="k", model="gpt-4"
-        )
+        context = PolicyMatchContext(team_alias="finance-team", key_alias="k", model="gpt-4")
         attached = registry.get_attached_policies(context)
 
         assert "healthcare-policy" not in attached
@@ -314,7 +295,7 @@ class TestGetMatchingPoliciesFallback:
 _MODELS: Final = ("gpt-4o", "gpt-5.5", "claude-opus-4-1")
 
 
-def _policy_forest(draw: st.DrawFn) -> dict[str, Policy]:  # mutable-ok: PolicyResolver takes dict[str, Policy]
+def _policy_forest(draw: st.DrawFn) -> dict[str, Policy]:
     names: Final = tuple(f"p{i}" for i in range(draw(st.integers(min_value=1, max_value=6))))
     return {
         name: Policy(
@@ -329,7 +310,7 @@ def _policy_forest(draw: st.DrawFn) -> dict[str, Policy]:  # mutable-ok: PolicyR
 @st.composite
 def _forest_and_request(
     draw: st.DrawFn,
-) -> tuple[dict[str, Policy], tuple[str, ...], PolicyMatchContext]:  # mutable-ok: PolicyResolver takes dict
+) -> tuple[dict[str, Policy], tuple[str, ...], PolicyMatchContext]:
     policies: Final = _policy_forest(draw)
     attached: Final = tuple(draw(st.lists(st.sampled_from(sorted(policies)), unique=True)))
     context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model=draw(st.sampled_from(_MODELS)))
@@ -341,7 +322,7 @@ def _own_condition_applies(policy: Policy, context: PolicyMatchContext) -> bool:
 
 
 def _applicable_chain(
-    policies: dict[str, Policy],  # mutable-ok: PolicyResolver takes dict[str, Policy]
+    policies: dict[str, Policy],
     name: str,
     context: PolicyMatchContext,
 ) -> tuple[str, ...]:
@@ -354,7 +335,7 @@ class TestChainMatchingProperties:
     @settings(max_examples=400, deadline=None)
     def test_chain_matching_only_widens_to_applicable_ancestor_guardrails(
         self,
-        case: tuple[dict[str, Policy], tuple[str, ...], PolicyMatchContext],  # mutable-ok: PolicyResolver takes dict
+        case: tuple[dict[str, Policy], tuple[str, ...], PolicyMatchContext],
     ):
         policies, attached, context = case
         head: Final = tuple(
@@ -379,7 +360,7 @@ class TestChainMatchingProperties:
 
 class TestAncestorAdmissionLogging:
     @staticmethod
-    def _chain() -> dict[str, Policy]:  # mutable-ok: PolicyResolver takes dict[str, Policy]
+    def _chain() -> dict[str, Policy]:
         return {
             "parent": Policy(guardrails=PolicyGuardrails(add=["g-parent"])),
             "child": Policy(

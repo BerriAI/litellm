@@ -98,7 +98,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @staticmethod
     def _translate_anthropic_document_block_to_file_part(
         block: Mapping[str, object],
-    ) -> dict[str, str] | None:  # mutable-ok: API message payload
+    ) -> dict[str, str] | None:
         """Convert an Anthropic document block to a Responses input_file part."""
         raw_source: Final = block.get("source")
         if not isinstance(raw_source, Mapping):
@@ -130,7 +130,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @staticmethod
     def _tool_result_output_value(
         output_text: str,
-        file_parts: tuple[dict[str, str], ...],  # mutable-ok: json content parts
+        file_parts: tuple[dict[str, str], ...],
     ) -> str | list[dict[str, str]]:  # mutable-ok: API message payload
         """Plain string output, or a part list when document file parts are present."""
         if not file_parts:
@@ -165,7 +165,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         cls,
         summary: Iterable[object],
         encrypted_content: object,
-    ) -> dict[str, object] | None:  # mutable-ok: API message payload
+    ) -> dict[str, object] | None:
         """The one Anthropic block for a Responses reasoning item.
 
         The item's encrypted reasoning rides the block's opaque field (`signature`, or
@@ -192,9 +192,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return "thinking" if block.get("type") in ("thinking", "redacted_thinking") else f"block:{index}"
 
     @classmethod
-    def _assistant_group_to_input_items(
-        cls, group: tuple[Mapping[str, object], ...]
-    ) -> tuple[dict[str, object], ...]:  # mutable-ok: API message payload
+    def _assistant_group_to_input_items(cls, group: tuple[Mapping[str, object], ...]) -> tuple[dict[str, object], ...]:
         first: Final = group[0]
         btype: Final = first.get("type")
         if btype in ("thinking", "redacted_thinking"):

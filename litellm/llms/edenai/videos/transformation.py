@@ -24,9 +24,7 @@ if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
-def _usage_with_reported_cost(
-    usage: Mapping[str, object] | None, body: bytes
-) -> dict[str, object]:  # mutable-ok: VideoObject.usage is a plain dict field
+def _usage_with_reported_cost(usage: Mapping[str, object] | None, body: bytes) -> dict[str, object]:
     cost: Final = reported_cost(body)
     return {
         key: value
@@ -38,18 +36,18 @@ def _usage_with_reported_cost(
 class EdenAIVideoConfig(OpenAIVideoConfig):
     def validate_environment(
         self,
-        headers: dict[str, object],  # mutable-ok: inherited contract
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
+    ) -> dict[str, object]:
         return authorized_headers(headers, api_key or (litellm_params.api_key if litellm_params else None), model)
 
     def get_complete_url(
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        litellm_params: dict[str, object],
     ) -> str:
         return endpoint_url(api_base, "videos")
 
@@ -61,10 +59,10 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: dict[str, object],  # mutable-ok: inherited contract
+        video_create_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict[str, object],  # mutable-ok: inherited contract
-    ) -> tuple[dict[str, object], RequestFiles, str]:  # mutable-ok: inherited contract
+        headers: dict[str, object],
+    ) -> tuple[dict[str, object], RequestFiles, str]:
         """A reference image is a multipart file part, or a JSON `{"file_id"}` / `{"image_url"}` object."""
         reference: Final = video_create_optional_request_params.get("input_reference")
         if not isinstance(reference, Mapping):
@@ -94,7 +92,7 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
-        request_data: dict[str, object] | None = None,  # mutable-ok: inherited contract
+        request_data: dict[str, object] | None = None,
     ) -> VideoObject:
         video: Final = super().transform_video_create_response(
             model=model,
@@ -133,7 +131,7 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: inherited contract
+    ) -> dict[str, str]:
         raw_response.raise_for_status()  # the shared GET helpers return error bodies instead of raising
         return super().transform_video_list_response(
             raw_response=raw_response, logging_obj=logging_obj, custom_llm_provider=custom_llm_provider
@@ -143,6 +141,6 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return EdenAIException(message=error_message, status_code=status_code, headers=headers)

@@ -2518,7 +2518,6 @@ class TestWifTierPrecedence:
         assert [record for record in caplog.records if "takes precedence" in record.getMessage()] == []
 
 
-
 class TestWifZeroBehaviorChange:
     def test_unconfigured_raises_same_authentication_error(self, clean_anthropic_env):
         """No WIF config and no keys: same AuthenticationError as today (message
@@ -3506,7 +3505,7 @@ class TestModelDiscovery:
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_REGULAR_KEY)
-        requested: Final = []  # mutable-ok: a test spy recording the URLs the client was asked for
+        requested: Final = []
 
         def respond(request: httpx.Request) -> httpx.Response:
             requested.append(str(request.url))

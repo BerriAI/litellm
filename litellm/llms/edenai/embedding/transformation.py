@@ -30,23 +30,23 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],  # mutable-ok: inherited contract
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
+    ) -> dict[str, object]:
         return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}
 
     def validate_environment(
         self,
-        headers: dict[str, object],  # mutable-ok: inherited contract
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: inherited contract
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
+    ) -> dict[str, object]:
         return json_headers(headers, api_key, model)
 
     def get_complete_url(
@@ -54,8 +54,8 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         return endpoint_url(api_base, "embeddings")
@@ -64,9 +64,9 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        headers: dict[str, object],  # mutable-ok: inherited contract
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         return {"model": model, "input": input, **optional_params}
 
     def transform_embedding_response(
@@ -76,9 +76,9 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None,
-        request_data: dict[str, object],  # mutable-ok: inherited contract
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        request_data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> EmbeddingResponse:
         body: Final = raw_response.json()
         logging_obj.post_call(original_response=body)
@@ -92,6 +92,6 @@ class EdenAIEmbeddingConfig(BaseEmbeddingConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return EdenAIException(message=error_message, status_code=status_code, headers=headers)

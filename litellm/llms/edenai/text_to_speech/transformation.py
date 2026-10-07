@@ -28,27 +28,27 @@ class EdenAITextToSpeechConfig(BaseTextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        voice: str | dict[str, object] | None = None,  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        voice: str | dict[str, object] | None = None,
         drop_params: bool = False,
-        kwargs: dict[str, object] | None = None,  # mutable-ok: inherited contract
-    ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: inherited contract
+        kwargs: dict[str, object] | None = None,
+    ) -> tuple[str | None, dict[str, object]]:
         return (voice if isinstance(voice, str) else None), optional_params
 
     def validate_environment(
         self,
-        headers: dict[str, object],  # mutable-ok: inherited contract
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
+    ) -> dict[str, object]:
         return json_headers(headers, api_key, model)
 
     def get_complete_url(
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        litellm_params: dict[str, object],
     ) -> str:
         return endpoint_url(api_base, "audio/speech")
 
@@ -57,9 +57,9 @@ class EdenAITextToSpeechConfig(BaseTextToSpeechConfig):
         model: str,
         input: str,
         voice: str | None,
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
-        headers: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> TextToSpeechRequestData:
         fields: Final = (("model", model), ("input", input), ("voice", voice), *optional_params.items())
         return TextToSpeechRequestData(dict_body={key: value for key, value in fields if value is not None})
@@ -78,6 +78,6 @@ class EdenAITextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return EdenAIException(message=error_message, status_code=status_code, headers=headers)

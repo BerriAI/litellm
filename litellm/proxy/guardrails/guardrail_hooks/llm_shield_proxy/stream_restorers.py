@@ -112,8 +112,8 @@ class AnthropicSSERestorer:
 
     def __init__(self, step: StreamStep) -> None:
         self._step: Final = step
-        self._carries: Final[dict[int, str]] = {}  # mutable-ok: per-block windows advanced in place.
-        self._delta_types: Final[dict[int, str]] = {}  # mutable-ok: each block's delta type, for its flush.
+        self._carries: Final[dict[int, str]] = {}
+        self._delta_types: Final[dict[int, str]] = {}
         self._pending = b""
         self._as_text = False
         self._is_sse: bool | None = None
@@ -257,8 +257,8 @@ class ResponsesStreamRestorer:
     def __init__(self, step: StreamStep, rehydrate: Rehydrate) -> None:
         self._step: Final = step
         self._rehydrate: Final = rehydrate
-        self._carries: Final[dict[ResponsesStreamKey, str]] = {}  # mutable-ok: per-stream windows advanced in place.
-        self._last_deltas: Final[dict[ResponsesStreamKey, object]] = {}  # mutable-ok: newest delta per stream.
+        self._carries: Final[dict[ResponsesStreamKey, str]] = {}
+        self._last_deltas: Final[dict[ResponsesStreamKey, object]] = {}
 
     async def restore(self, event: object) -> tuple[object, ...]:
         """The events to emit in place of `event`: any flush, then the event itself."""

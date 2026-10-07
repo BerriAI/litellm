@@ -272,7 +272,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def build_response_from_payload(
         self,
-        payload: dict[str, object],  # mutable-ok: mirrors override contract
+        payload: dict[str, object],
         model_response: TranscriptionResponse | None = None,
         response_format: str | None = None,
     ) -> TranscriptionResponse:

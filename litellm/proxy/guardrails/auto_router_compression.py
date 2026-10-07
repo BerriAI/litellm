@@ -139,7 +139,7 @@ def _active_compression_guardrails() -> tuple["CustomGuardrail", ...]:
 
 
 async def arm_pre_call(
-    data: dict[str, object],  # mutable-ok: arms the live request dict in place
+    data: dict[str, object],
     llm_router: "Router | None",
 ) -> None:
     """Apply an auto router's compression policy, if any, before guardrails run.

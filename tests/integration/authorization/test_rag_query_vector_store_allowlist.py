@@ -30,7 +30,7 @@ JsonObject: TypeAlias = dict[str, JsonValue]
 
 
 def _json_array(*values: JsonValue) -> JsonValue:
-    return [*values]  # mutable-ok: request payloads and YAML sequences require list values
+    return [*values]
 
 
 def _permission_for_stores(*store_ids: str) -> JsonObject:

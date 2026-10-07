@@ -72,7 +72,7 @@ class CohereEmbeddingConfig:
         self,
         model: str,
         input: list[str],  # mutable-ok: mirrors override contract
-        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+        inference_params: dict[str, object],
     ) -> CohereEmbeddingRequestWithModel:
         return self._transform_request(model, input, inference_params)
 
@@ -136,7 +136,7 @@ class CohereEmbeddingConfig:
         response: httpx.Response,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
-        data: dict[str, object] | CohereEmbeddingRequest,  # mutable-ok: mirrors override contract
+        data: dict[str, object] | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
         encoding: _SupportsEncode,
@@ -202,7 +202,7 @@ class CohereEmbeddingConfig:
 
     def populate_embedding_response(
         self,
-        response_json: dict[str, object],  # mutable-ok: mirrors override contract
+        response_json: dict[str, object],
         model_response: EmbeddingResponse,
         model: str,
         encoding: _SupportsEncode,

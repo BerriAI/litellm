@@ -45,7 +45,7 @@ _MISTRAL_PURPOSE_BY_OPENAI: Final[Mapping[str, MistralFilePurpose]] = MappingPro
 )
 _SUPPORTED_PURPOSES: Final = ", ".join(_MISTRAL_PURPOSE_BY_OPENAI)
 
-_NO_QUERY_PARAMS: Final[dict[str, str]] = {}  # mutable-ok: BaseFilesConfig request transforms return tuple[str, dict]
+_NO_QUERY_PARAMS: Final[dict[str, str]] = {}
 
 
 class MistralMultipartUpload(TypedDict):
@@ -150,7 +150,7 @@ class MistralFilesConfig(BaseFilesConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: BaseFilesConfig signature
+    ) -> dict[str, str]:
         return get_mistral_auth_headers(headers, api_key)
 
     def get_supported_openai_params(
@@ -161,10 +161,10 @@ class MistralFilesConfig(BaseFilesConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature, returned as-is
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:
         return optional_params
 
     def transform_create_file_request(
@@ -173,7 +173,7 @@ class MistralFilesConfig(BaseFilesConfig):
         create_file_data: CreateFileRequest,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> dict[str, object]:  # mutable-ok: BaseFilesConfig signature
+    ) -> dict[str, object]:
         if "file" not in create_file_data:
             raise ValueError("File data is required")
         extracted: Final = extract_file_data(create_file_data["file"])
@@ -199,7 +199,7 @@ class MistralFilesConfig(BaseFilesConfig):
         file_id: str,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+    ) -> tuple[str, dict[str, str]]:
         return self._file_url(file_id, litellm_params), _NO_QUERY_PARAMS
 
     def transform_retrieve_file_response(
@@ -215,7 +215,7 @@ class MistralFilesConfig(BaseFilesConfig):
         file_id: str,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+    ) -> tuple[str, dict[str, str]]:
         return self._file_url(file_id, litellm_params), _NO_QUERY_PARAMS
 
     def transform_delete_file_response(
@@ -232,7 +232,7 @@ class MistralFilesConfig(BaseFilesConfig):
         purpose: str | None,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+    ) -> tuple[str, dict[str, str]]:
         url: Final = f"{_api_base_from(litellm_params)}/v1/files"
         if not purpose:
             return url, _NO_QUERY_PARAMS
@@ -251,7 +251,7 @@ class MistralFilesConfig(BaseFilesConfig):
         file_content_request: FileContentRequest,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+    ) -> tuple[str, dict[str, str]]:
         file_id: Final = file_content_request.get("file_id")
         if file_id is None:
             raise ValueError("file_id is required to download file content")

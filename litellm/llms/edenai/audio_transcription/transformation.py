@@ -22,7 +22,7 @@ from litellm.utils import convert_to_model_response_object
 from ..common_utils import EdenAIException, authorized_headers, endpoint_url, reported_cost
 
 
-def _form_fields(model: str, optional_params: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: httpx form data
+def _form_fields(model: str, optional_params: Mapping[str, object]) -> dict[str, object]:
     """LiteLLM parks non-OpenAI params, `model` included, under `extra_body` for the OpenAI SDK; a
     multipart body carries them as top-level text fields instead."""
     extras: Final = optional_params.get("extra_body")
@@ -41,30 +41,30 @@ class EdenAIAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         return endpoint_url(api_base, "audio/transcriptions")
 
     def validate_environment(
         self,
-        headers: dict[str, object],  # mutable-ok: inherited contract
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: inherited contract
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:  # mutable-ok: inherited contract
+    ) -> dict[str, object]:
         return authorized_headers(headers, api_key, model)
 
     def transform_audio_transcription_request(
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict[str, object],  # mutable-ok: inherited contract
-        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> AudioTranscriptionRequestData:
         """Eden reports `duration` and `cost` on every body, so the Whisper default of `verbose_json`,
         which the gpt-4o-transcribe models reject, is not needed for cost tracking."""
@@ -86,6 +86,6 @@ class EdenAIAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return EdenAIException(message=error_message, status_code=status_code, headers=headers)

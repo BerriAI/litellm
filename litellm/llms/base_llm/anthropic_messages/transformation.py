@@ -43,14 +43,14 @@ class BaseAnthropicMessagesConfig(ABC):
 
     async def avalidate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        headers: dict,
         model: str,
         messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
-        optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
-        litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+    ) -> tuple[dict, str | None]:
         """Async counterpart used by the async handler. The default delegates to the
         sync implementation; providers whose sync path can block the event loop
         (e.g. a WIF token exchange) override this."""

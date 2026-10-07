@@ -79,7 +79,7 @@ class SharedPrometheusSeriesAdmissions:
 
     def __init__(self, directory: str) -> None:
         self._directory = directory
-        self._admissions: dict[str, _MetricAdmissions] = {}  # mutable-ok: one entry per metric, added on first use
+        self._admissions: dict[str, _MetricAdmissions] = {}
         self.lock = RLock()
 
     def admit_series(self, metric_name: str, label_values: tuple[str, ...], max_series: int) -> bool:
