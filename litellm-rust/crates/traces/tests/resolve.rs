@@ -33,6 +33,8 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         call_keys: Vec::new(),
         call_evidence: None,
         tool_call_id: String::new(),
+        source_url: String::new(),
+        source_title: String::new(),
         team_id: "team".into(),
         api_key_hash: "key".into(),
         user_id: String::new(),
@@ -171,6 +173,44 @@ fn summary_counts_model_calls_tools_and_agents() {
     assert_eq!(summary.duration_ms, 1000.0);
     assert_eq!(summary.start_time, "2026-09-30T04:36:29+00:00");
     assert_eq!(summary.spend, None);
+}
+
+fn sourced(mut span: TraceSpansRow, url: &str, title: &str) -> TraceSpansRow {
+    span.source_url = url.into();
+    span.source_title = title.into();
+    span
+}
+
+const THREAD: &str = "https://acme.slack.com/archives/C1/p1";
+
+#[rstest]
+#[case::root_wins(
+    vec![sourced(at(row("root", "", "agent", "agent", "agent"), 5, 10), THREAD, "root thread"),
+         sourced(at(row("tool", "root", "tool", "tool", "agent"), 0, 1), "https://other.example/", "child")],
+    Some((THREAD, "root thread")),
+)]
+#[case::earliest_child_when_root_has_none(
+    vec![at(row("root", "", "agent", "agent", "agent"), 0, 10),
+         sourced(at(row("late", "root", "tool", "tool", "agent"), 5, 1), "https://late.example/", "late"),
+         sourced(at(row("early", "root", "tool", "tool", "agent"), 2, 1), THREAD, "early")],
+    Some((THREAD, "early")),
+)]
+#[case::non_https_is_dropped(
+    vec![sourced(row("root", "", "agent", "agent", "agent"), "javascript:alert(1)", "x")],
+    None,
+)]
+#[case::absent(vec![row("root", "", "agent", "agent", "agent")], None)]
+fn summary_source_links_where_the_run_started(
+    #[case] rows: Vec<TraceSpansRow>,
+    #[case] expected: Option<(&str, &str)>,
+) {
+    let source = resolve_trace("t", "", &rows, &[]).unwrap().summary.source;
+    assert_eq!(
+        source
+            .as_ref()
+            .map(|source| (source.url.as_str(), source.title.as_str())),
+        expected
+    );
 }
 
 #[rstest]
