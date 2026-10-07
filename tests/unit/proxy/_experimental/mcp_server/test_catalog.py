@@ -230,14 +230,16 @@ async def test_failed_upstream_remains_visible_when_other_sources_continue(monke
     async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
         if server_id == "a":
             return ListToolsResult(tools=[], meta={SERVER_OUTCOMES_META_KEY: {"a": {"tag": "timeout"}}})
-        return page("b2" if cursor else "b1", None if cursor else "next")
+        return page("b2" if cursor else "b1", None if cursor else "next").model_copy(update={"ttl_ms": 9000})
 
     first = await listing(fetch)
     assert [tool.name for tool in first.tools] == ["b1"]
     assert first.meta[SERVER_OUTCOMES_META_KEY]["a"] == {"tag": "timeout"}
+    assert first.ttl_ms == 0
     second = await listing(fetch, first.next_cursor)
     assert [tool.name for tool in second.tools] == ["b2"]
     assert second.meta[SERVER_OUTCOMES_META_KEY]["a"] == {"tag": "timeout"}
+    assert second.ttl_ms == 0
 
 
 @pytest.mark.asyncio
@@ -473,6 +475,7 @@ async def test_optional_gateway_catalog_reports_initial_failure_and_rejects_fail
     assert fetch.await_args.args[-1] == "next"
 
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["tools", "prompts", "resources", "templates"])
 async def test_first_catalog_page_keeps_admitted_items_and_reports_rate_limited_servers(
@@ -587,3 +590,82 @@ async def test_continuation_rate_limit_raises_without_refetching_completed_serve
     charged_server_ids: Final = [call.args[1].server_id for call in limiter.await_args_list]
     assert charged_server_ids.count("catalog-a") == 2
     assert charged_server_ids.count("catalog-b") == 1
+
+@pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
+@pytest.mark.parametrize("ttls,expected", (((9000, 4000), 4000), ((9000, 0), 0)))
+def test_optional_catalog_preserves_conservative_freshness(kind, ttls, expected):
+    from mcp.types import (
+        ListPromptsRequest,
+        ListPromptsResult,
+        ListResourcesRequest,
+        ListResourcesResult,
+        ListResourceTemplatesRequest,
+        ListResourceTemplatesResult,
+    )
+
+    request, result_type, field = {
+        "prompts": (ListPromptsRequest(), ListPromptsResult, "prompts"),
+        "resources": (ListResourcesRequest(), ListResourcesResult, "resources"),
+        "templates": (ListResourceTemplatesRequest(), ListResourceTemplatesResult, "resource_templates"),
+    }[kind]
+    pages = tuple(result_type(**{field: []}, ttl_ms=ttl, cache_scope="public") for ttl in ttls)
+    result = catalog.combine_optional_catalog(request, pages, None, None)
+    assert result.ttl_ms == expected
+    assert result.cache_scope == "private"
+
+
+@pytest.mark.asyncio
+async def test_tool_catalog_preserves_upstream_freshness():
+    async def fetch(server_id, cursor):
+        return page(server_id).model_copy(update={"ttl_ms": 9000, "cache_scope": "public"})
+
+    result = await listing(fetch)
+    assert 0 < result.ttl_ms <= 9000
+    assert result.cache_scope == "private"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_ttl,limit,expected_ttl", [(1000, 60, 1000), (90000, 1, 1000), (0, 60, 0)])
+async def test_discovery_cache_uses_upstream_freshness_and_configured_cap(upstream_ttl, limit, expected_ttl):
+    from unittest.mock import AsyncMock
+    from mcp.types import ListPromptsResult, Prompt
+    from pydantic import TypeAdapter
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self):
+            return self.now
+
+    clock = Clock()
+    cache = catalog._DiscoveryCache(limit, clock, TypeAdapter(ListPromptsResult))
+    fetch = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="fresh")], ttl_ms=upstream_ttl))
+    first = await cache.get(("server", "caller"), fetch)
+    assert first.prompts[0].name == "fresh"
+    clock.now = 0.5
+    second = await cache.get(("server", "caller"), fetch)
+    assert second.prompts[0].name == "fresh"
+    if expected_ttl:
+        assert fetch.await_count == 1
+        assert second.ttl_ms == 500
+        second.prompts[0].name = "caller edit"
+    else:
+        assert fetch.await_count == 2
+    clock.now = 1.0
+    assert (await cache.get(("server", "caller"), fetch)).prompts[0].name == "fresh"
+    assert fetch.await_count == (2 if expected_ttl else 3)
+
+
+def test_partial_optional_catalog_never_advertises_freshness():
+    from mcp.types import ListPromptsRequest, ListPromptsResult
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+
+    result = catalog.combine_optional_catalog(
+        ListPromptsRequest(),
+        [ListPromptsResult(prompts=[], ttl_ms=9000)],
+        None,
+        {SERVER_OUTCOMES_META_KEY: {"failed-earlier": {"tag": "timeout"}}},
+    )
+    assert result.ttl_ms == 0
+    assert result.cache_scope == "private"
+

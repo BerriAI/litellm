@@ -3520,3 +3520,45 @@ async def test_optional_catalog_distinguishes_absent_capability_from_failed_cont
         assert result.next_cursor is None
     if failure == "unadvertised":
         assert method not in methods
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind,field,entry",
+    [
+        ("prompts", "prompts", {"name": "example"}),
+        ("resources", "resources", {"name": "example", "uri": "test://example"}),
+        ("resource_templates", "resourceTemplates", {"name": "example", "uriTemplate": "test://{name}"}),
+    ],
+)
+@pytest.mark.parametrize("ttl", [0, 5000])
+async def test_optional_discovery_retains_freshness_across_pages(kind, field, entry, ttl):
+    def respond(request):
+        payload = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        if payload.method == "server/discover":
+            result = {
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {"prompts": {}, "resources": {}},
+                "ttlMs": 0,
+                "cacheScope": "private",
+                "resultType": "complete",
+            }
+        else:
+            following = bool((payload.params or {}).get("cursor"))
+            result = {
+                field: [entry],
+                "ttlMs": ttl if following else 9000,
+                "cacheScope": "private" if following else "public",
+                "resultType": "complete",
+                **({} if following else {"nextCursor": "next"}),
+            }
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+
+    client = _MockTransportClient(respond, server_url="https://example.com/mcp", protocol_version="2026-07-28")
+    result = await getattr(client, "list_" + kind + "_result")(raise_on_error=True)
+    assert len(getattr(result, kind)) == 2
+    assert result.cache_scope == "private"
+    assert result.next_cursor is None
+    assert (0 < result.ttl_ms <= ttl) if ttl else result.ttl_ms == 0
+    assert len(await getattr(client, "list_" + kind)(raise_on_error=True)) == 2
