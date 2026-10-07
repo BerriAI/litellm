@@ -42,7 +42,7 @@ def get_all_functions_called_in_tests(base_dir):
         print("dir_path: ", dir_path)
         for root, _, files in os.walk(dir_path):
             for file in files:
-                if file.endswith(".py") and "router" in file.lower():
+                if file.endswith(".py") and ("router" in file.lower() or test_dir == "unit"):
                     print("file: ", file)
                     file_path = os.path.join(root, file)
                     with open(file_path, "r", encoding="utf-8") as f:
@@ -71,6 +71,8 @@ def get_functions_from_router(file_path):
 
 ignored_function_names = [
     "_acancel_batch",
+    "_acreate_batch",
+    "_acreate_file",
     "__init__",
     "avector_store_create",  # Tested via proxy vector_store_endpoints (files lack "router" in name)
     "_override_vector_store_methods_for_router",  # No-op placeholder, called during Router init

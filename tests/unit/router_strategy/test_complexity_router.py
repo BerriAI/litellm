@@ -2748,6 +2748,7 @@ def _llm_response(content: str, response_cost: float | None = None):
     response.choices = [MagicMock()]
     response.choices[0].message.content = content
     response._hidden_params = {} if response_cost is None else {"response_cost": response_cost}
+    response.hidden_params = response._hidden_params
     return response
 
 

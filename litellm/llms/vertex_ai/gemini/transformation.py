@@ -57,7 +57,7 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
-    _check_text_in_content,
+    check_text_in_content,
     get_supports_response_schema,
     get_supports_system_message,
 )
@@ -193,7 +193,7 @@ def _apply_gemini_metadata(
 
     part_dict: Final = dict(part)
 
-    if media_resolution_enum is not None and VertexGeminiConfig._is_gemini_3_or_newer(model):
+    if media_resolution_enum is not None and VertexGeminiConfig.is_gemini_3_or_newer(model):
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
@@ -584,15 +584,21 @@ def _process_gemini_media(
         raise e
 
 
-def _snake_to_camel(snake_str: str) -> str:
+def snake_to_camel(snake_str: str) -> str:
     """Convert snake_case to camelCase"""
     components: Final = snake_str.split("_")
     return components[0] + "".join(x.capitalize() for x in components[1:])
 
 
-def _camel_to_snake(camel_str: str) -> str:
+_snake_to_camel = snake_to_camel
+
+
+def camel_to_snake(camel_str: str) -> str:
     """Convert camelCase to snake_case"""
     return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_str).lower()
+
+
+_camel_to_snake = camel_to_snake
 
 
 def _get_equivalent_key(key: str, available_keys: set) -> str | None:
@@ -603,12 +609,12 @@ def _get_equivalent_key(key: str, available_keys: set) -> str | None:
         return key
 
     # Try camelCase version
-    camel_key: Final = _snake_to_camel(key)
+    camel_key: Final = snake_to_camel(key)
     if camel_key in available_keys:
         return camel_key
 
     # Try snake_case version
-    snake_key: Final = _camel_to_snake(key)
+    snake_key: Final = camel_to_snake(key)
     if snake_key in available_keys:
         return snake_key
 
@@ -687,7 +693,7 @@ def _collect_tool_call_thought_signatures(
     return frozenset(signatures)
 
 
-def _gemini_convert_messages_with_history(
+def gemini_convert_messages_with_history(
     messages: list[AllMessageValues],
     model: str | None = None,
     litellm_params: dict | None = None,
@@ -715,7 +721,7 @@ def _gemini_convert_messages_with_history(
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-    forward_function_call_id: Final = VertexGeminiConfig._forward_gemini_function_call_id(model or "")
+    forward_function_call_id: Final = VertexGeminiConfig.forward_gemini_function_call_id(model or "")
 
     try:
         while msg_i < len(messages):
@@ -861,7 +867,7 @@ def _gemini_convert_messages_with_history(
                     - Known Vertex Error: Unable to submit request because it must have a text parameter.
                     - Relevant Issue: https://github.com/BerriAI/litellm/issues/5515
                 """
-                has_text_in_content = _check_text_in_content(user_content)
+                has_text_in_content = check_text_in_content(user_content)
                 if has_text_in_content is False:
                     verbose_logger.warning(
                         "No text in user content. Adding a blank text to user content, to ensure Gemini doesn't fail the request. Relevant Issue - https://github.com/BerriAI/litellm/issues/5515"
@@ -1053,6 +1059,8 @@ def _gemini_convert_messages_with_history(
         raise e
 
 
+_gemini_convert_messages_with_history = gemini_convert_messages_with_history
+
 # Keys that LiteLLM consumes internally and must never be forwarded to the
 _LITELLM_INTERNAL_EXTRA_BODY_KEYS: Final[frozenset] = frozenset({"cache", "tags"})
 
@@ -1124,7 +1132,7 @@ def _rewrite_google_maps_response_format(data: RequestBody) -> None:
         _rewrite_mime_type_to_response_format(generation_config)
 
 
-def _transform_request_body(
+def transform_request_body(
     messages: list[AllMessageValues],
     model: str,
     optional_params: dict,
@@ -1137,7 +1145,7 @@ def _transform_request_body(
     """
     # Separate system prompt from rest of message
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
-    system_instructions, messages = _transform_system_message(
+    system_instructions, messages = transform_system_message(
         supports_system_message=supports_system_message, messages=messages
     )
     # Checks for 'response_schema' support - if passed in
@@ -1163,11 +1171,11 @@ def _transform_request_body(
 
     try:
         if custom_llm_provider == "gemini":
-            content = litellm.GoogleAIStudioGeminiConfig()._transform_messages(
+            content = litellm.GoogleAIStudioGeminiConfig().transform_messages(
                 messages=messages, model=model, litellm_params=litellm_params
             )
         else:
-            content = litellm.VertexGeminiConfig()._transform_messages(
+            content = litellm.VertexGeminiConfig().transform_messages(
                 messages=messages, model=model, litellm_params=litellm_params
             )
         tools: Final[Tools | None] = optional_params.pop("tools", None)
@@ -1237,6 +1245,9 @@ def _transform_request_body(
     return data
 
 
+_transform_request_body = transform_request_body
+
+
 def sync_transform_request_body(
     gemini_api_key: str | None,
     messages: list[AllMessageValues],
@@ -1278,7 +1289,7 @@ def sync_transform_request_body(
         vertex_auth_header=vertex_auth_header,
     )
 
-    return _transform_request_body(
+    return transform_request_body(
         messages=messages,
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -1355,7 +1366,7 @@ async def async_transform_request_body(
         # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
         # whole sync transformation on a worker thread so it does not block the
         # async event loop.
-        return await asyncify(_transform_request_body)(
+        return await asyncify(transform_request_body)(
             messages=inlined_messages,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -1364,7 +1375,7 @@ async def async_transform_request_body(
             optional_params=optional_params,
         )
 
-    return _transform_request_body(
+    return transform_request_body(
         messages=inlined_messages,
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -1383,7 +1394,7 @@ def _default_user_message_when_system_message_passed() -> ChatCompletionUserMess
     return ChatCompletionUserMessage(content=".", role="user")
 
 
-def _transform_system_message(
+def transform_system_message(
     supports_system_message: bool, messages: list[AllMessageValues]
 ) -> tuple[SystemInstructions | None, list[AllMessageValues]]:
     """
@@ -1427,3 +1438,6 @@ def _transform_system_message(
         return SystemInstructions(parts=system_content_blocks), messages
 
     return None, messages
+
+
+_transform_system_message = transform_system_message
