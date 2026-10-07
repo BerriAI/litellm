@@ -9,6 +9,7 @@ from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.endpoints.speech.speech_to_completion_bridge.transformation import (
     SpeechToCompletionBridgeTransformationHandler,
 )
+from litellm.llms.gemini.speech_audio import convert_pcm16_to_wav
 from litellm.types.utils import ChatCompletionAudioResponse, Choices, Message, ModelResponse
 
 GEMINI_TTS_MODEL: Final = "gemini-3.1-flash-tts-preview"
@@ -116,7 +117,7 @@ def test_gemini_38_tts_speech_does_not_wrap_a_wav_the_provider_already_returned(
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-    wav: Final = SpeechToCompletionBridgeTransformationHandler()._convert_pcm16_to_wav(PCM_BYTES)
+    wav: Final = convert_pcm16_to_wav(PCM_BYTES)
     model: Final = "gemini-3.8-flash-tts"
     logging_obj: Final = LiteLLMLoggingObj(
         model=model,
@@ -155,7 +156,7 @@ def test_gemini_38_tts_pcm_response_strips_a_provider_wav_header() -> None:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-    wav: Final = SpeechToCompletionBridgeTransformationHandler()._convert_pcm16_to_wav(PCM_BYTES)
+    wav: Final = convert_pcm16_to_wav(PCM_BYTES)
     model: Final = "gemini-3.8-flash-tts"
     logging_obj: Final = LiteLLMLoggingObj(
         model=model,
