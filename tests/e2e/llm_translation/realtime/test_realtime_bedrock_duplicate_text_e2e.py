@@ -21,10 +21,12 @@ import base64
 import wave
 from collections import Counter
 from pathlib import Path
+from typing import Final
 
 import pytest
 
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from realtime_client import (
@@ -48,16 +50,16 @@ def pcm16_at_nova_input_rate(path: Path) -> bytes:
     """Mono PCM16 samples from `path`, linearly resampled to Nova Sonic's 16 kHz input rate."""
     with wave.open(str(path), "rb") as wav:
         assert (wav.getnchannels(), wav.getsampwidth()) == (1, 2), "fixture must be mono PCM16"
-        rate = wav.getframerate()
-        source = array.array("h", wav.readframes(wav.getnframes()))
-    step = rate / NOVA_INPUT_RATE
-    resampled = array.array("h")
-    for i in range(int(len(source) / step) - 1):
-        position = i * step
-        base = int(position)
-        fraction = position - base
-        resampled.append(round(source[base] * (1 - fraction) + source[base + 1] * fraction))
-    return resampled.tobytes()
+        ratio: Final = wav.getframerate() / NOVA_INPUT_RATE
+        source: Final = array.array("h", wav.readframes(wav.getnframes()))
+    positions: Final = (i * ratio for i in range(int(len(source) / ratio) - 1))
+    return array.array("h", (_interpolated_sample(source, position) for position in positions)).tobytes()
+
+
+def _interpolated_sample(source: array.array[int], position: float) -> int:
+    base: Final = int(position)
+    fraction: Final = position - base
+    return round(source[base] * (1 - fraction) + source[base + 1] * fraction)
 
 
 def mic_chunks(pcm: bytes) -> list[InputAudioBufferAppend]:
@@ -72,11 +74,21 @@ class TestNovaSonicAssistantText:
         "llm.realtime.bedrock_converse.basic.stream.works",
         exercised_on=["realtime"],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.REALTIME,
+            providers=(Provider.BEDROCK,),
+            models=(NOVA_SONIC,),
+            capabilities=(Capability.AUDIO_INPUT, Capability.AUDIO_OUTPUT),
+            mode=Mode.WEBSOCKET,
+        )
+    )
     def test_nova_sonic_voice_turn_shows_each_sentence_once(
         self, client: RealtimeClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        model = f"e2e-nova-sonic-dupe-{unique_marker()}"
-        model_id = client.proxy.create_model(
+        model: Final = f"e2e-nova-sonic-dupe-{unique_marker()}"
+        model_id: Final = client.proxy.create_model(
             model,
             LiteLLMParamsBody(
                 model=NOVA_SONIC,
@@ -87,7 +99,7 @@ class TestNovaSonicAssistantText:
             mode="realtime",
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
-        silence = InputAudioBufferAppend(
+        silence: Final = InputAudioBufferAppend(
             audio=base64.b64encode(bytes(int(NOVA_INPUT_RATE * CHUNK_SECONDS) * 2)).decode()
         )
 
@@ -102,7 +114,7 @@ class TestNovaSonicAssistantText:
                 )
             )
             session.collect_until("session.updated", timeout=30)
-            events = session.stream_and_collect(
+            events: Final = session.stream_and_collect(
                 mic_chunks(pcm16_at_nova_input_rate(QUESTION_WAV)),
                 tail=silence,
                 interval=CHUNK_SECONDS,
@@ -110,13 +122,13 @@ class TestNovaSonicAssistantText:
                 timeout=90,
             )
 
-        types = [e.type for e in events]
+        types: Final = [e.type for e in events]
         assert "response.done" in types, f"Nova Sonic never finished a response; types={types}"
-        spoken = [
+        spoken: Final = [
             text
             for e in events_of_type(events, "response.text.done")
             if (text := TextDone.model_validate_json(e.payload).text.strip())
         ]
         assert spoken, f"Nova Sonic produced no assistant text; types={types}"
-        repeated = {t: n for t, n in Counter(spoken).items() if n > 1}
+        repeated: Final = {t: n for t, n in Counter(spoken).items() if n > 1}
         assert not repeated, f"assistant text delivered more than once: {repeated}; all text.done={spoken}"

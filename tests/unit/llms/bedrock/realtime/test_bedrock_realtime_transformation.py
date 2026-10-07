@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -1133,7 +1134,7 @@ class TestBedrockRealtimeUserEventsAndUsage:
         assert [e["type"] for e in events] == ["conversation.item.input_audio_transcription.delta"]
 
     @staticmethod
-    def _assistant_text_block(stage, text, stop_reason):
+    def _assistant_text_block(stage: str, text: str, stop_reason: str) -> list[dict[str, object]]:
         return [
             {
                 "event": {
@@ -1149,7 +1150,7 @@ class TestBedrockRealtimeUserEventsAndUsage:
         ]
 
     @staticmethod
-    def _assistant_audio_block(stop_reason):
+    def _assistant_audio_block(stop_reason: str) -> list[dict[str, object]]:
         return [
             {"event": {"contentStart": {"role": "ASSISTANT", "type": "AUDIO"}}},
             {"event": {"audioOutput": {"content": base64.b64encode(b"\x00\x01" * 8).decode()}}},
@@ -1157,8 +1158,8 @@ class TestBedrockRealtimeUserEventsAndUsage:
         ]
 
     def test_final_assistant_text_blocks_do_not_replay_the_spoken_sentences(self):
-        sentences = ["I can't check live weather.", " Try a weather app.", " It will have the forecast."]
-        events = self._run(
+        sentences: Final = ["I can't check live weather.", " Try a weather app.", " It will have the forecast."]
+        events: Final = self._run(
             BedrockRealtimeConfig(),
             self._assistant_text_block("SPECULATIVE", sentences[0], "PARTIAL_TURN")
             + self._assistant_audio_block("PARTIAL_TURN")
@@ -1170,25 +1171,25 @@ class TestBedrockRealtimeUserEventsAndUsage:
             + self._assistant_text_block("FINAL", sentences[1], "PARTIAL_TURN")
             + self._assistant_text_block("FINAL", sentences[2], "PARTIAL_TURN"),
         )
-        types = [e["type"] for e in events]
+        types: Final = [e["type"] for e in events]
         assert [e["text"] for e in events if e["type"] == "response.text.done"] == sentences
         assert types.count("response.created") == 1
         assert types.count("response.done") == 1
         assert types[-1] == "response.done"
-        response_ids = {e["response_id"] for e in events if e["type"] == "response.text.delta"}
+        response_ids: Final = {e["response_id"] for e in events if e["type"] == "response.text.delta"}
         assert response_ids == {events[0]["response"]["id"]}
 
     def test_final_assistant_text_after_end_turn_opens_no_response(self):
-        events = self._run(
+        events: Final = self._run(
             BedrockRealtimeConfig(),
             self._assistant_text_block("FINAL", "Already spoken.", "END_TURN"),
         )
         assert events == []
 
     def test_speculative_text_after_a_final_block_is_forwarded(self):
-        config = BedrockRealtimeConfig()
+        config: Final = BedrockRealtimeConfig()
         self._run(config, self._assistant_text_block("FINAL", "Already spoken.", "END_TURN"))
-        events = self._run(config, self._assistant_text_block("SPECULATIVE", "Next turn.", "PARTIAL_TURN"))
+        events: Final = self._run(config, self._assistant_text_block("SPECULATIVE", "Next turn.", "PARTIAL_TURN"))
         assert [e["type"] for e in events][:1] == ["response.created"]
         assert [e["text"] for e in events if e["type"] == "response.text.done"] == ["Next turn."]
 
