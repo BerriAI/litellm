@@ -15,11 +15,13 @@ import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from e2e_config import settle_propagation
 from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
+from e2e_metadata import step
 from models import KeyGenerateBody, McpServerListResponse, McpServerRow, ObjectPermission
 from proxy_client import ProxyClient
 
@@ -44,6 +46,19 @@ class McpServerNewBody(BaseModel):
 
 class McpServerNewResponse(BaseModel):
     server_id: str
+
+
+class McpHealthParams(BaseModel):
+    server_ids: list[str] | None = None
+
+
+class McpHealthRow(BaseModel):
+    server_id: str
+    status: Literal["healthy", "unhealthy", "unknown"] | None
+
+
+class McpHealthResponse(RootModel[list[McpHealthRow]]):
+    pass
 
 
 class McpToolMcpInfo(BaseModel):
@@ -139,6 +154,7 @@ class McpCallToolResponse(BaseModel):
 class McpClient:
     proxy: ProxyClient
 
+    @step("Register the MCP server {server_name} with the alias {alias}")
     def register_server(
         self,
         *,
@@ -169,6 +185,7 @@ class McpClient:
             )
         ).server_id
 
+    @step("Delete the MCP server")
     def delete_server(self, server_id: str) -> None:
         _ = self.proxy.transport.delete(
             f"/v1/mcp/server/{server_id}",
@@ -177,6 +194,7 @@ class McpClient:
             response_type=NoBody,
         )
 
+    @step("List the MCP servers from /v1/mcp/server")
     def registered_servers(self) -> list[McpServerRow]:
         return unwrap(
             self.proxy.transport.get(
@@ -187,27 +205,37 @@ class McpClient:
             )
         ).root
 
-    def await_registered(self, server_id: str) -> None:
-        """Poll /v1/mcp/server until `server_id` is listed. Fails at poll_timeout.
+    @step("List the MCP servers the key can see from /v1/mcp/server")
+    def list_servers(self, key: str) -> Result[McpServerListResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=NoBody(),
+            response_type=McpServerListResponse,
+        )
 
-        The DB row exists the moment registration returns, but a data-plane pod
-        answers the listing from a registry it refreshes on a periodic DB sync, so a
-        pod that joined the load balancer after the write reports the server as
-        absent until its first sync.
-        """
-        deadline = time.monotonic() + self.proxy.poll_timeout
-        while True:
-            registered = frozenset(row.server_id for row in self.registered_servers())
-            if server_id in registered:
-                return
-            if time.monotonic() >= deadline:
-                raise AssertionError(
-                    f"registered server {server_id} still absent from /v1/mcp/server "
-                    f"{self.proxy.poll_timeout}s after registration (the data plane never synced "
-                    f"the row): {registered}"
-                )
-            time.sleep(self.proxy.poll_interval)
+    @step("Check the health of the MCP servers the key can see from /v1/mcp/server/health")
+    def server_health(self, key: str, server_ids: list[str] | None = None) -> Result[McpHealthResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server/health",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=McpHealthParams(server_ids=server_ids),
+            response_type=McpHealthResponse,
+        )
 
+    @step("Wait for every proxy replica to list the MCP server in /v1/mcp/server")
+    def await_registered(self, server_id: str) -> McpServerRow:
+        """Wait for every configured replica to list the server and return its row."""
+        registered = self.proxy.read_body_back_everywhere(
+            "/v1/mcp/server",
+            McpServerListResponse,
+            settled=lambda response: any(row.server_id == server_id for row in response.root),
+        )
+        return next(
+            row for response in registered.values() for row in response.root if row.server_id == server_id
+        )
+
+    @step("Generate a virtual key for the user {user_id}")
     def generate_key(
         self,
         *,
@@ -234,6 +262,7 @@ class McpClient:
             )
         )
 
+    @step("List the MCP tools the key can see from /mcp-rest/tools/list")
     def list_tools(self, key: str) -> Result[McpToolsListResponse]:
         return self.proxy.transport.get(
             "/mcp-rest/tools/list",
@@ -242,6 +271,7 @@ class McpClient:
             response_type=McpToolsListResponse,
         )
 
+    @step('Wait for /mcp-rest/tools/list to show the MCP server\'s tool matching "{needle}"')
     def await_tool(self, key: str, server_id: str, needle: str) -> str:
         """Poll tools/list until `server_id` serves a tool matching `needle`, and
         return its fully-qualified name. Fails at poll_timeout.
@@ -267,6 +297,7 @@ class McpClient:
                 )
             time.sleep(self.proxy.poll_interval)
 
+    @step("Wait for /mcp-rest/tools/list to show the key exactly the expected tools on the MCP server")
     def await_tools(self, key: str, server_id: str, *, expected: frozenset[str]) -> frozenset[str]:
         """Poll tools/list until `server_id`'s tools as `key` sees them are exactly
         `expected`, and return the last listing either way, so the caller's equality
@@ -281,6 +312,7 @@ class McpClient:
                 return unwrap(result).tool_names_for_server(server_id)
             time.sleep(self.proxy.poll_interval)
 
+    @step("Call the MCP tool {name} through /mcp-rest/tools/call")
     def await_call_tool(
         self,
         key: str,
@@ -309,6 +341,7 @@ class McpClient:
                 )
             time.sleep(self.proxy.poll_interval)
 
+    @step("Call the MCP tool {name} through /mcp-rest/tools/call and wait for a 403")
     def await_call_tool_denied(
         self,
         key: str,
@@ -335,6 +368,7 @@ class McpClient:
                 )
             time.sleep(self.proxy.poll_interval)
 
+    @step('Create the guardrail {name} that blocks MCP tool calls containing "{blocked_keyword}"')
     def register_mcp_content_filter(self, *, name: str, blocked_keyword: str) -> str:
         """Register a default-on content-filter guardrail that runs on the MCP
         tool-call hook (pre_mcp_call) and blocks a single keyword. The keyword is
@@ -358,6 +392,7 @@ class McpClient:
         settle_propagation(time.monotonic())
         return guardrail_id
 
+    @step("Delete the guardrail")
     def delete_guardrail(self, guardrail_id: str) -> None:
         _ = self.proxy.transport.delete(
             f"/guardrails/{guardrail_id}",
@@ -366,6 +401,7 @@ class McpClient:
             response_type=NoBody,
         )
 
+    @step("Call the MCP tool {name} through /mcp-rest/tools/call with {arguments}")
     def call_tool(
         self,
         key: str,

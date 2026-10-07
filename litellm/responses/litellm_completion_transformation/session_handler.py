@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
-from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
@@ -17,6 +16,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
     from litellm.responses.litellm_completion_transformation.transformation import (
         ChatCompletionSession,
     )
@@ -89,7 +89,7 @@ class ResponsesSessionHandler:
 
     @staticmethod
     async def extend_chat_completion_message_with_spend_log_payload(
-        spend_log: SpendLogsPayload,
+        spend_log: "SpendLogsPayload",
         chat_completion_message_history: list[
             AllMessageValues
             | GenericChatCompletionMessage
@@ -122,7 +122,7 @@ class ResponsesSessionHandler:
             elif isinstance(_response_input_param, dict):
                 response_input_param = cast(
                     ResponseInputParam,
-                    [_response_input_param],  # mutable-ok: a lone input item still has to arrive as a list
+                    [_response_input_param],
                 )
 
         if response_input_param:
@@ -161,7 +161,7 @@ class ResponsesSessionHandler:
 
     @staticmethod
     async def get_proxy_server_request_from_spend_log(
-        spend_log: SpendLogsPayload,
+        spend_log: "SpendLogsPayload",
     ) -> dict | None:
         """
         Get the parsed proxy server request from the spend log
@@ -194,7 +194,7 @@ class ResponsesSessionHandler:
 
     @staticmethod
     def _get_cold_storage_object_key_from_spend_log(
-        spend_log: SpendLogsPayload,
+        spend_log: "SpendLogsPayload",
     ) -> str | None:
         """
         Extract the cold storage object key from spend log metadata.
@@ -265,7 +265,7 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_all_spend_logs_for_previous_response_id(
         previous_response_id: str,
-    ) -> list[SpendLogsPayload]:
+    ) -> "list[SpendLogsPayload]":
         """
         Get all spend logs for a previous response id
 
@@ -287,7 +287,7 @@ class ResponsesSessionHandler:
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
-        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
         response_id: Final = decoded_response_id.get("response_id", previous_response_id)
         if prisma_client is None:
             return []
@@ -317,4 +317,4 @@ class ResponsesSessionHandler:
                 return spend_logs
 
         verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
-        return []  # mutable-ok: an empty result the caller only reads
+        return []

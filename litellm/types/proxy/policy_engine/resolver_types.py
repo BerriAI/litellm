@@ -8,10 +8,12 @@ the final guardrails list.
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class PolicyMatchContext(BaseModel):
+class PolicyMatchContext(LiteLLMBaseModel):
     """
     Context used to match a request against policies.
 
@@ -38,7 +40,7 @@ class PolicyMatchContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ResolvedPolicy(BaseModel):
+class ResolvedPolicy(LiteLLMBaseModel):
     """
     Result of resolving a policy with its inheritance chain.
 
@@ -63,7 +65,7 @@ class ResolvedPolicy(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyScopeResponse(BaseModel):
+class PolicyScopeResponse(LiteLLMBaseModel):
     """Scope configuration for a policy."""
 
     teams: list[str] = Field(default_factory=list)
@@ -72,14 +74,14 @@ class PolicyScopeResponse(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class PolicyGuardrailsResponse(BaseModel):
+class PolicyGuardrailsResponse(LiteLLMBaseModel):
     """Guardrails configuration for a policy."""
 
     add: list[str] = Field(default_factory=list)
     remove: list[str] = Field(default_factory=list)
 
 
-class PolicyInfoResponse(BaseModel):
+class PolicyInfoResponse(LiteLLMBaseModel):
     """Response for /policy/info/{policy_name} endpoint."""
 
     policy_name: str
@@ -90,7 +92,7 @@ class PolicyInfoResponse(BaseModel):
     inheritance_chain: list[str]
 
 
-class PolicySummaryItem(BaseModel):
+class PolicySummaryItem(LiteLLMBaseModel):
     """Summary of a single policy for list endpoint."""
 
     inherit: str | None = None
@@ -100,14 +102,14 @@ class PolicySummaryItem(BaseModel):
     inheritance_chain: list[str]
 
 
-class PolicyListResponse(BaseModel):
+class PolicyListResponse(LiteLLMBaseModel):
     """Response for /policy/list endpoint."""
 
     policies: dict[str, PolicySummaryItem]
     total_count: int
 
 
-class PolicyTestResponse(BaseModel):
+class PolicyTestResponse(LiteLLMBaseModel):
     """Response for /policy/test endpoint."""
 
     context: PolicyMatchContext
@@ -121,7 +123,7 @@ class PolicyTestResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyConditionRequest(BaseModel):
+class PolicyConditionRequest(LiteLLMBaseModel):
     """Condition for when a policy applies."""
 
     model: str | None = Field(
@@ -130,7 +132,7 @@ class PolicyConditionRequest(BaseModel):
     )
 
 
-class PolicyCreateRequest(BaseModel):
+class PolicyCreateRequest(LiteLLMBaseModel):
     """Request body for creating a new policy."""
 
     policy_name: str = Field(description="Unique name for the policy.")
@@ -160,7 +162,7 @@ class PolicyCreateRequest(BaseModel):
     )
 
 
-class PolicyUpdateRequest(BaseModel):
+class PolicyUpdateRequest(LiteLLMBaseModel):
     """Request body for updating a policy."""
 
     policy_name: str | None = Field(
@@ -193,7 +195,7 @@ class PolicyUpdateRequest(BaseModel):
     )
 
 
-class PolicyDBResponse(BaseModel):
+class PolicyDBResponse(LiteLLMBaseModel):
     """Response for a policy from the database."""
 
     policy_id: str = Field(description="Unique ID of the policy.")
@@ -226,7 +228,7 @@ class PolicyDBResponse(BaseModel):
     )
 
 
-class PolicyListDBResponse(BaseModel):
+class PolicyListDBResponse(LiteLLMBaseModel):
     """Response for listing policies from the database."""
 
     policies: list[PolicyDBResponse] = Field(default_factory=list, description="List of policies.")
@@ -238,7 +240,7 @@ class PolicyListDBResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyVersionCreateRequest(BaseModel):
+class PolicyVersionCreateRequest(LiteLLMBaseModel):
     """Request body for creating a new policy version (draft)."""
 
     source_policy_id: str | None = Field(
@@ -247,7 +249,7 @@ class PolicyVersionCreateRequest(BaseModel):
     )
 
 
-class PolicyVersionStatusUpdateRequest(BaseModel):
+class PolicyVersionStatusUpdateRequest(LiteLLMBaseModel):
     """Request body for updating a policy version's status."""
 
     version_status: str = Field(
@@ -255,7 +257,7 @@ class PolicyVersionStatusUpdateRequest(BaseModel):
     )
 
 
-class PolicyVersionListResponse(BaseModel):
+class PolicyVersionListResponse(LiteLLMBaseModel):
     """Response for listing all versions of a policy."""
 
     policy_name: str = Field(description="Name of the policy.")
@@ -265,7 +267,7 @@ class PolicyVersionListResponse(BaseModel):
     total_count: int = Field(default=0, description="Total number of versions.")
 
 
-class PolicyVersionCompareResponse(BaseModel):
+class PolicyVersionCompareResponse(LiteLLMBaseModel):
     """Response for comparing two policy versions."""
 
     version_a: PolicyDBResponse = Field(description="First version.")
@@ -281,7 +283,7 @@ class PolicyVersionCompareResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PolicyAttachmentCreateRequest(BaseModel):
+class PolicyAttachmentCreateRequest(LiteLLMBaseModel):
     """Request body for creating a policy attachment."""
 
     policy_name: str = Field(description="Name of the policy to attach.")
@@ -305,9 +307,19 @@ class PolicyAttachmentCreateRequest(BaseModel):
         default=None,
         description="Tag patterns this attachment applies to. Supports wildcards (e.g., health-*).",
     )
+    priority: int | None = Field(
+        default=None,
+        ge=-2147483648,
+        le=2147483647,
+        description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+    )
+    default: bool = Field(
+        default=False,
+        description="Apply this attachment only when no non-default attachment matches the request.",
+    )
 
 
-class PolicyAttachmentDBResponse(BaseModel):
+class PolicyAttachmentDBResponse(LiteLLMBaseModel):
     """Response for a policy attachment from the database."""
 
     attachment_id: str = Field(description="Unique ID of the attachment.")
@@ -317,6 +329,14 @@ class PolicyAttachmentDBResponse(BaseModel):
     keys: list[str] = Field(default_factory=list, description="Key patterns.")
     models: list[str] = Field(default_factory=list, description="Model patterns.")
     tags: list[str] = Field(default_factory=list, description="Tag patterns.")
+    priority: int | None = Field(
+        default=None,
+        description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+    )
+    default: bool = Field(
+        default=False,
+        description="Apply this attachment only when no non-default attachment matches the request.",
+    )
     created_at: datetime | None = Field(default=None, description="When the attachment was created.")
     updated_at: datetime | None = Field(default=None, description="When the attachment was last updated.")
     created_by: str | None = Field(default=None, description="Who created the attachment.")
@@ -327,7 +347,7 @@ class PolicyAttachmentDBResponse(BaseModel):
     )
 
 
-class PolicyAttachmentListResponse(BaseModel):
+class PolicyAttachmentListResponse(LiteLLMBaseModel):
     """Response for listing policy attachments."""
 
     attachments: list[PolicyAttachmentDBResponse] = Field(
@@ -341,7 +361,7 @@ class PolicyAttachmentListResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class PipelineTestRequest(BaseModel):
+class PipelineTestRequest(LiteLLMBaseModel):
     """Request body for testing a guardrail pipeline with sample messages."""
 
     pipeline: dict[str, Any] = Field(
@@ -352,7 +372,7 @@ class PipelineTestRequest(BaseModel):
     )
 
 
-class PolicyResolveRequest(BaseModel):
+class PolicyResolveRequest(LiteLLMBaseModel):
     """Request body for resolving effective policies/guardrails for a context."""
 
     team_alias: str | None = Field(default=None, description="Team alias to resolve for.")
@@ -361,7 +381,7 @@ class PolicyResolveRequest(BaseModel):
     tags: list[str] | None = Field(default=None, description="Tags to resolve for.")
 
 
-class PolicyMatchDetail(BaseModel):
+class PolicyMatchDetail(LiteLLMBaseModel):
     """Details about why a specific policy matched."""
 
     policy_name: str = Field(description="Name of the matched policy.")
@@ -374,7 +394,7 @@ class PolicyMatchDetail(BaseModel):
     )
 
 
-class PolicyResolveResponse(BaseModel):
+class PolicyResolveResponse(LiteLLMBaseModel):
     """Response for resolving effective policies/guardrails for a context."""
 
     effective_guardrails: list[str] = Field(
@@ -392,7 +412,7 @@ class PolicyResolveResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class AttachmentImpactResponse(BaseModel):
+class AttachmentImpactResponse(LiteLLMBaseModel):
     """Response for estimating the impact of a policy attachment."""
 
     affected_keys_count: int = Field(

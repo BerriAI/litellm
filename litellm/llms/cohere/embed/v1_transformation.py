@@ -2,7 +2,8 @@
 Legacy /v1/embedding transformation logic for Bedrock Cohere.
 """
 
-from typing import Any, Final
+from collections.abc import Sized
+from typing import Final, Protocol
 
 import httpx
 
@@ -14,6 +15,12 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import is_base64_encoded
+
+
+class _SupportsEncode(Protocol):
+    """Tokenizer handle: the embedding usage path only encodes text to measure its token length."""
+
+    def encode(self, text: str, /) -> Sized: ...
 
 
 class CohereEmbeddingConfig:
@@ -61,7 +68,15 @@ class CohereEmbeddingConfig:
 
         return transformed_request
 
-    def _calculate_usage(self, input: list[str], encoding: Any, meta: dict) -> Usage:
+    def transform_request(
+        self,
+        model: str,
+        input: list[str],  # mutable-ok: mirrors override contract
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> CohereEmbeddingRequestWithModel:
+        return self._transform_request(model, input, inference_params)
+
+    def _calculate_usage(self, input: list[str], encoding: _SupportsEncode, meta: dict) -> Usage:
         input_tokens = 0
 
         text_tokens: Final[int | None] = meta.get("billed_units", {}).get("input_tokens")
@@ -97,7 +112,7 @@ class CohereEmbeddingConfig:
         data: dict | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
-        encoding: Any,
+        encoding: _SupportsEncode,
         input: list,
     ) -> EmbeddingResponse:
         response_json: Final = response.json()
@@ -116,12 +131,25 @@ class CohereEmbeddingConfig:
             input=input,
         )
 
+    def transform_response(
+        self,
+        response: httpx.Response,
+        api_key: str | None,
+        logging_obj: LiteLLMLoggingObj,
+        data: dict[str, object] | CohereEmbeddingRequest,  # mutable-ok: mirrors override contract
+        model_response: EmbeddingResponse,
+        model: str,
+        encoding: _SupportsEncode,
+        input: list[str],  # mutable-ok: mirrors override contract
+    ) -> EmbeddingResponse:
+        return self._transform_response(response, api_key, logging_obj, data, model_response, model, encoding, input)
+
     def _populate_embedding_response(
         self,
         response_json: dict,
         model_response: EmbeddingResponse,
         model: str,
-        encoding: Any,
+        encoding: _SupportsEncode,
         input: list,
     ) -> EmbeddingResponse:
         """
@@ -171,3 +199,13 @@ class CohereEmbeddingConfig:
         )
 
         return model_response
+
+    def populate_embedding_response(
+        self,
+        response_json: dict[str, object],  # mutable-ok: mirrors override contract
+        model_response: EmbeddingResponse,
+        model: str,
+        encoding: _SupportsEncode,
+        input: list[str],  # mutable-ok: mirrors override contract
+    ) -> EmbeddingResponse:
+        return self._populate_embedding_response(response_json, model_response, model, encoding, input)

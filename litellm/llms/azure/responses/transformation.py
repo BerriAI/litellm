@@ -32,7 +32,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
-        return AzureOpenAIGPT5Config._supports_reasoning_effort_level(model, "none")
+        return AzureOpenAIGPT5Config.supports_reasoning_effort_level(model, "none")
 
     @staticmethod
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
@@ -46,15 +46,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return [param for param in base_supported_params if param not in self.AZURE_UNSUPPORTED_PARAMS]
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
-        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
+        return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_stripped_model_name(self, model: str) -> str:
-        # if "responses/" is in the model name, remove it
-        if "responses/" in model:
-            model = model.replace("responses/", "")
-        if "o_series" in model:
-            model = model.replace("o_series/", "")
-        return model
+        return model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
 
     def _handle_reasoning_item(self, item: dict[str, Any]) -> dict[str, Any]:
         """
@@ -174,7 +169,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 
-        return BaseAzureLLM._get_base_azure_url(
+        return BaseAzureLLM.get_base_azure_url(
             api_base=api_base,
             litellm_params=litellm_params,
             route="/openai/responses",
