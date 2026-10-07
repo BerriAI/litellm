@@ -14,9 +14,12 @@ The async SSE wrapper must instead surface the failure as a well-formed
 Anthropic ``error`` event so the stream stays valid and the client can retry.
 """
 
+import asyncio
 import json
 import os
 import sys
+import threading
+from datetime import datetime
 from typing import List, Optional
 from unittest.mock import MagicMock
 
@@ -25,6 +28,8 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
     _mid_stream_error_sse_event,
@@ -142,37 +147,55 @@ def test_error_event_preserves_midstream_fallback_error():
     assert "internalServerException" in payload["error"]["message"]
 
 
-class _RecordingLoggingObj:
-    """Stands in for the logging object at the mid-stream failure boundary.
+class _AsyncFailureRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.exceptions: list[BaseException] = []
 
-    ``dispatch_failure_handlers`` is the seam the adapter calls, so recording
-    through it is what proves the adapter routed the failure rather than
-    swallowing it.
-    """
-
-    def __init__(self, proxy_managed: bool):
-        self.recorded_message_ids: list[str] = []
-        self.failure_calls: list[BaseException] = []
-        self.sync_failure_callback_ran = False
-        self.on_detached_stream_failure = self._detached_failure_hook if proxy_managed else None
-
-    async def _detached_failure_hook(self, exc: BaseException) -> None:
-        return None
-
-    def record_streamed_anthropic_message_id(self, message_id: str) -> None:
-        self.recorded_message_ids.append(message_id)
-
-    async def dispatch_failure_handlers(
-        self,
-        exception: BaseException,
-        traceback_exception: str,
-        prefer_async_handlers: bool = False,
-    ) -> None:
-        self.failure_calls.append(exception)
-        self.sync_failure_callback_ran = True
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.exceptions.append(kwargs["exception"])
 
 
-def _failing_wrapper(logging_obj) -> AnthropicStreamWrapper:
+class _SyncFailureRecorder:
+    def __init__(self):
+        self.exceptions: list[BaseException] = []
+        self.called = threading.Event()
+
+    def __call__(self, kwargs, completion_response, start_time, end_time):
+        self.exceptions.append(kwargs["exception"])
+        self.called.set()
+
+
+def _make_logging_obj(
+    test_name: str,
+    async_recorder: _AsyncFailureRecorder,
+    sync_recorder: _SyncFailureRecorder,
+) -> LiteLLMLoggingObj:
+    return LiteLLMLoggingObj(
+        model="bedrock-converse-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id=test_name,
+        function_id=test_name,
+        dynamic_failure_callbacks=[sync_recorder],
+        dynamic_async_failure_callbacks=[async_recorder],
+    )
+
+
+async def _proxy_boundary_hook(exc: Exception) -> None:
+    return None
+
+
+async def _wait_for_sync_failure(sync_recorder: _SyncFailureRecorder) -> None:
+    for _ in range(500):
+        if sync_recorder.called.is_set():
+            return
+        await asyncio.sleep(0.01)
+
+
+def _failing_wrapper(logging_obj: LiteLLMLoggingObj | None) -> AnthropicStreamWrapper:
     return AnthropicStreamWrapper(
         completion_stream=_AsyncStreamThenRaise(
             [_make_chunk(Delta(content="partial"))],
@@ -185,49 +208,35 @@ def _failing_wrapper(logging_obj) -> AnthropicStreamWrapper:
 
 @pytest.mark.asyncio
 async def test_mid_stream_error_reraises_for_proxy_managed_stream():
-    """The proxy arms ``on_detached_stream_failure`` on the logging object, which
-    makes its streaming boundary the owner of failure bookkeeping. Re-raising lets
-    that boundary write the failure spend row and serialize the error frame, so the
-    adapter must neither swallow the error nor report it a second time."""
-    logging_obj = _RecordingLoggingObj(proxy_managed=True)
-    wrapper = _failing_wrapper(logging_obj)
+    async_recorder = _AsyncFailureRecorder()
+    sync_recorder = _SyncFailureRecorder()
+    logging_obj = _make_logging_obj("proxy-managed", async_recorder, sync_recorder)
+    logging_obj.on_detached_stream_failure = _proxy_boundary_hook
 
     with pytest.raises(BedrockError):
-        await _drain_sse(wrapper)
+        await _drain_sse(_failing_wrapper(logging_obj))
 
-    assert logging_obj.failure_calls == [], "adapter duplicated bookkeeping the proxy boundary owns"
+    await asyncio.sleep(0.1)
+    assert async_recorder.exceptions == []
+    assert sync_recorder.exceptions == []
 
 
 @pytest.mark.asyncio
 async def test_mid_stream_error_dispatches_failure_handlers_for_standalone_stream():
-    """Standalone SDK consumption has no proxy boundary downstream, so a mid-stream
-    provider failure reaches no failure bookkeeping on its own and the spend row is
-    never written. The adapter must route it through ``dispatch_failure_handlers``,
-    which covers both the sync ``litellm.failure_callback`` list and the async one."""
-    logging_obj = _RecordingLoggingObj(proxy_managed=False)
-    wrapper = _failing_wrapper(logging_obj)
+    async_recorder = _AsyncFailureRecorder()
+    sync_recorder = _SyncFailureRecorder()
+    wrapper = _failing_wrapper(_make_logging_obj("standalone", async_recorder, sync_recorder))
 
     events = await _drain_sse(wrapper)
+    await _wait_for_sync_failure(sync_recorder)
 
-    assert len(logging_obj.failure_calls) == 1, "mid-stream failure was swallowed without bookkeeping"
-    assert "messageStop" in str(logging_obj.failure_calls[0])
-    assert logging_obj.sync_failure_callback_ran
+    assert [str(exc) for exc in async_recorder.exceptions] == ["ConverseStream ended without messageStop"]
+    assert [str(exc) for exc in sync_recorder.exceptions] == ["ConverseStream ended without messageStop"]
     assert _parse_sse(events[-1])[0] == "error"
 
 
 @pytest.mark.asyncio
 async def test_mid_stream_error_emits_error_event_without_logging_obj():
-    """No logging object at all is a legitimate standalone shape (the adapter is
-    constructed without one for direct SDK use), and it must still produce the
-    client-facing error frame."""
-    wrapper = AnthropicStreamWrapper(
-        completion_stream=_AsyncStreamThenRaise(
-            [_make_chunk(Delta(content="partial"))],
-            BedrockError(status_code=500, message="boom"),
-        ),
-        model="claude-x",
-    )
-
-    events = await _drain_sse(wrapper)
+    events = await _drain_sse(_failing_wrapper(None))
 
     assert _parse_sse(events[-1])[0] == "error"
