@@ -56,12 +56,9 @@ def make_sync_call(
     timeout: float | httpx.Timeout | None = None,
 ) -> tuple[Any, httpx.Headers]:
     if client is None:
-        _params: Final = {}
-        if timeout is not None:
-            if isinstance(timeout, (float, int)):
-                timeout = httpx.Timeout(timeout)
-            _params["timeout"] = timeout
-        client = _get_httpx_client(_params if _params else None)
+        client_timeout: Final = httpx.Timeout(timeout) if isinstance(timeout, (float, int)) else timeout
+        client_params: Final = {"timeout": client_timeout} if client_timeout is not None else None
+        client = _get_httpx_client(client_params)
 
     response: Final = client.post(
         api_base,

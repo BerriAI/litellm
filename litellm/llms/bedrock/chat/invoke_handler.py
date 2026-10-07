@@ -168,18 +168,23 @@ async def make_call(
 ) -> "tuple[MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
-            _params: Final = (
-                {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
-                else {}
+            client_timeout: Final = httpx.Timeout(timeout) if isinstance(timeout, (float, int)) else timeout
+            ssl_verify: Final = (
+                logging_obj.litellm_params.get("ssl_verify")
+                if logging_obj and logging_obj.litellm_params
+                else None
             )
-            if timeout is not None:
-                if isinstance(timeout, (float, int)):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
+            client_params: Final = {
+                k: v
+                for k, v in (
+                    ("ssl_verify", ssl_verify),
+                    ("timeout", client_timeout),
+                )
+                if v is not None
+            } or None
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.BEDROCK,
-                params=_params if _params else None,
+                params=client_params,
             )  # Create a new client if none provided
 
         response: Final = await client.post(
@@ -274,16 +279,21 @@ def make_sync_call(
 ) -> "tuple[MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
-            _params: Final = (
-                {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
-                else {}
+            client_timeout: Final = httpx.Timeout(timeout) if isinstance(timeout, (float, int)) else timeout
+            ssl_verify: Final = (
+                logging_obj.litellm_params.get("ssl_verify")
+                if logging_obj and logging_obj.litellm_params
+                else None
             )
-            if timeout is not None:
-                if isinstance(timeout, (float, int)):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            client = _get_httpx_client(params=_params if _params else None)
+            client_params: Final = {
+                k: v
+                for k, v in (
+                    ("ssl_verify", ssl_verify),
+                    ("timeout", client_timeout),
+                )
+                if v is not None
+            } or None
+            client = _get_httpx_client(params=client_params)
 
         response: Final = client.post(
             api_base,
