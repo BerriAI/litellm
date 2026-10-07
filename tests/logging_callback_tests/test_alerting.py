@@ -3,35 +3,28 @@
 
 import asyncio
 import io
-import json
 import os
-import random
-import time
-from litellm._uuid import uuid
-from datetime import datetime, timedelta
-from typing import Optional
-
-import httpx
-
-from litellm.types.integrations.slack_alerting import AlertType
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
-import unittest.mock
+from datetime import datetime, timedelta
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from openai import APIError
 
 import litellm
-from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.SlackAlerting.slack_alerting import (
     DeploymentMetrics,
     SlackAlerting,
 )
 from litellm.proxy._types import CallInfo, Litellm_EntityType, WebhookEvent
 from litellm.proxy.utils import ProxyLogging
-from litellm.router import AlertingConfig, Router
+from litellm.router import Router
+from litellm.types.integrations.slack_alerting import AlertType
 from litellm.utils import get_api_base
 
 
@@ -324,45 +317,6 @@ async def test_daily_reports_completion(slack_alerting):
         mock_send_alert.assert_awaited()
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="Local test. Test if slack alerts are sent.")
-async def test_send_llm_exception_to_slack():
-
-    # on async success
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-5-mini",
-                "litellm_params": {
-                    "model": "gpt-5-mini",
-                    "api_key": "bad_key",
-                },
-            },
-            {
-                "model_name": "gpt-5-good",
-                "litellm_params": {
-                    "model": "gpt-5-mini",
-                },
-            },
-        ],
-        alerting_config=AlertingConfig(
-            alerting_threshold=0.5, webhook_url=os.getenv("SLACK_WEBHOOK_URL")
-        ),
-    )
-    try:
-        await router.acompletion(
-            model="gpt-5-mini",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )
-    except Exception:
-        pass
-
-    await router.acompletion(
-        model="gpt-5-good",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-
-    await asyncio.sleep(3)
 
 
 # test models with 0 metrics are ignored
@@ -790,9 +744,10 @@ async def test_print_alerting_payload_warning():
     Test if alerts are printed to verbose logger when log_to_console=True
     """
     litellm.set_verbose = True
+    import logging
+
     from litellm._logging import verbose_proxy_logger
     from litellm.integrations.SlackAlerting.batching_handler import send_to_webhook
-    import logging
 
     # Create a string buffer to capture log output
     log_stream = io.StringIO()

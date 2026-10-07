@@ -892,40 +892,6 @@ jobs:
           paths:
             - router_unit_tests_coverage.xml
             - router_unit_tests_coverage
-  litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: medium
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -k \"assistants\""
-          no_output_timeout: 15m
-      # Store test results
-      - store_test_results:
-          path: test-results
   llm_translation_testing:
     docker:
       - *python312_image
@@ -1021,49 +987,6 @@ jobs:
           paths:
             - realtime_translation_coverage.xml
             - realtime_translation_coverage
-  agent_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/agent_tests/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv -s \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml agent_coverage.xml
-            mv .coverage agent_coverage
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - agent_coverage.xml
-            - agent_coverage
   guardrails_testing:
     docker:
       - *python312_image
@@ -2685,7 +2608,7 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage agent_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3221,9 +3144,13 @@ jobs:
       parallelism:
         type: integer
         default: 1
+      resource_class:
+        type: enum
+        enum: [large, xlarge]
+        default: large
     machine:
       image: ubuntu-2204:2024.04.1
-    resource_class: large
+    resource_class: << parameters.resource_class >>
     working_directory: ~/project
     parallelism: << parameters.parallelism >>
     steps:
@@ -3566,7 +3493,11 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, mcp, sdk, cost, security, browser]
+              suite: [management, accounting, database, providers, sdk, cost, security, browser]
+      - integration_contracts:
+          name: integration-mcp
+          suite: mcp
+          resource_class: xlarge
       - integration_contracts:
           name: integration-extensions
           suite: extensions
@@ -3624,7 +3555,6 @@ workflows:
       - local_testing_part1
       - local_testing_part2
       - langfuse_logging_unit_tests
-      - litellm_assistants_api_testing
       - litellm_router_testing
       - litellm_router_unit_testing
       - auth_ui_unit_tests
@@ -3658,7 +3588,6 @@ workflows:
             - build_docker_database_image
       - llm_translation_testing
       - realtime_translation_testing
-      - agent_testing
       - guardrails_testing
       - google_generate_content_endpoint_testing
       - llm_responses_api_testing
@@ -3673,7 +3602,6 @@ workflows:
       - upload-coverage:
           requires:
             - realtime_translation_testing
-            - agent_testing
             - google_generate_content_endpoint_testing
             - guardrails_testing
             - ocr_testing
@@ -3687,7 +3615,6 @@ workflows:
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
-            - litellm_assistants_api_testing
             - litellm_router_unit_testing
             - auth_ui_unit_tests
       - db_migration_disable_update_check:

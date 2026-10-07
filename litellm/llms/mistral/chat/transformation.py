@@ -229,7 +229,7 @@ class MistralConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[object, object, list[AllMessageValues]]: 
+    ) -> Coroutine[object, object, list[AllMessageValues]]:
         ...
 
     @overload
