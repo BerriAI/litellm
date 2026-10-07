@@ -158,7 +158,7 @@ class AnthropicMessagesRequestUtils:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
             from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-            AnthropicConfig._maybe_drop_speed_param(
+            AnthropicConfig.maybe_drop_speed_param(
                 model=model,
                 optional_params=filtered_params,
                 drop_params=drop_params,

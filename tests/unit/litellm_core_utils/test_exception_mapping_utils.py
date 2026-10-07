@@ -1239,7 +1239,7 @@ def test_handle_error_marks_only_a_status_code_it_never_received():
     handler = BaseLLMHTTPHandler()
 
     with pytest.raises(litellm.llms.base_llm.chat.transformation.BaseLLMException) as transport:
-        raise handler._handle_error(e=httpx.ConnectError("Connection refused"), provider_config=None)
+        raise handler.handle_error(e=httpx.ConnectError("Connection refused"), provider_config=None)
     assert transport.value.status_code == 500
     assert transport.value.status_code_is_synthesized is True
 
@@ -1250,7 +1250,7 @@ def test_handle_error_marks_only_a_status_code_it_never_received():
         response=httpx.Response(status_code=500, request=request, text="upstream exploded"),
     )
     with pytest.raises(litellm.llms.base_llm.chat.transformation.BaseLLMException) as received:
-        raise handler._handle_error(e=upstream, provider_config=None)
+        raise handler.handle_error(e=upstream, provider_config=None)
     assert received.value.status_code == 500
     assert received.value.status_code_is_synthesized is False
 

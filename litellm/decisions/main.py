@@ -10,7 +10,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.decisions.transformation import DecisionsProviderConfig
 from litellm.llms.cloudflare.decisions.transformation import CLOUDFLARE_DECISIONS_ENDPOINT
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client, get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, get_httpx_client
 from litellm.llms.openrouter.decisions.transformation import OPENROUTER_DECISIONS_ENDPOINT
 from litellm.llms.perplexity.decisions.transformation import PERPLEXITY_DECISIONS_ENDPOINT
 from litellm.llms.strands_decider.decisions.transformation import STRANDS_DECIDER_DECISIONS_ENDPOINT
@@ -206,7 +206,7 @@ def _parse_response(
     response.raise_for_status()
     payload: Final[object] = _DECISIONS_PAYLOAD_ADAPTER.validate_json(response.content)
     result: Final = _DECISIONS_RESPONSE_ADAPTER.validate_python(prepared.config.unwrap_response(payload))
-    result._hidden_params.update(
+    result.hidden_params.update(
         {
             "model": f"{prepared.provider}/{prepared.upstream_model}",
             "custom_llm_provider": prepared.provider,
@@ -283,7 +283,7 @@ def decisions(
     )
     logging_obj: Final = _log_request(prepared, kwargs)
     try:
-        handler: Final = _get_httpx_client()
+        handler: Final = get_httpx_client()
         response: Final = handler.post(
             prepared.url,
             json=dict(prepared.body),

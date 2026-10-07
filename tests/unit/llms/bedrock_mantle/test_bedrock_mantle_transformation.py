@@ -59,7 +59,7 @@ class TestBedrockMantleConfig:
         monkeypatch.setenv("BEDROCK_MANTLE_REGION", "eu-west-1")
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
+        api_base, _ = cfg.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://bedrock-mantle.eu-west-1.api.aws/v1"
 
     def test_default_api_base_uses_aws_region(self, monkeypatch):
@@ -67,7 +67,7 @@ class TestBedrockMantleConfig:
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
+        api_base, _ = cfg.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://bedrock-mantle.ap-northeast-1.api.aws/v1"
 
     def test_default_api_base_uses_aws_region_name_env(self, monkeypatch):
@@ -76,7 +76,7 @@ class TestBedrockMantleConfig:
         monkeypatch.delenv("AWS_REGION", raising=False)
         monkeypatch.setenv("AWS_REGION_NAME", "ca-central-1")
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
+        api_base, _ = cfg.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://bedrock-mantle.ca-central-1.api.aws/v1"
 
     def test_aws_region_name_param_overrides_env(self, monkeypatch):
@@ -85,7 +85,7 @@ class TestBedrockMantleConfig:
         monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-west-2")
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(
+        api_base, _ = cfg.get_openai_compatible_provider_info(
             None, None, litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2")
         )
         assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
@@ -98,12 +98,10 @@ class TestBedrockMantleConfig:
         monkeypatch.delenv("AWS_REGION", raising=False)
         cfg = BedrockMantleChatConfig()
         with pytest.raises(ValueError, match="api\\.aws\\.attacker\\.example/'\\. Region names must contain only"):
-            cfg._get_openai_compatible_provider_info(
+            cfg.get_openai_compatible_provider_info(
                 None,
                 None,
-                litellm_params=GenericLiteLLMParams(
-                    aws_region_name="us-east-1.api.aws.attacker.example/"
-                ),
+                litellm_params=GenericLiteLLMParams(aws_region_name="us-east-1.api.aws.attacker.example/"),
             )
 
     def test_get_llm_provider_rejects_malicious_aws_region_name(self, monkeypatch):
@@ -143,7 +141,7 @@ class TestBedrockMantleConfig:
         for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION", "AWS_REGION_NAME"):
             monkeypatch.delenv(var, raising=False)
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(None, None, model="us-gov-west-1/xai.grok-4.3")
+        api_base, _ = cfg.get_openai_compatible_provider_info(None, None, model="us-gov-west-1/xai.grok-4.3")
         assert api_base == "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1"
 
     def test_aws_region_name_param_beats_model_region_prefix(self, monkeypatch, local_cost_map):
@@ -152,7 +150,7 @@ class TestBedrockMantleConfig:
         for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION", "AWS_REGION_NAME"):
             monkeypatch.delenv(var, raising=False)
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(
+        api_base, _ = cfg.get_openai_compatible_provider_info(
             None,
             None,
             litellm_params=GenericLiteLLMParams(aws_region_name="us-east-1"),
@@ -165,13 +163,13 @@ class TestBedrockMantleConfig:
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
+        api_base, _ = cfg.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://bedrock-mantle.us-east-1.api.aws/v1"
 
     def test_custom_api_base_overrides_default(self, monkeypatch):
         custom_base = "https://bedrock-mantle.us-west-2.api.aws/v1"
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(custom_base, None)
+        api_base, _ = cfg.get_openai_compatible_provider_info(custom_base, None)
         assert api_base == custom_base
 
     def test_chat_base_for_gpt_oss_uses_v1(self, monkeypatch):
@@ -181,18 +179,14 @@ class TestBedrockMantleConfig:
         monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(
-            None, None, model="openai.gpt-oss-120b"
-        )
+        api_base, _ = cfg.get_openai_compatible_provider_info(None, None, model="openai.gpt-oss-120b")
         assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
 
     @pytest.mark.parametrize(
         "model_id",
         ["google.gemma-4-31b", "google.gemma-4-26b-a4b", "google.gemma-4-e2b"],
     )
-    def test_chat_base_for_gemma_4_uses_openai_v1(
-        self, monkeypatch, local_cost_map, model_id
-    ):
+    def test_chat_base_for_gemma_4_uses_openai_v1(self, monkeypatch, local_cost_map, model_id):
         # The chat-config bug the Gemma 4 cards exposed: gemma-4-* is served on the
         # /openai/v1 base, not the hardcoded /v1. Driven by the price-map
         # use_openai_responses_path flag (loaded by local_cost_map). Fails before
@@ -200,41 +194,35 @@ class TestBedrockMantleConfig:
         monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(
-            None, None, model=model_id
-        )
+        api_base, _ = cfg.get_openai_compatible_provider_info(None, None, model=model_id)
         assert api_base == "https://bedrock-mantle.us-east-2.api.aws/openai/v1"
 
-    def test_chat_base_explicit_api_base_wins_over_derived(
-        self, monkeypatch, local_cost_map
-    ):
+    def test_chat_base_explicit_api_base_wins_over_derived(self, monkeypatch, local_cost_map):
         # An explicit api_base must not be overridden by the data-driven default,
         # even for a model whose default differs (gemma-4 -> openai/v1).
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         custom_base = "https://bedrock-mantle.us-west-2.api.aws/v1"
         cfg = BedrockMantleChatConfig()
-        api_base, _ = cfg._get_openai_compatible_provider_info(
-            custom_base, None, model="google.gemma-4-31b"
-        )
+        api_base, _ = cfg.get_openai_compatible_provider_info(custom_base, None, model="google.gemma-4-31b")
         assert api_base == custom_base
 
     def test_api_key_from_env(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "test-key-123")
         cfg = BedrockMantleChatConfig()
-        _, api_key = cfg._get_openai_compatible_provider_info(None, None)
+        _, api_key = cfg.get_openai_compatible_provider_info(None, None)
         assert api_key == "test-key-123"
 
     def test_api_key_param_overrides_env(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "env-key")
         cfg = BedrockMantleChatConfig()
-        _, api_key = cfg._get_openai_compatible_provider_info(None, "explicit-key")
+        _, api_key = cfg.get_openai_compatible_provider_info(None, "explicit-key")
         assert api_key == "explicit-key"
 
     def test_api_key_from_aws_bearer_token_bedrock_env(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "standard-bearer")
         cfg = BedrockMantleChatConfig()
-        _, api_key = cfg._get_openai_compatible_provider_info(None, None)
+        _, api_key = cfg.get_openai_compatible_provider_info(None, None)
         assert api_key == "standard-bearer"
 
     def test_get_supported_openai_params(self):

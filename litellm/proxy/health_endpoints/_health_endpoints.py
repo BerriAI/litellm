@@ -730,6 +730,19 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
     return model_param_to_info
 
 
+def _model_infos_for_endpoint(
+    model_param_to_info: Mapping[str, list[Mapping[str, str | None]]], endpoint: Mapping[str, object]
+) -> tuple[Mapping[str, str | None], ...]:
+    model_param: Final = endpoint.get("model")
+    if not isinstance(model_param, str):
+        return ()
+    model_infos: Final = model_param_to_info.get(model_param, [])
+    endpoint_model_id: Final = endpoint.get("model_id")
+    if not endpoint_model_id:
+        return tuple(model_infos)
+    return tuple(info for info in model_infos if info["model_id"] == endpoint_model_id)
+
+
 def _aggregate_health_check_results(
     model_param_to_info: dict,
     healthy_endpoints: list,
@@ -754,7 +767,7 @@ def _aggregate_health_check_results(
     for endpoint in healthy_endpoints:
         model_param = endpoint.get("model")
         if model_param and model_param in model_param_to_info:
-            for model_info in model_param_to_info[model_param]:
+            for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
                 key = (model_info["model_id"], model_info["model_name"])
                 if key not in model_results:
                     model_results[key] = {
@@ -771,7 +784,7 @@ def _aggregate_health_check_results(
         model_param = endpoint.get("model")
         error_message = endpoint.get("error")
         if model_param and model_param in model_param_to_info:
-            for model_info in model_param_to_info[model_param]:
+            for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
                 key = (model_info["model_id"], model_info["model_name"])
                 if key not in model_results:
                     model_results[key] = {
@@ -1770,7 +1783,7 @@ async def _get_health_readiness_details(
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
-                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "use_aiohttp_transport": AsyncHTTPHandler.should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
@@ -1783,7 +1796,7 @@ async def _get_health_readiness_details(
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
-                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "use_aiohttp_transport": AsyncHTTPHandler.should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
