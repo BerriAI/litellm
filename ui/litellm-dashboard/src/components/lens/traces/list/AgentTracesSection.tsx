@@ -27,7 +27,7 @@ import type { RelativeRangeState } from "@/components/shared/timeRange/useRelati
 import { TracesTimeline } from "./TracesTimeline";
 import { TracingSetupCard } from "../../onboarding/tracing/TracingSetupCard";
 import { useTracesLive } from "../api";
-import { type AgentTracesResult, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
+import { type AgentTracesResult, useAgentTraces, useTraceAgents, useTraceAvailability } from "./useAgentTraces";
 
 const DRAWER_WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 
@@ -105,7 +105,8 @@ export function AgentTracesSection({
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
   const traceQuery = { accessToken, range, enabled: isActive };
-  const traces = useAgentTraces(traceQuery);
+  const traces = useAgentTraces({ ...traceQuery, agent });
+  const agentOptions = useTraceAgents(traceQuery);
   const setup = useTracingSetup(traces, isActive, rangeChanged);
   const checkHistory = setup.isEmpty && !rangeChanged;
   const history = useTraceAvailability(accessToken, isActive && checkHistory && setup.disabledDetail == null);
@@ -201,6 +202,7 @@ export function AgentTracesSection({
           query={query}
           onQueryChange={setQuery}
           runs={traces.traces}
+          agentOptions={agentOptions}
           range={zoom ?? window}
           busy={traces.isPlaceholder}
         >
@@ -262,10 +264,11 @@ function TracesReceived({ received }: { received: boolean }) {
 }
 
 function TraceCounts({ runs }: { runs: readonly TraceSummary[] }) {
+  const agents = new Set(runs.flatMap(traceAgentNames)).size;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2 text-xs text-muted-foreground">
       <span>
-        {runs.length} {runs.length === 1 ? "run" : "runs"} from {new Set(runs.flatMap(traceAgentNames)).size} agents
+        {runs.length} {runs.length === 1 ? "run" : "runs"} from {agents} {agents === 1 ? "agent" : "agents"}
       </span>
     </div>
   );
