@@ -495,3 +495,36 @@ def test_tokenizer_fallback_logs_safe_diagnostic_context(caplog, monkeypatch):
     assert secret not in message
     assert "REDACTED" in message
     assert "install tokenizers and huggingface-hub" in message
+
+
+@pytest.mark.parametrize("python_installed", [False, True])
+def test_native_added_token_decoder_preserves_fields_without_python_dependency(monkeypatch, python_installed):
+    from tokenizers import AddedToken
+
+    native = HuggingFaceTokenizer.from_str(TOKENIZER_JSON)
+    expected = ReferenceTokenizer.from_str(TOKENIZER_JSON).get_added_tokens_decoder()
+    if not python_installed:
+        monkeypatch.setitem(sys.modules, "tokenizers", None)
+    actual = native.get_added_tokens_decoder()
+    attributes = ("content", "single_word", "lstrip", "rstrip", "normalized", "special")
+    assert {
+        token_id: tuple(getattr(token, name) for name in attributes) for token_id, token in actual.items()
+    } == {
+        token_id: tuple(getattr(token, name) for name in attributes) for token_id, token in expected.items()
+    }
+    assert {token_id: str(token) for token_id, token in actual.items()} == {
+        token_id: str(token) for token_id, token in expected.items()
+    }
+    if python_installed:
+        assert all(isinstance(token, AddedToken) for token in actual.values())
+
+
+def test_native_added_token_decoder_preserves_unrelated_import_failure():
+    from unittest.mock import patch
+
+    native = HuggingFaceTokenizer.from_str(TOKENIZER_JSON)
+    failure = ModuleNotFoundError(name="broken_tokenizer_dependency")
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ModuleNotFoundError) as caught:
+            native.get_added_tokens_decoder()
+    assert caught.value is failure

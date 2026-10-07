@@ -6052,3 +6052,55 @@ async def test_polly_missing_dependency_remains_actionable_with_retries(monkeypa
         with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
             litellm.speech(model="aws_polly/standard", input="ping", voice="Joanna", num_retries=1)
     assert caught.value.name == "botocore"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_tenacity", [False, True])
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_mantle_responses_missing_dependency_is_not_retried(monkeypatch, missing_tenacity, use_async):
+    import builtins
+
+    original_import = builtins.__import__
+    attempts = []
+
+    def import_without_aws(name, *args, **kwargs):
+        if name == "botocore":
+            attempts.append(name)
+            raise ModuleNotFoundError(name="botocore")
+        if name == "tenacity" and missing_tenacity:
+            attempts.append(name)
+            raise ModuleNotFoundError(name="tenacity")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_aws)
+    monkeypatch.setattr(litellm, "num_retries", None)
+    for name in ("AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    if use_async:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3"):
+            await litellm.aresponses(model="bedrock_mantle/openai.gpt-oss-120b", input="ping", num_retries=1)
+    else:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3"):
+            litellm.responses(model="bedrock_mantle/openai.gpt-oss-120b", input="ping", num_retries=1)
+    assert attempts == ["botocore"]
+
+
+@pytest.mark.asyncio
+async def test_async_responses_still_retries_provider_server_errors(monkeypatch):
+    monkeypatch.setattr(litellm, "num_retries", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock as upstream:
+        response = upstream.post("https://openai-test.invalid/v1/responses").mock(side_effect=[
+            httpx.Response(500, json={"error": {"message": "temporary provider failure", "type": "server_error"}}),
+            httpx.Response(200, json={
+                "id": "resp-retry", "object": "response", "created_at": 1, "status": "completed",
+                "model": "test-model", "output": [],
+                "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+            }),
+        ])
+        result = await litellm.aresponses(
+            model="openai/test-model", input="ping", api_key="test-key",
+            api_base="https://openai-test.invalid/v1", num_retries=1, max_retries=0,
+        )
+        assert result.status == "completed"
+        assert response.call_count == 2

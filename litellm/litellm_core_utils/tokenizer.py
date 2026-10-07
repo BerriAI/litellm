@@ -217,6 +217,19 @@ class OpenAIEncoding:
 
 
 @dataclass(frozen=True, slots=True)
+class _NativeAddedToken:
+    content: str
+    single_word: bool
+    lstrip: bool
+    rstrip: bool
+    normalized: bool
+    special: bool
+
+    def __str__(self) -> str:
+        return self.content
+
+
+@dataclass(frozen=True, slots=True)
 class HuggingFaceTokenizer:
     """The read-only ``tokenizers.Tokenizer`` surface over the Rust Hugging Face codec."""
 
@@ -269,7 +282,12 @@ class HuggingFaceTokenizer:
         return self._native.get_vocab_size(with_added_tokens)
 
     def get_added_tokens_decoder(self) -> dict[int, _AddedToken]:  # mutable-ok: [LIT001] SDK return type
-        from tokenizers import AddedToken
+        try:
+            from tokenizers import AddedToken
+        except ModuleNotFoundError as error:
+            if error.name != "tokenizers":
+                raise
+            return {token_id: _NativeAddedToken(*data) for token_id, data in self._native.added_tokens_decoder()}
 
         return {
             token_id: AddedToken(
