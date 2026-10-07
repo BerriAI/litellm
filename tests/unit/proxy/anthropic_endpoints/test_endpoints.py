@@ -452,6 +452,48 @@ class TestErrorLogCarriesCallId:
         assert call_id in record.getMessage()
 
 
+class TestCountTokensCompactedHistory:
+    """A history carrying Anthropic's signed compaction block used to come back as a 500 from
+    /v1/messages/count_tokens once the count ran on the local tokenizer, which rejected the block type."""
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_counts_a_compaction_block_like_its_summary_text(self):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        summary = "The user is building a recipe app and asked for one-sentence class descriptions."
+        follow_up = {"role": "user", "content": "Now do the same for Ingredient."}
+        compacted = {
+            "model": "claude-sonnet-5-5",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}],
+                },
+                follow_up,
+            ],
+        }
+        as_text = {
+            "model": "claude-sonnet-5-5",
+            "messages": [{"role": "assistant", "content": [{"type": "text", "text": summary}]}, follow_up],
+        }
+        request = MagicMock()
+        request.headers = {}
+
+        async def count(body):
+            with (
+                patch.object(ep, "_read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+                patch.object(proxy_server, "llm_router", None),  # test-quality-ok: module global; with no router the count runs on the local tokenizer, the path that raised
+            ):
+                return await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+        counted = await count(compacted)
+
+        assert counted["input_tokens"] > 0
+        assert counted == await count(as_text)
+
+
 class TestEventLoggingBatchEndpoint:
     """Test the stubbed event logging batch endpoint"""
 

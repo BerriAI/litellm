@@ -5,6 +5,7 @@ import io
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from itertools import accumulate
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import anyio
@@ -43,6 +44,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesTextParam,
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
+    CompactionBlock,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -897,6 +899,11 @@ def _count_anthropic_content(
     return tokens
 
 
+_TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
+    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+)
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
@@ -907,6 +914,7 @@ def _count_content_list(
         | AnthropicMessagesTextParam
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
+        | CompactionBlock
     ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
@@ -917,8 +925,10 @@ def _count_content_list(
         for c in content_list:
             if isinstance(c, str):
                 num_tokens += count_function(c)
-            elif c["type"] == "text":
-                num_tokens += count_function(str(c.get("text", "")))
+            elif c["type"] in _TEXT_FIELD_BY_BLOCK_TYPE:
+                block_text = str(c.get(_TEXT_FIELD_BY_BLOCK_TYPE[c["type"]]) or "")
+                if block_text:
+                    num_tokens += count_function(block_text)
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
@@ -948,12 +958,6 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                 )
-            elif c["type"] in ("thinking", "redacted_thinking"):
-                # Claude extended thinking content block
-                # Count the thinking text and skip the opaque blobs (signature, redacted data)
-                thinking_text = str(c.get("thinking", ""))
-                if thinking_text:
-                    num_tokens += count_function(thinking_text)
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
                 # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
@@ -971,7 +975,7 @@ def _count_content_list(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference)."
+                    f"compaction, tool_reference)."
                 )
         return num_tokens
     except Exception as e:

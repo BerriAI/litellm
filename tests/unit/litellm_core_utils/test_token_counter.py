@@ -1205,6 +1205,50 @@ def test_token_counter_with_redacted_thinking_content():
 
     assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
 
+
+def test_token_counter_with_compaction_block():
+    """
+    A replayed on-demand compaction block (Anthropic's signed summary of the earlier turns) counts its
+    summary text like a text block and nothing for its signature. It used to raise, which turned every
+    /v1/messages/count_tokens call on a compacted history into a 500 once the provider count fell back here.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    summary = "The user is building a recipe app in Python and asked for one-sentence class descriptions."
+    follow_up = {"role": "user", "content": [{"type": "text", "text": "Now do the same for Ingredient."}]}
+    signed_block = {"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}
+
+    as_compaction = [{"role": "assistant", "content": [signed_block]}, follow_up]
+    unsigned = [{"role": "assistant", "content": [{"type": "compaction", "content": summary}]}, follow_up]
+    as_text = [{"role": "assistant", "content": [{"type": "text", "text": summary}]}, follow_up]
+
+    assert token_counter(model=model, messages=as_compaction) == token_counter(model=model, messages=as_text)
+    assert token_counter(model=model, messages=unsigned) == token_counter(model=model, messages=as_text)
+
+
+def test_count_content_list_skips_the_tokenizer_for_empty_block_text():
+    """
+    An empty thinking block, a redacted_thinking block (no thinking text at all) and a compaction
+    block with no summary carry no tokens, even under a tokenizer that charges for the empty string
+    (the llama-2 tokenizer prepends its BOS token to every encode call). Counting them through the
+    tokenizer added one token per block on such models.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    def charges_for_empty_text(text: str) -> int:
+        return len(text.split()) + 1
+
+    empty_blocks = [
+        {"type": "thinking", "thinking": "", "signature": "EqcLCkYICxgCKkCrqu6lP..."},
+        {"type": "thinking", "thinking": None, "signature": "EqcLCkYICxgCKkCrqu6lP..."},
+        {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIw"},
+        {"type": "compaction", "content": ""},
+        {"type": "text", "text": ""},
+    ]
+
+    assert _count_content_list(charges_for_empty_text, empty_blocks, False, None) == 0
+    assert _count_content_list(charges_for_empty_text, [{"type": "thinking", "thinking": "two words"}], False, None) == 3
+
+
 def test_token_counter_with_tool_reference_block():
     """
     Regression test: a message containing an Anthropic tool-search
