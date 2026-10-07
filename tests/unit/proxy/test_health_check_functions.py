@@ -1,10 +1,10 @@
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
@@ -218,6 +218,44 @@ def test_aggregate_health_check_results_multiple_endpoints():
     key = ("model-123", "gpt-3.5-turbo")
     assert result[key]["healthy_count"] == 2
     assert result[key]["unhealthy_count"] == 0
+
+
+def test_aggregate_health_check_results_attributes_each_result_to_its_own_deployment():
+    deployments: Final = (("a", "qwen"), ("a", "qwen-alias"), ("b", "qwen"), ("b", "qwen-alias"))
+    model_list: Final = [
+        {
+            "model_name": name,
+            "litellm_params": {"model": "openai/qwen", "api_base": f"http://{host}:11434/v1"},
+            "model_info": {"id": f"{host}-{name}"},
+        }
+        for host, name in deployments
+    ]
+    healthy_endpoints: Final = [
+        {"model": "openai/qwen", "api_base": "http://a:11434/v1", "model_id": "a-qwen"},
+        {"model": "openai/qwen", "api_base": "http://a:11434/v1", "model_id": "a-qwen-alias"},
+    ]
+    unhealthy_endpoints: Final = [
+        {"model": "openai/qwen", "api_base": "http://b:11434/v1", "model_id": "b-qwen", "error": "Connection error."},
+        {
+            "model": "openai/qwen",
+            "api_base": "http://b:11434/v1",
+            "model_id": "b-qwen-alias",
+            "error": "Connection error.",
+        },
+    ]
+
+    result: Final = _aggregate_health_check_results(
+        _build_model_param_to_info_mapping(model_list), healthy_endpoints, unhealthy_endpoints
+    )
+
+    assert {
+        key: (value["healthy_count"], value["unhealthy_count"], value["error_message"]) for key, value in result.items()
+    } == {
+        ("a-qwen", "qwen"): (1, 0, None),
+        ("a-qwen-alias", "qwen-alias"): (1, 0, None),
+        ("b-qwen", "qwen"): (0, 1, "Connection error."),
+        ("b-qwen-alias", "qwen-alias"): (0, 1, "Connection error."),
+    }
 
 
 @pytest.mark.asyncio
