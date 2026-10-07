@@ -631,7 +631,7 @@ def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypat
         preset_cache_key="responses-stream-cache-key",
         original_function=litellm.aresponses,
         dual_cache=None,
-        should_store_result_in_cache=lambda original_function, kwargs: True,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
     )
     logging_obj = SimpleNamespace(
         model_call_details={"litellm_params": {}},
@@ -1877,7 +1877,7 @@ async def test_responses_streaming_completed_event_persists_async_cache():
         preset_cache_key="responses-stream-cache-key",
         original_function=litellm.aresponses,
         async_set_cache=AsyncMock(),
-        should_store_result_in_cache=lambda original_function, kwargs: True,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
     )
     logging_obj.llm_caching_handler = caching_handler
 
@@ -1923,7 +1923,7 @@ def test_responses_streaming_completed_event_persists_sync_cache():
         preset_cache_key="responses-stream-cache-key",
         original_function=litellm.responses,
         sync_set_cache=MagicMock(),
-        should_store_result_in_cache=lambda original_function, kwargs: True,
+        _should_store_result_in_cache=lambda original_function, kwargs: True,
     )
     logging_obj.llm_caching_handler = caching_handler
 
@@ -2065,7 +2065,7 @@ def test_persist_completed_response_to_cache_guard_branches(monkeypatch, scenari
             preset_cache_key=None,
             original_function=litellm.responses,
             dual_cache=None,
-            should_store_result_in_cache=lambda original_function, kwargs: scenario != "store_disabled",
+            _should_store_result_in_cache=lambda original_function, kwargs: scenario != "store_disabled",
         )
         if scenario == "missing_cache_backend":
             monkeypatch.setattr(streaming_module.litellm, "cache", None)

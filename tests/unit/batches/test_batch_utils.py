@@ -1232,7 +1232,7 @@ async def test_output_file_content_unified_file_id_extraction(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def testhandle_completed_batch_orchestration(monkeypatch):
+async def test_handle_completed_batch_orchestration(monkeypatch):
     rows = [_success_row(model="gpt-4o", usage=_usage(10, 5))]
 
     async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
@@ -1251,7 +1251,7 @@ async def testhandle_completed_batch_orchestration(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def testhandle_completed_batch_counts_error_file_failures(monkeypatch):
+async def test_handle_completed_batch_counts_error_file_failures(monkeypatch):
     """Regression test: OpenAI writes per-request failures (e.g. a rejected param)
     to a separate error_file_id, never into the output file - so failed_requests
     must include them or it silently undercounts real batch failures."""
@@ -1298,7 +1298,7 @@ async def testhandle_completed_batch_counts_error_file_failures(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def testhandle_completed_batch_decodes_model_encoded_error_file_id(monkeypatch):
+async def test_handle_completed_batch_decodes_model_encoded_error_file_id(monkeypatch):
     """A model-encoded error file id must be decoded to the raw provider id before
     the fetch, exactly like the output file id. Sending the encoded id straight to
     the provider 404s, and the swallowed fetch failure silently reports 0 failures."""
@@ -1345,7 +1345,7 @@ async def testhandle_completed_batch_decodes_model_encoded_error_file_id(monkeyp
 
 
 @pytest.mark.asyncio
-async def testhandle_completed_batch_no_error_file_id_reports_zero_error_failures(monkeypatch):
+async def test_handle_completed_batch_no_error_file_id_reports_zero_error_failures(monkeypatch):
     rows = [_success_row(model="gpt-4o", usage=_usage(10, 5))]
 
     async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
@@ -1361,7 +1361,7 @@ async def testhandle_completed_batch_no_error_file_id_reports_zero_error_failure
 
 
 @pytest.mark.asyncio
-async def testhandle_completed_batch_no_output_file_is_zero(monkeypatch):
+async def test_handle_completed_batch_no_output_file_is_zero(monkeypatch):
     """
     Regression: an all-error batch completes with output_file_id=None (results go
     to a separate error_file_id). handle_completed_batch must report an empty
@@ -1385,7 +1385,7 @@ async def testhandle_completed_batch_no_output_file_is_zero(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def testhandle_completed_batch_vertex_disable_transform_path(monkeypatch):
+async def test_handle_completed_batch_vertex_disable_transform_path(monkeypatch):
     raw_rows = [{"response": {"usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 2}}}]
 
     async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
@@ -1786,7 +1786,7 @@ async def test_handle_completed_bedrock_batch_prices_from_deployment_model(monke
 
 
 @pytest.mark.asyncio
-async def testhandle_completed_batch_honors_deployment_pricing(monkeypatch) -> None:
+async def test_handle_completed_batch_honors_deployment_pricing(monkeypatch) -> None:
     """A deployment's configured rates must win over the global cost map."""
     rows = [_success_row(model="gemini-2.5-flash", usage=_usage(60, 75))]
 
@@ -2297,7 +2297,7 @@ async def test_native_vertex_rows_on_another_provider_keep_the_generic_path(monk
 
 
 @pytest.mark.asyncio
-async def testhandle_completed_batch_routes_native_rows_without_flag(monkeypatch):
+async def test_handle_completed_batch_routes_native_rows_without_flag(monkeypatch):
     monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", False, raising=False)
     raw_rows = [_native_vertex_row(GROUNDED_USAGE_METADATA, grounded=True)]
 
