@@ -40,6 +40,16 @@ pub struct MessagesModelCapabilities {
     #[serde(default)]
     pub supports_speed: bool,
     #[serde(default)]
+    pub supports_mid_conversation_system: bool,
+    #[serde(default)]
+    pub supports_cache_control_ttl: bool,
+    #[serde(default)]
+    pub supports_native_structured_output: bool,
+    #[serde(default)]
+    pub supports_tool_search: bool,
+    #[serde(default)]
+    pub effort_ceiling: Option<litellm_llms_types::formats::messages::EffortLevel>,
+    #[serde(default)]
     pub effort_tiers: SupportedEffortTiers,
 }
 
@@ -57,6 +67,11 @@ impl Default for MessagesModelCapabilities {
             supports_output_config: false,
             supports_sampling_params: true,
             supports_speed: false,
+            supports_mid_conversation_system: false,
+            supports_cache_control_ttl: false,
+            supports_native_structured_output: false,
+            supports_tool_search: false,
+            effort_ceiling: None,
             effort_tiers: SupportedEffortTiers::default(),
         }
     }

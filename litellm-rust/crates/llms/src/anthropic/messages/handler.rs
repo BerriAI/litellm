@@ -1,7 +1,7 @@
 use litellm_llms_types::{
     formats::messages::{
-        AdaptiveThinking, EnabledThinking, Message, MessagesOptionalParams, MessagesRequest,
-        ThinkingConfig, ThinkingDisplay,
+        AdaptiveThinking, EnabledThinking, Message, MessagesMetadata, MessagesOptionalParams,
+        MessagesRequest, ThinkingConfig, ThinkingDisplay,
     },
     recognized::Recognized,
 };
@@ -26,6 +26,7 @@ pub fn shape_anthropic_messages_request(
                 .params
                 .metadata
                 .as_ref()
+                .filter(|metadata| !matches!(metadata, Recognized::Unrecognized(Value::Null)))
                 .map(validate_anthropic_api_metadata)
                 .transpose()?,
             thinking: with_reasoning_auto_summary(request.params.thinking, reasoning_auto_summary),
@@ -41,23 +42,34 @@ fn sanitize_anthropic_messages(messages: Vec<Message>) -> Vec<Message> {
     ))
 }
 
-fn validate_anthropic_api_metadata(metadata: &Value) -> Result<Value, Error> {
-    let Value::Object(fields) = metadata else {
-        return Err(Error::InvalidRequest(crate::ErrorDetail::InvalidValue {
-            field: "metadata",
-            expected: "an object",
-            actual: metadata.clone(),
-        }));
+fn validate_anthropic_api_metadata(
+    metadata: &Recognized<MessagesMetadata>,
+) -> Result<Recognized<MessagesMetadata>, Error> {
+    let fields = match metadata {
+        Recognized::Known(metadata) => metadata,
+        Recognized::Unrecognized(actual) => {
+            return Err(Error::InvalidRequest(crate::ErrorDetail::InvalidValue {
+                field: "metadata",
+                expected: "an object",
+                actual: actual.clone(),
+            }));
+        }
     };
-    match fields.get("user_id") {
-        None | Some(Value::Null) => Ok(json!({})),
-        Some(Value::String(user_id)) => Ok(json!({"user_id": user_id})),
-        Some(other) => Err(Error::InvalidRequest(crate::ErrorDetail::InvalidValue {
-            field: "metadata.user_id",
-            expected: "a string",
-            actual: other.clone(),
-        })),
-    }
+    let user_id = match &fields.user_id {
+        None | Some(Recognized::Unrecognized(Value::Null)) => None,
+        Some(Recognized::Known(user_id)) => Some(Recognized::Known(user_id.clone())),
+        Some(Recognized::Unrecognized(actual)) => {
+            return Err(Error::InvalidRequest(crate::ErrorDetail::InvalidValue {
+                field: "metadata.user_id",
+                expected: "a string",
+                actual: actual.clone(),
+            }));
+        }
+    };
+    Ok(Recognized::Known(MessagesMetadata {
+        user_id,
+        ..MessagesMetadata::default()
+    }))
 }
 
 fn with_reasoning_auto_summary(
@@ -223,7 +235,9 @@ mod tests {
         #[case] expected: Result<Value, Error>,
     ) {
         assert_eq!(
-            validate_anthropic_api_metadata(&metadata).map_err(|error| error.to_string()),
+            validate_anthropic_api_metadata(&serde_json::from_value(metadata).unwrap())
+                .map(|value| serde_json::to_value(value).unwrap())
+                .map_err(|error| error.to_string()),
             expected.map_err(|error| error.to_string()),
         );
     }
@@ -308,6 +322,20 @@ mod tests {
                 "thinking": {"type": "enabled", "budget_tokens": 1024, "display": "summarized"},
                 "safeguards": [{"type": "dangerous_tool_use"}]
             })
+        );
+    }
+    #[rstest]
+    fn null_metadata_is_still_omitted_during_provider_shaping() {
+        let shaped = shape_anthropic_messages_request(
+            request(json!({
+                "model":"test-model","messages":[],"metadata":null
+            })),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(shaped).unwrap(),
+            json!({"model":"test-model","messages":[]})
         );
     }
 }

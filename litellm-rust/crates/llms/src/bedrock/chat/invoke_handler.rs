@@ -146,7 +146,9 @@ mod tests {
                 index: 0,
                 delta: MessagesContentBlockDelta::TextDelta {
                     text: "hello".into(),
+                    extra: Default::default(),
                 },
+                extra: Default::default(),
             }]
         );
         assert_eq!(from_aws, from_sse);

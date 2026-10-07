@@ -15,9 +15,9 @@ use litellm_auth_aws::{
     resolve_bedrock_region,
 };
 use litellm_llms_types::formats::messages::{
-    MessagesRequest,
-    streaming::{MessagesStreamEvent, MessagesStreamUsage},
+    MessagesRequest, MessagesUsage, streaming::MessagesStreamEvent,
 };
+use litellm_llms_types::serde_compat::Nullable;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -210,58 +210,67 @@ pub fn bedrock_anthropic_messages_event_stream(bytes: ByteStream) -> EventStream
 #[derive(Default)]
 pub struct MessageStopUsagePromoter {
     pending_delta: Option<MessagesStreamEvent>,
-    start_usage: Option<MessagesStreamUsage>,
+    start_usage: Option<MessagesUsage>,
 }
 
 fn promoted_usage(
-    delta: Option<MessagesStreamUsage>,
-    stop: Option<&MessagesStreamUsage>,
-    start: Option<&MessagesStreamUsage>,
-) -> Option<MessagesStreamUsage> {
-    let delta = delta.unwrap_or_default();
-    let merged = MessagesStreamUsage {
+    delta: Option<Box<MessagesUsage>>,
+    stop: Option<&MessagesUsage>,
+    start: Option<&MessagesUsage>,
+) -> Option<Box<MessagesUsage>> {
+    let delta = delta.map(|usage| *usage).unwrap_or_default();
+    let merged = MessagesUsage {
         input_tokens: stop
-            .and_then(|stop| stop.input_tokens)
-            .or(delta.input_tokens),
+            .and_then(|stop| stop.input_tokens.and_then(Nullable::into_value))
+            .or(delta.input_tokens.and_then(Nullable::into_value))
+            .map(Nullable::Value),
         cache_creation_input_tokens: stop
-            .and_then(|stop| stop.cache_creation_input_tokens)
-            .or(delta.cache_creation_input_tokens)
-            .or_else(|| start.and_then(|start| start.cache_creation_input_tokens)),
+            .and_then(|stop| {
+                stop.cache_creation_input_tokens
+                    .and_then(Nullable::into_value)
+            })
+            .or(delta
+                .cache_creation_input_tokens
+                .and_then(Nullable::into_value))
+            .or_else(|| {
+                start.and_then(|start| {
+                    start
+                        .cache_creation_input_tokens
+                        .and_then(Nullable::into_value)
+                })
+            })
+            .map(Nullable::Value),
         cache_read_input_tokens: stop
-            .and_then(|stop| stop.cache_read_input_tokens)
-            .or(delta.cache_read_input_tokens)
-            .or_else(|| start.and_then(|start| start.cache_read_input_tokens)),
-        extra: delta
-            .extra
-            .into_iter()
-            .chain(
-                start
-                    .and_then(|start| start.extra.get_key_value("cache_creation"))
-                    .map(|(key, value)| (key.clone(), value.clone())),
-            )
-            .fold(Map::new(), |mut extra, (key, value)| {
-                extra.entry(key).or_insert(value);
-                extra
-            }),
+            .and_then(|stop| stop.cache_read_input_tokens.and_then(Nullable::into_value))
+            .or(delta.cache_read_input_tokens.and_then(Nullable::into_value))
+            .or_else(|| {
+                start.and_then(|start| start.cache_read_input_tokens.and_then(Nullable::into_value))
+            })
+            .map(Nullable::Value),
+        cache_creation: delta
+            .cache_creation
+            .or_else(|| start.and_then(|start| start.cache_creation.clone())),
         ..delta
     };
-    (merged != MessagesStreamUsage::default()).then_some(merged)
+    (merged != MessagesUsage::default()).then(|| Box::new(merged))
 }
 
 fn promoted(
     event: MessagesStreamEvent,
-    stop: Option<&MessagesStreamUsage>,
-    start: Option<&MessagesStreamUsage>,
+    stop: Option<&MessagesUsage>,
+    start: Option<&MessagesUsage>,
 ) -> MessagesStreamEvent {
     match event {
         MessagesStreamEvent::MessageDelta {
             delta,
             usage,
             context_management,
+            extra,
         } => MessagesStreamEvent::MessageDelta {
             delta,
             usage: promoted_usage(usage, stop, start),
             context_management,
+            extra,
         },
         other => other,
     }
@@ -282,16 +291,16 @@ impl StreamTransformer for MessageStopUsagePromoter {
                 self.pending_delta = Some(input);
                 Ok(pending.into_iter().collect())
             }
-            MessagesStreamEvent::MessageStop { usage } => Ok(pending
-                .map(|delta| promoted(delta, usage.as_ref(), self.start_usage.as_ref()))
+            MessagesStreamEvent::MessageStop { usage, extra } => Ok(pending
+                .map(|delta| promoted(delta, usage.as_deref(), self.start_usage.as_ref()))
                 .into_iter()
-                .chain([MessagesStreamEvent::MessageStop { usage }])
+                .chain([MessagesStreamEvent::MessageStop { usage, extra }])
                 .collect()),
-            MessagesStreamEvent::MessageStart { message } => {
+            MessagesStreamEvent::MessageStart { message, extra } => {
                 self.start_usage = Some(message.usage.clone());
                 Ok(pending
                     .into_iter()
-                    .chain([MessagesStreamEvent::MessageStart { message }])
+                    .chain([MessagesStreamEvent::MessageStart { message, extra }])
                     .collect())
             }
             other => Ok(pending.into_iter().chain([other]).collect()),
@@ -386,6 +395,12 @@ mod tests {
         json!({"output_tokens": 5, "cache_read_input_tokens": 7}),
         None,
         json!({"output_tokens": 5, "cache_read_input_tokens": 7}),
+    )]
+    #[case::explicit_delta_cache_breakdown_takes_precedence(
+        json!({"cache_creation":{"ephemeral_5m_input_tokens":4}}),
+        json!({"output_tokens":5,"cache_creation":null}),
+        None,
+        json!({"output_tokens":5,"cache_creation":null}),
     )]
     fn message_delta_usage_is_completed_from_stop_then_start(
         #[case] start: Value,

@@ -1,14 +1,14 @@
 # structure
 
-- `formats/chat_completions`, `formats/responses` and `formats/ocr.rs` own shared API payloads
+- `formats/{messages,chat_completions,responses,ocr,audio_transcription,batches}` owns shared API payloads; `chat_completions` owns Chat Completions
 - Split larger formats by content, request, response and streaming; keep small contracts in one file
-- `headers`, `json_schema`, `recognized` and `serde_compat` hold format-independent data helpers
+- `providers/` owns shared provider wire extensions; `headers`, `json_schema`, `recognized` and `serde_compat` are format-independent data helpers
 
 # boundaries
 
-- A type belongs here when it describes data consumers agree on independently of call execution
+- A type belongs here when it describes data consumers agree on independently of call execution; being public or serializable is insufficient
 - Adapter contracts and policy belong in `llms`; call envelopes and execution state belong in `inference-<format>`
-- Keep this crate free of execution dependencies, I/O, async runtime, environment, clock, catalog and global settings access
+- No execution-crate dependencies, I/O, async runtime, environment, clock, catalog or global settings access
 - Provider types may use format types; format types must not depend on provider types
 
 # invariants
@@ -23,7 +23,7 @@
 - `Recognized<T>` preserves wrong-shaped values as well as unknown variants; use it only where permissive passthrough is intended
 - A format field does not promise provider support; capability checks, clamping, normalization and cross-format conversion belong in adapters
 - JSON Schema `const`, `enum` and `examples` contain literal data, not child schemas
-- Normalized host responses can be partial LiteLLM contracts; replacing them with upstream schemas can change behavior
+- Normalized host responses and batch jobs can be partial LiteLLM contracts; replacing them with upstream schemas can change behavior
 
 # skills
 

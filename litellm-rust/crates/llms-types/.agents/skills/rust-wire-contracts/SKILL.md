@@ -1,6 +1,6 @@
 ---
 name: rust-wire-contracts
-description: Define or revise shared Rust Chat Completions, Responses and OCR payloads and their Serde contracts in litellm-llms-types. Use for canonical type ownership, missing/null semantics, discriminators and unknown-field preservation; adapter policy and provider transformations belong in llms.
+description: Define or revise shared Rust LLM API payloads and their Serde contracts in litellm-llms-types. Use for canonical type ownership, missing/null semantics, discriminators and unknown-field preservation; provider rewriting belongs to rust-provider-transforms.
 ---
 
 # scope

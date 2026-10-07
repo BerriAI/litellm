@@ -1,34 +1,36 @@
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
-        ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
+        ContextEdit, ContextManagement, ContextTrigger, Message, MessagesOptionalParams,
+        MessagesRequest, Speed,
     },
     providers::anthropic::{AnthropicBeta, BetaSet},
     recognized::Recognized,
 };
 use serde_json::{Map, Value, json};
 
-use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
+use super::{
+    handler::shape_anthropic_messages_request,
+    thinking::{translate_reasoning_effort, translate_thinking},
+};
 use crate::base_llm::messages::context::MessagesTransformContext;
 use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        ANTHROPIC_BASE_URL_ENV, DEFAULT_ANTHROPIC_HEADERS, OauthHandling, complete_anthropic_url,
+        get_auth_header, has_advisor_tool, has_anthropic_credential, is_tool_search_used,
+        merge_beta_headers, optionally_handle_anthropic_oauth, requires_native_compaction_beta,
+        strip_advisor_blocks, strip_encrypted_reasoning_blocks,
     },
     base_llm::{
         auth::AuthScheme,
-        messages::transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+        messages::{
+            normalization::strip_billing_metadata,
+            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+        },
     },
 };
-
-pub(crate) const DEFAULT_HEADERS: &[(&str, &str)] = &[
-    ("anthropic-version", "2023-06-01"),
-    ("content-type", "application/json"),
-];
 
 pub struct AnthropicMessagesConfig;
 
@@ -106,7 +108,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
+        DEFAULT_ANTHROPIC_HEADERS
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
@@ -114,15 +116,63 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThinkingSemantics {
+    /// Claude's rules: disabled thinking is dropped, legacy and adaptive thinking and effort
+    /// are rewritten for the model, and a temperature that conflicts with thinking is removed.
+    Anthropic,
+    /// The host reads `thinking` its own way, so only `reasoning_effort` is mapped.
+    Passthrough,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BillingMetadata {
+    Forward,
+    Strip,
+}
+
+/// How an Anthropic-wire host diverges from the first-party request policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RequestPolicy {
+    pub thinking: ThinkingSemantics,
+    pub billing_metadata: BillingMetadata,
+}
+
+pub const FIRST_PARTY_REQUEST_POLICY: RequestPolicy = RequestPolicy {
+    thinking: ThinkingSemantics::Anthropic,
+    billing_metadata: BillingMetadata::Forward,
+};
+
+/// A third-party host that speaks the Anthropic wire format but is not Claude.
+pub const COMPATIBLE_HOST_REQUEST_POLICY: RequestPolicy = RequestPolicy {
+    thinking: ThinkingSemantics::Passthrough,
+    billing_metadata: BillingMetadata::Strip,
+};
+
 pub(crate) fn transform_messages_request(
     request: MessagesRequest,
     context: &MessagesTransformContext,
+) -> Result<MessagesRequest, Error> {
+    transform_messages_request_with(request, context, FIRST_PARTY_REQUEST_POLICY)
+}
+
+pub(crate) fn transform_messages_request_with(
+    request: MessagesRequest,
+    context: &MessagesTransformContext,
+    policy: RequestPolicy,
 ) -> Result<MessagesRequest, Error> {
     if request.params.max_tokens.is_none() {
         return Err(Error::MissingField("max_tokens"));
     }
     let request = drop_unsupported_params(request, context)?;
-    let request = translate_thinking(request, &context.thinking)?;
+    let request = match policy.thinking {
+        ThinkingSemantics::Anthropic => translate_thinking(request, &context.thinking)?,
+        ThinkingSemantics::Passthrough => translate_reasoning_effort(request, &context.thinking)?,
+    };
+    let request = match policy.billing_metadata {
+        BillingMetadata::Forward => request,
+        BillingMetadata::Strip => strip_billing_metadata(request),
+    };
     let context_management = request
         .params
         .context_management
@@ -190,12 +240,20 @@ fn context_management_betas(
 }
 
 fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
-    params.output_format.is_some()
+    params
+        .output_format
+        .as_ref()
+        .is_some_and(|value| !matches!(value, Recognized::Unrecognized(Value::Null)))
         || params
             .output_config
             .as_ref()
             .and_then(Recognized::known)
-            .is_some_and(|config| config.format.is_some())
+            .is_some_and(|config| {
+                config
+                    .format
+                    .as_ref()
+                    .is_some_and(|value| !matches!(value, Recognized::Unrecognized(Value::Null)))
+            })
 }
 
 fn messages_carry_output_config(messages: &[Message]) -> bool {
@@ -283,17 +341,26 @@ fn compact_edit_from_openai(entry: &Map<String, Value>) -> Option<ContextEdit> {
     let trigger = entry
         .get("compact_threshold")
         .and_then(Value::as_f64)
-        .map(|threshold| json!({"type": "input_tokens", "value": threshold as i64}));
+        .map(|threshold| {
+            Recognized::Known(ContextTrigger::InputTokens {
+                value: Recognized::Known(threshold as i64),
+                extra: Map::new(),
+            })
+        });
     let passthrough = entry
         .iter()
-        .filter(|(key, _)| !matches!(key.as_str(), "type" | "compact_threshold"))
+        .filter(|(key, _)| !matches!(key.as_str(), "type" | "compact_threshold" | "trigger"))
         .map(|(key, value)| (key.clone(), value.clone()));
     Some(ContextEdit::Compact {
-        extra: trigger
-            .map(|trigger| ("trigger".to_string(), trigger))
-            .into_iter()
-            .chain(passthrough)
-            .collect(),
+        trigger: entry
+            .get("trigger")
+            .map(|value| {
+                serde_json::from_value::<ContextTrigger>(value.clone())
+                    .map(Recognized::Known)
+                    .unwrap_or_else(|_| Recognized::Unrecognized(value.clone()))
+            })
+            .or(trigger),
+        extra: passthrough.collect(),
     })
 }
 
@@ -409,6 +476,56 @@ mod tests {
                 {"type": "text", "text": "Here is the implementation."}
             ]}
         ])
+    }
+
+    fn transform_with(fields: Value, policy: RequestPolicy) -> Value {
+        let context = MessagesTransformContext::with_lookup(
+            MessagesModelCapabilities {
+                supports_reasoning: true,
+                thinking_always_on: true,
+                ..Default::default()
+            },
+            false,
+            &no_env,
+        );
+        serde_json::to_value(
+            transform_messages_request_with(request(fields), &context, policy).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[rstest]
+    #[case::first_party(FIRST_PARTY_REQUEST_POLICY, Value::Null, json!("x-anthropic-billing-header: cc_version=1"))]
+    #[case::compatible_host(COMPATIBLE_HOST_REQUEST_POLICY, json!({"type": "disabled"}), Value::Null)]
+    fn the_request_policy_picks_thinking_rewrites_and_billing_stripping(
+        #[case] policy: RequestPolicy,
+        #[case] thinking: Value,
+        #[case] system: Value,
+    ) {
+        let transformed = transform_with(
+            json!({
+                "thinking": {"type": "disabled"},
+                "system": "x-anthropic-billing-header: cc_version=1"
+            }),
+            policy,
+        );
+        assert_eq!(transformed["thinking"], thinking);
+        assert_eq!(transformed["system"], system);
+    }
+
+    #[rstest]
+    #[case::first_party(FIRST_PARTY_REQUEST_POLICY)]
+    #[case::compatible_host(COMPATIBLE_HOST_REQUEST_POLICY)]
+    fn every_policy_maps_reasoning_effort(#[case] policy: RequestPolicy) {
+        let transformed = transform_with(
+            json!({"max_tokens": 4096, "reasoning_effort": "low"}),
+            policy,
+        );
+        assert_eq!(transformed.get("reasoning_effort"), None);
+        assert_eq!(
+            transformed["thinking"],
+            json!({"type": "enabled", "budget_tokens": ThinkingBudgets::default().low})
+        );
     }
 
     #[fixture]
@@ -1090,15 +1207,44 @@ mod tests {
         );
     }
 
-    #[test]
-    fn default_headers_match_anthropic() {
-        assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.default_headers(),
-            &[
-                ("anthropic-version", "2023-06-01"),
-                ("content-type", "application/json"),
-            ]
+    #[rstest]
+    #[case::api_key("sk-ant-api-test")]
+    #[case::oauth("sk-ant-oat-test")]
+    fn default_headers_agree_across_anthropic_adapters(#[case] api_key: &str) {
+        use crate::{
+            anthropic::{
+                chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
+                count_tokens::transformation::{
+                    ANTHROPIC_COUNT_TOKENS_TRANSFORMATION, AnthropicCountTokensConfig,
+                },
+            },
+            azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
+            base_llm::chat::transformation::BaseConfig,
+        };
+
+        let defaults = ANTHROPIC_MESSAGES_CONFIG.default_headers();
+        assert_eq!(defaults.len(), 2);
+        assert!(defaults.contains(&("content-type", "application/json")));
+        assert!(
+            defaults
+                .iter()
+                .any(|(name, value)| { *name == "anthropic-version" && !value.is_empty() })
         );
+        assert_eq!(
+            ANTHROPIC_CHAT_COMPLETIONS_CONFIG.default_headers(),
+            defaults
+        );
+        assert_eq!(AZURE_ANTHROPIC_MESSAGES_CONFIG.default_headers(), defaults);
+
+        let count_headers = ANTHROPIC_COUNT_TOKENS_TRANSFORMATION.required_headers(api_key);
+        for (name, value) in defaults {
+            let matching: Vec<_> = count_headers
+                .iter()
+                .filter(|(header_name, _)| header_name == name)
+                .map(|(_, header_value)| header_value.as_str())
+                .collect();
+            assert_eq!(matching, [*value]);
+        }
     }
 
     #[test]
