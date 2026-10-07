@@ -215,6 +215,23 @@ class TestDeepEvalLogger(unittest.TestCase):
         self.assertEqual(chat_output, {"role": "assistant", "content": None, "tool_calls": [redacted_tool_call]})
         self.assertEqual(responses_output, {"role": "assistant", "content": None, "tool_calls": [redacted_tool_call]})
 
+    def test_turn_off_message_logging_redacts_text(self):
+        self.logger.turn_off_message_logging = True
+        chat_text: Final = self._sent_span_output(_chat_response(content="secret answer", tool_calls=()))
+        responses_text: Final = self._sent_span_output({"usage": {}, "output": [_responses_message("secret answer")]})
+        chat_mixed: Final = self._sent_span_output(
+            _chat_response(content="secret answer", tool_calls=(_CHAT_TOOL_CALL,))
+        )
+        responses_mixed: Final = self._sent_span_output(
+            {"usage": {}, "output": [_responses_message("secret answer"), _RESPONSES_FUNCTION_CALL]}
+        )
+
+        self.assertEqual(chat_text, "redacted-by-litellm")
+        self.assertEqual(responses_text, "redacted-by-litellm")
+        for mixed in (chat_mixed, responses_mixed):
+            self.assertEqual(mixed["content"], "redacted-by-litellm")
+            self.assertEqual(mixed["tool_calls"][0]["function"]["arguments"], "redacted-by-litellm")
+
     def test_empty_choices_records_no_output(self):
         output: Final = self._sent_span_output({"usage": {}, "choices": []})
 
