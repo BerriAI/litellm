@@ -1,4 +1,5 @@
 import type { SignalConfig } from "../../model/types";
+import { SIGNAL_LIBRARY } from "../../model/signals";
 
 export const MAX_SIGNALS = 20;
 const MAX_NAME = 60;
@@ -58,8 +59,18 @@ const uniqueId = (base: string, taken: ReadonlySet<string>, attempt = 1): string
   return taken.has(id) ? uniqueId(base, taken, attempt + 1) : id;
 };
 
-export const signalIds = (rows: readonly SignalRow[]): string[] =>
-  rows.reduce<string[]>((ids, row) => [...ids, uniqueId(row.id || slug(row.name), new Set(ids))], []);
+export const signalIds = (rows: readonly SignalRow[]): string[] => {
+  const savedIds: ReadonlySet<string> = new Set(rows.flatMap((row) => (row.id ? [row.id] : [])));
+  return rows.reduce<string[]>((ids, row) => {
+    if (row.id) return [...ids, row.id];
+    const librarySignal = SIGNAL_LIBRARY.find((signal) => signal.question === row.question);
+    const libraryIds = new Set(
+      SIGNAL_LIBRARY.filter((signal) => signal.id !== librarySignal?.id).map((signal) => signal.id),
+    );
+    const taken = new Set([...savedIds, ...ids, ...libraryIds]);
+    return [...ids, uniqueId(librarySignal?.id ?? slug(row.name), taken)];
+  }, []);
+};
 
 const rowProblems = (row: SignalRow, duplicateName: boolean): RowProblems => {
   const name = row.name.trim();

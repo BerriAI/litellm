@@ -29,7 +29,7 @@ import {
   type SignalRow,
 } from "./signalDraft";
 
-const LIBRARY_IDS: ReadonlySet<string> = new Set(SIGNAL_LIBRARY.map((signal) => signal.id));
+const LIBRARY_QUESTIONS: ReadonlySet<string> = new Set(SIGNAL_LIBRARY.map((signal) => signal.question));
 
 export function SignalSettings() {
   return (
@@ -168,15 +168,19 @@ export function SignalForm({ saved }: { saved: SignalConfig }) {
   const setRows = (rows: readonly SignalRow[]) => setDraft((current) => ({ ...current, rows }));
   const addRow = () => setRows([...draft.rows, newRow(crypto.randomUUID())]);
   const active = signalsConfigured(saved);
-  const custom = draft.rows.filter((row) => !LIBRARY_IDS.has(row.id));
-  const picked = new Set(draft.rows.filter((row) => LIBRARY_IDS.has(row.id)).map((row) => row.id));
+  const custom = draft.rows.filter((row) => !LIBRARY_QUESTIONS.has(row.question));
+  const picked = new Set(
+    SIGNAL_LIBRARY.filter((signal) => draft.rows.some((row) => row.question === signal.question)).map(
+      (signal) => signal.id,
+    ),
+  );
   const pick = (next: ReadonlySet<string>) =>
     setRows([
       ...SIGNAL_LIBRARY.filter((signal) => next.has(signal.id)).map(
         (signal) =>
-          draft.rows.find((row) => row.id === signal.id) ?? {
+          draft.rows.find((row) => row.question === signal.question) ?? {
             key: signal.id,
-            id: signal.id,
+            id: draft.rows.some((row) => row.id === signal.id) ? "" : signal.id,
             name: signal.name,
             question: signal.question,
           },

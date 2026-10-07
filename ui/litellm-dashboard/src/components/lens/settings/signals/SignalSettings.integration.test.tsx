@@ -2,8 +2,8 @@ import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { testQueryClient } from "@/../tests/test-utils";
 import { renderWithLens } from "@/../tests/lens-test-utils";
+import { testQueryClient } from "@/../tests/test-utils";
 
 import type { SignalConfig } from "../../model/types";
 import { SignalForm } from "./SignalSettings";
@@ -58,5 +58,28 @@ describe("signal settings", () => {
 
     expect(threshold).toHaveValue(80);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps a custom Tool failure signal separate while toggling the library signal", async () => {
+    const user = userEvent.setup();
+    const customQuestion = "Does this custom failure condition apply?";
+    const customSignal = { id: "tool_failure", name: "Tool failure", question: customQuestion };
+    const customConfig: SignalConfig = {
+      ...saved,
+      signals: [customSignal],
+    };
+    renderWithLens(<SignalForm saved={customConfig} />);
+
+    const question = await screen.findByRole("textbox", { name: "Question for Tool failure" });
+    const tile = screen.getByRole("button", { name: /^Tool failure/ });
+    expect(question).toHaveValue(customQuestion);
+    expect(tile).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(tile);
+    expect(tile).toHaveAttribute("aria-pressed", "true");
+    expect(question).toHaveValue(customQuestion);
+    await user.click(tile);
+    expect(tile).toHaveAttribute("aria-pressed", "false");
+    expect(question).toHaveValue(customQuestion);
   });
 });

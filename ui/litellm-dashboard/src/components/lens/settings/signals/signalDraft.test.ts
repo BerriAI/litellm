@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { SIGNAL_LIBRARY } from "../../model/signals";
 import { configFrom, draftFrom, draftProblems, newRow, signalIds } from "./signalDraft";
 
 const saved = {
@@ -16,11 +17,36 @@ describe("signal drafts", () => {
   it("keeps saved IDs on rename and derives unique IDs for new signals", () => {
     const rows = [
       { ...draftFrom(saved).rows[0], name: "Annoyed user" },
-      { ...newRow("a"), name: "Repeated request!" },
-      { ...newRow("b"), name: "Repeated request?" },
+      { ...newRow("a"), name: "Repeat request!" },
+      { ...newRow("b"), name: "Repeat request?" },
       { ...newRow("c"), name: "2nd try" },
     ];
-    expect(signalIds(rows)).toEqual(["user_frustration", "repeated_request", "repeated_request_2", "signal_2nd_try"]);
+    expect(signalIds(rows)).toEqual(["user_frustration", "repeat_request", "repeat_request_2", "signal_2nd_try"]);
+  });
+
+  it("does not assign a library ID to a new custom question", () => {
+    const rows = [{ ...newRow("custom"), name: "Tool failure", question: "Does this custom signal apply?" }];
+
+    expect(signalIds(rows)[0]).not.toBe("tool_failure");
+  });
+
+  it("keeps custom and library signals distinct when their names match", () => {
+    const toolFailure = SIGNAL_LIBRARY.find((signal) => signal.id === "tool_failure");
+    if (!toolFailure) throw new Error("Tool failure is missing from the signal library");
+    const customQuestion = "Does this custom signal apply?";
+    const draft = {
+      model: "jev",
+      thresholdPercent: 50,
+      rows: [
+        { ...newRow("library"), name: toolFailure.name, question: toolFailure.question },
+        { ...newRow("custom"), id: toolFailure.id, name: toolFailure.name, question: customQuestion },
+      ],
+    };
+
+    expect(configFrom(draft).signals).toEqual([
+      { id: "tool_failure_2", name: "Tool failure", question: toolFailure.question },
+      { id: "tool_failure", name: "Tool failure", question: customQuestion },
+    ]);
   });
 
   it("reports blank, duplicate and out of range fields", () => {
