@@ -428,6 +428,7 @@ class MCPServerConfig(TypedDict, total=False):
     client_assertion_signing_alg: str
     timeout: float
     max_concurrent_requests: int
+    rpm: ReadOnly[int | None]
 
 
 class _ProtectedResourceMetadataPayload(TypedDict, total=False):
@@ -2754,6 +2755,7 @@ class MCPServerManager:
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
                 max_concurrent_requests=server_config.get("max_concurrent_requests", None),
+                rpm=server_config.get("rpm", None),
                 token_validation=server_config.get("token_validation", None),
                 oauth_identity_binding=server_config.get("oauth_identity_binding", None),
             )
@@ -3343,6 +3345,7 @@ class MCPServerManager:
             or "rfc8693",
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
+            rpm=getattr(mcp_server, "rpm", None),
         )
         _warn_legacy_delegate_auth_if_applicable(new_server, source="database")
         if register_oauth_discovery:
@@ -5997,6 +6000,7 @@ class MCPServerManager:
                 data=synthetic_llm_data,
                 call_type=CallTypes.call_mcp_tool.value,
             )
+            await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
             if modified_data:
                 # Convert response back to MCP format and apply modifications
                 modified_kwargs: Final = proxy_logging_obj.convert_mcp_hook_response_to_kwargs(
@@ -7231,6 +7235,7 @@ class MCPServerManager:
             instructions=server.instructions,
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
+            rpm=server.rpm,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -7354,6 +7359,7 @@ class MCPServerManager:
             instructions=server.instructions,
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
+            rpm=server.rpm,
         )
 
     _build_mcp_server_table = build_mcp_server_table

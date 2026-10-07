@@ -31962,6 +31962,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -33814,6 +33826,17 @@
               ],
               "title": "Reviewed At"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "title": "Server Id",
               "type": "string"
@@ -34699,6 +34722,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "anyOf": [
@@ -37098,6 +37133,17 @@
               ],
               "title": "Reviewed At"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "title": "Server Id",
               "type": "string"
@@ -38828,6 +38874,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -39370,6 +39428,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "title": "Server Id",
@@ -42216,6 +42286,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "anyOf": [

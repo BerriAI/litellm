@@ -42,7 +42,8 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.mcp import MCPPreCallRequestObject
+from litellm.types.mcp import MCPPreCallRequestObject, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import (
     EmbeddingResponse,
     ModelResponse,
@@ -3786,9 +3787,9 @@ async def test_failure_event_settles_project_itpm_otpm_at_recovered_partial_usag
 # ----------------------- Per-MCP-server rate limiting (v3) -----------------------
 
 
-def _make_mcp_handler():
-    local_cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(
+def _make_mcp_handler() -> tuple[PROXY_MaxParallelRequestsHandler_v3, DualCache]:
+    local_cache: Final = DualCache()
+    handler: Final = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
     return handler, local_cache
@@ -3917,7 +3918,7 @@ async def test_mcp_per_key_rpm_enforced_v3(monkeypatch):
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
     api_key = hash_token("sk-mcp-enforce")
     local_cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(
+    handler = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
 
@@ -3969,7 +3970,6 @@ async def test_mcp_per_key_rpm_enforced_v3(monkeypatch):
         )
     assert exc_info.value.status_code == 429
 
-    # A different server has no configured limit -> not rate limited.
     for _ in range(5):
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
@@ -3978,8 +3978,195 @@ async def test_mcp_per_key_rpm_enforced_v3(monkeypatch):
             call_type="call_mcp_tool",
         )
 
-    # The TPM counter must never be created for an MCP descriptor.
     assert not any(":tokens" in key and "github" in key for key in request_counts)
+
+
+@pytest.mark.asyncio
+async def test_mcp_per_key_rate_limit_uses_trusted_server_alias_v3() -> None:
+    handler, local_cache = _make_mcp_handler()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        metadata={"mcp_rpm_limit": {"github-alias": 1}},
+    )
+    server: Final = MCPServer(
+        server_id="server-1",
+        name="github",
+        alias="github-alias",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+
+    await handler.enforce_mcp_server_rate_limits(user_api_key_dict, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_key"):
+        await handler.enforce_mcp_server_rate_limits(user_api_key_dict, server)
+
+    assert all(
+        value == 0
+        for key, value in local_cache.in_memory_cache.cache_dict.items()
+        if key.endswith(":tokens")
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_per_key_rejection_does_not_consume_shared_server_rpm_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-shared",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+        rpm=2,
+    )
+    first_key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-limited"),
+        metadata={"mcp_rpm_limit": {"github": 1}},
+    )
+    second_key: Final = UserAPIKeyAuth(api_key=hash_token("sk-mcp-unlimited"))
+
+    await handler.enforce_mcp_server_rate_limits(first_key, server)
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_key") as key_rejected:
+        await handler.enforce_mcp_server_rate_limits(first_key, server)
+
+    assert key_rejected.value.headers is not None
+    assert key_rejected.value.headers["retry-after"] == str(handler.window_size)
+    assert key_rejected.value.headers["rate_limit_type"] == "requests"
+    assert key_rejected.value.headers["reset_at"]
+    await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_server") as server_rejected:
+        await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+    assert server_rejected.value.headers is not None
+    assert server_rejected.value.headers["retry-after"] == str(handler.window_size)
+    assert server_rejected.value.headers["rate_limit_type"] == "requests"
+    assert server_rejected.value.headers["reset_at"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_per_key_rate_limit_is_scoped_to_server_identity_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        metadata={"mcp_rpm_limit": {"github": 1}},
+    )
+    github: Final = MCPServer(
+        server_id="server-github",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+    slack: Final = MCPServer(
+        server_id="server-slack",
+        name="slack",
+        server_name="slack",
+        transport=MCPTransport.http,
+    )
+
+    await handler.enforce_mcp_server_rate_limits(user_api_key_dict, github)
+    await handler.enforce_mcp_server_rate_limits(user_api_key_dict, slack)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_key"):
+        await handler.enforce_mcp_server_rate_limits(user_api_key_dict, github)
+
+
+@pytest.mark.asyncio
+async def test_raw_mcp_server_name_does_not_create_mcp_descriptor_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        metadata={"mcp_rpm_limit": {"github": 5}},
+    )
+
+    local_cache: Final = DualCache()
+    await handler.async_pre_call_hook(
+        user_api_key_dict,
+        local_cache,
+        {"model": "gpt-4o-mini", "mcp_server_name": "github"},
+        "call_mcp_tool",
+    )
+
+    assert not any("mcp_per_" in key for key in local_cache.in_memory_cache.cache_dict)
+
+
+@pytest.mark.asyncio
+async def test_mcp_per_team_rate_limit_is_enforced_from_team_metadata_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-1",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+    first_key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-first"),
+        team_id="team-1",
+        team_metadata={"mcp_rpm_limit": {"github": 1}},
+    )
+    second_key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-second"),
+        team_id="team-1",
+        team_metadata={"mcp_rpm_limit": {"github": 1}},
+    )
+
+    await handler.enforce_mcp_server_rate_limits(first_key, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_team"):
+        await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_rpm_is_shared_across_keys_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-1",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+        rpm=2,
+    )
+    first_key: Final = UserAPIKeyAuth(api_key=hash_token("sk-mcp-first"))
+    second_key: Final = UserAPIKeyAuth(api_key=hash_token("sk-mcp-second"))
+
+    await handler.enforce_mcp_server_rate_limits(first_key, server)
+    await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_server"):
+        await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_rpm_zero_rejects_first_request_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-zero",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+        rpm=0,
+    )
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_server"):
+        await handler.enforce_mcp_server_rate_limits(None, server)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_without_any_rate_limits_skips_cache_v3() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    handler, local_cache = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-unlimited",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+
+    with patch.object(handler, "should_rate_limit", new_callable=AsyncMock) as should_rate_limit:
+        await handler.enforce_mcp_server_rate_limits(None, server)
+
+    should_rate_limit.assert_not_awaited()
+    assert local_cache.in_memory_cache.cache_dict == {}
 
 
 def test_get_key_mcp_rpm_limit_precedence():

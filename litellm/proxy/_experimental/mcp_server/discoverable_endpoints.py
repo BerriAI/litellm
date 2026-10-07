@@ -1764,6 +1764,16 @@ def client_supplied_redirect_uris(value: object) -> list[str] | None:
     return uris if len(uris) == len(value) else None
 
 
+_CLIENT_APPLICATION_TYPE: Final = TypeAdapter(Literal["native", "web"] | None)
+
+
+def client_supplied_application_type(value: object) -> Literal["native", "web"] | None:
+    try:
+        return _CLIENT_APPLICATION_TYPE.validate_python(value)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail="application_type must be native or web") from exc
+
+
 async def _post_dcr_registration(
     registration_url: str,
     register_data: Mapping[str, object],
@@ -1928,6 +1938,7 @@ async def register_client_with_server(
     fallback_client_id: str | None = None,
     persist_credentials: bool = False,
     client_redirect_uris: list[str] | None = None,
+    client_application_type: Literal["native", "web"] | None = None,
 ):
     raise_if_not_oauth2(mcp_server)
     request_base_url: Final = get_request_base_url(request)
@@ -1983,6 +1994,11 @@ async def register_client_with_server(
         )
 
     register_data: Final = {
+        **(
+            {"application_type": client_application_type}
+            if bridge_relay and client_application_type is not None
+            else {}
+        ),
         "client_name": client_name,
         "redirect_uris": client_redirect_uris if bridge_relay else [current_redirect_uri],
         "grant_types": grant_types or (["authorization_code", "refresh_token"] if bridge_relay else []),
@@ -3097,6 +3113,7 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
         return await register_aggregate_client(
             request=request, request_body=data, token_exchange_available=token_exchange_available()
         )
+    client_application_type: Final = client_supplied_application_type(data.get("application_type"))
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     async with global_mcp_server_manager.catalog.operation():
@@ -3118,6 +3135,7 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
                     token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
                     fallback_client_id=resolved.server_name or resolved.name,
                     client_redirect_uris=client_redirect_uris,
+                    client_application_type=client_application_type,
                 )
             return dummy_return
 
@@ -3133,4 +3151,5 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
             token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
             fallback_client_id=mcp_server_name,
             client_redirect_uris=client_redirect_uris,
+            client_application_type=client_application_type,
         )
