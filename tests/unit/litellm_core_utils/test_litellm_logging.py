@@ -3710,11 +3710,11 @@ def test_get_usage_as_dict():
 
     # Test case 1: None response_obj returns empty usage dict
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=None)
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {}
 
     # Test case 2: Empty response_obj returns empty usage dict
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={})
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {}
 
     # Test case 3: combined_usage_object takes priority
     combined = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
@@ -3734,7 +3734,35 @@ def test_get_usage_as_dict():
 
     # Test case 5: response_obj with no usage key returns empty
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={"id": "resp-1", "choices": []})
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {}
+
+
+@pytest.mark.parametrize(
+    "usage, include_usage",
+    [(None, False), (None, True), ({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, True)],
+)
+def test_logging_preserves_missing_usage_without_accepting_request_metadata(
+    logging_obj: Logging, usage: dict[str, int] | None, include_usage: bool
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import convert_to_model_response_object
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    response: Final[ModelResponse] = convert_to_model_response_object(
+        response_object={"id": "usage-coverage", "choices": [], **({"usage": usage} if include_usage else {})},
+        model_response_object=ModelResponse(),
+    )
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"litellm_params": {"metadata": {"usage_object": {"prompt_tokens": 99, "completion_tokens": 99}}}},
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["metadata"]["usage_object"] == (response.usage.model_dump() if usage is not None else {})
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (0, 0, 0)
 
 
 def test_append_system_prompt_messages():
