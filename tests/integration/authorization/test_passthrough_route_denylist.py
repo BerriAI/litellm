@@ -77,7 +77,16 @@ def test_denied_subpath_is_blocked_even_when_allowed_while_its_sibling_still_rea
 
 @pytest.mark.parametrize(
     "subpath",
-    ["public/%2e%2e/admin/users", "/admin/users", "admin%3F", "admin%3F/users", "admin%23", "admin%23/users"],
+    [
+        "public/%2e%2e/admin/users",
+        "/admin/users",
+        "admin%3F",
+        "admin%3F/users",
+        "admin%23",
+        "admin%23/users",
+        "public%3Fx/%2e%2e/admin%3F",
+        "public%23x/%2e%2e/admin%23",
+    ],
     ids=[
         "encoded_dot_dot_segment",
         "empty_segment",
@@ -85,6 +94,8 @@ def test_denied_subpath_is_blocked_even_when_allowed_while_its_sibling_still_rea
         "encoded_query_mark_then_subpath",
         "encoded_fragment_mark",
         "encoded_fragment_mark_then_subpath",
+        "encoded_query_mark_then_dot_dot",
+        "encoded_fragment_mark_then_dot_dot",
     ],
 )
 def test_dot_and_empty_segments_cannot_reach_a_denied_subpath(gateway: Gateway, subpath: str) -> None:

@@ -4565,6 +4565,8 @@ def test_denied_passthrough_routes_do_not_restrict_proxy_admins():
         "/svc/admin#",
         "/svc/admin#/users",
         "/svc/public/../admin?x",
+        "/svc/public?x/../admin?",
+        "/svc/public#x/../admin#",
     ],
     ids=[
         "dot-dot-segment",
@@ -4576,6 +4578,8 @@ def test_denied_passthrough_routes_do_not_restrict_proxy_admins():
         "fragment-mark",
         "fragment-mark-then-subpath",
         "dot-dot-then-query-mark",
+        "query-mark-then-dot-dot",
+        "fragment-mark-then-dot-dot",
     ],
 )
 def test_dot_and_empty_segments_cannot_reach_a_denied_route(route):
@@ -4590,6 +4594,16 @@ def test_dot_and_empty_segments_cannot_reach_a_denied_route(route):
 
     assert exc_info.value.status_code == 403
     assert "Matched `/svc/admin` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+def test_dot_dot_out_of_a_denied_route_is_checked_as_the_route_it_forwards_to():
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/admin/../public", valid_token=valid_token)
 
 
 @pytest.mark.parametrize("route", ["/svc/admin", "/svc/admin/", "/svc/admin/users"])

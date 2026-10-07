@@ -698,6 +698,28 @@ def test_construct_target_url_with_subpath():
     )
     assert result == "http://example.com/api/v1"
 
+    result = HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
+        base_target="http://example.com", subpath="api/../v1/", include_subpath=True
+    )
+    assert result == "http://example.com/v1/"
+
+
+@pytest.mark.parametrize(
+    "subpath",
+    ["admin/users", "public/../admin", "../../admin", "/admin/", "./admin", "admin?", "public?x/../admin#"],
+)
+def test_forwarded_route_is_the_path_the_forwarder_sends_upstream(subpath):
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        HttpPassThroughEndpointHelpers,
+    )
+
+    target: Final = HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
+        base_target="http://upstream.test/base", subpath=subpath, include_subpath=True
+    )
+    forwarded: Final = HttpPassThroughEndpointHelpers.forwarded_route(endpoint_path="/svc", subpath=subpath)
+
+    assert "/svc" + httpx.URL(target).path.removeprefix("/base") == forwarded
+
 
 def test_add_exact_path_route():
     """
