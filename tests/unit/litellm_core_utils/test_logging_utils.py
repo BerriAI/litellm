@@ -96,9 +96,16 @@ class TestTruncateBase64InString:
         assert result.count("base64_data truncated") == 2
 
     @pytest.mark.timeout(10)
-    def test_many_sse_data_lines_without_data_uris_are_scanned_in_linear_time(self):
-        sse = 'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n' * 50_000
-        assert _truncate_base64_in_string(sse) == sse
+    @pytest.mark.parametrize(
+        "text",
+        [
+            'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n' * 50_000,
+            "data:" * 200_000,
+        ],
+        ids=["sse_lines", "whitespace_free_prefixes"],
+    )
+    def test_repeated_data_prefixes_without_data_uris_are_scanned_in_linear_time(self, text: str):
+        assert _truncate_base64_in_string(text) == text
 
     def test_no_data_uri(self):
         text = "hello world, no base64 here"
