@@ -132,10 +132,10 @@ async def test_proxy_only_error_log_drops_caller_guardrail_information_without_l
     metadata_field: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    monkeypatch.setattr(Logging, "pre_call", MagicMock())
-    monkeypatch.setattr(Logging, "async_failure_handler", AsyncMock())
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
     guardrail_info: Final = [
         {
             "guardrail_name": "caller-guardrail",
