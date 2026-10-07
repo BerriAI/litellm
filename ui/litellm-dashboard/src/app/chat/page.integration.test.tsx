@@ -8,7 +8,10 @@ import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 
 const { mockMakeOpenAIResponsesRequest, shellState } = vi.hoisted(() => ({
   mockMakeOpenAIResponsesRequest: vi.fn(),
-  shellState: { storageUnavailable: false },
+  shellState: {
+    activeConversationIdOverride: null as string | null,
+    storageUnavailable: false,
+  },
 }));
 
 vi.mock("next/navigation", () => ({
@@ -42,6 +45,16 @@ vi.mock("react-syntax-highlighter/dist/esm/styles/prism", () => ({ coy: {}, oneD
 vi.mock("@/contexts/ChatShellContext", () => ({
   useChatShell: () => {
     const history = useChatHistory(null, "metrics-test-user");
+    const activeConversationId = shellState.activeConversationIdOverride ?? history.currentActiveId;
+    const activeConversation = shellState.activeConversationIdOverride
+      ? {
+          id: shellState.activeConversationIdOverride,
+          title: "Second conversation",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          messages: [],
+        }
+      : history.activeConversation;
     return {
       accessToken: "sk-test",
       userId: "metrics-test-user",
@@ -51,8 +64,8 @@ vi.mock("@/contexts/ChatShellContext", () => ({
       selectedMCPServers: [],
       setSelectedMCPServers: vi.fn(),
       conversations: history.conversations,
-      activeConversation: history.activeConversation,
-      activeConversationId: history.currentActiveId,
+      activeConversation,
+      activeConversationId,
       storageUnavailable: shellState.storageUnavailable,
       staleId: false,
       createConversation: history.createConversation,
@@ -70,20 +83,22 @@ const ON_TIMING_DATA_INDEX = 7;
 const ON_USAGE_DATA_INDEX = 8;
 const ON_TOTAL_LATENCY_INDEX = 24;
 
-async function sendOneMessage(onUrlUpdate?: OnUrlUpdateFunction): Promise<void> {
-  renderWithProviders(<ChatConversationPage />, { onUrlUpdate });
+async function sendOneMessage(onUrlUpdate?: OnUrlUpdateFunction) {
+  const result = renderWithProviders(<ChatConversationPage />, { onUrlUpdate });
   expect(await screen.findByRole("button", { name: /gpt-5\.4-mini/ })).toBeInTheDocument();
   fireEvent.change(screen.getByPlaceholderText("How can I help you today?"), {
     target: { value: "How much did this cost?" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
   await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(1));
+  return result;
 }
 
 describe("/ui/chat request metrics", () => {
   beforeEach(() => {
     localStorage.clear();
     mockMakeOpenAIResponsesRequest.mockReset();
+    shellState.activeConversationIdOverride = null;
     shellState.storageUnavailable = false;
     vi.mocked(fetchAvailableModels).mockResolvedValue([{ model_group: "gpt-5.4-mini" }]);
   });
@@ -190,6 +205,30 @@ describe("/ui/chat request metrics", () => {
       { role: "assistant", content: "First answer" },
       { role: "user", content: "Follow up" },
     ]);
+  });
+
+  it("ignores late response IDs after changing conversations", async () => {
+    const firstCompletion = Promise.withResolvers<void>();
+    mockMakeOpenAIResponsesRequest.mockImplementationOnce(async (...args: unknown[]) => {
+      await firstCompletion.promise;
+      (args[1] as (role: string, delta: string) => void)("assistant", "First answer");
+      (args[15] as (id: string) => void)("response-first");
+    });
+    mockMakeOpenAIResponsesRequest.mockResolvedValue(undefined);
+
+    const { rerender } = await sendOneMessage();
+    shellState.activeConversationIdOverride = "conversation-b";
+    rerender(<ChatConversationPage />);
+
+    await act(async () => firstCompletion.resolve());
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Follow up" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const second = mockMakeOpenAIResponsesRequest.mock.calls[1];
+    expect(second[14]).toBeNull();
+    expect(second[0]).toEqual([{ role: "user", content: "Follow up" }]);
   });
 
   it("renders latency, TTFT, token counts and cost reported for the assistant turn", async () => {

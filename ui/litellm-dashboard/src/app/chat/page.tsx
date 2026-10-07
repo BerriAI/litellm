@@ -78,6 +78,7 @@ export default function ChatConversationPage() {
 
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
   const responsesSessionGenerationRef = useRef(0);
+  const previousResponsesConversationRef = useRef(activeConversationId);
   const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
@@ -121,6 +122,16 @@ export default function ChatConversationPage() {
       .catch(() => toast.error("Could not load models"))
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
+
+  useLayoutEffect(() => {
+    if (
+      previousResponsesConversationRef.current !== null &&
+      previousResponsesConversationRef.current !== activeConversationId
+    ) {
+      responsesSessionGenerationRef.current += 1;
+    }
+    previousResponsesConversationRef.current = activeConversationId;
+  }, [activeConversationId]);
 
   // Reset the responses session when switching between conversations so that
   // previous_response_id from conversation A is never sent for conversation B.
