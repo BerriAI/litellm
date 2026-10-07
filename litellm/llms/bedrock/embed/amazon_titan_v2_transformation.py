@@ -13,8 +13,6 @@ import types
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import TypeAdapter
-
 from litellm.types.llms.bedrock import (
     AmazonTitanV2EmbeddingRequest,
     AmazonTitanV2EmbeddingResponse,
@@ -76,27 +74,27 @@ class AmazonTitanV2Config:
                     optional_params["embeddingTypes"] = ["float"]
         return optional_params
 
-    def _transform_request(self, input: str, inference_params: dict[str, object]) -> AmazonTitanV2EmbeddingRequest:
+    def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanV2EmbeddingRequest:
         return AmazonTitanV2EmbeddingRequest(inputText=input, **inference_params)
 
     def transform_request(
         self,
         input: str,
-        inference_params: dict[str, object],  # mutable-ok: exact API
+        inference_params: dict,  # mutable-ok: forwards private contract
     ) -> AmazonTitanV2EmbeddingRequest:
         return self._transform_request(input, inference_params)
 
-    def _transform_response(self, response_list: list[dict[str, object]], model: str) -> EmbeddingResponse:
+    def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
         total_prompt_tokens = 0
 
         transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = TypeAdapter(AmazonTitanV2EmbeddingResponse).validate_python(response)
+            _parsed_response = AmazonTitanV2EmbeddingResponse(**response)
 
             # According to AWS docs, embeddingsByType is always present
             # If binary was requested (encoding_format="base64"), use binary data
             # Otherwise, use float data from embeddingsByType or fallback to embedding field
-            embedding_data: list[float] | list[int] | str
+            embedding_data: list[float] | list[int]
 
             if "embeddingsByType" in _parsed_response and "binary" in _parsed_response["embeddingsByType"]:
                 # Use binary data if available (for encoding_format="base64")
@@ -128,7 +126,7 @@ class AmazonTitanV2Config:
 
     def transform_response(
         self,
-        response_list: list[dict[str, object]],  # mutable-ok: exact API
+        response_list: list[dict],  # mutable-ok: forwards private contract
         model: str,
     ) -> EmbeddingResponse:
         return self._transform_response(response_list, model)

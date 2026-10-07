@@ -417,7 +417,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return None
 
     @classmethod
-    def validate_effort_for_model(cls, /, model: str, effort: str | None, custom_llm_provider: str) -> str | None:
+    def validate_effort_for_model(
+        cls,
+        model: str,
+        effort: str | None,
+        custom_llm_provider: str,
+    ) -> str | None:
         return cls._validate_effort_for_model(model, effort, custom_llm_provider)
 
     @staticmethod
@@ -437,7 +442,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @classmethod
-    def model_supports_effort_param(cls, /, model: str, custom_llm_provider: str) -> bool:
+    def model_supports_effort_param(
+        cls,
+        model: str,
+        custom_llm_provider: str,
+    ) -> bool:
         return cls._model_supports_effort_param(model, custom_llm_provider)
 
     @staticmethod
@@ -456,7 +465,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @staticmethod
     def _maybe_drop_speed_param(
         model: str,
-        optional_params: dict[str, object],
+        optional_params: dict,
         drop_params: bool,
         custom_llm_provider: str | None = None,
     ) -> None:
@@ -483,9 +492,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @classmethod
     def maybe_drop_speed_param(
         cls,
-        /,
         model: str,
-        optional_params: dict[str, object],  # mutable-ok: exact API
+        optional_params: dict,  # mutable-ok: forwards private contract
         drop_params: bool,
         custom_llm_provider: str | None = None,
     ) -> None:
@@ -515,7 +523,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @classmethod
-    def raise_invalid_reasoning_effort(cls, /, model: str, value: object, llm_provider: str) -> NoReturn:
+    def raise_invalid_reasoning_effort(
+        cls,
+        model: str,
+        value: object,
+        llm_provider: str,
+    ) -> NoReturn:
         return cls._raise_invalid_reasoning_effort(model, value, llm_provider)
 
     def get_supported_openai_params(self, model: str):
@@ -947,7 +960,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return returned_tool, mcp_server
 
     def map_tool_helper(
-        self, tool: ChatCompletionToolParam
+        self,
+        tool: ChatCompletionToolParam,
     ) -> tuple[AllAnthropicToolsValues | None, AnthropicMcpServerTool | None]:
         return self._map_tool_helper(tool)
 
@@ -982,7 +996,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def _map_tools(
         self,
-        tools: list[ChatCompletionToolParam],
+        tools: list,
     ) -> tuple[list[AllAnthropicToolsValues], list[AnthropicMcpServerTool]]:
         anthropic_tools: Final = []
         mcp_servers: Final = []
@@ -1028,10 +1042,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def map_tools(
         self,
-        tools: list[ChatCompletionToolParam],  # mutable-ok: exact API
-    ) -> (
-        tuple[list[AllAnthropicToolsValues], list[AnthropicMcpServerTool]]  # mutable-ok: exact API
-    ):
+        tools: list,  # mutable-ok: forwards private contract
+    ) -> tuple[list[AllAnthropicToolsValues], list[AnthropicMcpServerTool]]:  # mutable-ok: forwards private contract
         return self._map_tools(tools)
 
     @staticmethod
@@ -1287,10 +1299,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def map_stop_sequences(
         self,
-        stop: str | list[str] | None,  # mutable-ok: exact API
-    ) -> (
-        list[str] | None  # mutable-ok: exact API
-    ):
+        stop: str | list[str] | None,  # mutable-ok: forwards private contract
+    ) -> list[str] | None:  # mutable-ok: forwards private contract
         return self._map_stop_sequences(stop)
 
     @staticmethod
@@ -1357,7 +1367,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @classmethod
     def map_reasoning_effort(
         cls,
-        /,
         reasoning_effort: REASONING_EFFORT | str | None,
         model: str,
         custom_llm_provider: str,
@@ -2844,8 +2853,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @classmethod
     def convert_tool_response_to_message(
         cls,
-        /,
-        tool_calls: list[ChatCompletionToolCallChunk],  # mutable-ok: mirrors override contract
+        tool_calls: list[ChatCompletionToolCallChunk],  # mutable-ok: forwards private contract
     ) -> LitellmMessage | None:
         return cls._convert_tool_response_to_message(tool_calls)
 

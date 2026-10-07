@@ -15,7 +15,6 @@ from urllib.parse import quote, unquote
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 import litellm
@@ -684,7 +683,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     )
     vertex_request_body: Final = transform_request_body(
         messages=map_developer_role_to_system_role(chat_request_body.get("messages", [])),
-        model=TypeAdapter(str).validate_python(chat_request_body.get("model", "")),
+        model=chat_request_body.get("model", ""),
         optional_params=map_openai_to_vertex_params(chat_request_body),
         custom_llm_provider="vertex_ai",
         litellm_params={},

@@ -478,7 +478,10 @@ class BaseAzureLLM(BaseOpenAILLM):
             return None
 
     @classmethod
-    def try_get_default_azure_credential_provider(cls, /, scope: str) -> Callable[[], str] | None:
+    def try_get_default_azure_credential_provider(
+        cls,
+        scope: str,
+    ) -> Callable[[], str] | None:
         return cls._try_get_default_azure_credential_provider(scope)
 
     def get_azure_openai_client(
@@ -756,9 +759,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         return client
 
     @staticmethod
-    def _base_validate_azure_environment(
-        headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
-    ) -> dict[str, str]:
+    def _base_validate_azure_environment(headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
         # Check if api-key is already in headers; if so, use it
@@ -788,10 +789,9 @@ class BaseAzureLLM(BaseOpenAILLM):
     @classmethod
     def base_validate_azure_environment(
         cls,
-        /,
-        headers: dict[str, str],  # mutable-ok: exact API
+        headers: dict,  # mutable-ok: forwards private contract
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict[str, str]:  # mutable-ok: matches extension signature
+    ) -> dict:  # mutable-ok: forwards private contract
         return cls._base_validate_azure_environment(headers, litellm_params)
 
     @staticmethod
@@ -849,7 +849,6 @@ class BaseAzureLLM(BaseOpenAILLM):
     @classmethod
     def get_base_azure_url(
         cls,
-        /,
         api_base: str | None,
         litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
         route: Literal["/openai/responses", "/openai/vector_stores"] | str,

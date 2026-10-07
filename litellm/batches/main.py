@@ -1119,10 +1119,7 @@ def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj
         from litellm.types.utils import LiteLLMBatch
 
         # Normalize status to lowercase (AWS returns 'Completed', 'Failed', etc.)
-        aws_status_value: Final = status_response.get("status", "")
-        if not isinstance(aws_status_value, str):
-            raise ValueError("Bedrock async invoke status must be a string")
-        aws_status_raw: Final = aws_status_value
+        aws_status_raw: Final = status_response.get("status", "")
         aws_status_lower: Final = aws_status_raw.lower()
         # Map AWS status values to LiteLLM expected values
         status_mapping: Final[dict[str, BatchJobStatus]] = {
@@ -1136,14 +1133,11 @@ def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj
         )  # Default to "failed" if unknown status
 
         # Get output S3 URI safely
-        output_data_config: Final = status_response.get("outputDataConfig")
-        s3_output_data_config: Final = (
-            output_data_config.get("s3OutputDataConfig") if isinstance(output_data_config, dict) else None
-        )
-        output_s3_uri_value: Final = (
-            s3_output_data_config.get("s3Uri") if isinstance(s3_output_data_config, dict) else None
-        )
-        output_s3_uri: Final = output_s3_uri_value if isinstance(output_s3_uri_value, str) else ""
+        output_s3_uri = ""
+        try:
+            output_s3_uri = status_response["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"]
+        except (KeyError, TypeError):
+            pass
 
         # Use BedrockBatchesConfig's timestamp parsing method (expects raw AWS status string)
         import time
@@ -1158,13 +1152,8 @@ def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj
             _,
             _,
         ) = BedrockBatchesConfig().parse_timestamps_and_status(status_response, aws_status_raw)
-        invocation_arn: Final = status_response.get("invocationArn")
-        model_arn: Final = status_response.get("modelArn")
-        failure_message: Final = status_response.get("failureMessage")
-        if not isinstance(invocation_arn, str) or not isinstance(model_arn, str):
-            raise ValueError("Bedrock async invoke status is missing its invocation or model ARN")
         result: Final = LiteLLMBatch(
-            id=invocation_arn,
+            id=status_response["invocationArn"],
             object="batch",
             status=normalized_status,
             created_at=created_at or int(time.time()),  # Provide default timestamp if None
@@ -1179,8 +1168,8 @@ def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj
             metadata=dict(
                 **{
                     "output_file_id": output_s3_uri,
-                    "failure_message": failure_message if isinstance(failure_message, str) else "",
-                    "model_arn": model_arn,
+                    "failure_message": status_response.get("failureMessage") or "",
+                    "model_arn": status_response["modelArn"],
                 }
             ),
             completion_window="24h",

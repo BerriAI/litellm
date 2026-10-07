@@ -792,7 +792,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
     def get_aws_region_name(
         self,
-        optional_params: dict,  # pyright: ignore[reportMissingTypeArgument]  # mirrors AWS options  # mutable-ok: extension API
+        optional_params: dict,  # mutable-ok: forwards private contract
         model: str | None = None,
         model_id: str | None = None,
     ) -> str:
@@ -813,7 +813,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             )
 
     @classmethod
-    def validate_aws_region_name(cls, /, aws_region_name: str | None) -> None:
+    def validate_aws_region_name(
+        cls,
+        aws_region_name: str | None,
+    ) -> None:
         return cls._validate_aws_region_name(aws_region_name)
 
     @staticmethod

@@ -44,7 +44,6 @@ def convert_image(image: str) -> str:
 
 _convert_image = convert_image
 
-
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 
 

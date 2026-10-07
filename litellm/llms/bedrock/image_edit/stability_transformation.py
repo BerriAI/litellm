@@ -87,7 +87,10 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         return False
 
     @classmethod
-    def is_stability_edit_model(cls, model: str | None = None) -> bool:
+    def is_stability_edit_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
         return cls._is_stability_edit_model(model)
 
     def get_error_class(

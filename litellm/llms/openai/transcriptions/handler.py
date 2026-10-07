@@ -113,9 +113,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             input=None,
             api_key=openai_client.api_key,
             additional_args={
-                "api_base": (
-                    openai_client._base_url._uri_reference  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
-                ),
+                "api_base": openai_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                 "atranscription": True,
                 "complete_input_dict": data,
             },
@@ -178,9 +176,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 input=None,
                 api_key=openai_aclient.api_key,
                 additional_args={
-                    "api_base": (
-                        openai_aclient._base_url._uri_reference  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
-                    ),
+                    "api_base": openai_aclient._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "atranscription": True,
                     "complete_input_dict": data,
                 },

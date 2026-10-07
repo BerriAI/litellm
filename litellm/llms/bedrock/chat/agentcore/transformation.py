@@ -195,7 +195,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
     def get_runtime_session_id(
         self,
-        optional_params: dict,  # pyright: ignore[reportMissingTypeArgument]  # runtime options # mutable-ok: exact override
+        optional_params: dict,  # mutable-ok: forwards private contract
     ) -> str:
         return self._get_runtime_session_id(optional_params)
 
@@ -210,7 +210,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
     def get_runtime_user_id(
         self,
-        optional_params: dict,  # pyright: ignore[reportMissingTypeArgument]  # runtime options # mutable-ok: exact override
+        optional_params: dict,  # mutable-ok: forwards private contract
     ) -> str | None:
         return self._get_runtime_user_id(optional_params)
 

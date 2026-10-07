@@ -66,7 +66,10 @@ class AmazonStability3Config:
         return False
 
     @classmethod
-    def is_stability_3_model(cls, model: str | None = None) -> bool:
+    def is_stability_3_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
         return cls._is_stability_3_model(model)
 
     @classmethod

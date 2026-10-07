@@ -171,17 +171,15 @@ class AzureAIAgentsConfig(BaseConfig):
         # Return base URL - actual endpoints will be constructed during request
         return api_base
 
-    def _get_agent_id(self, model: str, optional_params: dict[str, object]) -> str:
+    def _get_agent_id(self, model: str, optional_params: dict) -> str:
         """
         Get the agent ID from model or optional_params.
 
         model format: "azure_ai/agents/<agent_id>" or "agents/<agent_id>" or just "<agent_id>"
         """
         agent_id: Final = optional_params.get("agent_id") or optional_params.get("assistant_id")
-        if isinstance(agent_id, str) and agent_id:
+        if agent_id:
             return agent_id
-        if agent_id is not None and not isinstance(agent_id, str):
-            raise ValueError("agent_id must be a string")
 
         # Extract from model name using the static method
         return self.get_agent_id_from_model(model)
@@ -189,7 +187,7 @@ class AzureAIAgentsConfig(BaseConfig):
     def get_agent_id(
         self,
         model: str,
-        optional_params: dict[str, object],  # mutable-ok: preserves extension signature
+        optional_params: dict,  # mutable-ok: forwards private contract
     ) -> str:
         return self._get_agent_id(model, optional_params)
 

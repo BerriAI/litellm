@@ -7,10 +7,10 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 import httpx
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue
 
 import litellm
 from litellm import verbose_logger
@@ -56,7 +56,6 @@ from litellm.types.llms.vertex_ai import (
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
     VERTEX_CREDENTIALS_TYPES,
     Candidates,
-    CitationMetadata,
     ContentType,
     FunctionCallingConfig,
     FunctionDeclaration,
@@ -65,10 +64,8 @@ from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     HttpxPartType,
     LogprobsResult,
-    SafetyRatings,
     ToolConfig,
     Tools,
-    UrlContextMetadata,
     UsageMetadata,
     VertexToolName,
 )
@@ -77,7 +74,6 @@ from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
-    ModelResponseStream,
     PromptTokensDetailsWrapper,
     TopLogprob,
     Usage,
@@ -109,7 +105,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import StreamingChoices
+    from litellm.types.utils import ModelResponseStream, StreamingChoices
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -303,7 +299,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return True
 
     @classmethod
-    def is_gemini_3_or_newer(cls, /, model: str) -> bool:
+    def is_gemini_3_or_newer(
+        cls,
+        model: str,
+    ) -> bool:
         return cls._is_gemini_3_or_newer(model)
 
     @staticmethod
@@ -317,7 +316,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return VertexGeminiConfig._is_gemini_3_or_newer(model)
 
     @classmethod
-    def forward_gemini_function_call_id(cls, /, model: str) -> bool:
+    def forward_gemini_function_call_id(
+        cls,
+        model: str,
+    ) -> bool:
         return cls._forward_gemini_function_call_id(model)
 
     def _supports_penalty_parameters(self, model: str) -> bool:
@@ -382,7 +384,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=400,
             )
 
-    def _map_web_search_options(self, value: dict[str, object]) -> Tools:
+    def _map_web_search_options(self, value: dict) -> Tools:
         """
         Base Case: empty dict
 
@@ -390,11 +392,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         return Tools(googleSearch={})
 
-    def map_web_search_options(self, value: dict[str, object]) -> Tools:  # mutable-ok: mirrors override contract
+    def map_web_search_options(
+        self,
+        value: dict,  # mutable-ok: forwards private contract
+    ) -> Tools:
         return self._map_web_search_options(value)
 
     @staticmethod
-    def _search_tool_keys() -> set[str]:
+    def _search_tool_keys() -> set:
         return {
             VertexToolName.GOOGLE_SEARCH.value,
             VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value,
@@ -407,11 +412,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         }
 
     @classmethod
-    def search_tool_keys(cls, /) -> set[str]:  # mutable-ok: mirrors override contract
+    def search_tool_keys(
+        cls,
+    ) -> set:  # mutable-ok: forwards private contract
         return cls._search_tool_keys()
 
     @classmethod
-    def _drop_search_tools_mixed_with_functions(cls, optional_params: dict[str, object]) -> None:
+    def _drop_search_tools_mixed_with_functions(cls, optional_params: dict) -> None:
         """
         Drop search tools from optional_params when mixed with function declarations
         and include_server_side_tool_invocations is not enabled.
@@ -452,7 +459,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def drop_search_tools_mixed_with_functions(
         cls,
-        optional_params: dict[str, object],  # mutable-ok: exact API
+        optional_params: dict,  # mutable-ok: forwards private contract
     ) -> None:
         return cls._drop_search_tools_mixed_with_functions(optional_params)
 
@@ -613,7 +620,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _map_function(self, value: list[dict[str, object]], optional_params: dict[str, object]) -> list[Tools]:
+    def _map_function(self, value: list[dict], optional_params: dict) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
@@ -646,9 +653,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         for tool in value:
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
-                _openai_function_object = TypeAdapter(ChatCompletionToolParamFunctionChunk).validate_python(
-                    tool["function"]
-                )
+                _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
 
                 if (
                     "parameters" in _openai_function_object
@@ -660,7 +665,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 openai_function_object = _openai_function_object
 
             elif "name" in tool:  # functions list
-                openai_function_object = TypeAdapter(ChatCompletionToolParamFunctionChunk).validate_python(tool)
+                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)
 
             if "type" in tool and tool["type"] == "computer_use":
                 computer_use_config = {k: v for k, v in tool.items() if k != "type"}
@@ -788,20 +793,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         # Add retrieval config to toolConfig if googleMaps has location data
         if google_maps_retrieval_config is not None:
-            tool_config: Final = optional_params.setdefault("toolConfig", {})
-            if not isinstance(tool_config, dict):
-                raise ValueError("toolConfig must be a mapping")
-            tool_config["retrievalConfig"] = google_maps_retrieval_config
+            if "toolConfig" not in optional_params:
+                optional_params["toolConfig"] = {}
+            optional_params["toolConfig"]["retrievalConfig"] = google_maps_retrieval_config
 
         return _tools_list
 
     def map_function(
         self,
-        value: list[dict[str, object]],  # mutable-ok: exact API
-        optional_params: dict[str, object],  # mutable-ok: exact API
-    ) -> (
-        list[Tools]  # mutable-ok: exact API
-    ):
+        value: list[dict],  # mutable-ok: forwards private contract
+        optional_params: dict,  # mutable-ok: forwards private contract
+    ) -> list[Tools]:  # mutable-ok: forwards private contract
         return self._map_function(value, optional_params)
 
     def _map_response_schema(self, value: dict) -> dict:
@@ -1056,7 +1058,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=400,
             )
 
-    def _map_audio_params(self, value: dict[str, object]) -> dict[str, object]:
+    def _map_audio_params(self, value: dict) -> dict:
         """
         Expected input:
         {
@@ -1094,17 +1096,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         speech_config: Final[SpeechConfig] = {}
 
         if "voice" in value:
-            voice: Final = TypeAdapter(str).validate_python(value["voice"])
-            prebuilt_voice_config: Final[PrebuiltVoiceConfig] = {"voiceName": voice}
+            prebuilt_voice_config: Final[PrebuiltVoiceConfig] = {"voiceName": value["voice"]}
             voice_config: Final[VoiceConfig] = {"prebuiltVoiceConfig": prebuilt_voice_config}
             speech_config["voiceConfig"] = voice_config
 
         if "language_code" in value:
-            speech_config["languageCode"] = TypeAdapter(str).validate_python(value["language_code"])
+            speech_config["languageCode"] = value["language_code"]
 
-        return cast(dict[str, object], speech_config)
+        return cast(dict, speech_config)
 
-    def map_audio_params(self, value: dict[str, object]) -> dict[str, object]:  # mutable-ok: mirrors override contract
+    def map_audio_params(
+        self,
+        value: dict,  # mutable-ok: forwards private contract
+    ) -> dict:  # mutable-ok: forwards private contract
         return self._map_audio_params(value)
 
     @staticmethod
@@ -1342,7 +1346,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return False
 
     @classmethod
-    def is_model_gemini_spec_model(cls, /, model: str | None) -> bool:
+    def is_model_gemini_spec_model(
+        cls,
+        model: str | None,
+    ) -> bool:
         return cls._is_model_gemini_spec_model(model)
 
     @staticmethod
@@ -1965,9 +1972,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @classmethod
     def calculate_usage(
-        cls, /, completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage
+        cls,
+        completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
     ) -> Usage:
-        return cls._calculate_usage(completion_response=completion_response)
+        return cls._calculate_usage(completion_response)
 
     @staticmethod
     def _check_finish_reason(
@@ -1987,7 +1995,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @classmethod
     def check_finish_reason(
-        cls, /, chat_completion_message: ChatCompletionResponseMessage | None, finish_reason: str | None
+        cls,
+        chat_completion_message: ChatCompletionResponseMessage | None,
+        finish_reason: str | None,
     ) -> OpenAIChatCompletionFinishReason:
         return cls._check_finish_reason(chat_completion_message, finish_reason)
 
@@ -2042,19 +2052,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @classmethod
     def check_prompt_level_content_filter(
-        cls, /, processed_chunk: GenerateContentResponseBody, response_id: str | None, model: str | None = None
+        cls,
+        processed_chunk: GenerateContentResponseBody,
+        response_id: str | None,
+        model: str | None = None,
     ) -> Optional["ModelResponseStream"]:
         return cls._check_prompt_level_content_filter(processed_chunk, response_id, model)
 
     @staticmethod
-    def _calculate_web_search_requests(grounding_metadata: Sequence[Mapping[str, object]]) -> int | None:
+    def _calculate_web_search_requests(grounding_metadata: list[dict]) -> int | None:
         return calculate_grounding_requests(grounding_metadata).web_search_requests
 
     @classmethod
     def calculate_web_search_requests(
         cls,
-        /,
-        grounding_metadata: Sequence[Mapping[str, object]],
+        grounding_metadata: list[dict],  # mutable-ok: forwards private contract
     ) -> int | None:
         return cls._calculate_web_search_requests(grounding_metadata)
 
@@ -2068,7 +2080,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             details.google_maps_grounding_requests = grounding_requests.google_maps_grounding_requests
 
     @classmethod
-    def set_grounding_usage_counters(cls, /, usage: Usage, grounding_metadata: Sequence[Mapping[str, object]]) -> None:
+    def set_grounding_usage_counters(
+        cls,
+        usage: Usage,
+        grounding_metadata: Sequence[Mapping[str, object]],
+    ) -> None:
         return cls._set_grounding_usage_counters(usage, grounding_metadata)
 
     @staticmethod
@@ -2111,12 +2127,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _extract_candidate_metadata(
         candidate: Candidates,
-    ) -> tuple[  # mutable-ok: preserves provider metadata result contract
-        list[dict[str, object]],
-        list[UrlContextMetadata],
-        list[list[SafetyRatings]],
-        list[CitationMetadata],
-    ]:
+    ) -> tuple[list[dict], list[dict], list, list]:
         """
         Extract metadata from a single candidate response.
 
@@ -2126,17 +2137,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             safety_ratings: List
             citation_metadata: List
         """
-        grounding_metadata: Final[list[dict[str, object]]] = []
-        url_context_metadata: Final[list[UrlContextMetadata]] = []
-        safety_ratings: Final[list[list[SafetyRatings]]] = []
-        citation_metadata: Final[list[CitationMetadata]] = []
+        grounding_metadata: Final[list[dict]] = []
+        url_context_metadata: Final[list[dict]] = []
+        safety_ratings: Final[list] = []
+        citation_metadata: Final[list] = []
 
         if "groundingMetadata" in candidate:
-            raw_grounding_metadata: Final = candidate["groundingMetadata"]
-            if isinstance(raw_grounding_metadata, list):
-                grounding_metadata.extend(TypeAdapter(list[dict[str, object]]).validate_python(raw_grounding_metadata))
+            if isinstance(candidate["groundingMetadata"], list):
+                grounding_metadata.extend(candidate["groundingMetadata"])
             else:
-                grounding_metadata.append(TypeAdapter(dict[str, object]).validate_python(raw_grounding_metadata))
+                grounding_metadata.append(candidate["groundingMetadata"])
 
         if "safetyRatings" in candidate:
             safety_ratings.append(candidate["safetyRatings"])
@@ -2145,7 +2155,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             citation_metadata.append(candidate["citationMetadata"])
 
         if "urlContextMetadata" in candidate:
-            url_context_metadata.append(candidate["urlContextMetadata"])
+            # Add URL context metadata to grounding metadata
+            url_context_metadata.append(cast(dict, candidate["urlContextMetadata"]))
 
         return (
             grounding_metadata,
@@ -2173,11 +2184,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _set_stream_metadata_on_response(
-        model_response: ModelResponse | ModelResponseStream,
-        grounding_metadata: list[dict[str, object]],
-        url_context_metadata: list[UrlContextMetadata],
-        safety_ratings: list[list[SafetyRatings]],
-        citation_metadata: list[CitationMetadata],
+        model_response: Any,
+        grounding_metadata: list[dict],
+        url_context_metadata: list[dict],
+        safety_ratings: list[dict],
+        citation_metadata: list[dict],
     ) -> None:
         setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
         if grounding_metadata:
@@ -2197,12 +2208,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def set_stream_metadata_on_response(
         cls,
-        /,
-        model_response: ModelResponse | ModelResponseStream,
-        grounding_metadata: list[dict[str, object]],  # mutable-ok: exact forwarding signature
-        url_context_metadata: list[UrlContextMetadata],  # mutable-ok: exact forwarding signature
-        safety_ratings: list[list[SafetyRatings]],  # mutable-ok: exact forwarding signature
-        citation_metadata: list[CitationMetadata],  # mutable-ok: exact forwarding signature
+        model_response: object,
+        grounding_metadata: list[dict],  # mutable-ok: forwards private contract
+        url_context_metadata: list[dict],  # mutable-ok: forwards private contract
+        safety_ratings: list[dict],  # mutable-ok: forwards private contract
+        citation_metadata: list[dict],  # mutable-ok: forwards private contract
     ) -> None:
         return cls._set_stream_metadata_on_response(
             model_response, grounding_metadata, url_context_metadata, safety_ratings, citation_metadata
@@ -2229,7 +2239,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _convert_grounding_metadata_to_annotations(
-        grounding_metadata: Sequence[Mapping[str, object]],
+        grounding_metadata: list[dict],
         content_text: str | None,
     ) -> list[ChatCompletionAnnotation]:
         """
@@ -2240,31 +2250,29 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         for metadata in grounding_metadata:
             # Extract groundingSupports - these map text segments to sources
-            grounding_supports = TypeAdapter(list[dict[str, object]]).validate_python(
-                metadata.get("groundingSupports", [])
-            )
-            grounding_chunks = TypeAdapter(list[dict[str, object]]).validate_python(metadata.get("groundingChunks", []))
+            grounding_supports = metadata.get("groundingSupports", [])
+            grounding_chunks = metadata.get("groundingChunks", [])
 
             # Build a map of chunk indices to web URIs
             chunk_to_uri_map: dict[int, dict[str, str]] = {}
             for idx, chunk in enumerate(grounding_chunks):
                 if "web" in chunk:
-                    web_data = TypeAdapter(dict[str, object]).validate_python(chunk["web"])
+                    web_data = chunk["web"]
                     chunk_to_uri_map[idx] = {
-                        "url": str(web_data.get("uri", "")),
-                        "title": str(web_data.get("title", "")),
+                        "url": web_data.get("uri", ""),
+                        "title": web_data.get("title", ""),
                     }
 
             # Process each grounding support to create annotations
             for support in grounding_supports:
-                segment = TypeAdapter(dict[str, object]).validate_python(support.get("segment", {}))
+                segment = support.get("segment", {})
                 start_index = segment.get("startIndex")
                 end_index = segment.get("endIndex")
 
                 # Get the chunk indices for this support
-                chunk_indices = TypeAdapter(list[int]).validate_python(support.get("groundingChunkIndices", []))
+                chunk_indices = support.get("groundingChunkIndices", [])
 
-                if isinstance(start_index, int) and isinstance(end_index, int) and chunk_indices:
+                if start_index is not None and end_index is not None and chunk_indices:
                     # Use the first chunk's URL for the annotation
                     first_chunk_idx = chunk_indices[0]
                     if first_chunk_idx in chunk_to_uri_map:
@@ -2287,16 +2295,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _process_candidates(
         _candidates: list[Candidates],
-        model_response: ModelResponse | ModelResponseStream,
-        standard_optional_params: dict[str, object],
+        model_response: Union[ModelResponse, "ModelResponseStream"],
+        standard_optional_params: dict,
         cumulative_tool_call_index: int = 0,
-    ) -> tuple[  # mutable-ok: preserves candidate result contract
-        list[dict[str, object]],
-        list[UrlContextMetadata],
-        list[list[SafetyRatings]],
-        list[CitationMetadata],
-        int,
-    ]:
+    ) -> tuple[list[dict], list[dict], list, list, int]:
         """
         Helper method to process candidates and extract metadata
 
@@ -2312,10 +2314,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
         from litellm.types.utils import ModelResponseStream
 
-        grounding_metadata: Final[list[dict[str, object]]] = []
-        url_context_metadata: Final[list[UrlContextMetadata]] = []
-        safety_ratings: Final[list[list[SafetyRatings]]] = []
-        citation_metadata: Final[list[CitationMetadata]] = []
+        grounding_metadata: Final[list[dict]] = []
+        url_context_metadata: Final[list[dict]] = []
+        safety_ratings: Final[list] = []
+        citation_metadata: Final[list] = []
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate and "finishReason" not in candidate:
@@ -2477,18 +2479,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def process_candidates(
         cls,
-        /,
-        _candidates: list[Candidates],  # mutable-ok: mirrors override contract
-        model_response: ModelResponse | ModelResponseStream,
-        standard_optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        _candidates: list[Candidates],  # mutable-ok: forwards private contract
+        model_response: Union[ModelResponse, "ModelResponseStream"],
+        standard_optional_params: dict,  # mutable-ok: forwards private contract
         cumulative_tool_call_index: int = 0,
-    ) -> tuple[  # mutable-ok: preserves candidate result contract
-        list[dict[str, object]],
-        list[UrlContextMetadata],
-        list[list[SafetyRatings]],
-        list[CitationMetadata],
-        int,
-    ]:
+    ) -> tuple[list[dict], list[dict], list, list, int]:  # mutable-ok: forwards private contract
         return cls._process_candidates(
             _candidates, model_response, standard_optional_params, cumulative_tool_call_index
         )
@@ -2535,7 +2530,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _transform_google_generate_content_to_openai_model_response(
         self,
-        completion_response: GenerateContentResponseBody | dict[str, object],
+        completion_response: GenerateContentResponseBody | dict,
         model_response: ModelResponse,
         model: str,
         logging_obj: LoggingClass,
@@ -2571,11 +2566,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         response_id: Final = completion_response.get("responseId")
         if response_id:
             model_response.id = response_id
-        url_context_metadata: list[UrlContextMetadata] = []
+        url_context_metadata: list[dict] = []
         try:
-            grounding_metadata: list[dict[str, object]] = []
-            safety_ratings: list[list[SafetyRatings]] = []
-            citation_metadata: list[CitationMetadata] = []
+            grounding_metadata: list[dict] = []
+            safety_ratings: list[dict] = []
+            citation_metadata: list[dict] = []
             if _candidates:
                 (
                     grounding_metadata,
@@ -2636,7 +2631,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def transform_google_generate_content_to_openai_model_response(
         self,
-        completion_response: GenerateContentResponseBody | dict[str, object],  # mutable-ok: mirrors override contract
+        completion_response: GenerateContentResponseBody | dict,  # mutable-ok: forwards private contract
         model_response: ModelResponse,
         model: str,
         logging_obj: LoggingClass,
@@ -2650,7 +2645,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         messages: list[AllMessageValues],
         model: str | None = None,
-        litellm_params: dict[str, object] | None = None,
+        litellm_params: dict | None = None,
     ) -> list[ContentType]:
         return gemini_convert_messages_with_history(
             messages=messages,
@@ -2661,10 +2656,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def transform_messages(
         self,
-        messages: list[AllMessageValues],  # mutable-ok: exact API
+        messages: list[AllMessageValues],  # mutable-ok: forwards private contract
         model: str | None = None,
-        litellm_params: dict[str, object] | None = None,  # mutable-ok: exact API
-    ) -> list[ContentType]:  # mutable-ok: matches extension signature
+        litellm_params: dict | None = None,  # mutable-ok: forwards private contract
+    ) -> list[ContentType]:  # mutable-ok: forwards private contract
         return self._transform_messages(messages, model, litellm_params)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
@@ -3275,12 +3270,7 @@ class ModelResponseIterator:
         self,
         _candidates: list[Candidates],
         model_response: "ModelResponseStream",
-    ) -> tuple[
-        list[dict[str, object]],
-        list[UrlContextMetadata],
-        list[list[SafetyRatings]],
-        list[CitationMetadata],
-    ]:
+    ) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
         (
             grounding_metadata,
             url_context_metadata,
@@ -3409,10 +3399,10 @@ class ModelResponseIterator:
             if blocked_response is not None:
                 model_response = blocked_response
 
-            grounding_metadata: list[dict[str, object]] = []
-            url_context_metadata: list[UrlContextMetadata] = []
-            safety_ratings: list[list[SafetyRatings]] = []
-            citation_metadata: list[CitationMetadata] = []
+            grounding_metadata: list[dict] = []
+            url_context_metadata: list[dict] = []
+            safety_ratings: list[dict] = []
+            citation_metadata: list[dict] = []
 
             _candidates: Final[list[Candidates] | None] = processed_chunk.get("candidates")
             if _candidates:

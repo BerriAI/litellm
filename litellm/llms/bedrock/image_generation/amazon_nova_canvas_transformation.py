@@ -60,7 +60,10 @@ class AmazonNovaCanvasConfig:
         return False
 
     @classmethod
-    def is_nova_model(cls, model: str | None = None) -> bool:
+    def is_nova_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
         return cls._is_nova_model(model)
 
     @classmethod

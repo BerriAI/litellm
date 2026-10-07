@@ -6,7 +6,7 @@ import copy
 import json
 import urllib.parse
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Final, cast, get_args, overload
+from typing import TYPE_CHECKING, Final, get_args, overload
 
 import httpx
 
@@ -585,12 +585,8 @@ class BedrockEmbedding(BaseAWSLLM):
         )
 
     async def _get_async_invoke_status(
-        self,
-        invocation_arn: str,
-        aws_region_name: str,
-        logging_obj: "LiteLLMLoggingObj | None" = None,
-        **kwargs: object,
-    ) -> dict[str, object]:
+        self, invocation_arn: str, aws_region_name: str, logging_obj=None, **kwargs
+    ) -> dict:
         """
         Get the status of an async invoke job using the GetAsyncInvoke operation.
 
@@ -606,11 +602,7 @@ class BedrockEmbedding(BaseAWSLLM):
         # Get the runtime endpoint
         endpoint_url, _ = self.get_runtime_endpoint(
             api_base=None,
-            aws_bedrock_runtime_endpoint=(
-                kwargs.get("aws_bedrock_runtime_endpoint")
-                if isinstance(kwargs.get("aws_bedrock_runtime_endpoint"), str)
-                else None
-            ),
+            aws_bedrock_runtime_endpoint=kwargs.get("aws_bedrock_runtime_endpoint"),
             aws_region_name=aws_region_name,
         )
 
@@ -634,7 +626,7 @@ class BedrockEmbedding(BaseAWSLLM):
         # LOGGING
         if logging_obj is not None:
             # Create custom curl command for GET request
-            masked_headers: Final = logging_obj._get_masked_headers(dict(prepped.headers.items()))
+            masked_headers: Final = logging_obj._get_masked_headers(prepped.headers)
             formatted_headers: Final = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
             custom_curl = "\n\nGET Request Sent from LiteLLM:\n"
             custom_curl += "curl -X GET \\\n"
@@ -678,12 +670,7 @@ class BedrockEmbedding(BaseAWSLLM):
         self,
         invocation_arn: str,
         aws_region_name: str,
-        logging_obj: object | None = None,
-        **kwargs: object,
-    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        return await self._get_async_invoke_status(
-            invocation_arn,
-            aws_region_name,
-            cast("LiteLLMLoggingObj | None", logging_obj),
-            **kwargs,
-        )
+        logging_obj=None,
+        **kwargs,  # kwargs-ok: forwards private contract
+    ) -> dict:  # mutable-ok: forwards private contract
+        return await self._get_async_invoke_status(invocation_arn, aws_region_name, logging_obj, **kwargs)

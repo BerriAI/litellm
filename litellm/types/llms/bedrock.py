@@ -525,7 +525,7 @@ class AmazonTitanV2EmbeddingRequest(TypedDict, total=False):
 
 
 class AmazonTitanV2EmbeddingsByType(TypedDict, total=False):
-    binary: ReadOnly[list[int] | str]  # Array of integers or base64 string for binary format
+    binary: list[int]  # Array of integers for binary format
     float: list[float]  # Array of floats for float format
 
 
@@ -554,10 +554,10 @@ class AmazonTitanMultimodalEmbeddingRequest(TypedDict, total=False):
     embeddingConfig: AmazonTitanMultimodalEmbeddingConfig
 
 
-class AmazonTitanMultimodalEmbeddingResponse(TypedDict, total=False):
-    embedding: ReadOnly[Required[list[float]]]
-    inputTextTokenCount: ReadOnly[Required[int]]
-    message: ReadOnly[str | None]
+class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
+    embedding: list[float]
+    inputTextTokenCount: int
+    message: str  # Specifies any errors that occur during generation.
 
 
 TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]

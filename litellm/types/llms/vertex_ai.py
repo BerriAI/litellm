@@ -339,7 +339,7 @@ class CachedContent(TypedDict, total=False):
 class RequestBody(TypedDict, total=False):
     contents: Required[list[ContentType]]
     system_instruction: SystemInstructions
-    tools: list[dict[str, object]]  # writable-ok: request body fields are assembled in place
+    tools: Tools
     toolConfig: ToolConfig
     safetySettings: list[SafetSettingsConfig]
     generationConfig: GenerationConfig

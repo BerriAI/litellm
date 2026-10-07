@@ -81,7 +81,7 @@ class BaseModelResponseIterator:
         if self.http_response is not None:
             await self.http_response.aclose()
 
-    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk | ModelResponseStream:
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         return GenericStreamingChunk(
             text="",
             is_finished=False,
@@ -96,12 +96,12 @@ class BaseModelResponseIterator:
         return self
 
     @staticmethod
-    def _string_to_dict_parser(str_line: str) -> dict[str, object] | None:
-        stripped_json_chunk: dict[str, object] | None = None
+    def _string_to_dict_parser(str_line: str) -> dict | None:
+        stripped_json_chunk: dict | None = None
         stripped_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
         try:
             if stripped_chunk is not None:
-                stripped_json_chunk = cast(dict[str, object], json.loads(stripped_chunk))
+                stripped_json_chunk = json.loads(stripped_chunk)
             else:
                 stripped_json_chunk = None
         except json.JSONDecodeError:
@@ -110,8 +110,9 @@ class BaseModelResponseIterator:
 
     @classmethod
     def string_to_dict_parser(
-        cls, /, str_line: str
-    ) -> dict[str, object] | None:  # mutable-ok: mirrors override contract
+        cls,
+        str_line: str,
+    ) -> dict | None:  # mutable-ok: forwards private contract
         return cls._string_to_dict_parser(str_line)
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
@@ -248,7 +249,7 @@ class FakeStreamResponseIterator:
         return self
 
     @abstractmethod
-    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         pass
 
     def __next__(self):

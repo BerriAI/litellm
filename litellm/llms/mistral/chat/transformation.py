@@ -224,9 +224,6 @@ class MistralConfig(OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
-    def get_openai_compatible_provider_info(self, api_base: str | None, api_key: str | None) -> tuple[str, str | None]:
-        return self._get_openai_compatible_provider_info(api_base, api_key)
-
     # fmt: off
 
     @overload
@@ -289,23 +286,21 @@ class MistralConfig(OpenAIGPTConfig):
         else:
             return super()._transform_messages(new_messages, model, False)
 
-    @overload
-    def transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[object, object, list[AllMessageValues]]: ...  # mutable-ok: matches override
-
-    @overload
-    def transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[False] = False
-    ) -> list[AllMessageValues]: ...  # mutable-ok: matches override
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def transform_messages(
         self,
-        messages: list[AllMessageValues],  # mutable-ok: exact API
+        messages: list[AllMessageValues],  # mutable-ok: forwards private contract
         model: str,
         is_async: bool = False,
     ) -> (
-        list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]  # mutable-ok: exact API
+        list[AllMessageValues]  # mutable-ok: forwards private contract
+        | Coroutine[object, object, list[AllMessageValues]]
     ):
         return self._transform_messages(messages, model, is_async)
 

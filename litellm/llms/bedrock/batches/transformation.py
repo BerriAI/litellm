@@ -453,11 +453,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             "data": None,
         }
 
-    def _parse_timestamps_and_status(
-        self,
-        response_data: Mapping[str, object],
-        status_str: str,
-    ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
+    def _parse_timestamps_and_status(self, response_data, status_str: str):
         """Helper to parse timestamps based on status."""
         import datetime
 
@@ -513,9 +509,9 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
     def parse_timestamps_and_status(
         self,
-        response_data: Mapping[str, object],
+        response_data,
         status_str: str,
-    ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
+    ):
         return self._parse_timestamps_and_status(response_data, status_str)
 
     def _extract_file_configs(self, response_data):

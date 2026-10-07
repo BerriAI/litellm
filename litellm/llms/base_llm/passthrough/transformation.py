@@ -261,8 +261,6 @@ class BasePassthroughConfig(BaseLLMModelInfo):
 
     def convert_raw_bytes_to_str_lines(
         self,
-        raw_bytes: list[bytes],  # mutable-ok: exact API
-    ) -> (
-        list[str]  # mutable-ok: exact API
-    ):
+        raw_bytes: list[bytes],  # mutable-ok: forwards private contract
+    ) -> list[str]:  # mutable-ok: forwards private contract
         return self._convert_raw_bytes_to_str_lines(raw_bytes)

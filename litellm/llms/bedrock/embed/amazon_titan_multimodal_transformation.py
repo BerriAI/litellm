@@ -8,8 +8,6 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 
 from typing import Final
 
-from pydantic import TypeAdapter
-
 from litellm.types.llms.bedrock import (
     AmazonTitanMultimodalEmbeddingConfig,
     AmazonTitanMultimodalEmbeddingRequest,
@@ -41,9 +39,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
                 optional_params["embeddingConfig"] = AmazonTitanMultimodalEmbeddingConfig(outputEmbeddingLength=v)
         return optional_params
 
-    def _transform_request(
-        self, input: str, inference_params: dict[str, object]
-    ) -> AmazonTitanMultimodalEmbeddingRequest:
+    def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanMultimodalEmbeddingRequest:
         ## check if b64 encoded str or not ##
         is_encoded: Final = is_base64_encoded(input)
         if is_encoded:  # check if string is b64 encoded image or not
@@ -59,20 +55,20 @@ class AmazonTitanMultimodalEmbeddingG1Config:
     def transform_request(
         self,
         input: str,
-        inference_params: dict[str, object],  # mutable-ok: exact API
+        inference_params: dict,  # mutable-ok: forwards private contract
     ) -> AmazonTitanMultimodalEmbeddingRequest:
         return self._transform_request(input, inference_params)
 
     def _transform_response(
         self,
-        response_list: list[dict[str, object]],
+        response_list: list[dict],
         model: str,
-        batch_data: list[dict[str, object]] | None = None,
+        batch_data: list[dict] | None = None,
     ) -> EmbeddingResponse:
         total_prompt_tokens = 0
         transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = TypeAdapter(AmazonTitanMultimodalEmbeddingResponse).validate_python(response)
+            _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)
             transformed_responses.append(
                 Embedding(
                     embedding=_parsed_response["embedding"],
@@ -105,8 +101,8 @@ class AmazonTitanMultimodalEmbeddingG1Config:
 
     def transform_response(
         self,
-        response_list: list[dict[str, object]],  # mutable-ok: exact API
+        response_list: list[dict],  # mutable-ok: forwards private contract
         model: str,
-        batch_data: list[dict[str, object]] | None = None,  # mutable-ok: exact API
+        batch_data: list[dict] | None = None,  # mutable-ok: forwards private contract
     ) -> EmbeddingResponse:
         return self._transform_response(response_list, model, batch_data)

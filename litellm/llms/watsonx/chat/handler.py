@@ -70,11 +70,8 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
             stream=optional_params.get("stream", False),
         )
 
-        model_id_value: Final = watsonx_auth_payload.get("model_id")
-        model_id: Final = model_id_value if isinstance(model_id_value, str) else ""
-
         return super().completion(
-            model=model_id,
+            model=watsonx_auth_payload.get("model_id") or "",
             messages=messages,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,

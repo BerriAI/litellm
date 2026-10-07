@@ -295,8 +295,8 @@ class PassThroughStreamingHandler:
         - OpenAI
         """
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
-            is_message_stop_chunk,
-            is_provider_error_chunk,
+            is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
+            is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
         )
 
         # Transport reads can split event names and JSON payloads. Recognize terminal

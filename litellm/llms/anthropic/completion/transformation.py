@@ -233,7 +233,10 @@ class AnthropicTextConfig(BaseConfig):
         return model == "claude-2" or model == "claude-instant-1"
 
     @classmethod
-    def is_anthropic_text_model(cls, /, model: str) -> bool:
+    def is_anthropic_text_model(
+        cls,
+        model: str,
+    ) -> bool:
         return cls._is_anthropic_text_model(model)
 
     def _get_anthropic_text_prompt_from_messages(self, messages: list[AllMessageValues], model: str) -> str:

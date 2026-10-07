@@ -30,9 +30,7 @@ class BedrockCohereEmbeddingConfig:
     def _is_v3_model(self, model: str) -> bool:
         return "3" in model
 
-    def _transform_request(
-        self, model: str, input: list[str], inference_params: dict[str, object]
-    ) -> CohereEmbeddingRequest:
+    def _transform_request(self, model: str, input: list[str], inference_params: dict) -> CohereEmbeddingRequest:
         transformed_request: Final = CohereEmbeddingConfig()._transform_request(model, input, inference_params)
 
         new_transformed_request: Final = CohereEmbeddingRequest(
@@ -47,7 +45,7 @@ class BedrockCohereEmbeddingConfig:
     def transform_request(
         self,
         model: str,
-        input: list[str],  # mutable-ok: exact API
-        inference_params: dict[str, object],  # mutable-ok: exact API
+        input: list[str],  # mutable-ok: forwards private contract
+        inference_params: dict,  # mutable-ok: forwards private contract
     ) -> CohereEmbeddingRequest:
         return self._transform_request(model, input, inference_params)

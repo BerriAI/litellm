@@ -54,7 +54,9 @@ class XAIChatConfig(OpenAIGPTConfig):
         return api_base, dynamic_api_key
 
     def get_openai_compatible_provider_info(
-        self, api_base: str | None, api_key: str | None
+        self,
+        api_base: str | None,
+        api_key: str | None,
     ) -> tuple[str | None, str | None]:
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
@@ -172,7 +174,10 @@ class XAIChatConfig(OpenAIGPTConfig):
             return False
         return True
 
-    def supports_stop_reason(self, model: str) -> bool:
+    def supports_stop_reason(
+        self,
+        model: str,
+    ) -> bool:
         return self._supports_stop_reason(model)
 
     def _supports_frequency_penalty(self, model: str) -> bool:
@@ -417,8 +422,7 @@ class XAIChatConfig(OpenAIGPTConfig):
     @classmethod
     def normalize_openai_compatible_usage_totals(
         cls,
-        /,
-        usage: Usage | dict[str, Any] | None,  # mutable-ok: exact API
+        usage: Usage | dict[str, object] | None,  # mutable-ok: forwards private contract
     ) -> None:
         return cls._normalize_openai_compatible_usage_totals(usage)
 

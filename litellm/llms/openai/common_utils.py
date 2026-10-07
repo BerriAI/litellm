@@ -330,7 +330,10 @@ class BaseOpenAILLM:
         )
 
     @classmethod
-    def get_async_http_client(cls, /, shared_session: Optional["ClientSession"] = None) -> httpx.AsyncClient | None:
+    def get_async_http_client(
+        cls,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> httpx.AsyncClient | None:
         return cls._get_async_http_client(shared_session)
 
     @staticmethod

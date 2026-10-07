@@ -722,10 +722,7 @@ class AWSEventStreamDecoder:
         except Exception as e:
             raise Exception(f"Received streaming error - {e}")
 
-    def _chunk_parser(
-        self,
-        chunk_data: dict,  # pyright: ignore[reportMissingTypeArgument]  # mirrors Bedrock event payloads
-    ) -> GChunk | ModelResponseStream | dict:  # pyright: ignore[reportMissingTypeArgument]  # mirrors Bedrock results
+    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -782,9 +779,9 @@ class AWSEventStreamDecoder:
 
     def chunk_parser(
         self,
-        chunk_data: dict,  # pyright: ignore[reportMissingTypeArgument]  # Bedrock  # mutable-ok: exact API
-    ) -> GChunk | ModelResponseStream | dict:  # pyright: ignore[reportMissingTypeArgument]  # Boto  # mutable-ok: exact
-        return self._chunk_parser(chunk_data=chunk_data)
+        chunk_data: dict,  # mutable-ok: forwards private contract
+    ) -> GChunk | ModelResponseStream | dict:  # mutable-ok: forwards private contract
+        return self._chunk_parser(chunk_data)
 
     def iter_bytes(
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
@@ -892,10 +889,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
             json_mode=json_mode,
         )
 
-    def _chunk_parser(
-        self,
-        chunk_data: dict,  # pyright: ignore[reportMissingTypeArgument]  # mirrors Bedrock event payloads
-    ) -> ModelResponseStream:
+    def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
@@ -915,10 +909,7 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
             sync_stream=sync_stream,
         )
 
-    def _chunk_parser(
-        self,
-        chunk_data: dict,  # pyright: ignore[reportMissingTypeArgument]  # mirrors Bedrock event payloads
-    ) -> GChunk | ModelResponseStream | dict:  # pyright: ignore[reportMissingTypeArgument]  # mirrors Bedrock results
+    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 

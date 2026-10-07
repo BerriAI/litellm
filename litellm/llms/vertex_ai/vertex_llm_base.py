@@ -38,7 +38,6 @@ def graft_default_vertex_path(api_base: str, default_url: str) -> str:
 
 _graft_default_vertex_path = graft_default_vertex_path
 
-
 GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
     "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform"
 )

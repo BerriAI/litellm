@@ -6,8 +6,6 @@ Why separate file? Make it easy to see how transformation works
 
 from typing import Final
 
-from pydantic import TypeAdapter
-
 from litellm._uuid import uuid
 from litellm.types.rerank import (
     RerankBilledUnits,
@@ -20,15 +18,12 @@ from litellm.types.rerank import (
 
 
 class TogetherAIRerankConfig:
-    def _transform_response(self, response: dict[str, object]) -> RerankResponse:
-        _billed_units: Final = TypeAdapter(RerankBilledUnits).validate_python(response.get("usage", {}))
-        _tokens: Final = TypeAdapter(RerankTokens).validate_python(response.get("usage", {}))
+    def _transform_response(self, response: dict) -> RerankResponse:
+        _billed_units: Final = RerankBilledUnits(**response.get("usage", {}))
+        _tokens: Final = RerankTokens(**response.get("usage", {}))
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        results_value: Final = response.get("results")
-        _results: Final[list[dict[str, object]] | None] = (
-            TypeAdapter(list[dict[str, object]]).validate_python(results_value) if results_value is not None else None
-        )
+        _results: Final[list[dict] | None] = response.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={response}")
@@ -41,13 +36,13 @@ class TogetherAIRerankConfig:
                 raise ValueError(f"Missing required fields in the result={result}")
 
             # Get document data if it exists
-            document_data = TypeAdapter(dict[str, object]).validate_python(result.get("document", {}))
+            document_data = result.get("document", {})
             document = RerankResponseDocument(text=str(document_data.get("text", ""))) if document_data else None
 
             # Create typed result
             rerank_result = RerankResponseResult(
-                index=TypeAdapter(int).validate_python(result["index"]),
-                relevance_score=TypeAdapter(float).validate_python(result["relevance_score"]),
+                index=int(result["index"]),
+                relevance_score=float(result["relevance_score"]),
             )
 
             # Only add document if it exists
@@ -56,15 +51,14 @@ class TogetherAIRerankConfig:
 
             rerank_results.append(rerank_result)
 
-        response_id: Final = response.get("id")
         return RerankResponse(
-            id=TypeAdapter(str | None).validate_python(response_id) or str(uuid.uuid4()),
+            id=response.get("id") or str(uuid.uuid4()),
             results=rerank_results,
             meta=rerank_meta,
-        )
+        )  # Return response
 
     def transform_response(
         self,
-        response: dict[str, object],  # mutable-ok: preserves extension signature
+        response: dict,  # mutable-ok: forwards private contract
     ) -> RerankResponse:
         return self._transform_response(response)

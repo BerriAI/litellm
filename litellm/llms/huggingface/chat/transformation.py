@@ -145,25 +145,12 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
                     status_code=404,
                     headers={},
                 )
-            provider_mapping_entry: Final = provider_mapping[provider]
-            if not isinstance(provider_mapping_entry, dict):
-                raise HuggingFaceError(
-                    message=f"Provider mapping for {provider} is invalid",
-                    status_code=404,
-                    headers={},
-                )
-            if provider_mapping_entry.get("status") == "staging":
+            provider_mapping = provider_mapping[provider]
+            if provider_mapping["status"] == "staging":
                 logger.warning(
                     "Model %s is in staging mode for provider %s. Meant for test purposes only.", model_id, provider
                 )
-            mapped_model_value: Final = provider_mapping_entry.get("providerId")
-            if not isinstance(mapped_model_value, str):
-                raise HuggingFaceError(
-                    message=f"Provider mapping for {provider} has no model ID",
-                    status_code=404,
-                    headers={},
-                )
-            mapped_model = mapped_model_value
+            mapped_model = provider_mapping["providerId"]
 
         messages = self._transform_messages(messages=messages, model=mapped_model)
         return dict(ChatCompletionRequest(model=mapped_model, messages=messages, **optional_params))

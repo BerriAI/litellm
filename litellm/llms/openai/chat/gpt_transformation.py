@@ -387,23 +387,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         )
             return hoisted_messages
 
-    @overload
-    def transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[object, object, list[AllMessageValues]]: ...  # mutable-ok: matches override
-
-    @overload
-    def transform_messages(
-        self, messages: list[AllMessageValues], model: str, is_async: Literal[False] = False
-    ) -> list[AllMessageValues]: ...  # mutable-ok: matches override
-
     def transform_messages(
         self,
-        messages: list[AllMessageValues],  # mutable-ok: exact API
+        messages: list[AllMessageValues],  # mutable-ok: forwards private contract
         model: str,
         is_async: bool = False,
     ) -> (
-        list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]  # mutable-ok: exact API
+        list[AllMessageValues]  # mutable-ok: forwards private contract
+        | Coroutine[object, object, list[AllMessageValues]]
     ):
         return self._transform_messages(messages, model, is_async)
 

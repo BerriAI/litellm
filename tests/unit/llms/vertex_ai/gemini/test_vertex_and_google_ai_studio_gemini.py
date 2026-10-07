@@ -1307,7 +1307,7 @@ def test_vertex_ai_streaming_usage_calculation():
     }
 
     # Test streaming chunk parsing
-    with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
+    with patch.object(VertexGeminiConfig, "calculate_usage") as mock_calculate_usage:
         # Create a streaming chunk
         chunk = {
             "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
@@ -1320,7 +1320,7 @@ def test_vertex_ai_streaming_usage_calculation():
         )
         iterator.chunk_parser(chunk)
 
-        # Verify _calculate_usage was called with correct parameters
+        # Verify calculate_usage was called with correct parameters
         mock_calculate_usage.assert_called_once_with(completion_response=chunk)
 
     # Test non-streaming response parsing

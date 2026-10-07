@@ -230,7 +230,10 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         return _supports_nova_canvas_image_edit_from_model_cost(model or "")
 
     @classmethod
-    def is_nova_canvas_image_edit_model(cls, model: str | None = None) -> bool:
+    def is_nova_canvas_image_edit_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
         return cls._is_nova_canvas_image_edit_model(model)
 
     def get_error_class(

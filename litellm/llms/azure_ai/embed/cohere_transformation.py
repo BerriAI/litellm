@@ -11,8 +11,6 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 
 from typing import Final
 
-from pydantic import TypeAdapter
-
 from litellm.types.llms.azure_ai import ImageEmbeddingInput, ImageEmbeddingRequest
 from litellm.types.llms.openai import EmbeddingCreateParams
 from litellm.types.utils import EmbeddingResponse, Usage
@@ -31,9 +29,7 @@ class AzureAICohereConfig:
 
         return model
 
-    def _transform_request_image_embeddings(
-        self, input: list[str], optional_params: dict[str, object]
-    ) -> ImageEmbeddingRequest:
+    def _transform_request_image_embeddings(self, input: list[str], optional_params: dict) -> ImageEmbeddingRequest:
         """
         Assume all str in list is base64 encoded string
         """
@@ -41,10 +37,10 @@ class AzureAICohereConfig:
         for i in input:
             embedding_input = ImageEmbeddingInput(image=i)
             image_input.append(embedding_input)
-        return TypeAdapter(ImageEmbeddingRequest).validate_python({"input": image_input, **optional_params})
+        return ImageEmbeddingRequest(input=image_input, **optional_params)
 
     def _transform_request(
-        self, input: list[str], optional_params: dict[str, object], model: str
+        self, input: list[str], optional_params: dict, model: str
     ) -> tuple[ImageEmbeddingRequest, EmbeddingCreateParams, list[int]]:
         """
         Return the list of input to `/image/embeddings`, `/v1/embeddings`, list of image_embedding_idx for recombination
@@ -64,9 +60,7 @@ class AzureAICohereConfig:
         ## REMOVE IMAGE EMBEDDINGS FROM input list
         filtered_input: Final = [item for idx, item in enumerate(input) if idx not in image_embedding_idx]
 
-        v1_embeddings_request: Final = TypeAdapter(EmbeddingCreateParams).validate_python(
-            {"input": filtered_input, "model": model, **optional_params}
-        )
+        v1_embeddings_request: Final = EmbeddingCreateParams(input=filtered_input, model=model, **optional_params)
         image_embeddings_request: Final = self._transform_request_image_embeddings(
             input=image_embeddings, optional_params=optional_params
         )
@@ -75,10 +69,10 @@ class AzureAICohereConfig:
 
     def transform_request(
         self,
-        input: list[str],  # mutable-ok: matches extension signature
-        optional_params: dict[str, object],  # mutable-ok: matches extension signature
+        input: list[str],  # mutable-ok: forwards private contract
+        optional_params: dict,  # mutable-ok: forwards private contract
         model: str,
-    ) -> tuple[ImageEmbeddingRequest, EmbeddingCreateParams, list[int]]:  # mutable-ok: mirrors override contract
+    ) -> tuple[ImageEmbeddingRequest, EmbeddingCreateParams, list[int]]:  # mutable-ok: forwards private contract
         return self._transform_request(input, optional_params, model)
 
     def _transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:
@@ -99,5 +93,8 @@ class AzureAICohereConfig:
 
         return response
 
-    def transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:
+    def transform_response(
+        self,
+        response: EmbeddingResponse,
+    ) -> EmbeddingResponse:
         return self._transform_response(response)

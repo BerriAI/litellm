@@ -12,7 +12,6 @@ from typing import (
     Final,
     Literal,
     NamedTuple,
-    NoReturn,
     Optional,
     Protocol,
     TypedDict,
@@ -6175,7 +6174,7 @@ class BaseLLMHTTPHandler:
             BaseEvalsAPIConfig,
             BaseRealtimeHTTPConfig,
         ],
-    ) -> NoReturn:
+    ):
         received_status_code: Final = (
             e.response.status_code if isinstance(e, httpx.HTTPStatusError) else getattr(e, "status_code", None)
         )
@@ -6235,7 +6234,7 @@ class BaseLLMHTTPHandler:
             BaseEvalsAPIConfig,
             BaseRealtimeHTTPConfig,
         ],
-    ) -> NoReturn:
+    ):
         return self._handle_error(e, provider_config)
 
     @staticmethod

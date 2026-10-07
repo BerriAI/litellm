@@ -83,7 +83,6 @@ def extract_text_content(content: str | Iterable[Mapping[str, object]] | None) -
 
 _extract_text_content = extract_text_content
 
-
 _TOOL_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 

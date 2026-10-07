@@ -172,3 +172,11 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             litellm_params=litellm_params,
             custom_llm_provider="gemini",
         )
+
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: forwards private contract
+        model: str | None = None,
+        litellm_params: dict | None = None,  # mutable-ok: forwards private contract
+    ) -> list[ContentType]:  # mutable-ok: forwards private contract
+        return self._transform_messages(messages, model, litellm_params)

@@ -692,10 +692,7 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
-def build_vertex_schema(
-    parameters: dict[str, object],
-    add_property_ordering: bool = False,
-) -> dict[str, object]:  # mutable-ok: returns mutable schema for callers
+def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
 
@@ -711,7 +708,7 @@ def build_vertex_schema(
     # Get valid fields from Schema TypedDict
     valid_schema_fields: Final = set(get_type_hints(Schema).keys())
 
-    defs: Final = TypeAdapter(dict[str, object]).validate_python(parameters.pop("$defs", {}))
+    defs: Final = parameters.pop("$defs", {})
     # Expand $ref references in parameters using the definitions
     # Note: We don't pre-flatten defs as that causes exponential memory growth
     # with circular references (see issue #19098). unpack_defs handles nested
@@ -749,7 +746,7 @@ def build_vertex_schema(
 _build_vertex_schema = build_vertex_schema
 
 
-def build_json_schema(parameters: dict[str, object]) -> dict[str, object]:
+def build_json_schema(parameters: dict) -> dict:
     """
     Build a JSON Schema for use with Gemini's responseJsonSchema parameter.
 
@@ -1331,12 +1328,11 @@ class VertexAITokenCounter(BaseTokenCounter):
         else:
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
             from litellm.llms.vertex_ai.gemini.transformation import (
-                gemini_convert_messages_with_history,
+                gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
             )
 
-            gemini_messages: Final = TypeAdapter(list[AllMessageValues]).validate_python(messages or [])
             resolved_contents: Final = (
-                contents if contents is not None else gemini_convert_messages_with_history(messages=gemini_messages)
+                contents if contents is not None else gemini_convert_messages_with_history(messages=messages or [])
             )
 
             count_tokens_params: Final = {

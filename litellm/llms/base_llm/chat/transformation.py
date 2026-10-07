@@ -4,7 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
@@ -133,31 +133,24 @@ class BaseConfig(ABC):
         """
         return False
 
-    def _add_tools_to_optional_params(
-        self,
-        optional_params: dict[str, object],  # mutable-ok: preserves in-place extension contract
-        tools: Sequence[object],
-    ) -> dict[str, object]:
+    def _add_tools_to_optional_params(self, optional_params: dict, tools: list) -> dict:
         """
         Helper util to add tools to optional_params.
         """
         if "tools" not in optional_params:
             optional_params["tools"] = tools
         else:
-            existing_tools: Final = optional_params["tools"]
-            if not isinstance(existing_tools, Sequence):
-                raise TypeError("optional_params['tools'] must be a sequence")
             optional_params["tools"] = [
-                *existing_tools,
+                *optional_params["tools"],
                 *tools,
             ]
         return optional_params
 
     def add_tools_to_optional_params(
         self,
-        optional_params: dict[str, object],  # mutable-ok: exact API
-        tools: Sequence[object],
-    ) -> dict[str, object]:  # mutable-ok: matches extension signature
+        optional_params: dict,  # mutable-ok: forwards private contract
+        tools: list,  # mutable-ok: forwards private contract
+    ) -> dict:  # mutable-ok: forwards private contract
         return self._add_tools_to_optional_params(optional_params, tools)
 
     def translate_developer_role_to_system_role(

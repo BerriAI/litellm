@@ -48,7 +48,7 @@ def _normalize_reasoning_effort_for_chat_completion(
     return None
 
 
-def get_effort_level(value: str | dict[str, object] | None) -> str | None:
+def get_effort_level(value: str | dict | None) -> str | None:
     """Extract the effective effort level from reasoning_effort (string or dict).
 
     Use this for guards that compare effort level (e.g. xhigh validation, "none" checks).
@@ -59,14 +59,12 @@ def get_effort_level(value: str | dict[str, object] | None) -> str | None:
         return None
     if isinstance(value, str):
         return value
-    if isinstance(value, dict):
-        effort: Final = value.get("effort")
-        return effort if isinstance(effort, str) else None
+    if isinstance(value, dict) and "effort" in value:
+        return value["effort"]
     return None
 
 
 _get_effort_level = get_effort_level
-
 
 GPT_REASONING_SERIES_MARKERS: Final = ("gpt-5", "gpt-6")
 
@@ -168,7 +166,11 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         )
 
     @classmethod
-    def supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
+    def supports_reasoning_effort_level(
+        cls,
+        model: str,
+        level: str,
+    ) -> bool:
         return cls._supports_reasoning_effort_level(model, level)
 
     @classmethod

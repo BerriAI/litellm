@@ -13,8 +13,6 @@ import types
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import TypeAdapter
-
 from litellm.types.llms.bedrock import (
     AmazonTitanG1EmbeddingRequest,
     AmazonTitanG1EmbeddingResponse,
@@ -59,22 +57,22 @@ class AmazonTitanG1Config:
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         return optional_params
 
-    def _transform_request(self, input: str, inference_params: dict[str, object]) -> AmazonTitanG1EmbeddingRequest:
+    def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanG1EmbeddingRequest:
         return AmazonTitanG1EmbeddingRequest(inputText=input)
 
     def transform_request(
         self,
         input: str,
-        inference_params: dict[str, object],  # mutable-ok: exact API
+        inference_params: dict,  # mutable-ok: forwards private contract
     ) -> AmazonTitanG1EmbeddingRequest:
         return self._transform_request(input, inference_params)
 
-    def _transform_response(self, response_list: list[dict[str, object]], model: str) -> EmbeddingResponse:
+    def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
         total_prompt_tokens = 0
 
         transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = TypeAdapter(AmazonTitanG1EmbeddingResponse).validate_python(response)
+            _parsed_response = AmazonTitanG1EmbeddingResponse(**response)
             transformed_responses.append(
                 Embedding(
                     embedding=_parsed_response["embedding"],
@@ -93,7 +91,7 @@ class AmazonTitanG1Config:
 
     def transform_response(
         self,
-        response_list: list[dict[str, object]],  # mutable-ok: exact API
+        response_list: list[dict],  # mutable-ok: forwards private contract
         model: str,
     ) -> EmbeddingResponse:
         return self._transform_response(response_list, model)
