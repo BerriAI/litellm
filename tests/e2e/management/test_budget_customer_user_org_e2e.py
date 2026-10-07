@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, RootModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, Success, UnauthorizedError, UnknownApiError, is_ok, unwrap
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyGenerateBody, ModelBudgetEntry, OrgInfoParams, OrgNewBody, UserNewBody
@@ -152,6 +153,7 @@ _UPDATED_MAX_BUDGET = 91.25
 
 class TestBudgetManagement:
     @pytest.mark.covers("mgmt.budget.list.happy_path")
+    @meta(Subject(domain=Domain.SPEND_BUDGETS, route=Route.BUDGET_MANAGEMENT))
     def test_created_budget_appears_in_budget_list(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -164,6 +166,7 @@ class TestBudgetManagement:
         )
 
     @pytest.mark.covers("mgmt.budget.update.accepts_model_max_budget")
+    @meta(Subject(domain=Domain.SPEND_BUDGETS, route=Route.BUDGET_MANAGEMENT))
     def test_update_accepts_per_model_budgets_including_punctuated_names(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -213,6 +216,7 @@ class TestBudgetManagement:
         )
 
     @pytest.mark.covers("mgmt.budget.update.persists")
+    @meta(Subject(domain=Domain.SPEND_BUDGETS, route=Route.BUDGET_MANAGEMENT))
     def test_update_max_budget_persists_to_budget_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -247,6 +251,7 @@ class TestBudgetManagement:
         )
 
     @pytest.mark.covers("mgmt.budget.new.admin_only")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.BUDGET_MANAGEMENT))
     def test_new_is_refused_for_a_non_admin_key(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -352,6 +357,7 @@ class TestBudgetListV1:
     """
 
     @pytest.mark.covers("mgmt.budget.list_v1.happy_path")
+    @meta(Subject(domain=Domain.SPEND_BUDGETS, route=Route.BUDGET_MANAGEMENT))
     def test_sorts_pages_and_filters_the_budgets_it_created(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -392,6 +398,7 @@ class TestBudgetListV1:
         assert [row.tpm_limit for row in limits] == [60000, 60000, 60000]
 
     @pytest.mark.covers("mgmt.budget.list_v1.happy_path")
+    @meta(Subject(domain=Domain.SPEND_BUDGETS, route=Route.BUDGET_MANAGEMENT))
     def test_is_null_finds_the_budget_left_uncapped(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -409,11 +416,13 @@ class TestBudgetListV1:
         assert [row.max_budget for row in _list_budgets(client, found).data] == [None]
 
     @pytest.mark.covers("mgmt.budget.list_v1.happy_path")
+    @meta(Subject(domain=Domain.SPEND_BUDGETS, route=Route.BUDGET_MANAGEMENT))
     def test_refuses_a_sort_field_and_a_parameter_it_does_not_support(self, client: ManagementClient) -> None:
         assert _list_status(client, BudgetPageParams(sort="budget_duration")) == 400
         assert _list_status(client, BudgetPageParams(not_a_parameter="b-1")) == 400
 
     @pytest.mark.covers("mgmt.budget.list_v1.admin_only")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.BUDGET_MANAGEMENT))
     def test_is_refused_for_a_non_admin_key(self, client: ManagementClient, resources: ResourceManager) -> None:
         key = client.proxy.generate_key(KeyGenerateBody())
         resources.defer(lambda: client.proxy.delete_key(key))
@@ -482,6 +491,7 @@ def _customer_info(client: ManagementClient, route: str, user_id: str) -> Custom
 
 class TestCustomerManagement:
     @pytest.mark.covers("mgmt.customer.new.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.CUSTOMER_MANAGEMENT))
     def test_new_persists_to_customer_info(self, client: ManagementClient, resources: ResourceManager) -> None:
         customer_id = f"e2e-mgmt-cust-{unique_marker()}"
         created = _create_customer(
@@ -495,6 +505,7 @@ class TestCustomerManagement:
         )
 
     @pytest.mark.covers("mgmt.customer.delete.persists")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.CUSTOMER_MANAGEMENT))
     def test_delete_removes_the_customer(self, client: ManagementClient, resources: ResourceManager) -> None:
         """The teardown's deferred delete fires again on the already-deleted customer
         by design: it is the safety net if this test fails before the in-body delete,
@@ -524,6 +535,7 @@ class TestCustomerManagement:
         _ = _poll(client, gone, f"customer {customer_id} still resolved on /customer/info after /customer/delete")
 
     @pytest.mark.covers("mgmt.end_user.new.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.CUSTOMER_MANAGEMENT))
     def test_end_user_new_persists_to_end_user_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -542,6 +554,7 @@ class TestCustomerManagement:
 
 class TestUserManagement:
     @pytest.mark.covers("mgmt.user.info.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.USER_MANAGEMENT))
     def test_new_user_is_readable_via_user_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -586,6 +599,7 @@ class OrgInfoMembersResponse(BaseModel):
 
 class TestOrganizationMembership:
     @pytest.mark.covers("mgmt.organization.member_add.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.ORGANIZATION_MANAGEMENT))
     def test_member_add_records_membership(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
