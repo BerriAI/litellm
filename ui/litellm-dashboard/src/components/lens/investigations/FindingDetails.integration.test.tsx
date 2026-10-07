@@ -165,7 +165,7 @@ it("reports how many sampled traces the finding affected and highlights each quo
       <FindingPanel readOnly busy={false} sampledRuns={sampled} onReview={vi.fn()} />
     </Inspector.Root>,
   );
-  expect(screen.getByRole("region", { name: "Frequency" })).toHaveTextContent("25% 1 of 4 traces affected");
+  expect(screen.getByRole("region", { name: "Frequency" })).toHaveTextContent(/25%\s*1 of 4 traces affected/);
   const example = screen.getByRole("article", { name: "run a" });
   expect(within(example).getByText("files:read is missing").tagName).toBe("MARK");
   expect(screen.queryByRole("article", { name: "run b" })).not.toBeInTheDocument();
@@ -179,8 +179,33 @@ it("shows contributing investigation runs and every affected trace, including ol
     investigation_runs: ["first-investigation-run", "second-investigation-run"],
   };
   renderWithLens(<Harness current={current} onReview={vi.fn()} />);
-  expect(screen.getByText(/1 affected trace · Found across 2 investigation runs/)).toBeVisible();
-  const example = screen.getByRole("article", { name: "older-trace" });
+  expect(screen.getByText("1 affected trace")).toBeVisible();
+  expect(screen.getByText("Found across 2 investigation runs")).toBeVisible();
+  const example = screen.getByRole("article", { name: "Trace older-tr" });
   expect(within(example).getByText("No quote was retained for this trace.")).toBeVisible();
   expect(within(example).getByRole("button", { name: "View trace" })).toBeVisible();
+});
+
+it("shows the finding's priority and keeps the first three examples, revealing the rest on request", async () => {
+  const user = userEvent.setup();
+  const traceOf = (id: string) => btoa(JSON.stringify(["traces", "", id]));
+  const ids = ["t1", "t2", "t3", "t4", "t5"];
+  const current: Finding = {
+    ...finding,
+    occurrences: ids.map(traceOf),
+    evidence: ids.map((id) => ({
+      execution_id: traceOf(id),
+      span_id: id,
+      quote: `Input: ${id}\nOutput: done`,
+      role: "support" as const,
+    })),
+  };
+  renderWithLens(<Harness current={current} onReview={vi.fn()} />);
+  const panel = screen.getByRole("complementary", { name: "Finding details" });
+  expect(within(panel).getByText("High priority")).toBeVisible();
+  expect(within(panel).getAllByRole("article")).toHaveLength(3);
+  expect(within(panel).getAllByText("Call and result")).toHaveLength(3);
+  await user.click(within(panel).getByRole("button", { name: "Show 2 more examples" }));
+  expect(within(panel).getAllByRole("article")).toHaveLength(5);
+  expect(within(panel).queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
 });
