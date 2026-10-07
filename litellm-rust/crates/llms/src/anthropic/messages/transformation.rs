@@ -1,32 +1,34 @@
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
-        ContextEdit, ContextManagement, ContextTrigger, Message, MessagesOptionalParams,
-        MessagesRequest, Speed,
+        ContentBlockType, ContextEdit, ContextManagement, ContextTrigger, Message, MessageContent,
+        MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BetaSet},
     recognized::Recognized,
+    serde_compat::deserialize_present,
 };
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::{
     handler::shape_anthropic_messages_request,
     thinking::{translate_reasoning_effort, translate_thinking},
 };
-use crate::base_llm::messages::context::MessagesTransformContext;
 use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, DEFAULT_ANTHROPIC_HEADERS, OauthHandling, complete_anthropic_url,
-        get_auth_header, has_advisor_tool, has_anthropic_credential, is_tool_search_used,
-        merge_beta_headers, optionally_handle_anthropic_oauth, requires_native_compaction_beta,
-        strip_advisor_blocks, strip_encrypted_reasoning_blocks,
+        ANTHROPIC_BASE_URL_ENV, DEFAULT_ANTHROPIC_HEADERS, OauthHandling, OauthToken,
+        complete_anthropic_url, get_auth_header, has_advisor_tool, has_anthropic_credential,
+        is_tool_search_used, merge_beta_headers, optionally_handle_anthropic_oauth,
+        requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
     },
     base_llm::{
         auth::AuthScheme,
         messages::{
-            normalization::strip_billing_metadata,
+            context::MessagesTransformContext,
+            normalization::{strip_billing_metadata, strip_cache_control_scope},
             transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
         },
     },
@@ -104,6 +106,15 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
                 environment_variable: ANTHROPIC_API_KEY_ENV,
             },
         ))?;
+        let headers = if matches!(&auth, AuthScheme::Credential { secret, .. } if OauthToken::parse_key(secret.expose()).is_some())
+        {
+            merge_beta_headers(
+                headers,
+                [AnthropicBeta::Oauth20250420].into_iter().collect(),
+            )
+        } else {
+            headers
+        };
         Ok(ValidatedEnvironment { headers, auth })
     }
 
@@ -131,22 +142,47 @@ pub enum BillingMetadata {
     Strip,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheControlScope {
+    Forward,
+    Strip,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compaction {
+    Forward,
+    Drop,
+}
+
 /// How an Anthropic-wire host diverges from the first-party request policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RequestPolicy {
     pub thinking: ThinkingSemantics,
     pub billing_metadata: BillingMetadata,
+    pub cache_control_scope: CacheControlScope,
+    pub compaction: Compaction,
 }
 
 pub const FIRST_PARTY_REQUEST_POLICY: RequestPolicy = RequestPolicy {
     thinking: ThinkingSemantics::Anthropic,
     billing_metadata: BillingMetadata::Forward,
+    cache_control_scope: CacheControlScope::Forward,
+    compaction: Compaction::Forward,
+};
+
+/// Claude served by a cloud partner (Azure Foundry, Vertex AI), which rejects first-party-only
+/// request fields.
+pub const PARTNER_HOST_REQUEST_POLICY: RequestPolicy = RequestPolicy {
+    billing_metadata: BillingMetadata::Strip,
+    cache_control_scope: CacheControlScope::Strip,
+    ..FIRST_PARTY_REQUEST_POLICY
 };
 
 /// A third-party host that speaks the Anthropic wire format but is not Claude.
 pub const COMPATIBLE_HOST_REQUEST_POLICY: RequestPolicy = RequestPolicy {
     thinking: ThinkingSemantics::Passthrough,
     billing_metadata: BillingMetadata::Strip,
+    ..FIRST_PARTY_REQUEST_POLICY
 };
 
 pub(crate) fn transform_messages_request(
@@ -172,6 +208,20 @@ pub(crate) fn transform_messages_request_with(
     let request = match policy.billing_metadata {
         BillingMetadata::Forward => request,
         BillingMetadata::Strip => strip_billing_metadata(request),
+    };
+    let request = match policy.cache_control_scope {
+        CacheControlScope::Forward => request,
+        CacheControlScope::Strip => strip_cache_control_scope(request),
+    };
+    let request = match policy.compaction {
+        Compaction::Forward => request,
+        Compaction::Drop => MessagesRequest {
+            params: MessagesOptionalParams {
+                compaction: None,
+                ..request.params
+            },
+            ..request
+        },
     };
     let context_management = request
         .params
@@ -200,7 +250,7 @@ pub(crate) fn update_headers_with_anthropic_beta(
     merge_beta_headers(headers, feature_betas(request))
 }
 
-fn feature_betas(request: &MessagesRequest) -> BetaSet {
+pub(crate) fn feature_betas(request: &MessagesRequest) -> BetaSet {
     let params = &request.params;
     let tools = params.tools.as_deref();
     [
@@ -213,11 +263,47 @@ fn feature_betas(request: &MessagesRequest) -> BetaSet {
             .then_some(AnthropicBeta::PerTurnControl20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
+        thinking_displays_updates(params).then_some(AnthropicBeta::ThinkingDisplayUpdates20260818),
+        messages_change_tools(&request.messages)
+            .then_some(AnthropicBeta::MidConversationToolChanges20260701),
     ]
     .into_iter()
     .flatten()
     .chain(context_management_betas(params.context_management.as_ref()))
     .collect()
+}
+
+fn thinking_displays_updates(params: &MessagesOptionalParams) -> bool {
+    let display = match params.thinking.as_ref().and_then(Recognized::known) {
+        Some(ThinkingConfig::Adaptive(thinking)) => thinking.display.as_ref(),
+        Some(ThinkingConfig::Enabled(thinking)) => thinking.display.as_ref(),
+        Some(ThinkingConfig::Disabled(_)) | None => None,
+    };
+    display == Some(&Recognized::Known(ThinkingDisplay::Updates))
+}
+
+fn messages_change_tools(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .filter(|message| {
+            message.role == litellm_llms_types::formats::messages::MessageRole::System
+        })
+        .any(|message| match &message.content {
+            MessageContent::Blocks(blocks) => blocks.iter().any(|block| {
+                matches!(
+                    block.block_type.as_ref().and_then(|kind| kind.value()),
+                    Some(ContentBlockType::ToolAddition | ContentBlockType::ToolRemoval)
+                ) && block
+                    .tool
+                    .as_ref()
+                    .and_then(Recognized::known)
+                    .is_some_and(|tool| {
+                        tool.block_type.as_ref().and_then(|kind| kind.value())
+                            == Some(&ContentBlockType::ToolReference)
+                    })
+            }),
+            MessageContent::Text(_) => false,
+        })
 }
 
 fn is_compact_edit(edit: &Recognized<ContextEdit>) -> bool {
@@ -256,7 +342,7 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
             })
 }
 
-fn messages_carry_output_config(messages: &[Message]) -> bool {
+pub(crate) fn messages_carry_output_config(messages: &[Message]) -> bool {
     messages
         .iter()
         .any(|message| message.extra.contains_key("output_config"))
@@ -334,33 +420,37 @@ fn speed_text(speed: &Recognized<Speed>) -> String {
     }
 }
 
-fn compact_edit_from_openai(entry: &Map<String, Value>) -> Option<ContextEdit> {
-    if entry.get("type").and_then(Value::as_str) != Some("compaction") {
-        return None;
-    }
-    let trigger = entry
-        .get("compact_threshold")
-        .and_then(Value::as_f64)
-        .map(|threshold| {
-            Recognized::Known(ContextTrigger::InputTokens {
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OpenAiContextManagementEntry {
+    Compaction {
+        #[serde(default)]
+        compact_threshold: Option<Recognized<f64>>,
+        #[serde(default, deserialize_with = "deserialize_present")]
+        trigger: Option<Recognized<ContextTrigger>>,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+}
+
+fn compact_edit_from_openai(entry: &Value) -> Option<ContextEdit> {
+    let OpenAiContextManagementEntry::Compaction {
+        compact_threshold,
+        trigger,
+        extra,
+    } = OpenAiContextManagementEntry::deserialize(entry).ok()?;
+    let generated_trigger = match compact_threshold {
+        Some(Recognized::Known(threshold)) => {
+            Some(Recognized::Known(ContextTrigger::InputTokens {
                 value: Recognized::Known(threshold as i64),
                 extra: Map::new(),
-            })
-        });
-    let passthrough = entry
-        .iter()
-        .filter(|(key, _)| !matches!(key.as_str(), "type" | "compact_threshold" | "trigger"))
-        .map(|(key, value)| (key.clone(), value.clone()));
+            }))
+        }
+        _ => None,
+    };
     Some(ContextEdit::Compact {
-        trigger: entry
-            .get("trigger")
-            .map(|value| {
-                serde_json::from_value::<ContextTrigger>(value.clone())
-                    .map(Recognized::Known)
-                    .unwrap_or_else(|_| Recognized::Unrecognized(value.clone()))
-            })
-            .or(trigger),
-        extra: passthrough.collect(),
+        trigger: trigger.or(generated_trigger),
+        extra,
     })
 }
 
@@ -374,7 +464,6 @@ pub fn map_openai_context_management_to_anthropic(
     };
     let edits: Vec<Recognized<ContextEdit>> = entries
         .iter()
-        .filter_map(Value::as_object)
         .filter_map(compact_edit_from_openai)
         .map(Recognized::Known)
         .collect();
@@ -389,15 +478,17 @@ pub fn map_openai_context_management_to_anthropic(
 
 #[cfg(test)]
 mod tests {
-    use crate::base_llm::messages::context::{
-        MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
-    };
     use std::process::Command;
 
     use rstest::{fixture, rstest};
 
     use super::*;
-    use crate::anthropic::common_utils::ENCRYPTED_REASONING_SIGNATURE_PREFIX;
+    use crate::{
+        anthropic::common_utils::ENCRYPTED_REASONING_SIGNATURE_PREFIX,
+        base_llm::messages::context::{
+            MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
+        },
+    };
 
     type Env = &'static [(&'static str, &'static str)];
 
@@ -466,18 +557,6 @@ mod tests {
             .map(|transformed| serde_json::to_value(transformed).unwrap())
     }
 
-    fn advisor_history() -> Value {
-        json!([
-            {"role": "user", "content": "Build a worker pool."},
-            {"role": "assistant", "content": [
-                {"type": "text", "text": "Let me consult the advisor."},
-                {"type": "server_tool_use", "id": "srvtoolu_abc123", "name": "advisor", "input": {}},
-                {"type": "advisor_tool_result", "tool_use_id": "srvtoolu_abc123", "content": {"type": "advisor_result", "text": "Use channels."}},
-                {"type": "text", "text": "Here is the implementation."}
-            ]}
-        ])
-    }
-
     fn transform_with(fields: Value, policy: RequestPolicy) -> Value {
         let context = MessagesTransformContext::with_lookup(
             MessagesModelCapabilities {
@@ -526,6 +605,18 @@ mod tests {
             transformed["thinking"],
             json!({"type": "enabled", "budget_tokens": ThinkingBudgets::default().low})
         );
+    }
+
+    fn advisor_history() -> Value {
+        json!([
+            {"role": "user", "content": "Build a worker pool."},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "Let me consult the advisor."},
+                {"type": "server_tool_use", "id": "srvtoolu_abc123", "name": "advisor", "input": {}},
+                {"type": "advisor_tool_result", "tool_use_id": "srvtoolu_abc123", "content": {"type": "advisor_result", "text": "Use channels."}},
+                {"type": "text", "text": "Here is the implementation."}
+            ]}
+        ])
     }
 
     #[fixture]
@@ -732,6 +823,30 @@ mod tests {
         json!([{"type": "compaction", "compact_threshold": "150000"}]),
         Some(json!({"edits": [{"type": "compact_20260112"}]}))
     )]
+    #[case::negative_threshold_preserves_truncation(
+        json!([{"type": "compaction", "compact_threshold": -1000.9}]),
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": -1000}}]}))
+    )]
+    #[case::null_threshold_is_dropped(
+        json!([{"type": "compaction", "compact_threshold": null}]),
+        Some(json!({"edits": [{"type": "compact_20260112"}]}))
+    )]
+    #[case::caller_trigger_wins_over_threshold(
+        json!([{"type": "compaction", "compact_threshold": 200000, "trigger": {"type": "input_tokens", "value": 1000, "future": null}}]),
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 1000, "future": null}}]}))
+    )]
+    #[case::null_trigger_wins_over_threshold(
+        json!([{"type": "compaction", "compact_threshold": 200000, "trigger": null}]),
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": null}]}))
+    )]
+    #[case::unknown_trigger_wins_over_threshold(
+        json!([{"type": "compaction", "compact_threshold": 200000, "trigger": {"type": "future", "value": [1, null]}}]),
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "future", "value": [1, null]}}]}))
+    )]
+    #[case::scalar_trigger_wins_over_threshold(
+        json!([{"type": "compaction", "compact_threshold": 200000, "trigger": false}]),
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": false}]}))
+    )]
     #[case::non_object_entries_are_skipped(
         json!([42, "compaction", null, [], {"type": "compaction", "compact_threshold": 1000}]),
         Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 1000}}]}))
@@ -824,13 +939,140 @@ mod tests {
             ]},
             {"role": "user", "content": "And the next one?"}
         ]);
+        let original: Vec<Message> = serde_json::from_value(messages).unwrap();
+        let input = MessagesRequest {
+            messages: original.clone(),
+            ..request(json!({}))
+        };
+        let transformed = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(
+                input,
+                &MessagesTransformContext::with_lookup(unmapped, false, &no_env),
+            )
+            .map(|result| serde_json::to_value(result).unwrap());
         assert_eq!(
-            transform(json!({"messages": messages}), unmapped, false),
+            transformed,
             Ok(body(json!({"messages": [
                 {"role": "user", "content": "Solve it."},
                 {"role": "assistant", "content": [{"type": "text", "text": "The answer."}]},
                 {"role": "user", "content": "And the next one?"}
             ]})))
+        );
+        let MessageContent::Blocks(original_blocks) = &original[1].content else {
+            panic!("expected blocks")
+        };
+        assert_eq!(original_blocks.len(), 3);
+    }
+
+    #[rstest]
+    #[case::output_format(false)]
+    #[case::output_config_format(true)]
+    fn structured_outputs_preserve_schema_and_effort(#[case] nested: bool) {
+        use litellm_llms_types::formats::messages::{
+            EffortLevel, OutputConfig, OutputFormat, OutputFormatType,
+        };
+
+        let schema = json!({"type":"object","properties":{"result":{"type":"string"}}});
+        let format = OutputFormat {
+            format_type: OutputFormatType::JsonSchema,
+            schema: Some(serde_json::from_value(schema.clone()).unwrap()),
+            strict: None,
+            extra: Default::default(),
+        };
+        let params = if nested {
+            MessagesOptionalParams {
+                max_tokens: Some(1024),
+                output_config: Some(Recognized::Known(OutputConfig {
+                    format: Some(Recognized::Known(format)),
+                    effort: Some(Recognized::Known(EffortLevel::Xhigh)),
+                    ..OutputConfig::default()
+                })),
+                ..MessagesOptionalParams::default()
+            }
+        } else {
+            MessagesOptionalParams {
+                max_tokens: Some(1024),
+                output_format: Some(Recognized::Known(format)),
+                ..MessagesOptionalParams::default()
+            }
+        };
+        let transformed = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(
+                MessagesRequest {
+                    params,
+                    ..request(json!({}))
+                },
+                &MessagesTransformContext::with_lookup(
+                    MessagesModelCapabilities {
+                        supports_adaptive_thinking: true,
+                        supports_output_config: true,
+                        ..Default::default()
+                    },
+                    false,
+                    &no_env,
+                ),
+            )
+            .unwrap();
+        let wire = serde_json::to_value(&transformed).unwrap();
+        if nested {
+            assert_eq!(
+                wire["output_config"],
+                json!({"format":{"type":"json_schema","schema":schema},"effort":"xhigh"})
+            );
+        } else {
+            assert_eq!(
+                wire["output_format"],
+                json!({"type":"json_schema","schema":schema})
+            );
+        }
+        assert_eq!(
+            feature_betas(&transformed),
+            [AnthropicBeta::StructuredOutputs20251113]
+                .into_iter()
+                .collect()
+        );
+    }
+
+    #[rstest]
+    fn native_messages_forwards_safeguards_and_unknown_beta() {
+        let safeguards = json!([{"type":"dangerous_tool_use","classifier_context":{"v":1,"permission_mode":"auto"}}]);
+        let transformed = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(
+                request(json!({"safeguards":safeguards})),
+                &MessagesTransformContext::default(),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&transformed).unwrap()["safeguards"],
+            safeguards
+        );
+        let client = headers(&[(
+            "Anthropic-Beta",
+            "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14,future-client-beta",
+        )]);
+        assert_eq!(
+            crate::anthropic::common_utils::existing_betas(
+                &ANTHROPIC_MESSAGES_CONFIG.request_headers(client, &transformed)
+            ),
+            betas(&[
+                "dangerous-tool-use-2026-09-03",
+                "interleaved-thinking-2025-05-14",
+                "future-client-beta"
+            ])
+        );
+        let response_wire = json!({
+            "id":"msg_1","type":"message","role":"assistant","model":"claude",
+            "content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,
+            "usage":{"input_tokens":1,"output_tokens":1},
+            "safeguard_results":[{"type":"dangerous_tool_use","status":{"type":"available","tool_uses":{}}}]
+        });
+        let response = serde_json::from_value(response_wire.clone()).unwrap();
+        let transformed_response = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_response("claude", response)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(transformed_response).unwrap(),
+            response_wire
         );
     }
 
@@ -1025,7 +1267,7 @@ mod tests {
         &[],
         None,
         &[("ANTHROPIC_API_KEY", "sk-ant-oat01-env")],
-        &[],
+        &[("anthropic-beta", OAUTH_BETA)],
         Some(("Authorization", "sk-ant-oat01-env")),
     )]
     fn validate_environment_shapes_the_headers_and_names_the_credential(
@@ -1061,6 +1303,8 @@ mod tests {
 
     #[rstest]
     #[case::no_features(json!({}), &[])]
+    #[case::null_output_format(json!({"output_format":null}), &[])]
+    #[case::null_output_config_format(json!({"output_config":{"format":null}}), &[])]
     #[case::output_format(json!({"output_format": {"type": "json_schema"}}), &["structured-outputs-2025-11-13"])]
     #[case::null_output_format(json!({"output_format": null}), &[])]
     #[case::output_config_format(
@@ -1129,6 +1373,185 @@ mod tests {
     )]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
+    }
+
+    #[rstest]
+    #[case::absent(None)]
+    #[case::summarized(Some(ThinkingDisplay::Summarized))]
+    #[case::omitted(Some(ThinkingDisplay::Omitted))]
+    #[case::updates(Some(ThinkingDisplay::Updates))]
+    fn native_messages_thinking_display_updates_beta(
+        #[case] display: Option<ThinkingDisplay>,
+        #[values(false, true)] explicit_beta: bool,
+    ) {
+        let beta = AnthropicBeta::ThinkingDisplayUpdates20260818;
+        let request = MessagesRequest {
+            params: MessagesOptionalParams {
+                thinking: Some(Recognized::Known(ThinkingConfig::adaptive(display))),
+                ..MessagesOptionalParams::default()
+            },
+            ..request(json!({}))
+        };
+        let input = if explicit_beta {
+            vec![("Anthropic-Beta".into(), beta.to_string())]
+        } else {
+            Vec::new()
+        };
+        let output = ANTHROPIC_MESSAGES_CONFIG.request_headers(input, &request);
+        assert_eq!(
+            crate::anthropic::common_utils::existing_betas(&output),
+            if explicit_beta || display == Some(ThinkingDisplay::Updates) {
+                [beta].into_iter().collect()
+            } else {
+                BetaSet::default()
+            }
+        );
+        assert!(
+            output
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
+                .count()
+                <= 1
+        );
+    }
+
+    #[rstest]
+    #[case::absent(Value::Null, false)]
+    #[case::empty(json!({}), false)]
+    #[case::string(json!("updates"), false)]
+    #[case::missing_type(json!({"display":"updates"}), false)]
+    #[case::disabled(json!({"type":"disabled","display":"updates"}), false)]
+    #[case::enabled(json!({"type":"enabled","display":"updates","budget_tokens":1024}), true)]
+    fn thinking_display_beta_requires_active_thinking(
+        #[case] thinking: Value,
+        #[case] expected: bool,
+    ) {
+        let betas = feature_betas(&request(json!({"thinking":thinking})));
+        assert_eq!(
+            betas.contains(&AnthropicBeta::ThinkingDisplayUpdates20260818),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::empty(json!({}))]
+    #[case::effort(json!({"effort":"high"}))]
+    #[case::format(json!({"format":{"type":"text"}}))]
+    fn per_message_output_config_adds_beta_once(
+        #[case] output_config: Value,
+        #[values(false, true)] nested: bool,
+        #[values(false, true)] explicit_beta: bool,
+    ) {
+        let beta = AnthropicBeta::PerTurnControl20260701;
+        let message = Message {
+            role: litellm_llms_types::formats::messages::MessageRole::System,
+            content: MessageContent::Blocks(Vec::new()),
+            extra: [("output_config".into(), output_config)]
+                .into_iter()
+                .collect(),
+        };
+        let request = MessagesRequest {
+            messages: if nested { vec![message] } else { Vec::new() },
+            ..request(json!({"output_config":{"effort":"high"}}))
+        };
+        let input = if explicit_beta {
+            vec![("anthropic-beta".into(), beta.to_string())]
+        } else {
+            Vec::new()
+        };
+        let output = ANTHROPIC_MESSAGES_CONFIG.request_headers(input, &request);
+        assert_eq!(
+            crate::anthropic::common_utils::existing_betas(&output),
+            if nested || explicit_beta {
+                [beta].into_iter().collect()
+            } else {
+                BetaSet::default()
+            }
+        );
+        assert!(
+            output
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
+                .count()
+                <= 1
+        );
+    }
+
+    #[rstest]
+    #[case::user("user", json!([{"type":"tool_addition","tool":{"type":"tool_reference","name":"ping"}}]))]
+    #[case::assistant("assistant", json!([{"type":"tool_addition","tool":{"type":"tool_reference","name":"ping"}}]))]
+    #[case::text("system", json!("tool_addition"))]
+    #[case::reference_without_change("system", json!([{"type":"tool_reference","name":"ping"}]))]
+    #[case::definition("system", json!([{"type":"tool_addition","tool":{"type":"tool_definition","definition":{"name":"ping"}}}]))]
+    #[case::null_tool("system", json!([{"type":"tool_addition","tool":null}]))]
+    #[case::string_tool("system", json!([{"type":"tool_addition","tool":"tool_reference"}]))]
+    fn tool_changes_beta_requires_system_tool_reference(
+        #[case] role: &str,
+        #[case] content: Value,
+    ) {
+        let betas = feature_betas(&request(
+            json!({"messages":[{"role":role,"content":content}]}),
+        ));
+        assert!(!betas.contains(&AnthropicBeta::MidConversationToolChanges20260701));
+    }
+
+    #[rstest]
+    #[case::ordinary_text(None)]
+    #[case::addition(Some(ContentBlockType::ToolAddition))]
+    #[case::removal(Some(ContentBlockType::ToolRemoval))]
+    fn native_messages_tool_changes_beta(
+        #[case] action: Option<ContentBlockType>,
+        #[values(false, true)] explicit_beta: bool,
+    ) {
+        use litellm_llms_types::{formats::messages::ContentBlock, serde_compat::Nullable};
+
+        let beta = AnthropicBeta::MidConversationToolChanges20260701;
+        let changed = action.is_some();
+        let content = match action {
+            Some(action) => MessageContent::Blocks(vec![ContentBlock {
+                block_type: Some(Nullable::Value(action)),
+                payload: litellm_llms_types::formats::messages::ContentBlockPayload {
+                    tool: Some(Recognized::Known(Box::new(ContentBlock {
+                        block_type: Some(Nullable::Value(ContentBlockType::ToolReference)),
+                        ..ContentBlock::default()
+                    }))),
+                    ..Default::default()
+                },
+                ..ContentBlock::default()
+            }]),
+            None => MessageContent::Text("Answer briefly".into()),
+        };
+        let request = MessagesRequest {
+            messages: vec![Message {
+                role: litellm_llms_types::formats::messages::MessageRole::System,
+                content,
+                extra: Default::default(),
+            }],
+            params: MessagesOptionalParams {
+                thinking: Some(Recognized::Known(ThinkingConfig::adaptive(Some(
+                    ThinkingDisplay::Updates,
+                )))),
+                ..MessagesOptionalParams::default()
+            },
+            ..request(json!({}))
+        };
+        let input = if explicit_beta {
+            vec![("anthropic-beta".into(), beta.to_string())]
+        } else {
+            Vec::new()
+        };
+        let output = ANTHROPIC_MESSAGES_CONFIG.request_headers(input, &request);
+        let expected: BetaSet = [
+            Some(AnthropicBeta::ThinkingDisplayUpdates20260818),
+            (explicit_beta || changed).then_some(beta),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        assert_eq!(
+            crate::anthropic::common_utils::existing_betas(&output),
+            expected
+        );
     }
 
     #[rstest]
@@ -1267,5 +1690,157 @@ mod tests {
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+
+    #[rstest]
+    #[case::client_set(
+        "anthropic-beta",
+        "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,effort-2025-11-24",
+        "claude-code-20250219,context-management-2025-06-27,effort-2025-11-24,interleaved-thinking-2025-05-14,per-turn-control-2026-07-01"
+    )]
+    #[case::case_variant(
+        "Anthropic-Beta",
+        "interleaved-thinking-2025-05-14",
+        "interleaved-thinking-2025-05-14,per-turn-control-2026-07-01"
+    )]
+    fn per_turn_control_merges_forwarded_client_betas(
+        #[case] header_name: &str,
+        #[case] client_betas: &str,
+        #[case] expected_betas: &str,
+    ) {
+        use litellm_llms_types::formats::messages::{
+            ContentBlock, EffortLevel, MessageRole, OutputConfig,
+        };
+
+        let input = MessagesRequest {
+            messages: vec![
+                Message {
+                    role: MessageRole::User,
+                    content: MessageContent::Blocks(vec![ContentBlock::text("Hello")]),
+                    extra: Map::new(),
+                },
+                Message {
+                    role: MessageRole::System,
+                    content: MessageContent::Blocks(vec![ContentBlock::text("# Environment")]),
+                    extra: Map::from_iter([("output_config".into(), json!({"effort":"low"}))]),
+                },
+            ],
+            params: MessagesOptionalParams {
+                max_tokens: Some(64000),
+                output_config: Some(Recognized::Known(OutputConfig {
+                    effort: Some(Recognized::Known(EffortLevel::High)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            ..request(json!({}))
+        };
+        let validated = ANTHROPIC_MESSAGES_CONFIG
+            .validate_environment(
+                headers(&[(header_name, client_betas)]),
+                Some("sk-ant-test"),
+                "model",
+                &no_env,
+            )
+            .unwrap();
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.request_headers(validated.headers, &input),
+            headers(&[("anthropic-beta", expected_betas)]),
+        );
+    }
+
+    #[rstest]
+    fn reasoning_auto_summary_preserves_summarized_display_when_disabled() {
+        use litellm_llms_types::formats::messages::EnabledThinking;
+
+        let input = MessagesRequest {
+            params: MessagesOptionalParams {
+                thinking: Some(Recognized::Known(ThinkingConfig::Enabled(
+                    EnabledThinking {
+                        budget_tokens: Some(Recognized::Known(10000)),
+                        display: Some(Recognized::Known(ThinkingDisplay::Summarized)),
+                        ..Default::default()
+                    },
+                ))),
+                ..Default::default()
+            },
+            ..request(json!({}))
+        };
+        let shaped = ANTHROPIC_MESSAGES_CONFIG
+            .shape_request(input, false)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(shaped.params.thinking).unwrap(),
+            json!({"type":"enabled","budget_tokens":10000,"display":"summarized"}),
+        );
+    }
+
+    fn replay_tool(
+        id: &str,
+        name: &str,
+        input: Map<String, Value>,
+        provider_specific_fields: Option<Map<String, Value>>,
+    ) -> litellm_llms_types::formats::messages::ContentBlock {
+        use litellm_llms_types::{
+            formats::messages::{ContentBlock, ContentBlockPayload},
+            serde_compat::Nullable,
+        };
+
+        ContentBlock {
+            block_type: Some(Nullable::Value(ContentBlockType::ToolUse)),
+            payload: ContentBlockPayload {
+                id: Some(Nullable::Value(id.into())),
+                name: Some(Nullable::Value(name.into())),
+                input: Some(Recognized::Known(input)),
+                provider_specific_fields: provider_specific_fields.map(Recognized::Known),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[rstest]
+    #[case::empty_text(
+        vec![litellm_llms_types::formats::messages::ContentBlock::text(""), replay_tool("t", "B", Map::new(), None)],
+        json!([{"type":"text","text":""},{"type":"tool_use","id":"t","name":"B","input":{}}]),
+        json!([{"type":"tool_use","id":"t","name":"B","input":{}}]),
+    )]
+    #[case::tool_ids(
+        vec![replay_tool("functions.Bash:0", "Bash", Map::new(), None)],
+        json!([{"type":"tool_use","id":"functions.Bash:0","name":"Bash","input":{}}]),
+        json!([{"type":"tool_use","id":"functions_Bash_0","name":"Bash","input":{}}]),
+    )]
+    #[case::provider_fields(
+        vec![replay_tool("toolu_01", "get_weather", Map::from_iter([("city".into(),json!("Paris"))]), Some(Map::from_iter([("signature".into(),json!("sig_abc"))])))],
+        json!([{"type":"tool_use","id":"toolu_01","name":"get_weather","input":{"city":"Paris"},"provider_specific_fields":{"signature":"sig_abc"}}]),
+        json!([{"type":"tool_use","id":"toolu_01","name":"get_weather","input":{"city":"Paris"}}]),
+    )]
+    fn shaping_preserves_original_replay_input(
+        #[case] original_content: Vec<litellm_llms_types::formats::messages::ContentBlock>,
+        #[case] original_wire: Value,
+        #[case] expected_content: Value,
+    ) {
+        let original = Message {
+            role: litellm_llms_types::formats::messages::MessageRole::Assistant,
+            content: MessageContent::Blocks(original_content),
+            extra: Map::new(),
+        };
+        let shaped = ANTHROPIC_MESSAGES_CONFIG
+            .shape_request(
+                MessagesRequest {
+                    messages: vec![original.clone()],
+                    ..request(json!({}))
+                },
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&shaped.messages[0].content).unwrap(),
+            expected_content
+        );
+        assert_eq!(
+            serde_json::to_value(&original.content).unwrap(),
+            original_wire
+        );
     }
 }

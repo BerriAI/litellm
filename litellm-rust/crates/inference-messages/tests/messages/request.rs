@@ -400,6 +400,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                         drop_params,
                         ..MessagesSettings::default()
                     },
+                    ..MessagesShaping::default()
                 },
                 body: call.body.clone(),
                 custom_llm_provider: call.custom_llm_provider.clone(),
@@ -453,6 +454,7 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
                     supports_adaptive_thinking: true,
                     ..MessagesModelCapabilities::default()
                 },
+                ..MessagesShaping::default()
             },
             ..call
         },

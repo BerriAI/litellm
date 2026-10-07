@@ -9,6 +9,10 @@ use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
+use litellm_llms::bedrock::messages::{
+    connection::BedrockMessagesConnection,
+    invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+};
 use litellm_llms_types::formats::messages::MessagesRequest;
 use litellm_secrets::source::SecretSource;
 
@@ -77,6 +81,15 @@ fn prepare_provider_request(
     } = call;
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
+    let bedrock_connection = BedrockMessagesConnection {
+        api_base: api_base.clone().or_else(|| {
+            shaping
+                .bedrock_connection
+                .as_ref()
+                .and_then(|connection| connection.api_base.clone())
+        }),
+        ..shaping.bedrock_connection.clone().unwrap_or_default()
+    };
 
     let sanitized = config.shape_request(
         MessagesRequest { model, ..body },
@@ -90,16 +103,34 @@ fn prepare_provider_request(
     )?;
 
     let scoped =
-        get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
+        get_provider_specific_headers(provider_specific_header.as_ref(), Some(provider.as_str()));
     let forwarded = string_headers(Some(
         extra_headers.into_iter().flatten().chain(scoped).collect(),
     ))?;
-    let validated = config.validate_environment(
-        forwarded,
-        api_key.as_deref(),
-        &transformed.model,
-        &env_lookup,
-    )?;
+    let forwarded = match (provider, shaping.bedrock_request_metadata.as_ref()) {
+        (MessagesProvider::Bedrock, Some(metadata)) => {
+            litellm_llms::bedrock::request_metadata::bedrock_request_metadata_headers(
+                forwarded, metadata,
+            )?
+        }
+        _ => forwarded,
+    };
+    let validated = match provider {
+        MessagesProvider::Bedrock => BEDROCK_ANTHROPIC_MESSAGES_CONFIG
+            .validate_environment_with_connection(
+                forwarded,
+                api_key.as_deref(),
+                &transformed.model,
+                &bedrock_connection,
+                &env_lookup,
+            )?,
+        _ => config.validate_environment(
+            forwarded,
+            api_key.as_deref(),
+            &transformed.model,
+            &env_lookup,
+        )?,
+    };
     let environment = ValidatedEnvironment {
         headers: config.request_headers(
             with_default_headers(validated.headers, config.default_headers()),
@@ -108,10 +139,18 @@ fn prepare_provider_request(
         auth: validated.auth,
     };
 
-    let url = if transformed.params.stream == Some(true) {
-        config.complete_stream_url(api_base.as_deref(), &transformed.model, &env_lookup)?
-    } else {
-        config.get_complete_url(api_base.as_deref(), &transformed.model, &env_lookup)?
+    let url = match provider {
+        MessagesProvider::Bedrock => BEDROCK_ANTHROPIC_MESSAGES_CONFIG
+            .get_complete_url_with_connection(
+                &transformed.model,
+                &bedrock_connection,
+                transformed.params.stream == Some(true),
+                &env_lookup,
+            )?,
+        _ if transformed.params.stream == Some(true) => {
+            config.complete_stream_url(api_base.as_deref(), &transformed.model, &env_lookup)?
+        }
+        _ => config.get_complete_url(api_base.as_deref(), &transformed.model, &env_lookup)?,
     };
 
     Ok(ProviderMessagesRequest {
@@ -170,6 +209,104 @@ mod tests {
     ) -> Result<ProviderMessagesRequest, Error> {
         let resolved = resolve_provider(&call.body.model, call.custom_llm_provider.as_deref())?;
         prepare_provider_request(call, resolved, secrets)
+    }
+
+    #[rstest]
+    #[case::bedrock("bedrock", true)]
+    #[case::anthropic("anthropic", false)]
+    fn trusted_metadata_headers_are_applied_only_to_bedrock(
+        mut shaping: MessagesShaping,
+        #[case] provider: &str,
+        #[case] owns_metadata: bool,
+    ) {
+        use litellm_llms::bedrock::request_metadata::{
+            BEDROCK_REQUEST_METADATA_HEADER, BedrockMetadataSource, BedrockRequestMetadataInput,
+        };
+        shaping.bedrock_request_metadata = Some(BedrockRequestMetadataInput {
+            allowed_fields: vec!["user_api_key_alias".into()],
+            sources: vec![BedrockMetadataSource {
+                identity: vec![("user_api_key_alias".into(), "trusted-key".into())],
+                spend_logs: vec![],
+            }],
+        });
+        let prepared = prepare(MessagesCall {
+            body: body(json!({"model":"claude-test","messages":[{"role":"user","content":"hi"}],"max_tokens":16})),
+            api_key: Some("test-key".into()),
+            api_base: None,
+            custom_llm_provider: Some(provider.into()),
+            extra_headers: Some(serde_json::from_value(json!({"x-AMZN-bedrock-Request-METADATA":"caller-set"})).unwrap()),
+            provider_specific_header: None,
+            timeout: None,
+            shaping,
+        }).unwrap();
+        let values: Vec<_> = prepared
+            .environment
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case(BEDROCK_REQUEST_METADATA_HEADER))
+            .map(|(_, value)| value.as_str())
+            .collect();
+        if owns_metadata {
+            assert_eq!(values.len(), 1);
+            assert_eq!(
+                serde_json::from_str::<Value>(values[0]).unwrap(),
+                json!({"user_api_key_alias":"trusted-key"})
+            );
+        } else {
+            assert_eq!(values, ["caller-set"]);
+        }
+    }
+
+    #[rstest]
+    #[case::projected_endpoint(false, None, "https://projected.test/model/override%2Fmodel/invoke")]
+    #[case::streaming_endpoint(
+        true,
+        None,
+        "https://projected.test/model/override%2Fmodel/invoke-with-response-stream"
+    )]
+    #[case::explicit_endpoint(
+        false,
+        Some("https://caller.test"),
+        "https://caller.test/model/override%2Fmodel/invoke"
+    )]
+    fn bedrock_connection_controls_url_workspace_and_signing_scope(
+        shaping: MessagesShaping,
+        #[case] stream: bool,
+        #[case] api_base: Option<&str>,
+        #[case] expected_url: &str,
+    ) {
+        let shaping = MessagesShaping {
+            bedrock_connection: Some(BedrockMessagesConnection {
+                api_base: Some("https://projected.test".into()),
+                region: Some("us-east-2".into()),
+                model_id: Some("override/model".into()),
+                workspace_id: Some("trusted-project".into()),
+            }),
+            ..shaping
+        };
+        let prepared = prepare(MessagesCall {
+            body: body(json!({"model":"claude-test","messages":[{"role":"user","content":"hi"}],"max_tokens":16,"stream":stream})),
+            api_key: None,
+            api_base: api_base.map(str::to_string),
+            custom_llm_provider: Some("bedrock".into()),
+            extra_headers: Some(serde_json::from_value(json!({"Anthropic-Workspace-Id":"caller-project"})).unwrap()),
+            provider_specific_header: None,
+            timeout: None,
+            shaping,
+        }).unwrap();
+        assert_eq!(prepared.url, expected_url);
+        assert_eq!(
+            prepared
+                .environment
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-workspace-id"))
+                .collect::<Vec<_>>(),
+            [&("anthropic-workspace-id".into(), "trusted-project".into())]
+        );
+        assert!(
+            matches!(prepared.environment.auth, litellm_llms::base_llm::auth::AuthScheme::AwsSigV4 { region, .. } if region == "us-east-2")
+        );
     }
 
     /// The headers as they go on the wire, credential applied.

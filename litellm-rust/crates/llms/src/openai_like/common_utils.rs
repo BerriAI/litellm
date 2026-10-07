@@ -56,3 +56,81 @@ pub fn resolve_openai_like_api_key(
         .1
         .filter(|key| !key.is_empty())
 }
+
+/// One `providers.json` entry, as Python's `SimpleProviderConfig` reads it for the routes
+/// Rust serves. `cache_control_ttl` is the entry's `constraints.cache_control_ttl`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JsonProvider {
+    pub base_url: &'static str,
+    env_names: EnvNames,
+    pub cache_control_ttl: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnvNames {
+    Key([&'static str; 1]),
+    KeyAndBase([&'static str; 2]),
+}
+
+impl JsonProvider {
+    pub const fn new(
+        base_url: &'static str,
+        api_key_env: &'static str,
+        api_base_env: Option<&'static str>,
+        cache_control_ttl: bool,
+    ) -> Self {
+        let env_names = match api_base_env {
+            Some(api_base_env) => EnvNames::KeyAndBase([api_key_env, api_base_env]),
+            None => EnvNames::Key([api_key_env]),
+        };
+        Self {
+            base_url,
+            env_names,
+            cache_control_ttl,
+        }
+    }
+
+    pub fn api_key_env(&self) -> &'static str {
+        self.secret_names()[0]
+    }
+
+    pub fn api_base_env(&self) -> Option<&'static str> {
+        self.secret_names().get(1).copied()
+    }
+
+    pub fn secret_names(&self) -> &[&'static str] {
+        match &self.env_names {
+            EnvNames::Key(names) => names,
+            EnvNames::KeyAndBase(names) => names,
+        }
+    }
+
+    pub fn resolve_api_key(
+        &self,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<String> {
+        non_blank(api_key)
+            .map(str::to_string)
+            .or_else(|| env_lookup(self.api_key_env()).filter(|key| !key.trim().is_empty()))
+    }
+
+    pub fn resolve_api_base(
+        &self,
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> String {
+        non_blank(api_base)
+            .map(str::to_string)
+            .or_else(|| {
+                self.api_base_env()
+                    .and_then(env_lookup)
+                    .filter(|base| !base.trim().is_empty())
+            })
+            .unwrap_or_else(|| self.base_url.to_string())
+    }
+}
+
+pub fn non_blank(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.trim().is_empty())
+}

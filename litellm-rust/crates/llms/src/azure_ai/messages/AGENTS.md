@@ -12,8 +12,8 @@
 - `secret_names` lists every env name the adapter reads
 - A forwarded `x-api-key` or a non-blank `Authorization: Bearer` (an Entra ID token) is the credential, and the adapter adds no key on top of it
 - The Azure key goes in `x-api-key`, not Azure's usual `api-key`
-- The adapter removes `cache_control.scope` from system and message blocks
-- Scope removal and system folding stay idempotent; the current adapter folds all system-role turns into top-level `system`
+- `PARTNER_HOST_REQUEST_POLICY` strips `x-anthropic-billing-header` text blocks from `system` and `cache_control.scope` everywhere, as Python's `should_strip_billing_metadata` and `_remove_scope_from_cache_control` do
+- Removing `cache_control.scope` and normalizing system turns stay idempotent; only leading system turns are hoisted, later turns follow model capabilities, and top-level strings normalize to blocks
 
 # gotchas
 

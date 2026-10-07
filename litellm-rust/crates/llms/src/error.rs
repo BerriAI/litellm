@@ -19,6 +19,8 @@ pub enum Error {
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ErrorDetail {
+    #[error("upstream HTTP {status}: {message}")]
+    Http { status: u16, message: String },
     #[error("{0}")]
     Message(String),
     #[error("invalid {subject}: {source}")]

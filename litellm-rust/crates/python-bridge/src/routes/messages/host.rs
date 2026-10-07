@@ -185,6 +185,7 @@ impl MessagesPythonHost {
         Ok(MessagesShaping {
             capabilities,
             settings,
+            ..MessagesShaping::default()
         })
     }
 
