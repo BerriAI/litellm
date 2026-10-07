@@ -17,7 +17,12 @@ from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
-from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
+from litellm.types.caching import (
+    DEFAULT_CACHING_SUPPORTED_CALL_TYPES,
+    EMBEDDING_CACHE_FORMAT_VERSION,
+    LiteLLMCacheType,
+    SemanticCacheScope,
+)
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
@@ -1012,3 +1017,21 @@ def test_completion_past_max_messages_is_neither_served_from_nor_written_to_the_
     assert answer(four, "four second") == "four first", "a 4-message repeat missed the cache"
     assert answer(five, "five first") == "five first"
     assert answer(five, "five second") == "five second", "a 5-message repeat was served from the cache"
+
+
+def test_default_supported_call_types_are_not_shared_between_cache_instances():
+    first = Cache(type=LiteLLMCacheType.LOCAL)
+    second = Cache(type=LiteLLMCacheType.LOCAL)
+
+    assert first.supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
+
+    removed = first.supported_call_types[0]
+    first.supported_call_types.remove(removed)
+
+    assert removed in second.supported_call_types
+
+
+def test_supported_call_types_none_is_preserved():
+    cache = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=None)
+
+    assert cache.supported_call_types is None
