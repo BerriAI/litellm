@@ -23,7 +23,7 @@ from litellm.utils import (
     get_secret,
 )
 
-from ..common_utils import AWSEventStreamDecoder, SagemakerError
+from ..common_utils import AWSEventStreamDecoder, SagemakerError, with_inference_component_hint
 from ..embedding.transformation import SagemakerEmbeddingConfig
 from .transformation import SagemakerConfig
 
@@ -291,9 +291,9 @@ class SagemakerLLM(BaseAWSLLM):
         except Exception as e:
             verbose_logger.error("Sagemaker error %s", str(e))
             status_code: Final = getattr(e, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode", 500)
-            error_message = getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
-            if "Inference Component Name header is required" in error_message:
-                error_message += "\n pass in via `litellm.completion(..., model_id={InferenceComponentName})`"
+            error_message: Final = with_inference_component_hint(
+                getattr(e, "response", {}).get("Error", {}).get("Message", str(e)), call="litellm.completion"
+            )
             raise SagemakerError(status_code=status_code, message=error_message)
 
         return sagemaker_config.transform_response(
@@ -514,9 +514,7 @@ class SagemakerLLM(BaseAWSLLM):
                 )
                 raise e
         except Exception as e:
-            error_message = f"{e}"
-            if "Inference Component Name header is required" in error_message:
-                error_message += "\n pass in via `litellm.completion(..., model_id={InferenceComponentName})`"
+            error_message: Final = with_inference_component_hint(str(e), call="litellm.completion")
             raise SagemakerError(status_code=500, message=error_message)
         return sagemaker_config.transform_response(
             model=model,
@@ -578,6 +576,8 @@ class SagemakerLLM(BaseAWSLLM):
         provider_config: Final = SagemakerEmbeddingConfig.get_model_config(model)
         endpoint_name: Final = SagemakerEmbeddingConfig.get_endpoint_name(model)
         inference_component_name: Final = optional_params.get("model_id")
+        if inference_component_name is not None and not isinstance(inference_component_name, str):
+            raise SagemakerError(status_code=400, message="model_id must be the inference component name as a string")
         body_params: Final = {k: v for k, v in optional_params.items() if k != "model_id"}
         request_data: Final = provider_config.transform_embedding_request(endpoint_name, input, body_params, {})
         data: Final = json.dumps(request_data).encode("utf-8")
@@ -608,7 +608,9 @@ class SagemakerLLM(BaseAWSLLM):
             response = client.invoke_endpoint(**invoke_kwargs)
         except Exception as e:
             status_code: Final = getattr(e, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode", 500)
-            error_message: Final = getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
+            error_message: Final = with_inference_component_hint(
+                getattr(e, "response", {}).get("Error", {}).get("Message", str(e)), call="litellm.embedding"
+            )
             raise SagemakerError(status_code=status_code, message=error_message)
 
         response = json.loads(response["Body"].read().decode("utf8"))

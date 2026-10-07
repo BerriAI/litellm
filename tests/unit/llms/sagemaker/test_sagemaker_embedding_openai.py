@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from botocore.exceptions import ClientError
 
 import litellm
 from litellm import Router
@@ -147,7 +148,9 @@ class TestSagemakerOpenAIEmbeddingConfig:
         assert (result.usage.prompt_tokens, result.usage.total_tokens) == (0, 0)
 
     def test_response_keeps_base64_embedding_strings(self):
-        raw = httpx.Response(200, json={"data": [{"index": 0, "embedding": "AACAPwAAAEA="}], "usage": {"prompt_tokens": 2}})
+        raw = httpx.Response(
+            200, json={"data": [{"index": 0, "embedding": "AACAPwAAAEA="}], "usage": {"prompt_tokens": 2}}
+        )
 
         result = self.config.transform_embedding_response(
             model="my-embed-endpoint",
@@ -237,6 +240,63 @@ class TestSagemakerEmbeddingInferenceComponents:
 
         assert "InferenceComponentName" not in kwargs
         assert json.loads(kwargs["Body"]) == {"inputs": ["hello", "good morning"]}
+
+    @pytest.mark.parametrize(
+        ("sagemaker_message", "expected_hint"),
+        [
+            (
+                "Inference Component Name header is not allowed for endpoints to which you dont plan to deploy"
+                " inference components. Please remove the Inference Component Name header and try again.",
+                "remove `model_id` from this deployment, the endpoint has no inference components",
+            ),
+            (
+                "Inference Component Name header is required for this endpoint.",
+                "pass in via `litellm.embedding(..., model_id={InferenceComponentName})`",
+            ),
+            ('Received server error (500) from model with message "boom".', ""),
+        ],
+    )
+    def test_component_errors_keep_status_and_name_model_id(self, sagemaker_message: str, expected_hint: str):
+        session, client = fake_sagemaker_session(OPENAI_RESPONSE)
+        client.invoke_endpoint.side_effect = ClientError(
+            {
+                "Error": {"Code": "ValidationError", "Message": sagemaker_message},
+                "ResponseMetadata": {"HTTPStatusCode": 400},
+            },
+            "InvokeEndpoint",
+        )
+        with patch("boto3.Session", return_value=session), pytest.raises(SagemakerError) as raised:
+            self.sagemaker_llm.embedding(
+                model="my-embed-endpoint",
+                input=["hello"],
+                model_response=EmbeddingResponse(),
+                print_verbose=print,
+                encoding=None,
+                logging_obj=MagicMock(),
+                optional_params={"aws_region_name": "us-east-1", "model_id": "stray-component"},
+            )
+
+        assert raised.value.status_code == 400
+        assert raised.value.message == (
+            sagemaker_message + "\n " + expected_hint if expected_hint else sagemaker_message
+        )
+
+    def test_non_string_model_id_is_rejected_before_the_call(self):
+        session, client = fake_sagemaker_session(OPENAI_RESPONSE)
+        with patch("boto3.Session", return_value=session), pytest.raises(SagemakerError) as raised:
+            self.sagemaker_llm.embedding(
+                model="openai/my-embed-endpoint",
+                input=["hello"],
+                model_response=EmbeddingResponse(),
+                print_verbose=print,
+                encoding=None,
+                logging_obj=MagicMock(),
+                optional_params={"aws_region_name": "us-east-1", "model_id": ["my-component"]},
+            )
+
+        assert raised.value.status_code == 400
+        assert "model_id" in raised.value.message
+        client.invoke_endpoint.assert_not_called()
 
 
 SDK_KWARGS = {

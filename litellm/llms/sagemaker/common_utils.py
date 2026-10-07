@@ -43,6 +43,14 @@ def get_sagemaker_response_stream_shape():
     return _load_sagemaker_response_stream_shape()
 
 
+def with_inference_component_hint(error_message: str, call: str) -> str:
+    if "Inference Component Name header is required" in error_message:
+        return f"{error_message}\n pass in via `{call}(..., model_id={{InferenceComponentName}})`"
+    if "Inference Component Name header is not allowed" in error_message:
+        return f"{error_message}\n remove `model_id` from this deployment, the endpoint has no inference components"
+    return error_message
+
+
 class SagemakerError(BaseLLMException):
     def __init__(
         self,
