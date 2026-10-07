@@ -24,9 +24,9 @@ describe("filterRuns", () => {
   it.each(["ok", "unset"] as const)("keeps %s runs with recovered tool errors in non-failed filters", (status) => {
     const recovered = run({ status, error_count: 8 });
     expect(filterRuns([recovered], "status:error")).toEqual([]);
-    expect(filterRuns([recovered], "", { agent: "", status: "error" })).toEqual([]);
+    expect(filterRuns([recovered], "", "error")).toEqual([]);
     expect(filterRuns([recovered], "status:ok")).toEqual([recovered]);
-    expect(filterRuns([recovered], "", { agent: "", status: "ok" })).toEqual([recovered]);
+    expect(filterRuns([recovered], "", "ok")).toEqual([recovered]);
     expect(filterRuns([recovered], "-status:error")).toEqual([recovered]);
     expect(fieldValues(RUN_INDEX, [recovered], "status")).toEqual(["ok"]);
   });
@@ -58,13 +58,10 @@ describe("RUN_INDEX values", () => {
 
 it("matches a run the server sent with no agent names by its service", () => {
   const legacy = run({ trace_id: "ddd444", service: "claude-agent-sdk-demo", agent_names: [] });
-  expect(filterRuns([legacy], "", { agent: "claude-agent-sdk-demo", status: "all" })).toEqual([legacy]);
   expect(filterRuns([legacy], "agent:claude-agent-sdk-demo")).toEqual([legacy]);
 });
 
-it("combines quick filters with search and treats agent names literally", () => {
-  const selected = filterRuns(runs, "vector", { agent: "researcher", status: "error" });
-  expect(selected.map((run) => run.trace_id)).toEqual(["bbb222"]);
-  expect(filterRuns(runs, "vector", { agent: "triage", status: "all" })).toEqual([]);
-  expect(filterRuns(runs, "", { agent: "research*", status: "all" })).toEqual([]);
+it("combines the status quick filter with search", () => {
+  expect(filterRuns(runs, "vector", "error").map((run) => run.trace_id)).toEqual(["bbb222"]);
+  expect(filterRuns(runs, "vector", "ok")).toEqual([]);
 });
