@@ -19,7 +19,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -63,7 +63,7 @@ def _optional_attr_sequence(obj: object, name: str) -> Sequence[object]:
 
 
 def _error_status_and_message(exc: Exception) -> tuple[int, str]:
-    if isinstance(exc, (BaseLLMException, MidStreamFallbackError)):
+    if isinstance(exc, (BaseLLMException, MidStreamFallbackError, ContextWindowExceededError)):
         return exc.status_code, exc.message
     return 500, str(exc) or "Upstream stream ended before completion"
 
