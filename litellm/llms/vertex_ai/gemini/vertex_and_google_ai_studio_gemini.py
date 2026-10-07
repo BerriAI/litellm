@@ -3345,7 +3345,7 @@ class ModelResponseIterator:
     def _apply_stream_usage_metadata(
         self,
         processed_chunk: GenerateContentResponseBody,
-        model_response: Any,
+        model_response: "ModelResponseStream",
         grounding_metadata: list[dict],
     ) -> Usage | None:
         if "usageMetadata" not in processed_chunk:
