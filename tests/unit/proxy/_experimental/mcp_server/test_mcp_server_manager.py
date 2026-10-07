@@ -16079,9 +16079,9 @@ class TestProtectedCredentialPreparation:
         caller: str | None,
     ) -> None:
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            create_tool_function,
             request_auth_header,
             request_extra_headers,
-            create_tool_function,
         )
 
         tool: Final = create_tool_function(

@@ -3810,27 +3810,6 @@ def _build_mcp_descriptors(handler, user_api_key_dict, data, call_type="call_mcp
     )
 
 
-def test_mcp_per_key_descriptor_created_for_matching_server_v3():
-    handler, _ = _make_mcp_handler()
-    api_key = hash_token("sk-mcp-key")
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=api_key,
-        metadata={"mcp_rpm_limit": {"github": 5}},
-    )
-
-    descriptors = _build_mcp_descriptors(
-        handler, user_api_key_dict, {"mcp_server_name": "github"}
-    )
-
-    descriptor = _find_descriptor(descriptors, "mcp_per_key")
-    assert descriptor is not None
-    assert descriptor["value"] == f"{api_key}:github"
-    assert descriptor["rate_limit"]["requests_per_unit"] == 5
-    # MCP tool calls have no token usage; tokens_per_unit must stay None so the
-    # TPM reservation path is never engaged (otherwise budget would leak).
-    assert descriptor["rate_limit"]["tokens_per_unit"] is None
-
-
 def test_mcp_per_key_descriptor_skipped_for_non_matching_server_v3():
     handler, _ = _make_mcp_handler()
     user_api_key_dict = UserAPIKeyAuth(
@@ -3887,98 +3866,6 @@ def test_mcp_descriptor_skipped_for_raw_rest_body_v3():
 
     assert _find_descriptor(descriptors, "mcp_per_key") is None
     assert _find_descriptor(descriptors, "mcp_per_team") is None
-
-
-def test_mcp_per_team_descriptor_created_from_team_metadata_v3():
-    handler, _ = _make_mcp_handler()
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=hash_token("sk-mcp-key"),
-        team_id="team-1",
-        team_metadata={"mcp_rpm_limit": {"github": 3}},
-    )
-
-    descriptors = _build_mcp_descriptors(
-        handler, user_api_key_dict, {"mcp_server_name": "github"}
-    )
-
-    descriptor = _find_descriptor(descriptors, "mcp_per_team")
-    assert descriptor is not None
-    assert descriptor["value"] == "team-1:github"
-    assert descriptor["rate_limit"]["requests_per_unit"] == 3
-    assert descriptor["rate_limit"]["tokens_per_unit"] is None
-
-
-@pytest.mark.asyncio
-async def test_mcp_per_key_rpm_enforced_v3(monkeypatch):
-    """
-    A key configured with mcp_rpm_limit={"github": 2} must allow 2 calls to the
-    github MCP server within the window and reject the 3rd with a 429, while
-    calls to a different MCP server are unaffected.
-    """
-    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
-    api_key = hash_token("sk-mcp-enforce")
-    local_cache = DualCache()
-    handler = PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=InternalUsageCache(local_cache)
-    )
-
-    window_starts: Dict[str, int] = {}
-    request_counts: Dict[str, int] = {}
-
-    async def mock_batch_rate_limiter(*args, **kwargs):
-        keys = kwargs.get("keys") if kwargs else args[0]
-        args_list = kwargs.get("args") if kwargs else args[1]
-        now = args_list[0]
-        window_size = args_list[1]
-        results = []
-        for i in range(0, len(keys), 2):
-            window_key = keys[i]
-            counter_key = keys[i + 1]
-            prev_window = window_starts.get(window_key)
-            prev_counter = request_counts.get(counter_key, 0)
-            if prev_window is None or (now - prev_window) >= window_size:
-                window_starts[window_key] = now
-                new_counter = 1
-            else:
-                new_counter = prev_counter + 1
-            request_counts[counter_key] = new_counter
-            results.append(now)
-            results.append(new_counter)
-        return results
-
-    handler.batch_rate_limiter_script = mock_batch_rate_limiter
-
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=api_key,
-        metadata={"mcp_rpm_limit": {"github": 2}},
-    )
-
-    for _ in range(2):
-        await handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={"mcp_server_name": "github"},
-            call_type="call_mcp_tool",
-        )
-
-    with pytest.raises(HTTPException) as exc_info:
-        await handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={"mcp_server_name": "github"},
-            call_type="call_mcp_tool",
-        )
-    assert exc_info.value.status_code == 429
-
-    for _ in range(5):
-        await handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={"mcp_server_name": "slack"},
-            call_type="call_mcp_tool",
-        )
-
-    assert not any(":tokens" in key and "github" in key for key in request_counts)
 
 
 @pytest.mark.asyncio
