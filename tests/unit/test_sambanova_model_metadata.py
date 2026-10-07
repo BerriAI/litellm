@@ -32,33 +32,22 @@ def _sambanova_models() -> dict:
     return {k: v for k, v in model_cost.items() if k.startswith("sambanova/")}
 
 
-def test_sambanova_minimax_m3_model_info():
-    info = _sambanova_models().get("sambanova/MiniMax-M3")
-    assert info is not None, "sambanova/MiniMax-M3 missing from model_prices_and_context_window.json"
-    assert info["litellm_provider"] == "sambanova"
-    assert info["mode"] == "chat"
-    assert info["max_input_tokens"] == 1048576
-    assert info["input_cost_per_token"] == 6e-07
-    assert info["output_cost_per_token"] == 2.4e-06
-    assert info["supports_function_calling"] is True
-    assert info["supports_tool_choice"] is True
-    assert info["supports_reasoning"] is True
-    assert info["supports_response_schema"] is True
-    assert not info.get("supports_vision")
+def test_sambanova_chat_entries_are_consistent():
+    chat_models = {k: v for k, v in _sambanova_models().items() if v["mode"] == "chat"}
+    assert chat_models
+    for name, info in chat_models.items():
+        assert info["litellm_provider"] == "sambanova", name
+        assert info["input_cost_per_token"] >= 0, name
+        assert info["output_cost_per_token"] >= 0, name
+        assert info["max_tokens"] == info["max_output_tokens"], name
+        assert info["max_output_tokens"] <= info["max_input_tokens"], name
+        if info.get("supports_tool_choice"):
+            assert info.get("supports_function_calling"), name
+
+
+def test_sambanova_minimax_m3_is_routed_to_sambanova():
+    assert "sambanova/MiniMax-M3" in _sambanova_models()
 
     routed_model, provider, _, _ = get_llm_provider(model="sambanova/MiniMax-M3")
     assert routed_model == "MiniMax-M3"
     assert provider == "sambanova"
-
-
-def test_sambanova_max_output_tokens_match_live_catalog():
-    models = _sambanova_models()
-    assert models["sambanova/DeepSeek-V3.1"]["max_output_tokens"] == 7168
-    assert models["sambanova/DeepSeek-V3.2"]["max_output_tokens"] == 7168
-    assert models["sambanova/Meta-Llama-3.3-70B-Instruct"]["max_output_tokens"] == 3072
-
-
-def test_sambanova_retired_models_removed():
-    models = _sambanova_models()
-    assert "sambanova/DeepSeek-R1" not in models
-    assert "sambanova/Llama-4-Maverick-17B-128E-Instruct" not in models

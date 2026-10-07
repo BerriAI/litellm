@@ -103,6 +103,23 @@ def test_integration_source_explicit_header_wins(monkeypatch):
     assert request["extra_headers"] == {"X-Integration-Source": "custom", "X-Other": "1"}
 
 
+def test_integration_source_removed_from_body_when_header_also_set():
+    request = _transform(
+        {
+            "extra_headers": {"X-Integration-Source": "custom"},
+            "extra_body": {"integration_source": "ignored", "other": 1},
+        }
+    )
+    assert request["extra_headers"] == {"X-Integration-Source": "custom"}
+    assert request["extra_body"] == {"other": 1}
+
+
+def test_integration_source_header_matched_case_insensitively(monkeypatch):
+    monkeypatch.setenv("SAMBANOVA_INTEGRATION_SOURCE", "langflow")
+    request = _transform({"extra_headers": {"x-integration-source": "custom"}})
+    assert request["extra_headers"] == {"x-integration-source": "custom"}
+
+
 def test_content_list_converted_to_string():
     messages = [{"role": "user", "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}]
     out = SambanovaConfig()._transform_messages(messages, model="MiniMax-M3")
