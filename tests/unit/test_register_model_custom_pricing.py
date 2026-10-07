@@ -1019,3 +1019,21 @@ def test_completion_registers_cost_per_second_pricing():
         assert litellm.model_cost[model_key]["cost_per_second"] == 0.02
     finally:
         _restore_model_cost_entries(original_entries)
+
+
+def test_update_model_cost():
+    try:
+        litellm.register_model(
+            {
+                "gpt-4": {
+                    "max_tokens": 8192,
+                    "input_cost_per_token": 0.00002,
+                    "output_cost_per_token": 0.00006,
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                },
+            }
+        )
+        assert litellm.model_cost["gpt-4"]["input_cost_per_token"] == 0.00002
+    except Exception as e:
+        pytest.fail(f"An error occurred: {e}")
