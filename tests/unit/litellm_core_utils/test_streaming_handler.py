@@ -6,7 +6,7 @@ import pytest
 
 import asyncio
 import traceback
-from typing import Final, Optional
+from typing import Final, NoReturn, Optional
 
 import litellm
 from litellm import verbose_logger
@@ -869,10 +869,10 @@ async def test_bridged_stream_mid_stream_fallback_error_is_not_wrapped_again(log
         is_pre_first_chunk=True,
     )
 
-    async def _raise_inner_error(**kwargs):
+    async def _raise_inner_error(**kwargs: object) -> NoReturn:
         raise inner_error
 
-    response = CustomStreamWrapper(
+    response: Final = CustomStreamWrapper(
         completion_stream=None,
         model="gpt-6.1-sol",
         logging_obj=logging_obj,
