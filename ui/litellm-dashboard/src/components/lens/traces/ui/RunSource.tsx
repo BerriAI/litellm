@@ -15,20 +15,27 @@ type Source = NonNullable<TraceSummary["source"]>;
 
 interface SourceApp {
   readonly label: string;
+  readonly link: string;
   readonly logo: string | null;
 }
 
 const APPS: readonly (SourceApp & { readonly host: RegExp })[] = [
-  { host: /(^|\.)slack\.com$/, label: "Slack", logo: slackLogo.src },
-  { host: /(^|\.)linear\.app$/, label: "Linear", logo: linearLogo.src },
-  { host: /(^|\.)github\.com$/, label: "GitHub", logo: githubLogo.src },
-  { host: /(^|\.)notion\.(so|site)$/, label: "Notion", logo: notionLogo.src },
+  { host: /(^|\.)slack\.com$/, label: "Slack", link: "Slack thread", logo: slackLogo.src },
+  { host: /(^|\.)linear\.app$/, label: "Linear", link: "Linear issue", logo: linearLogo.src },
+  { host: /(^|\.)github\.com$/, label: "GitHub", link: "GitHub", logo: githubLogo.src },
+  { host: /(^|\.)notion\.(so|site)$/, label: "Notion", link: "Notion page", logo: notionLogo.src },
 ];
 
 export function sourceApp(url: string): SourceApp | null {
   const parsed = URL.canParse(url) ? new URL(url) : null;
   if (parsed?.protocol !== "https:") return null;
-  return APPS.find((app) => app.host.test(parsed.hostname)) ?? { label: parsed.hostname, logo: null };
+  return (
+    APPS.find((app) => app.host.test(parsed.hostname)) ?? {
+      label: parsed.hostname,
+      link: parsed.hostname,
+      logo: null,
+    }
+  );
 }
 
 function AppMark({ app, className }: { app: SourceApp; className: string }) {
@@ -50,10 +57,10 @@ export function RunSourceLink({ source }: { source: Source }) {
         href={source.url}
         target="_blank"
         rel="noopener noreferrer"
-        aria-label={`Open source in ${app.label}`}
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-muted/60 transition-colors hover:bg-muted active:scale-[0.97]"
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-muted/60 px-2 py-0.5 font-medium text-foreground transition-colors hover:bg-muted active:scale-[0.97]"
       >
-        <AppMark app={app} className="size-4 shrink-0" />
+        <AppMark app={app} className="size-3 shrink-0" />
+        {app.link}
       </HoverCardTrigger>
       <HoverCardContent align="start" className="w-72 p-3">
         <a href={source.url} target="_blank" rel="noopener noreferrer" className="flex flex-col gap-1.5">
