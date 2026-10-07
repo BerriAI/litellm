@@ -9,6 +9,15 @@ from pydantic import ConfigDict, Field
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
+class TraceAgentsRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        frozen=True,
+    )
+
+    start_ms: int | None = Field(None, description="Window start, unix ms. Default: 24h ago")
+    end_ms: int | None = Field(None, description="Window end, unix ms. Default: now")
+
+
 class TraceDetailRequest(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
@@ -36,6 +45,11 @@ class TraceListRequest(LiteLLMBaseModel):
     start_ms: int | None = Field(None, description="Window start, unix ms. Default: 24h ago")
     end_ms: int | None = Field(None, description="Window end, unix ms. Default: now")
     cursor: str | None = Field(None, max_length=512)
+    agent: str | None = Field(
+        None,
+        description="Only runs this agent took part in, as named in TraceAgentList",
+        max_length=256,
+    )
 
 
 class TraceQueryRequest(LiteLLMBaseModel):
@@ -56,6 +70,11 @@ class TraceSpanRequest(LiteLLMBaseModel):
 
 
 TraceWireRequests: TypeAlias = Annotated[
-    TraceDetailRequest | TraceErrorPageRequest | TraceListRequest | TraceQueryRequest | TraceSpanRequest,
+    TraceAgentsRequest
+    | TraceDetailRequest
+    | TraceErrorPageRequest
+    | TraceListRequest
+    | TraceQueryRequest
+    | TraceSpanRequest,
     Field(..., title="TraceWireRequests"),
 ]
