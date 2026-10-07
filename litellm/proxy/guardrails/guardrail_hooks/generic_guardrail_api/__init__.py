@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 from .generic_guardrail_api import GenericGuardrailAPI
@@ -20,7 +21,9 @@ def _get_config_value(litellm_params: "LitellmParams", optional_params: object, 
     return getattr(litellm_params, attribute_name, None)
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(
+    litellm_params: "LitellmParams", guardrail: "Guardrail", *, async_handler: AsyncHTTPHandler | None = None
+):
     import litellm
 
     optional_params: Final = getattr(litellm_params, "optional_params", None)
@@ -36,10 +39,16 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        async_handler=async_handler,
         streaming_end_of_stream_only=_get_config_value(litellm_params, optional_params, "streaming_end_of_stream_only"),
         streaming_sampling_rate=_get_config_value(litellm_params, optional_params, "streaming_sampling_rate"),
         streaming_transform_mode=_get_config_value(litellm_params, optional_params, "streaming_transform_mode"),
         timeout=litellm_params.timeout,
+        send_images=_get_config_value(litellm_params, optional_params, "send_images"),
+        exclude_payload_fields=_get_config_value(litellm_params, optional_params, "exclude_payload_fields"),
+        max_messages=_get_config_value(litellm_params, optional_params, "max_messages"),
+        max_text_chars=_get_config_value(litellm_params, optional_params, "max_text_chars"),
+        strip_patterns=_get_config_value(litellm_params, optional_params, "strip_patterns"),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(_generic_guardrail_api_callback)

@@ -8,8 +8,13 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
+import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final
+
+from pydantic import JsonValue
+from pydantic_core import to_jsonable_python
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
@@ -144,6 +149,48 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
         if not isinstance(message, dict):
             continue
         yield from _iter_text_parts_in_content(message.get("content"))
+
+
+def image_part_url(part: object) -> str | None:
+    match part:
+        case {"type": "image_url", "image_url": str() as url}:
+            return url
+        case {"type": "image_url", "image_url": {"url": str() as url}}:
+            return url
+        case _:
+            return None
+
+
+def map_content_image_urls(content: JsonValue, transform: Callable[[str], str]) -> JsonValue:
+    if not isinstance(content, list):
+        return content
+    return [_image_part_with_mapped_url(part, transform) for part in content]
+
+
+def _image_part_with_mapped_url(part: JsonValue, transform: Callable[[str], str]) -> JsonValue:
+    if not isinstance(part, dict) or part.get("type") != "image_url":
+        return part
+    image_url: Final = part.get("image_url")
+    if isinstance(image_url, str):
+        return {**part, "image_url": transform(image_url)}
+    if not isinstance(image_url, dict):
+        return part
+    url: Final = image_url.get("url")
+    if not isinstance(url, str):
+        return part
+    return {**part, "image_url": {**image_url, "url": transform(url)}}
+
+
+def map_messages_image_urls(messages: JsonValue, transform: Callable[[str], str]) -> JsonValue:
+    if not isinstance(messages, list):
+        return messages
+    return [_message_with_mapped_image_urls(message, transform) for message in messages]
+
+
+def _message_with_mapped_image_urls(message: JsonValue, transform: Callable[[str], str]) -> JsonValue:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    return {**message, "content": map_content_image_urls(message["content"], transform)}
 
 
 def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
@@ -307,3 +354,18 @@ def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
         role = message.get("role", "user") or "user"
         flattened.append({"role": role, "content": text})
     return flattened
+
+
+def _null_free_object(pairs: Sequence[tuple[str, object]]) -> Mapping[str, object]:
+    return MappingProxyType({key: item for key, item in pairs if item is not None})
+
+
+def _null_free(value: object) -> object:
+    normalized: Final[object] = json.loads(  # pyright: ignore[reportAny]  # stdlib parse of our own json.dumps output
+        json.dumps(value, default=to_jsonable_python), object_pairs_hook=_null_free_object
+    )
+    return normalized
+
+
+def same_json_ignoring_nulls(left: object, right: object) -> bool:
+    return _null_free(left) == _null_free(right)

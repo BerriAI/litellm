@@ -1795,6 +1795,11 @@ def _should_skip_optional_params(field_name: str, field_annotation: object) -> b
     return False
 
 
+def _is_ui_hidden(field: "FieldInfo") -> bool:
+    extra: Final = field.json_schema_extra
+    return isinstance(extra, dict) and extra.get("ui_hidden") is True
+
+
 def _unwrap_optional_type(field_annotation: object) -> object:
     """Unwrap Optional types to get the actual type."""
     if get_origin(field_annotation) is Union or get_origin(field_annotation) is UnionType:
@@ -1890,6 +1895,9 @@ def _extract_fields_recursive(
 
         # Skip optional_params if it's not meaningfully overridden
         if _should_skip_optional_params(field_name=field_name, field_annotation=field_annotation):
+            continue
+
+        if _is_ui_hidden(field):
             continue
 
         # Handle Optional types and get the actual type

@@ -1,7 +1,7 @@
 import json
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,6 +17,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     RegisterGuardrailRequest,
     TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
+    _get_fields_from_model,
     apply_guardrail,
     approve_guardrail_submission,
     create_guardrail,
@@ -36,6 +37,7 @@ from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPIOptionalParams
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -559,6 +561,19 @@ def test_get_guardrails_list_response_includes_guardrail_id():
     )
 
     assert response.guardrails[0].guardrail_id == "stable-config-id"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("exclude_payload_fields", ["request_headers"]), ("strip_patterns", [r"<ts>\d+</ts>"])],
+    ids=["exclude_payload_fields", "strip_patterns"],
+)
+def test_a_config_only_list_option_stays_out_of_the_form_but_still_validates(field, value):
+    form_fields: Final = _get_fields_from_model(GenericGuardrailAPIOptionalParams)
+
+    assert field not in form_fields
+    assert {"send_images", "max_messages", "max_text_chars"} <= set(form_fields)
+    assert getattr(GenericGuardrailAPIOptionalParams(**{field: value}), field) == tuple(value)
 
 
 def test_get_provider_specific_params():
