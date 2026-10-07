@@ -29,8 +29,8 @@ async def test_scheduler_diff_model_names():
     await scheduler.add_request(item1)
     await scheduler.add_request(item2)
 
-    assert await scheduler.poll(id="10", model_name="gpt-3.5-turbo", health_deployments=[{"key": "value"}]) == True
-    assert await scheduler.poll(id="11", model_name="gpt-4", health_deployments=[{"key": "value"}]) == True
+    assert await scheduler.poll(request=item1, health_deployments=[{"key": "value"}]) == True
+    assert await scheduler.poll(request=item2, health_deployments=[{"key": "value"}]) == True
 
 
 @pytest.mark.asyncio
@@ -53,7 +53,7 @@ async def test_scheduler_poll_persists_queue_to_cache():
     await scheduler.add_request(item1)
     await scheduler.add_request(item2)
 
-    await scheduler.poll(id="10", model_name="gpt-3.5-turbo", health_deployments=[])
+    await scheduler.poll(request=item1, health_deployments=[])
 
     queue_key = f"{SchedulerCacheKeys.queue.value}:{item1.model_name}"
     updated_queue = redis_cache.store[queue_key]
@@ -153,28 +153,47 @@ async def test_poll_admits_request_missing_from_queue_while_a_deployment_is_heal
     scheduler: Final = Scheduler()
 
     assert await scheduler.poll(
-        id="erased-by-concurrent-write", model_name="sched-model", health_deployments=[{"model_info": {"id": "a"}}]
+        request=FlowItem(priority=1, request_id="erased-by-concurrent-write", model_name="sched-model"),
+        health_deployments=[{"model_info": {"id": "a"}}],
     )
 
 
 @pytest.mark.asyncio
 async def test_poll_during_cooldown_admits_only_the_head_of_the_queue():
     scheduler: Final = Scheduler()
-    await scheduler.add_request(FlowItem(priority=2, request_id="later", model_name="sched-model"))
-    await scheduler.add_request(FlowItem(priority=1, request_id="head", model_name="sched-model"))
+    later: Final = FlowItem(priority=2, request_id="later", model_name="sched-model")
+    head: Final = FlowItem(priority=1, request_id="head", model_name="sched-model")
+    await scheduler.add_request(later)
+    await scheduler.add_request(head)
 
-    assert not await scheduler.poll(id="later", model_name="sched-model", health_deployments=[])
-    assert await scheduler.poll(id="head", model_name="sched-model", health_deployments=[])
+    assert not await scheduler.poll(request=later, health_deployments=[])
+    assert await scheduler.poll(request=head, health_deployments=[])
     assert await scheduler.get_queue("sched-model") == [(2, "later")]
 
 
 @pytest.mark.asyncio
-async def test_poll_during_cooldown_admits_a_request_a_concurrent_writer_erased():
+async def test_poll_during_cooldown_re_enqueues_a_request_a_concurrent_writer_erased_behind_the_head():
     scheduler: Final = Scheduler()
-    await scheduler.add_request(FlowItem(priority=0, request_id="still-queued", model_name="sched-model"))
+    still_queued: Final = FlowItem(priority=0, request_id="still-queued", model_name="sched-model")
+    erased: Final = FlowItem(priority=1, request_id="erased-by-concurrent-write", model_name="sched-model")
+    await scheduler.add_request(still_queued)
 
-    assert await scheduler.poll(id="erased-by-concurrent-write", model_name="sched-model", health_deployments=[])
-    assert await scheduler.get_queue("sched-model") == [(0, "still-queued")]
+    assert not await scheduler.poll(request=erased, health_deployments=[])
+    assert await scheduler.get_queue("sched-model") == [(0, "still-queued"), (1, "erased-by-concurrent-write")]
+    assert await scheduler.poll(request=still_queued, health_deployments=[])
+    assert await scheduler.poll(request=erased, health_deployments=[])
+    assert await scheduler.get_queue("sched-model") == []
+
+
+@pytest.mark.asyncio
+async def test_poll_during_cooldown_admits_an_erased_request_that_outranks_the_queue():
+    scheduler: Final = Scheduler()
+    await scheduler.add_request(FlowItem(priority=2, request_id="still-queued", model_name="sched-model"))
+
+    assert await scheduler.poll(
+        request=FlowItem(priority=0, request_id="erased-urgent", model_name="sched-model"), health_deployments=[]
+    )
+    assert await scheduler.get_queue("sched-model") == [(2, "still-queued")]
 
 
 class _ExpiringCache:
@@ -226,13 +245,15 @@ async def test_second_replica_enqueues_behind_a_queue_decoded_from_redis():
     redis_cache: Final = _JsonRoundTripRedisCache()
     replica_a: Final = Scheduler(redis_cache=redis_cache)
     replica_b: Final = Scheduler(redis_cache=redis_cache)
-    await replica_a.add_request(FlowItem(priority=1, request_id="waiting-on-a", model_name="sched-model"))
+    waiting_on_a: Final = FlowItem(priority=1, request_id="waiting-on-a", model_name="sched-model")
+    urgent_on_b: Final = FlowItem(priority=0, request_id="urgent-on-b", model_name="sched-model")
+    await replica_a.add_request(waiting_on_a)
 
-    await replica_b.add_request(FlowItem(priority=0, request_id="urgent-on-b", model_name="sched-model"))
+    await replica_b.add_request(urgent_on_b)
 
     assert await replica_b.get_queue("sched-model") == [(0, "urgent-on-b"), (1, "waiting-on-a")]
-    assert await replica_b.poll(id="urgent-on-b", model_name="sched-model", health_deployments=[])
-    assert await replica_b.poll(id="waiting-on-a", model_name="sched-model", health_deployments=[])
+    assert await replica_b.poll(request=urgent_on_b, health_deployments=[])
+    assert await replica_b.poll(request=waiting_on_a, health_deployments=[])
     await replica_b.remove_request(request_id="waiting-on-a", model_name="sched-model")
     assert await replica_b.get_queue("sched-model") == []
 

@@ -59,7 +59,7 @@ class Scheduler:
         # save the queue
         await self.save_queue(queue=queue, model_name=request.model_name)
 
-    async def poll(self, id: str, model_name: str, health_deployments: Sequence[object]) -> bool:
+    async def poll(self, request: FlowItem, health_deployments: Sequence[object]) -> bool:
         """
         Return if request can be processed.
 
@@ -67,28 +67,32 @@ class Scheduler:
         - True:
             * If healthy deployments are available
             * OR If request at the top of queue
-            * OR If the queue no longer holds the request (its cache key expired or a concurrent
-              writer erased the entry), since nothing can order it any more
         - False:
             * If no healthy deployments available
             * AND request not at the top of queue
+
+        A request the queue no longer holds (its cache key expired or a concurrent writer erased the entry)
+        is put back at its priority so it keeps its place in the order instead of failing or jumping ahead
         """
         print_verbose(f"len(health_deployments): {len(health_deployments)}")
         if len(health_deployments) > 0:
             return True
 
-        queue: Final = await self.get_queue(model_name=model_name)
-        if all(entry[1] != id for entry in queue):
-            print_verbose(f"queue: {queue} no longer holds id={id}, admitting it")
-            return True
-
-        print_verbose(f"queue: {queue}, seeking id={id}")
-        if queue[0][1] != id:
+        queue: Final = await self.get_queue(model_name=request.model_name)
+        entry: Final = (request.priority, request.request_id)
+        print_verbose(f"queue: {queue}, seeking {entry}")
+        if entry not in queue:
+            print_verbose(f"queue no longer holds {entry}, re-enqueueing it")
+            heapq.heappush(queue, entry)
+            if queue[0] != entry:
+                await self.save_queue(queue=queue, model_name=request.model_name)
+                return False
+        elif queue[0] != entry:
             return False
 
         heapq.heappop(queue)
-        await self.save_queue(queue=queue, model_name=model_name)
-        print_verbose(f"Popped id: {id}")
+        await self.save_queue(queue=queue, model_name=request.model_name)
+        print_verbose(f"Popped id: {request.request_id}")
         return True
 
     async def wait_for_turn(
@@ -101,11 +105,7 @@ class Scheduler:
             await self.add_request(request=request)
             end_time: Final = time.monotonic() + timeout
             while time.monotonic() < end_time:
-                if await self.poll(
-                    id=request.request_id,
-                    model_name=request.model_name,
-                    health_deployments=await get_healthy_deployments(),
-                ):
+                if await self.poll(request=request, health_deployments=await get_healthy_deployments()):
                     return
                 await asyncio.sleep(self.polling_interval)
         finally:
