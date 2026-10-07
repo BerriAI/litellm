@@ -37,6 +37,7 @@ from litellm.proxy.lens.state import (
     cancel_job,
     claim_job,
     current_job,
+    due_at,
     end_job,
     merge_finding,
     next_scan_start,
@@ -89,6 +90,22 @@ def worker(team: str = "alpha", identity: str = "worker") -> Worker:
     return Worker(id=identity, name=identity, scope=Scope(team_id=team), last_seen=NOW)
 
 
+def lens_with_job(
+    status: Literal["queued", "running", "completed"],
+    lease_until: datetime | None = None,
+    *,
+    enabled: bool = True,
+    trigger: Literal["schedule", "manual"] = "schedule",
+) -> Lens:
+    original: Final = lens()
+    configured: Final = original.model_copy(
+        update={"settings": original.settings.model_copy(update={"enabled": enabled})}
+    )
+    queued: Final = queue_job(configured, NOW, "job", trigger=trigger)
+    job: Final = queued.jobs[0].model_copy(update={"status": status, "lease_until": lease_until})
+    return queued.model_copy(update={"jobs": (job,)})
+
+
 def finding(execution: str) -> FindingDraft:
     return FindingDraft(
         title="Repeated failed searches",
@@ -96,6 +113,29 @@ def finding(execution: str) -> FindingDraft:
         check_id="retries",
         evidence=(Evidence(execution_id=execution, span_id="span", quote="timeout"),),
     )
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    (
+        pytest.param(lens(), NOW, id="idle-enabled"),
+        pytest.param(
+            lens().model_copy(update={"settings": lens().settings.model_copy(update={"enabled": False})}),
+            None,
+            id="idle-disabled",
+        ),
+        pytest.param(lens_with_job("queued", enabled=False, trigger="manual"), NOW, id="queued-manual-while-disabled"),
+        pytest.param(
+            lens_with_job("running", NOW + timedelta(minutes=5)),
+            NOW + timedelta(minutes=5),
+            id="running-with-lease",
+        ),
+        pytest.param(lens_with_job("running"), NOW, id="running-without-lease"),
+        pytest.param(lens_with_job("completed"), NOW, id="completed-only"),
+    ),
+)
+def test_due_at_matches_the_current_scheduling_state(candidate: Lens, expected: datetime | None) -> None:
+    assert due_at(candidate) == expected
 
 
 @pytest.mark.parametrize(
