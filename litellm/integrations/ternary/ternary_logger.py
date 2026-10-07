@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta, timezone
+from collections.abc import Sequence
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 import litellm
@@ -91,6 +92,44 @@ def _drop_days_before(data: pl.DataFrame, floor: datetime) -> pl.DataFrame:
     return kept
 
 
+def _canonical_day(raw: object) -> str | None:
+    """Return the zero-padded YYYY-MM-DD for a `date` value, or None when it is missing or unparseable."""
+    if isinstance(raw, date):
+        return raw.isoformat()
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed: Final = datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return parsed.date().isoformat()
+
+
+def _partition_by_day(data: pl.DataFrame) -> Sequence[tuple[str, pl.DataFrame]]:
+    """Split source rows by their UTC `date` (one upload per day); rows with no parseable date are dropped."""
+    if "date" not in data.columns:
+        verbose_logger.warning("Ternary export: source data has no `date` column; %d row(s) not exported", data.height)
+        return ()
+    days: Final[list[tuple[str, pl.DataFrame]]] = []  # mutable-ok: per-day parts, sorted and returned as a tuple
+    undated = 0  # rebind-ok: running count of rows dropped for an unusable `date`
+    for key, part in data.partition_by("date", as_dict=True, maintain_order=True).items():
+        partition_key: object = key[0]  # pyright: ignore[reportAny]  # polars partition keys are stubbed as Any
+        day = _canonical_day(partition_key)
+        if day is None:
+            undated += part.height
+            continue
+        days.append((day, part))
+    if undated:
+        verbose_logger.warning("Ternary export: dropped %d row(s) with a missing or unparseable `date`", undated)
+    return tuple(sorted(days, key=lambda entry: entry[0]))
+
+
+def _day_window(day: str, frequency: str) -> FocusTimeWindow:
+    """The single UTC day a per-day upload covers."""
+    start: Final = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return FocusTimeWindow(start_time=start, end_time=start + timedelta(days=1), frequency=frequency)
+
+
 def _parse_interval(raw: str | int | None) -> int | None:
     """Parse the export interval-seconds override; a non-numeric value is ignored."""
     if raw is None:
@@ -127,14 +166,25 @@ class _TernaryExportEngine(FocusExportEngine):
         if data.is_empty():
             verbose_logger.debug("Ternary export: no usage data for window %s", window)
             return
+        failed: Final[list[str]] = []  # mutable-ok: days whose upload failed, reported once after all days run
+        for day, day_data in _partition_by_day(data):
+            try:
+                await self._deliver_day(day_data, _day_window(day, window.frequency))
+            except Exception as e:  # noqa: BLE001  # one day's failure must not block the rest; logged and re-raised
+                verbose_logger.warning("Ternary export: upload for %s failed: %s", day, e)
+                failed.append(day)
+        if failed:
+            raise RuntimeError(f"Ternary export: {len(failed)} day(s) failed to upload: {', '.join(failed)}")
+
+    async def _deliver_day(self, data: pl.DataFrame, window: FocusTimeWindow) -> None:
         transformed: Final = self._transformer.transform(data)
         if transformed.is_empty():
-            verbose_logger.debug("Ternary export: normalized data empty for window %s", window)
+            verbose_logger.debug("Ternary export: normalized data empty for %s", window.start_time.date())
             return
         enriched: Final = _merge_token_tags(transformed, data)
         payload: Final = self._serializer.serialize(enriched)
         if not payload:
-            verbose_logger.debug("Ternary export: serializer returned empty payload")
+            verbose_logger.debug("Ternary export: serializer returned empty payload for %s", window.start_time.date())
             return
         await self._destination.deliver(
             content=payload,

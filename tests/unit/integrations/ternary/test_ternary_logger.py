@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import polars as pl
@@ -13,8 +16,11 @@ from litellm.integrations.focus.focus_logger import FocusLogger
 from litellm.integrations.ternary.ternary_logger import (
     TERNARY_USAGE_DATA_JOB_NAME,
     TernaryLogger,
+    _canonical_day,
+    _day_window,
     _drop_days_before,
     _merge_token_tags,
+    _partition_by_day,
     _TernaryExportEngine,
 )
 
@@ -282,12 +288,13 @@ def _fake_engine(*, transformed: pl.DataFrame, payload: bytes) -> MagicMock:
     engine._serializer.serialize = MagicMock(return_value=payload)
     engine._destination.deliver = AsyncMock()
     engine._build_filename = MagicMock(return_value="usage.csv")
+    engine._deliver_day = lambda data, window: _TernaryExportEngine._deliver_day(engine, data, window)
     return engine
 
 
 @pytest.mark.asyncio
 async def test_transform_enrich_deliver_enriches_tags_then_delivers():
-    data = pl.DataFrame({"Tags": [json.dumps({"team_id": "t1"})], "prompt_tokens": [7]})
+    data = pl.DataFrame({"date": ["2026-09-03"], "Tags": [json.dumps({"team_id": "t1"})], "prompt_tokens": [7]})
     transformed = pl.DataFrame({"Tags": [json.dumps({"team_id": "t1"})]})
     engine = _fake_engine(transformed=transformed, payload=b"csv-bytes")
 
@@ -299,6 +306,7 @@ async def test_transform_enrich_deliver_enriches_tags_then_delivers():
     kwargs = engine._destination.deliver.await_args.kwargs
     assert kwargs["content"] == b"csv-bytes"
     assert kwargs["filename"] == "usage.csv"
+    assert kwargs["time_window"].start_time.isoformat() == "2026-09-03T00:00:00+00:00"
 
 
 @pytest.mark.asyncio
@@ -306,6 +314,120 @@ async def test_transform_enrich_deliver_skips_empty_data():
     engine = _fake_engine(transformed=pl.DataFrame(), payload=b"")
     await _TernaryExportEngine._deliver_enriched(engine, pl.DataFrame(), _window())
     engine._destination.deliver.assert_not_awaited()
+
+
+def _real_engine() -> MagicMock:
+    from litellm.integrations.focus.serializers import FocusCsvSerializer
+    from litellm.integrations.focus.transformer import FocusTransformer
+
+    engine = MagicMock()
+    engine._transformer = FocusTransformer()
+    engine._serializer = FocusCsvSerializer()
+    engine._destination.deliver = AsyncMock()
+    engine._build_filename = MagicMock(side_effect=lambda w: f"usage_{w.start_time:%Y%m%d}.csv")
+    engine._deliver_day = lambda data, window: _TernaryExportEngine._deliver_day(engine, data, window)
+    return engine
+
+
+def _source_rows(dates: list[str]) -> pl.DataFrame:
+    n = len(dates)
+    return pl.DataFrame(
+        {
+            "date": dates,
+            "spend": [float(i + 1) for i in range(n)],
+            "api_key": [f"k{i}" for i in range(n)],
+            "api_key_alias": [f"a{i}" for i in range(n)],
+            "model": [f"m{i}" for i in range(n)],
+            "model_group": [f"g{i}" for i in range(n)],
+            "custom_llm_provider": ["anthropic"] * n,
+            "team_id": [f"t{i}" for i in range(n)],
+            "team_alias": [f"T{i}" for i in range(n)],
+            "api_requests": [1] * n,
+            "prompt_tokens": [10 * (i + 1) for i in range(n)],
+            "completion_tokens": [i for i in range(n)],
+            "cache_read_input_tokens": [0] * n,
+            "cache_creation_input_tokens": [0] * n,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_delivers_one_upload_per_utc_day_through_the_real_transformer():
+    engine = _real_engine()
+    data = _source_rows(["2026-10-06", "2026-10-05", "2026-10-06"])
+
+    await _TernaryExportEngine._deliver_enriched(engine, data, _window())
+
+    calls = engine._destination.deliver.await_args_list
+    assert [c.kwargs["time_window"].start_time.date().isoformat() for c in calls] == ["2026-10-05", "2026-10-06"]
+    for call, expected_rows, expected_day in ((calls[0], 1, "2026-10-05"), (calls[1], 2, "2026-10-06")):
+        window = call.kwargs["time_window"]
+        assert window.end_time - window.start_time == timedelta(days=1)
+        assert window.frequency == "daily"
+        rows = list(csv.DictReader(io.StringIO(call.kwargs["content"].decode("utf-8"))))
+        assert len(rows) == expected_rows
+        assert {row["ChargePeriodStart"] for row in rows} == {f"{expected_day}T00:00:00Z"}
+        assert all(json.loads(row["Tags"])["prompt_tokens"] for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_day_does_not_block_the_remaining_days():
+    engine = _real_engine()
+    data = _source_rows(["2026-10-04", "2026-10-05", "2026-10-06"])
+    attempted: list[str] = []
+
+    async def deliver(*, content, time_window, filename):
+        day = time_window.start_time.date().isoformat()
+        attempted.append(day)
+        if day == "2026-10-05":
+            raise RuntimeError("upload-url request for 2026-10-05 failed (500)")
+
+    engine._destination.deliver = deliver
+
+    with pytest.raises(RuntimeError, match=r"1 day\(s\) failed to upload: 2026-10-05"):
+        await _TernaryExportEngine._deliver_enriched(engine, data, _window())
+
+    assert attempted == ["2026-10-04", "2026-10-05", "2026-10-06"]
+
+
+def test_partition_by_day_sorts_canonicalizes_and_drops_undated_rows(caplog):
+    import logging
+    from datetime import date
+
+    from litellm._logging import verbose_logger
+
+    data = pl.DataFrame(
+        {"date": ["2026-10-06", None, "2026-10-05", "not-a-date", "2026-10-06"], "spend": [1.0, 2.0, 3.0, 4.0, 5.0]}
+    )
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        parts = _partition_by_day(data)
+
+    assert [(day, part["spend"].to_list()) for day, part in parts] == [
+        ("2026-10-05", [3.0]),
+        ("2026-10-06", [1.0, 5.0]),
+    ]
+    assert "dropped 2 row(s)" in caplog.text
+    assert _canonical_day(date(2026, 1, 2)) == "2026-01-02"
+    assert _canonical_day("2026-1-2") == "2026-01-02"
+    assert _canonical_day(20260102) is None
+
+
+def test_partition_by_day_warns_and_exports_nothing_without_a_date_column(caplog):
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        parts = _partition_by_day(pl.DataFrame({"spend": [1.0, 2.0]}))
+    assert parts == ()
+    assert "no `date` column; 2 row(s) not exported" in caplog.text
+
+
+def test_day_window_covers_exactly_one_utc_day():
+    window = _day_window("2026-10-06", "interval")
+    assert window.start_time.isoformat() == "2026-10-06T00:00:00+00:00"
+    assert window.end_time.isoformat() == "2026-10-07T00:00:00+00:00"
+    assert window.frequency == "interval"
 
 
 def test_pod_lock_key_is_ternary_specific():
@@ -350,7 +472,7 @@ async def test_export_all_delivers_with_all_window():
 
 @pytest.mark.asyncio
 async def test_transform_enrich_deliver_skips_when_transform_empty():
-    data = pl.DataFrame({"Tags": [json.dumps({"team_id": "t"})], "prompt_tokens": [1]})
+    data = pl.DataFrame({"date": ["2026-09-03"], "Tags": [json.dumps({"team_id": "t"})], "prompt_tokens": [1]})
     engine = _fake_engine(transformed=pl.DataFrame(), payload=b"")
     await _TernaryExportEngine._deliver_enriched(engine, data, _window())
     engine._destination.deliver.assert_not_awaited()
@@ -358,7 +480,7 @@ async def test_transform_enrich_deliver_skips_when_transform_empty():
 
 @pytest.mark.asyncio
 async def test_transform_enrich_deliver_skips_when_payload_empty():
-    data = pl.DataFrame({"Tags": [json.dumps({"team_id": "t"})]})
+    data = pl.DataFrame({"date": ["2026-09-03"], "Tags": [json.dumps({"team_id": "t"})]})
     transformed = pl.DataFrame({"Tags": [json.dumps({"team_id": "t"})]})
     engine = _fake_engine(transformed=transformed, payload=b"")
     await _TernaryExportEngine._deliver_enriched(engine, data, _window())
