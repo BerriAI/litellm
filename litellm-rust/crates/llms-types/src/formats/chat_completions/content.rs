@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use crate::recognized::Recognized;
 use crate::serde_compat::deserialize_present;
 
-use crate::formats::messages::CacheControl;
+use crate::formats::messages::{CacheControl, Citations, ContentSource};
 
 #[macro_rules_attribute::apply(wire_type)]
 #[serde(untagged)]
@@ -43,6 +43,29 @@ pub enum ChatContentPart {
     },
     File {
         file: Box<Recognized<ChatFile>>,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    Document {
+        source: Box<Recognized<ContentSource>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present"
+        )]
+        title: Option<Recognized<String>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present"
+        )]
+        context: Option<Recognized<String>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present"
+        )]
+        citations: Option<Recognized<Citations>>,
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
@@ -171,6 +194,7 @@ impl Recognized<ChatContentPart> {
                 | ChatContentPart::VideoUrl { extra, .. }
                 | ChatContentPart::InputAudio { extra, .. }
                 | ChatContentPart::File { extra, .. }
+                | ChatContentPart::Document { extra, .. }
                 | ChatContentPart::Refusal { extra, .. },
             ) => extra.get("text").and_then(Value::as_str),
             Self::Unrecognized(value) => value.get("text").and_then(Value::as_str),

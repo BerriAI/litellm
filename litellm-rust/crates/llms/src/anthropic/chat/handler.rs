@@ -5,9 +5,8 @@ use litellm_llms_types::formats::{
         ChatCompletionChunk, ChatCompletionThinkingBlock, ChatCompletionToolCallChunk,
         ChatCompletionsUsage,
     },
-    messages::streaming::{
-        MessagesContentBlock, MessagesContentBlockDelta, MessagesStreamEvent, MessagesStreamUsage,
-    },
+    messages::MessagesUsage,
+    messages::streaming::{MessagesContentBlock, MessagesContentBlockDelta, MessagesStreamEvent},
 };
 use serde_json::Value;
 
@@ -72,7 +71,7 @@ impl ModelResponseIterator {
         todo!()
     }
 
-    pub fn handle_usage(&mut self, _usage: MessagesStreamUsage) -> ChatCompletionsUsage {
+    pub fn handle_usage(&mut self, _usage: MessagesUsage) -> ChatCompletionsUsage {
         todo!()
     }
 

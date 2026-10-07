@@ -2,7 +2,10 @@ use litellm_llms_types::formats::messages::{Message, SystemPrompt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{Error, anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX};
+use crate::{
+    Error,
+    anthropic::{ANTHROPIC_OAUTH_TOKEN_PREFIX, common_utils::DEFAULT_ANTHROPIC_API_VERSION},
+};
 
 const COUNT_TOKENS_ENDPOINT: &str = "https://api.anthropic.com/v1/messages/count_tokens";
 const TOKEN_COUNTING_BETA: &str = "token-counting-2024-11-01";
@@ -84,7 +87,10 @@ impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
         vec![
             ("content-type", "application/json".to_string()),
             auth,
-            ("anthropic-version", "2023-06-01".to_string()),
+            (
+                "anthropic-version",
+                DEFAULT_ANTHROPIC_API_VERSION.to_string(),
+            ),
             ("anthropic-beta", TOKEN_COUNTING_BETA.to_string()),
         ]
     }

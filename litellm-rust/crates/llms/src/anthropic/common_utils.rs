@@ -6,10 +6,12 @@ use litellm_http::request::{
 };
 use litellm_llms_types::{
     formats::messages::{
-        ContentBlock, ContentBlockType, EffortLevel, Message, MessageContent, MessagesTool,
+        BlockContent, BuiltinMessagesTool, ContentBlock, ContentBlockPayload, ContentBlockType,
+        EffortLevel, Message, MessageContent, MessagesCompaction, MessagesTool,
     },
     providers::anthropic::{AnthropicBeta, BetaSet},
     recognized::Recognized,
+    serde_compat::Nullable,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -237,25 +239,34 @@ pub fn is_tool_search_used(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
     tools.into_iter().flatten().any(|tool| {
         matches!(
             tool,
-            Recognized::Known(
-                MessagesTool::ToolSearchRegex { .. } | MessagesTool::ToolSearchBm25 { .. }
-            )
+            Recognized::Known(MessagesTool::Builtin(
+                BuiltinMessagesTool::ToolSearchRegex(_) | BuiltinMessagesTool::ToolSearchBm25(_)
+            ))
         )
     })
 }
 
 pub fn has_advisor_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
-    tools
-        .into_iter()
-        .flatten()
-        .any(|tool| matches!(tool, Recognized::Known(MessagesTool::Advisor { .. })))
+    tools.into_iter().flatten().any(|tool| {
+        matches!(
+            tool,
+            Recognized::Known(MessagesTool::Builtin(BuiltinMessagesTool::Advisor(_)))
+        )
+    })
 }
 
-pub fn requires_native_compaction_beta(compaction: Option<&Value>, messages: &[Message]) -> bool {
-    compaction.is_some()
+pub fn requires_native_compaction_beta(
+    compaction: Option<&Recognized<MessagesCompaction>>,
+    messages: &[Message],
+) -> bool {
+    compaction.is_some_and(|value| !matches!(value, Recognized::Unrecognized(Value::Null)))
         || messages.iter().flat_map(Message::blocks).any(|block| {
             block.is_type(ContentBlockType::Compaction)
-                && block.signature.as_deref().is_some_and(|s| !s.is_empty())
+                && block
+                    .signature
+                    .as_ref()
+                    .and_then(Nullable::as_deref)
+                    .is_some_and(|s| !s.is_empty())
         })
 }
 
@@ -264,11 +275,13 @@ fn is_blank(text: Option<&str>) -> bool {
 }
 
 fn is_empty_text_block(block: &ContentBlock) -> bool {
-    block.is_type(ContentBlockType::Text) && is_blank(block.text.as_deref())
+    block.is_type(ContentBlockType::Text)
+        && is_blank(block.text.as_ref().and_then(Nullable::as_deref))
 }
 
 pub fn is_empty_thinking_block(block: &ContentBlock) -> bool {
-    block.is_type(ContentBlockType::Thinking) && is_blank(block.thinking.as_deref())
+    block.is_type(ContentBlockType::Thinking)
+        && is_blank(block.thinking.as_ref().and_then(Nullable::as_deref))
 }
 
 fn retain_blocks(messages: Vec<Message>, keep: impl Fn(&ContentBlock) -> bool) -> Vec<Message> {
@@ -322,20 +335,23 @@ fn normalized_if_changed(raw_id: Option<&str>) -> Option<String> {
 }
 
 fn sanitize_tool_use_id_block(block: ContentBlock) -> ContentBlock {
-    match block.block_type.as_ref() {
+    match block.block_type.as_ref().and_then(Nullable::value) {
         Some(ContentBlockType::ToolUse | ContentBlockType::ServerToolUse) => {
-            match normalized_if_changed(block.id.as_deref()) {
+            match normalized_if_changed(block.id.as_ref().and_then(Nullable::as_deref)) {
                 Some(id) => ContentBlock {
-                    id: Some(id),
+                    payload: ContentBlockPayload {
+                        id: Some(Nullable::Value(id)),
+                        ..block.payload
+                    },
                     ..block
                 },
                 None => block,
             }
         }
         Some(ContentBlockType::ToolResult) => {
-            match normalized_if_changed(block.tool_use_id.as_deref()) {
+            match normalized_if_changed(block.tool_use_id.as_ref().and_then(Nullable::as_deref)) {
                 Some(tool_use_id) => ContentBlock {
-                    tool_use_id: Some(tool_use_id),
+                    tool_use_id: Some(Nullable::Value(tool_use_id)),
                     ..block
                 },
                 None => block,
@@ -369,7 +385,10 @@ pub fn strip_provider_specific_fields(messages: Vec<Message>) -> Vec<Message> {
                     blocks
                         .into_iter()
                         .map(|block| ContentBlock {
-                            provider_specific_fields: None,
+                            payload: ContentBlockPayload {
+                                provider_specific_fields: None,
+                                ..block.payload
+                            },
                             ..block
                         })
                         .collect(),
@@ -382,9 +401,11 @@ pub fn strip_provider_specific_fields(messages: Vec<Message>) -> Vec<Message> {
 }
 
 pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
-    let field = match block.block_type.as_ref() {
-        Some(ContentBlockType::Thinking) => block.signature.as_deref(),
-        Some(ContentBlockType::RedactedThinking) => block.data.as_deref(),
+    let field = match block.block_type.as_ref().and_then(Nullable::value) {
+        Some(ContentBlockType::Thinking) => block.signature.as_ref().and_then(Nullable::as_deref),
+        Some(ContentBlockType::RedactedThinking) => {
+            block.data.as_ref().and_then(Nullable::as_deref)
+        }
         _ => None,
     };
     field.is_some_and(|value| value.starts_with(ENCRYPTED_REASONING_SIGNATURE_PREFIX))
@@ -396,15 +417,19 @@ pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> 
 
 fn is_advisor_use(block: &ContentBlock) -> bool {
     block.is_type(ContentBlockType::ServerToolUse)
-        && block.name.as_deref() == Some("advisor")
-        && block.id.as_deref().is_some_and(|id| !id.is_empty())
+        && block.name.as_ref().and_then(Nullable::as_deref) == Some("advisor")
+        && block
+            .id
+            .as_ref()
+            .and_then(Nullable::as_deref)
+            .is_some_and(|id| !id.is_empty())
 }
 
 pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()
         .map(|message| {
-            if message.role != "assistant" {
+            if message.role.as_str() != "assistant" {
                 return message;
             }
             let MessageContent::Blocks(blocks) = &message.content else {
@@ -413,7 +438,7 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
             let advisor_ids: Vec<&str> = blocks
                 .iter()
                 .filter(|block| is_advisor_use(block))
-                .filter_map(|block| block.id.as_deref())
+                .filter_map(|block| block.id.as_ref().and_then(Nullable::as_deref))
                 .collect();
             if advisor_ids.is_empty() {
                 return message;
@@ -424,7 +449,8 @@ pub fn strip_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
                     let is_result = block.is_type(ContentBlockType::AdvisorToolResult)
                         && block
                             .tool_use_id
-                            .as_deref()
+                            .as_ref()
+                            .and_then(Nullable::as_deref)
                             .is_some_and(|id| advisor_ids.contains(&id));
                     !is_advisor_use(block) && !is_result
                 })
@@ -452,11 +478,6 @@ struct ReplayedWebSearchResult {
 enum ReplayedWebSearchContent {
     #[serde(rename = "web_search_result")]
     Result(ReplayedWebSearchResult),
-    #[serde(rename = "web_search_tool_result_error")]
-    Error {
-        #[serde(default)]
-        error_code: String,
-    },
 }
 
 enum WebSearchResults {
@@ -464,19 +485,44 @@ enum WebSearchResults {
     Error(String),
 }
 
+fn replayed_search_field(value: Option<&Recognized<String>>) -> Option<String> {
+    match value {
+        None => Some(String::new()),
+        Some(Recognized::Known(value)) => Some(value.clone()),
+        Some(Recognized::Unrecognized(_)) => None,
+    }
+}
+
+fn replayed_search_result(item: &Recognized<ContentBlock>) -> Option<ReplayedWebSearchResult> {
+    let block = match item {
+        Recognized::Known(block) => block,
+        Recognized::Unrecognized(value) => {
+            let ReplayedWebSearchContent::Result(result) =
+                serde_json::from_value(value.clone()).ok()?;
+            return Some(result);
+        }
+    };
+    if !block.is_type(ContentBlockType::WebSearchResult) {
+        return None;
+    }
+    Some(ReplayedWebSearchResult {
+        url: replayed_search_field(block.url.as_ref())?,
+        title: replayed_search_field(block.title.as_ref())?,
+        snippet: replayed_search_field(block.snippet.as_ref())?,
+        encrypted_content: replayed_search_field(block.encrypted_content.as_ref())?,
+    })
+}
+
 fn flattenable_web_search_results(block: &ContentBlock) -> Option<(&str, WebSearchResults)> {
     if !block.is_type(ContentBlockType::WebSearchToolResult) {
         return None;
     }
-    let tool_use_id = block.tool_use_id.as_deref()?;
+    let tool_use_id = block.tool_use_id.as_ref().and_then(Nullable::as_deref)?;
     let results = match block.content.as_ref()? {
-        Value::Array(items) => {
+        Recognized::Known(BlockContent::Blocks(items)) => {
             let results = items
                 .iter()
-                .map(|item| match serde_json::from_value(item.clone()).ok()? {
-                    ReplayedWebSearchContent::Result(result) => Some(result),
-                    ReplayedWebSearchContent::Error { .. } => None,
-                })
+                .map(replayed_search_result)
                 .collect::<Option<Vec<_>>>()?;
             if results
                 .iter()
@@ -486,10 +532,9 @@ fn flattenable_web_search_results(block: &ContentBlock) -> Option<(&str, WebSear
             }
             WebSearchResults::Results(results)
         }
-        error @ Value::Object(_) => match serde_json::from_value(error.clone()).ok()? {
-            ReplayedWebSearchContent::Error { error_code } => WebSearchResults::Error(error_code),
-            ReplayedWebSearchContent::Result(_) => return None,
-        },
+        Recognized::Known(BlockContent::SearchError(error)) => {
+            WebSearchResults::Error(replayed_search_field(error.error_code.as_ref())?)
+        }
         _ => return None,
     };
     Some((tool_use_id, results))
@@ -539,10 +584,10 @@ fn server_tool_use_query(block: &ContentBlock) -> Option<(&str, &str)> {
     if !block.is_type(ContentBlockType::ServerToolUse) {
         return None;
     }
-    let id = block.id.as_deref()?;
+    let id = block.id.as_ref().and_then(Nullable::as_deref)?;
     let query = match block.input.as_ref() {
-        None => "",
-        Some(Value::Object(input)) => match input.get("query") {
+        None | Some(Recognized::Unrecognized(Value::Null)) => "",
+        Some(Recognized::Known(input)) => match input.get("query") {
             None => "",
             Some(query) => query.as_str()?,
         },
@@ -1328,6 +1373,13 @@ mod tests {
             {"type": "text", "text": "Web search results for 'second':\n\nNo results were returned."}
         ]}])
     )]
+    #[case::null_input_has_the_same_empty_query_as_missing_input(
+        json!([{"role":"assistant","content":[
+            {"type":"server_tool_use","id":"s1","input":null},
+            {"type":"web_search_tool_result","tool_use_id":"s1","content":[]}
+        ]}]),
+        json!([{"role":"assistant","content":[{"type":"text","text":"Web search results:\n\nNo results were returned."}]}])
+    )]
     fn flatten_unencrypted_web_search_results_rewrites(
         #[case] input: Value,
         #[case] expected: Value,
@@ -1666,6 +1718,7 @@ mod tests {
 
     #[rstest]
     #[case::param_without_history(Some(json!({})), json!([]), true)]
+    #[case::null_param_without_history(Some(json!(null)), json!([]), false)]
     #[case::param_with_unsigned_history(
         Some(json!({"trigger": 1})),
         json!([{"role": "assistant", "content": [{"type": "compaction", "content": "c"}]}]),
@@ -1695,7 +1748,12 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(
-            requires_native_compaction_beta(compaction.as_ref(), &history(messages)),
+            requires_native_compaction_beta(
+                compaction
+                    .map(|value| serde_json::from_value(value).unwrap())
+                    .as_ref(),
+                &history(messages)
+            ),
             expected
         );
     }
@@ -1867,6 +1925,11 @@ mod tests {
                 supports_output_config: false,
                 supports_sampling_params: true,
                 supports_speed: false,
+                supports_mid_conversation_system: false,
+                supports_cache_control_ttl: false,
+                supports_native_structured_output: false,
+                supports_tool_search: false,
+                effort_ceiling: None,
                 effort_tiers: tiers(false, false, false, false, false, false),
             }
         );
@@ -1900,6 +1963,19 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<MessagesModelCapabilities>(input).unwrap(),
             expected
+        );
+    }
+    #[rstest]
+    fn web_search_replay_still_ignores_unrelated_malformed_fields() {
+        let messages = json!([{"role":"assistant","content":[{
+            "type":"web_search_tool_result","tool_use_id":"server_1",
+            "content":[{"type":"web_search_result","url":"https://example.test","id":17}]
+        }]}]);
+        assert_eq!(
+            apply(flatten_unencrypted_web_search_results, messages),
+            json!([{
+                "role":"assistant","content":[{"type":"text","text":"Web search results:\n\nURL: https://example.test"}]
+            }])
         );
     }
 }
