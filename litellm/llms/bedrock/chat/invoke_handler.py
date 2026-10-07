@@ -12,6 +12,7 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -440,12 +441,8 @@ class _EventStreamTally:
 
 class AWSEventStreamDecoder:
     def __init__(self, model: str, json_mode: bool | None = False) -> None:
-        try:
-            from botocore.parsers import EventStreamJSONParser
-        except ModuleNotFoundError as error:
-            if error.name != "botocore":
-                raise
-            raise ImportError("Bedrock event decoding requires boto3. Run 'pip install boto3'.") from error
+        ensure_optional_import("botocore")
+        from botocore.parsers import EventStreamJSONParser
 
         self.model = model
         self.parser = EventStreamJSONParser()
