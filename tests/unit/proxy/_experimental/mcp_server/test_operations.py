@@ -289,7 +289,7 @@ def _catalog_case(method):
     "method", ["prompts/list", "prompts/get", "resources/list", "resources/templates/list", "resources/read"]
 )
 @pytest.mark.parametrize("state", ["success", "denied", "upstream_failure", "scope_failure"])
-async def test_native_catalog_operations_preserve_context_results_and_failure_policy(method, state):
+async def test_catalog_helpers_preserve_context_results_and_failure_policy(method, state):
     from types import SimpleNamespace
 
     from fastapi import HTTPException
@@ -325,10 +325,15 @@ async def test_native_catalog_operations_preserve_context_results_and_failure_po
             with pytest.raises(expected_error):
                 await getattr(server, handler_name)(ctx, operation.params)
         else:
-            result = await getattr(server, handler_name)(ctx, operation.params or PaginatedRequestParams())
             if collection:
-                assert getattr(result, collection) == (payload if state == "success" else [])
+                helper = getattr(operations, "_list_mcp_" + collection)
+                result = await helper(
+                    user_api_key_auth=caller, mcp_auth_header=None, mcp_servers=["catalog"],
+                    mcp_server_auth_headers=None, oauth2_headers=None, raw_headers=headers, client_ip="192.0.2.41",
+                )
+                assert result == (payload if state == "success" else [])
             else:
+                result = await getattr(server, handler_name)(ctx, operation.params or PaginatedRequestParams())
                 assert result == payload
     assert allowed.await_args.kwargs == {
         "user_api_key_auth": caller,
@@ -948,3 +953,105 @@ async def test_local_handler_rejects_an_owner_absent_from_the_catalog(monkeypatc
             await operations._handle_local_mcp_tool("private-export", {})
     assert denied.value.status_code == 503
     handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gateway_listing_rejects_unrecognized_continuation() -> None:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import ListToolsRequest, PaginatedRequestParams
+
+    with pytest.raises(MCPError, match=r"cursor|pagination"):
+        await GatewayOperations().execute(
+            ListToolsRequest(params=PaginatedRequestParams(cursor="forged-pagination-state")),
+            prepare_context(mcp_proxy_mode=True),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["prompts/list", "resources/list", "resources/templates/list"])
+async def test_continuation_preserves_current_authority_unavailable_error(monkeypatch, method):
+    from mcp import MCPError
+    from mcp.types import ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    caller = UserAPIKeyAuth(api_key="sk-owned-key-without-database")
+    caller.via_virtual_key = True
+    request = {"prompts/list": ListPromptsRequest, "resources/list": ListResourcesRequest, "resources/templates/list": ListResourceTemplatesRequest}[method]
+    with pytest.raises(MCPError, match="Server misconfigured: no database connection"):
+        await GatewayOperations().execute(request(params=PaginatedRequestParams(cursor="existing-state")), prepare_context(caller))
+
+
+@pytest.mark.asyncio
+async def test_virtual_tool_catalog_rejects_a_cursor_and_preserves_its_complete_listing():
+    from mcp import MCPError
+    from mcp.types import ListToolsRequest, PaginatedRequestParams
+
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    caller = UserAPIKeyAuth(object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="search", mcp_tool_search_enabled=True))
+    context = prepare_context(caller)
+    result = await GatewayOperations().execute(ListToolsRequest(), context)
+    assert result.tools
+    assert result.next_cursor is None
+    with pytest.raises(MCPError, match="fresh listing"):
+        await GatewayOperations().execute(ListToolsRequest(params=PaginatedRequestParams(cursor="existing-state")), context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_name", ["ListPromptsRequest", "ListResourcesRequest", "ListResourceTemplatesRequest"])
+@pytest.mark.parametrize("cursor", [None, "existing-state"])
+async def test_optional_catalog_preserves_revoked_user_error(monkeypatch, request_name, cursor):
+    from types import SimpleNamespace
+
+    from mcp import MCPError, types
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": []})
+    table = SimpleNamespace(find_unique=AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(writer_db=SimpleNamespace(litellm_usertable=table)))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    caller = UserAPIKeyAuth(user_id="revoked-catalog-user")
+    caller.mcp_admitted_user_subject = True
+    request = getattr(types, request_name)(params=types.PaginatedRequestParams(cursor=cursor))
+    with pytest.raises(MCPError, match="Invalid or expired credential"):
+        await GatewayOperations().execute(request, prepare_context(caller))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", ["continuation-state", ""])
+async def test_tool_continuation_failure_requires_a_fresh_listing(monkeypatch: pytest.MonkeyPatch, cursor: str) -> None:
+    from mcp import MCPError
+    from mcp.types import INVALID_PARAMS, ListToolsRequest, PaginatedRequestParams
+
+    failure: Final = RuntimeError("catalog temporarily unavailable")
+    fetch: Final = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(operations, "_get_tools_from_mcp_servers", fetch)
+    with pytest.raises(MCPError, match="start a fresh listing") as raised:
+        await GatewayOperations().execute(
+            ListToolsRequest(params=PaginatedRequestParams(cursor=cursor)), prepare_context()
+        )
+    assert raised.value.error.code == INVALID_PARAMS
+    assert raised.value.__cause__ is failure
+    assert fetch.await_count == 1
+    assert fetch.await_args.kwargs["params"].cursor == cursor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gateway", [False, True])
+async def test_initial_tool_listing_preserves_legacy_error_fallback(monkeypatch: pytest.MonkeyPatch, gateway: bool) -> None:
+    from mcp.types import ListToolsRequest
+
+    fetch: Final = AsyncMock(side_effect=RuntimeError("catalog temporarily unavailable"))
+    monkeypatch.setattr(operations, "_get_tools_from_mcp_servers", fetch)
+    if gateway:
+        result: Final = await GatewayOperations().execute(ListToolsRequest(), prepare_context())
+        assert result.tools == []
+        assert result.next_cursor is None
+    else:
+        listing: Final = await operations._list_mcp_tools()
+        assert listing.tools == []
+        assert listing.next_cursor is None
+    fetch.assert_awaited_once()
