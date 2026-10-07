@@ -488,6 +488,40 @@ async def test_tools_call_pre_call_check_enforces_mcp_server_rpm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tools_call_pre_call_hook_rejection_does_not_enforce_mcp_server_rpm() -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    server: Final = MCPServer(
+        server_id="catalog-call-pre-hook-rejected",
+        name="catalog-call-pre-hook-rejected",
+        server_name="catalog-call-pre-hook-rejected",
+        transport=MCPTransport.http,
+        rpm=1,
+    )
+    rate_limit_error: Final = ProxyRateLimitError(detail="ordinary key rate limit")
+    proxy_logging: Final = MagicMock()
+    proxy_logging._create_mcp_request_object_from_kwargs.return_value = {}
+    proxy_logging._convert_mcp_to_llm_format.return_value = {}
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=rate_limit_error)
+    proxy_logging.enforce_mcp_server_rate_limits = AsyncMock()
+
+    with pytest.raises(ProxyRateLimitError) as rejected:
+        await MCPServerManager().pre_call_tool_check(
+            name="echo",
+            arguments={},
+            server_name=server.name,
+            user_api_key_auth=None,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+        )
+
+    assert rejected.value is rate_limit_error
+    proxy_logging.enforce_mcp_server_rate_limits.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_disallowed_tool_does_not_consume_mcp_server_rpm() -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 

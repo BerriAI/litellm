@@ -3823,6 +3823,41 @@ async def test_mcp_per_key_rate_limit_uses_trusted_server_alias_v3() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_per_key_rejection_does_not_consume_shared_server_rpm_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-shared",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+        rpm=2,
+    )
+    first_key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-limited"),
+        metadata={"mcp_rpm_limit": {"github": 1}},
+    )
+    second_key: Final = UserAPIKeyAuth(api_key=hash_token("sk-mcp-unlimited"))
+
+    await handler.enforce_mcp_server_rate_limits(first_key, server)
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_key") as key_rejected:
+        await handler.enforce_mcp_server_rate_limits(first_key, server)
+
+    assert key_rejected.value.headers is not None
+    assert key_rejected.value.headers["retry-after"] == str(handler.window_size)
+    assert key_rejected.value.headers["rate_limit_type"] == "requests"
+    assert key_rejected.value.headers["reset_at"]
+    await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_server") as server_rejected:
+        await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+    assert server_rejected.value.headers is not None
+    assert server_rejected.value.headers["retry-after"] == str(handler.window_size)
+    assert server_rejected.value.headers["rate_limit_type"] == "requests"
+    assert server_rejected.value.headers["reset_at"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_per_key_rate_limit_is_scoped_to_server_identity_v3() -> None:
     handler, _ = _make_mcp_handler()
     user_api_key_dict: Final = UserAPIKeyAuth(

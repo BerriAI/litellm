@@ -10,7 +10,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.database import scratch_database
-from integration._support.mcp import McpPeer, mcp_peer, paginated_mcp_peer, register_mcp, tool_calls
+from integration._support.mcp import McpCaller, McpPeer, mcp_peer, paginated_mcp_peer, register_mcp, tool_calls
 from integration._support.process import owned_proxy
 from integration._support.redis_process import OwnedRedis, owned_redis
 from mcp import ClientSession, MCPError
@@ -223,6 +223,7 @@ def test_mcp_key_team_and_server_rpm_limits_share_redis(tmp_path: Path, monkeypa
             )
             key_two: Final = scenario.key(team_id=team_id, object_permission=permission)
             key_three: Final = scenario.key(object_permission=permission)
+            key_four: Final = scenario.key(rpm_limit=1, object_permission=permission)
 
             with owned_proxy(
                 seed, tmp_path / "second", second_environment, database_setup=(), **options
@@ -237,10 +238,23 @@ def test_mcp_key_team_and_server_rpm_limits_share_redis(tmp_path: Path, monkeypa
 
                 second_call: Final = _call_tool(first_replica, key_two, server_id, "rpm-add")
                 assert second_call.status_code == 200, second_call.text
+                third_call: Final = _call_tool(second_replica, key_two, server_id, "rpm-add")
+                assert third_call.status_code == 200, third_call.text
 
                 peer.drain()
-                key_two_rejected: Final = _call_tool(second_replica, key_two, server_id, "rpm-add")
+                key_two_rejected: Final = _call_tool(first_replica, key_two, server_id, "rpm-add")
                 _assert_rate_limit(key_two_rejected, "mcp_per_team")
+                assert tool_calls(peer.drain()) == ()
+
+                key_four_second_replica: Final = McpCaller(second_replica, key_four, "mcp")
+                key_four_first_replica: Final = McpCaller(first_replica, key_four, "mcp")
+                key_four_first_call: Final = key_four_second_replica.call("rpm-add", {"a": 1, "b": 2})
+                assert key_four_first_call.ok, key_four_first_call.raw
+
+                peer.drain()
+                key_four_rejected: Final = key_four_first_replica.call("rpm-add", {"a": 1, "b": 2})
+                assert not key_four_rejected.ok, key_four_rejected.raw
+                assert "api_key" in (key_four_rejected.error or "")
                 assert tool_calls(peer.drain()) == ()
 
                 peer.drain()
@@ -248,9 +262,8 @@ def test_mcp_key_team_and_server_rpm_limits_share_redis(tmp_path: Path, monkeypa
                 assert forbidden.status_code == 403, forbidden.text
                 assert tool_calls(peer.drain()) == ()
 
-                # The batch Lua script increments every descriptor before Python evaluates limits.
-                third_call: Final = _call_tool(first_replica, key_three, server_id, "rpm-add")
-                assert third_call.status_code == 200, third_call.text
+                key_three_first_call: Final = _call_tool(first_replica, key_three, server_id, "rpm-add")
+                assert key_three_first_call.status_code == 200, key_three_first_call.text
 
                 peer.drain()
                 server_rejected: Final = _call_tool(second_replica, key_three, server_id, "rpm-add")

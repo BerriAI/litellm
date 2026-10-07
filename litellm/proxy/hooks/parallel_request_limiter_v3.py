@@ -2996,10 +2996,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return
 
         parent_otel_span: Final = user_api_key_dict.parent_otel_span if user_api_key_dict is not None else None
-        response: Final = await self.should_rate_limit(
-            descriptors,
+        response: Final = await self.atomic_check_and_increment_by_n(
+            descriptors=descriptors,
+            increments=[{"requests": 1} for _ in descriptors],
             parent_otel_span=parent_otel_span,
-            skip_tpm_check=True,
         )
         if response["overall_code"] == "OVER_LIMIT":
             self._handle_rate_limit_error(response, descriptors)

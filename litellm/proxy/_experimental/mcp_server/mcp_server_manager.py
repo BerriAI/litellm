@@ -5930,7 +5930,6 @@ class MCPServerManager:
         hook_result: Final[dict[str, Any]] = {}
         if proxy_logging_obj is None:
             return hook_result
-        await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
 
         # Extract incoming Bearer token from raw request headers so
         # guardrails like MCPJWTSigner can verify + re-sign it (FR-5).
@@ -5977,6 +5976,7 @@ class MCPServerManager:
                 data=synthetic_llm_data,
                 call_type=CallTypes.call_mcp_tool.value,
             )
+            await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
             if modified_data:
                 # Convert response back to MCP format and apply modifications
                 modified_kwargs = proxy_logging_obj._convert_mcp_hook_response_to_kwargs(modified_data, pre_hook_kwargs)
