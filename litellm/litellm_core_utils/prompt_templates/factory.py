@@ -206,7 +206,7 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
     return system_content_str, msg_i
 
 
-def _ollama_bad_message(model: str, message: dict, msg_i: int, detail: str) -> litellm.BadRequestError:
+def _ollama_bad_message(model: str, message: dict, msg_i: int, detail: str) -> "litellm.BadRequestError":
     return litellm.BadRequestError(
         message=BAD_MESSAGE_ERROR_STR + f"the {message['role']} message at index {msg_i} {detail}",
         model=model,
