@@ -1,6 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "agent": {
+      "default": null,
+      "description": "Only runs this agent took part in, as named in TraceAgentList",
+      "maxLength": 256,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "cursor": {
       "default": null,
       "maxLength": 512,
