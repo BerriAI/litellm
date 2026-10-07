@@ -1756,6 +1756,8 @@ model LiteLLM_AutoRouterDailySpend {
   router_name                    String
   router_type                    String
   turns                          Int      @default(0)
+  total_tokens                   BigInt   @default(0)
+  token_recorded_turns            Int      @default(0)
   spend                          Float    @default(0)
   saved_spend                    Float    @default(0)
   savings_estimated_turns        Int      @default(0)
