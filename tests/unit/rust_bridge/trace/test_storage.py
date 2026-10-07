@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 from pydantic import JsonValue
 
+from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES
 from litellm.rust_bridge import loader
 from litellm.rust_bridge.trace.generated.types import QueryScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig
@@ -114,3 +115,24 @@ async def test_sql_query_rejects_malformed_clickhouse_envelopes(
 
     with pytest.raises(RuntimeError, match="Native trace query returned an invalid response"):
         await storage.query_sql("SELECT 1", {"kind": "all"}, "secret")
+
+@pytest.mark.asyncio
+@pytest.mark.requires_rust_extension
+async def test_schema_binding_rejects_non_positive_retention(native: ModuleType) -> None:
+    with pytest.raises(ValueError, match=r"database.*retention"):
+        native.NativeTraceConfig("traces", "http://localhost:8123", 0, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
+
+
+@pytest.mark.asyncio
+@pytest.mark.requires_rust_extension
+async def test_schema_binding_rejects_invalid_database(native: ModuleType) -> None:
+    with pytest.raises(ValueError, match=r"database.*retention"):
+        native.NativeTraceConfig("db; DROP DATABASE default", "http://localhost:8123", 14, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
+
+
+@pytest.mark.requires_rust_extension
+def test_invalid_url_error_does_not_expose_credentials(native: ModuleType) -> None:
+    with pytest.raises(RuntimeError, match="invalid ClickHouse HTTP URL") as error:
+        native.NativeTraceConfig("traces", "secret://writer:password@example.com", 7, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
+    assert "password" not in str(error.value)
+

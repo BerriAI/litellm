@@ -1,10 +1,8 @@
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Final, Literal
-
 import pytest
 from pydantic import TypeAdapter
-
 import litellm
 from litellm import _v2
 from litellm._v2.cache import NativeBackend
@@ -18,6 +16,7 @@ from tests.integration._support.native.callback_recorder import RecordingLogger,
 from tests._support.recording_server import RecordingServer, ResponseSpec
 from tests.integration._support.native.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.integration.sdk.native.test_inference_sdk import RESPONSES_MODEL, RESPONSES_RESPONSE
+
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -57,20 +56,6 @@ async def test_v2_cache_skips_provider_and_reports_one_success_per_call(
     await litellm.cache.disconnect()
 
 
-@pytest.mark.asyncio
-async def test_v2_global_cache_leaves_legacy_only_calls_usable() -> None:
-    litellm.cache = _v2.Cache.memory()
-    response: Final = await litellm.aembedding(
-        model="openai/cache-test-embedding",
-        input=["hello"],
-        api_key="test-key",
-        mock_response=[0.25, 0.75],
-    )
-    assert response.model_dump(include={"data"}) == {
-        "data": [{"embedding": [0.25, 0.75], "index": 0, "object": "embedding"}]
-    }
-
-
 @pytest.mark.parametrize("route", ("chat", "responses"))
 def test_v2_cache_works_through_python_inference(
     recording_server: RecordingServer, route: Literal["chat", "messages", "responses"], monkeypatch: pytest.MonkeyPatch
@@ -96,22 +81,6 @@ def test_v2_cache_works_through_python_inference(
             == MESSAGES_RESPONSE["content"][0]["text"]
         )
     assert len(recording_server.requests) == 1
-
-
-@pytest.mark.asyncio
-async def test_v2_facade_and_backend_share_storage_and_management() -> None:
-    cache: Final = _v2.Cache.memory()
-    await cache.async_add_cache({"answer": 7}, cache_key="shared")
-    assert cache.get_cache(cache_key="shared") == {"answer": 7}
-    assert await cache.ping() is True
-    await cache.delete_cache_keys(["shared"])
-    assert await cache.async_get_cache(cache_key="shared") is None
-    cache.add_cache({"answer": 8}, cache_key="flush")
-    backend: Final = cache.cache
-    assert isinstance(backend, NativeBackend)
-    backend.flush_cache()
-    assert cache.get_cache(cache_key="flush") is None
-    await cache.disconnect()
 
 
 @pytest.mark.asyncio

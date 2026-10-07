@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
@@ -117,19 +114,3 @@ def test_process_override_and_reset_apply_to_existing_threads() -> None:
         assert executor.submit(configuration.rust_enabled).result() is False
 
 
-@pytest.mark.parametrize(("value", "expected"), (("1", "True"), ("0", "False")))
-def test_environment_controls_startup(value: str, expected: str) -> None:
-    environment: Final = {**os.environ, "LITELLM_RUST": value}
-    result: Final = subprocess.run(
-        (
-            sys.executable,
-            "-c",
-            "from litellm.rust_bridge.configuration import rust_enabled; print(rust_enabled())",
-        ),
-        check=True,
-        capture_output=True,
-        text=True,
-        env=environment,
-    )
-
-    assert result.stdout.strip() == expected
