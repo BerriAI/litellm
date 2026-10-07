@@ -20,6 +20,7 @@ from e2e_config import unique_marker
 from e2e_http import UnknownApiError, unwrap
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from guardrails_client import (
+    GUARDRAIL_BACKEND,
     GuardrailsClient,
     OpenAIModerationParamsBody,
     poll_until_blocked,
@@ -43,6 +44,7 @@ class TestOpenAIModerationGuardrail:
             domain=Domain.GUARDRAILS,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.GEMINI,),
+            models=(GUARDRAIL_BACKEND,),
             mode=Mode.NONSTREAM,
         )
     )
@@ -90,6 +92,7 @@ class TestOpenAIModerationGuardrail:
             domain=Domain.GUARDRAILS,
             route=Route.MESSAGES,
             providers=(Provider.GEMINI,),
+            models=(GUARDRAIL_BACKEND,),
             mode=Mode.NONSTREAM,
         )
     )

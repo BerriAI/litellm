@@ -38,6 +38,8 @@ from models import (
 from proxy_client import ProxyClient
 from pydantic import BaseModel, Field
 
+GUARDRAIL_BACKEND: Final = "gemini/gemini-2.5-flash"
+
 GuardrailMode = Literal["pre_call", "post_call", "during_call", "logging_only"]
 PiiEntity = Literal["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON", "CREDIT_CARD", "US_SSN"]
 PiiAction = Literal["MASK", "BLOCK"]
@@ -238,7 +240,7 @@ class GuardrailsClient:
         resources: ResourceManager,
         prefix: str = "e2e-guard-backend",
         *,
-        backend: str = "gemini/gemini-2.5-flash",
+        backend: str = GUARDRAIL_BACKEND,
         api_key: str = "os.environ/GEMINI_API_KEY",
     ) -> str:
         """Register a chat deployment for a guardrail test to run against

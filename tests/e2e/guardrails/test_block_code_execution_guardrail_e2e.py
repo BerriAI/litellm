@@ -21,7 +21,7 @@ import pytest
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import unwrap
 from e2e_metadata import Domain, Mode, Provider, Subject, meta
-from guardrails_client import BlockCodeExecutionParamsBody, GuardrailsClient
+from guardrails_client import GUARDRAIL_BACKEND, BlockCodeExecutionParamsBody, GuardrailsClient
 from lifecycle import ResourceManager
 from models import ChatResponse
 
@@ -50,6 +50,7 @@ class TestBlockCodeExecutionGuardrail:
         Subject(
             domain=Domain.GUARDRAILS,
             providers=(Provider.GEMINI,),
+            models=(GUARDRAIL_BACKEND,),
             mode=Mode.NONSTREAM,
         )
     )
