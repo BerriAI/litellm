@@ -11,9 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.constants import AGENT_TRACING_AGENT_LIST_LIMIT, AGENT_TRACING_LIST_PAGE_SIZE
+from litellm.rust_bridge.trace.generated.models import TraceAgentRow, TraceAgentsParams
+from litellm.rust_bridge.trace.generated.responses import TraceAgentList
 from litellm.rust_bridge.trace.generated.types import TraceScope
-from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
-from litellm.tracing import otlp_http
+from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError, otlp_http
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError
 from litellm.tracing.receiver import TracingOverloadedError
 
@@ -70,6 +72,41 @@ async def test_reads_delegate_to_storage(cursor: str | None, page_size: int | No
     scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-research",)}
     assert await TraceReceiver(storage).get_trace("t1", scope, "", cursor, page_size) is None
     storage.get_trace.assert_awaited_once_with("t1", scope, "", cursor, page_size)
+
+
+@pytest.mark.asyncio
+async def test_list_agents_reads_the_scoped_window_and_returns_names_in_storage_order() -> None:
+    storage: Final = _fake_storage()
+    storage.trace_agents = AsyncMock(
+        return_value=(TraceAgentRow(agent_name="claude-code"), TraceAgentRow(agent_name="research_agent"))
+    )
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "user-1", "team_ids": ("team-a", "team-b")}
+
+    agents: Final = await TraceReceiver(storage).list_agents(scope, 10, 20)
+
+    assert agents == TraceAgentList(data=("claude-code", "research_agent"))
+    storage.trace_agents.assert_awaited_once_with(
+        TraceAgentsParams(
+            all_teams=0,
+            user_id="user-1",
+            team_ids=("team-a", "team-b"),
+            start_ms=10,
+            end_ms=20,
+            limit=AGENT_TRACING_AGENT_LIST_LIMIT,
+        )
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent", ("", "claude-code"))
+async def test_list_traces_forwards_the_agent_filter(agent: str) -> None:
+    storage: Final = _fake_storage()
+    storage.list_traces = AsyncMock(return_value={"data": (), "next_cursor": None})
+    scope: Final[TraceScope] = {"all_teams": 1, "user_id": "", "team_ids": ()}
+
+    await TraceReceiver(storage).list_traces(scope, 1, 2, "next", agent)
+
+    storage.list_traces.assert_awaited_once_with(scope, 1, 2, "next", AGENT_TRACING_LIST_PAGE_SIZE, agent)
 
 
 @pytest.mark.asyncio
