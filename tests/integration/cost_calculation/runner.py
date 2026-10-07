@@ -4,6 +4,7 @@ from typing import Final
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
+from integration.cost_calculation.assertions import assert_stream_has_no_error
 from integration.cost_calculation.case import CostTrackingTestCase
 from integration.cost_calculation.conftest import register_scenario_deployment
 
@@ -16,6 +17,8 @@ def assert_cost_tracking(case: CostTrackingTestCase, gateway: Gateway) -> None:
             "POST", case.litellm_endpoint, {**case.litellm_request, "model": deployment.model_name}, key=key
         )
         assert response.status_code == case.expected_litellm_status_code, response.text
+        if case.mock_provider_response.content_type == "text/event-stream":
+            assert_stream_has_no_error(response.text)
         if case.expected_response_cost_header is None:
             assert "x-litellm-response-cost" not in response.headers
         else:

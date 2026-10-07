@@ -61,7 +61,7 @@ CLAUDE_SONNET_5_STREAM_NO_USAGE_TEST_CASE: Final = replace(
     expected_response_cost_header=None,
     expected_spend_log={
         **CLAUDE_SONNET_5_TEST_CASE.expected_spend_log,
-        "spend": 0.000276,  # recounted: 47 * 0.000003 + 9 * 0.000015
+        "spend": 0.000276,
         "prompt_tokens": 47,
         "completion_tokens": 9,
         "input_cost": 0.000141,

@@ -61,7 +61,7 @@ GPT_5_6_STREAM_NO_USAGE_TEST_CASE: Final = replace(
     expected_response_cost_header=None,
     expected_spend_log={
         **GPT_5_6_TEST_CASE.expected_spend_log,
-        "spend": 0.0002065,  # recounted: 46 * 0.00000175 + 9 * 0.000014
+        "spend": 0.0002065,
         "prompt_tokens": 46,
         "completion_tokens": 9,
         "input_cost": 0.0000805,
