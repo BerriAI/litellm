@@ -137,7 +137,10 @@ def _prepare_request(
         api_key=api_key,
     )
 
-    canonical_model: Final = endpoint.canonical_model(upstream_model)
+    try:
+        canonical_model: Final = endpoint.canonical_model(upstream_model)
+    except ValueError as error:
+        raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     outbound_headers: Final = MappingProxyType(
         {
             **{

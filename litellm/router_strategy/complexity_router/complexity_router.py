@@ -1344,18 +1344,10 @@ class ComplexityRouter(CustomLogger):
                 provider=config.provider,
             )
         if config.provider == "databricks":
-            databricks_api_key: Final = config.api_key or next(
-                (key for key in map(get_secret_str, DATABRICKS_DECISIONS_ENDPOINT.api_key_env) if key), None
-            )
-            databricks_api_base: Final = config.api_base or get_secret_str(DATABRICKS_DECISIONS_ENDPOINT.api_base_env)
-            if not databricks_api_key or not databricks_api_base:
-                raise ValueError(
-                    "opensource_classifier_config provider 'databricks' requires api_key or DATABRICKS_API_KEY "
-                    "(or DATABRICKS_TOKEN) and api_base or DATABRICKS_API_BASE"
-                )
+            databricks: Final = DATABRICKS_DECISIONS_ENDPOINT.connection(config.api_base, config.api_key)
             return HttpJevClassifierClient(
-                api_key=databricks_api_key,
-                api_base=databricks_api_base,
+                api_key=databricks.api_key,
+                api_base=databricks.api_base,
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider="databricks",
             )

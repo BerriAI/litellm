@@ -129,7 +129,7 @@ class HttpJevClassifierClient:
             case "laya":
                 return MappingProxyType({**body, "model": laya_response_model(body, requested_model)})
             case "databricks":
-                return MappingProxyType({**body, "model": requested_model})
+                return DATABRICKS_DECISIONS_ENDPOINT.classifier_response(body, requested_model)
             case "typesafe" | "bespoke":
                 return body
 

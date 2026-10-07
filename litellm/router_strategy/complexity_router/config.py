@@ -761,11 +761,15 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
             if self.api_base is not None:
                 _ = validate_oss_api_base(self.provider, self.api_base)
             return self
-        if self.provider == "databricks" and "model" not in self.model_fields_set:
-            raise ValueError(
-                "opensource_classifier_config.model is required for provider 'databricks': the serving endpoint name, "
-                "e.g. databricks-openjev-qwen35-4b"
-            )
+        if self.provider == "databricks":
+            from litellm.llms.databricks.decisions.transformation import validate_serving_endpoint_name
+
+            if "model" not in self.model_fields_set:
+                raise ValueError(
+                    "opensource_classifier_config.model is required for provider 'databricks': the serving endpoint "
+                    "name, e.g. databricks-openjev-qwen35-4b"
+                )
+            _ = validate_serving_endpoint_name(self.model)
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
                 "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "

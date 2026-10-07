@@ -634,6 +634,26 @@ async def test_databricks_requires_api_base_before_http(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint_name", ["serving-endpoints/openjev", "openjev?x=1", "openjev#frag"])
+async def test_databricks_rejects_a_serving_endpoint_name_that_would_rewrite_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint_name: str,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", "https://workspace.example/serving-endpoints")
+    monkeypatch.setenv("DATABRICKS_API_KEY", "dapi-key")
+
+    with pytest.raises(litellm.BadRequestError, match="bare endpoint name"):
+        await litellm.adecisions(
+            model=f"databricks/{endpoint_name}",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
 async def test_databricks_requires_a_key_before_http(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,

@@ -540,9 +540,11 @@ async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
     assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)
 
 
-def test_databricks_requires_the_serving_endpoint_name_as_the_model() -> None:
+def test_databricks_requires_the_bare_serving_endpoint_name_as_the_model() -> None:
     with pytest.raises(ValueError, match="model is required for provider 'databricks'"):
         JevClassifierConfig.model_validate({"provider": "databricks"})
+    with pytest.raises(ValueError, match="bare endpoint name"):
+        JevClassifierConfig.model_validate({"provider": "databricks", "model": "serving-endpoints/my-openjev"})
     assert JevClassifierConfig.model_validate({"provider": "databricks", "model": "my-openjev"}).model == "my-openjev"
 
 
