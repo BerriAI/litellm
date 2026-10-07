@@ -1393,10 +1393,10 @@ def _schedule_async_success_logging(
             )
         )
 
-    if not getattr(logging_obj, "defer_async_logging", False):
+    if not logging_obj.defer_async_logging:
         _enqueue_async_logging()
         return
-    if getattr(logging_obj, "enqueue_deferred_logging", None) is not None:
+    if logging_obj.enqueue_deferred_logging is not None:
         return
     logging_obj.enqueue_deferred_logging = _enqueue_async_logging
 
