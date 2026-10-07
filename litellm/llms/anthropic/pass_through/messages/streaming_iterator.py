@@ -366,6 +366,14 @@ class AnthropicMessagesStreamingResponse:
         self._hidden_params = hidden_params
 
     @property
+    def hidden_params(self) -> AnthropicMessagesStreamHiddenParams:
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: AnthropicMessagesStreamHiddenParams) -> None:
+        self._hidden_params = hidden_params
+
+    @property
     def has_buffered_provider_output(self) -> bool:
         return getattr(self.completion_stream, "has_buffered_provider_output", False) is True
 
@@ -699,7 +707,7 @@ class BaseAnthropicMessagesStreamingIterator:
     async def _fire_detached_failure_hook(self, exc: Exception) -> None:
         from litellm._logging import verbose_proxy_logger
 
-        on_detached_failure: Final = getattr(self.litellm_logging_obj, "_on_detached_stream_failure", None)
+        on_detached_failure: Final = getattr(self.litellm_logging_obj, "on_detached_stream_failure", None)
         if on_detached_failure is None:
             return
         try:

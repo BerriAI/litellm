@@ -3,35 +3,28 @@
 
 import asyncio
 import io
-import json
 import os
-import random
-import time
-from litellm._uuid import uuid
-from datetime import datetime, timedelta
-from typing import Optional
-
-import httpx
-
-from litellm.types.integrations.slack_alerting import AlertType
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
-import unittest.mock
+from datetime import datetime, timedelta
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from openai import APIError
 
 import litellm
-from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.caching import DualCache
 from litellm.integrations.SlackAlerting.slack_alerting import (
     DeploymentMetrics,
     SlackAlerting,
 )
 from litellm.proxy._types import CallInfo, Litellm_EntityType, WebhookEvent
 from litellm.proxy.utils import ProxyLogging
-from litellm.router import AlertingConfig, Router
+from litellm.router import Router
+from litellm.types.integrations.slack_alerting import AlertType
 from litellm.utils import get_api_base
 
 
@@ -324,45 +317,6 @@ async def test_daily_reports_completion(slack_alerting):
         mock_send_alert.assert_awaited()
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="Local test. Test if slack alerts are sent.")
-async def test_send_llm_exception_to_slack():
-
-    # on async success
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-5-mini",
-                "litellm_params": {
-                    "model": "gpt-5-mini",
-                    "api_key": "bad_key",
-                },
-            },
-            {
-                "model_name": "gpt-5-good",
-                "litellm_params": {
-                    "model": "gpt-5-mini",
-                },
-            },
-        ],
-        alerting_config=AlertingConfig(
-            alerting_threshold=0.5, webhook_url=os.getenv("SLACK_WEBHOOK_URL")
-        ),
-    )
-    try:
-        await router.acompletion(
-            model="gpt-5-mini",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )
-    except Exception:
-        pass
-
-    await router.acompletion(
-        model="gpt-5-good",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-
-    await asyncio.sleep(3)
 
 
 # test models with 0 metrics are ignored
@@ -739,7 +693,7 @@ async def test_langfuse_trace_id():
     - Unit test for `_add_langfuse_trace_id_to_alert` function in slack_alerting.py
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+    from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 
     litellm.success_callback = ["langfuse"]
 
@@ -762,7 +716,7 @@ async def test_langfuse_trace_id():
 
     await asyncio.sleep(3)
 
-    assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
+    assert litellm_logging_obj.get_trace_id(service_name="langfuse") is not None
 
     slack_alerting = SlackAlerting(
         alerting_threshold=32,
@@ -771,7 +725,7 @@ async def test_langfuse_trace_id():
         internal_usage_cache=DualCache(),
     )
 
-    trace_url = await _add_langfuse_trace_id_to_alert(
+    trace_url = await add_langfuse_trace_id_to_alert(
         request_data={"litellm_logging_obj": litellm_logging_obj}
     )
 
@@ -779,7 +733,7 @@ async def test_langfuse_trace_id():
 
     returned_trace_id = trace_url.split("/")[-1]
 
-    assert returned_trace_id == litellm_logging_obj._get_trace_id(
+    assert returned_trace_id == litellm_logging_obj.get_trace_id(
         service_name="langfuse"
     )
 
@@ -790,9 +744,10 @@ async def test_print_alerting_payload_warning():
     Test if alerts are printed to verbose logger when log_to_console=True
     """
     litellm.set_verbose = True
+    import logging
+
     from litellm._logging import verbose_proxy_logger
     from litellm.integrations.SlackAlerting.batching_handler import send_to_webhook
-    import logging
 
     # Create a string buffer to capture log output
     log_stream = io.StringIO()

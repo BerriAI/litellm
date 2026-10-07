@@ -226,7 +226,7 @@ async def responses_api(
     # Normal request
     curl -X POST http://localhost:4000/v1/responses \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{
         "model": "gpt-4o",
         "input": "Tell me about AI"
@@ -235,7 +235,7 @@ async def responses_api(
     # Background request with polling
     curl -X POST http://localhost:4000/v1/responses \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{
         "model": "gpt-4o",
         "input": "Tell me about AI",
@@ -390,11 +390,11 @@ async def responses_api(
         if data.get("background") and isinstance(response, ResponsesAPIResponse):
             if response.status in ["queued", "in_progress"]:
                 from litellm_enterprise.proxy.hooks.managed_files import (
-                    _PROXY_LiteLLMManagedFiles,
+                    PROXY_LiteLLMManagedFiles,
                 )
 
                 managed_files_obj: Final = cast(
-                    _PROXY_LiteLLMManagedFiles | None,
+                    PROXY_LiteLLMManagedFiles | None,
                     proxy_logging_obj.get_proxy_hook("managed_files"),
                 )
 
@@ -518,7 +518,7 @@ async def cursor_chat_completions(
     ```bash
     curl -X POST http://localhost:4000/cursor/chat/completions \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{
         "model": "gpt-4o",
         "input": [{"role": "user", "content": "Hello"}]
@@ -711,11 +711,11 @@ async def get_response(
     ```bash
     # Get polling response
     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123 \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     
     # Get provider response
     curl -X GET http://localhost:4000/v1/responses/resp_abc123 \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -826,7 +826,7 @@ async def delete_response(
     
     ```bash
     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123 \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -1001,7 +1001,7 @@ async def compact_response(
     ```bash
     curl -X POST http://localhost:4000/v1/responses/compact \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{
         "model": "gpt-4o",
         "input": [{"role": "user", "content": "Hello"}]
@@ -1153,7 +1153,7 @@ async def responses_input_tokens(
     ```bash
     curl -X POST http://localhost:4000/v1/responses/input_tokens \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{
         "model": "gpt-4o",
         "input": "Hello, how are you?"
@@ -1232,11 +1232,11 @@ async def cancel_response(
     ```bash
     # Cancel polling response
     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     
     # Cancel provider response
     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (

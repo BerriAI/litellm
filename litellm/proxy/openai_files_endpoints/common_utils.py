@@ -104,7 +104,7 @@ class ManagedFileIdResolver(Protocol):
     ) -> Mapping[str, str]: ...
 
 
-def _is_base64_encoded_unified_file_id(b64_uid: str) -> str | Literal[False]:
+def _is_base64_encoded_unified_file_id(b64_uid: object) -> str | Literal[False]:
     # Ensure b64_uid is a string and not a mock object
     if not isinstance(b64_uid, str):
         return False
@@ -1196,7 +1196,7 @@ def _model_name_for_batch_response(response: "LiteLLMBatch") -> str | None:
     )
 
 
-def _batch_owner_auth_from_db_object(db_batch_object: "LiteLLM_ManagedObjectTable") -> "UserAPIKeyAuth | None":
+def _batch_owner_auth_from_db_object(db_batch_object: object) -> "UserAPIKeyAuth | None":
     from litellm.proxy._types import UserAPIKeyAuth
 
     created_by: Final = getattr(db_batch_object, "created_by", None)
@@ -1284,7 +1284,7 @@ async def ensure_batch_response_managed_file_ids(
     prisma_client,
     verbose_proxy_logger,
     user_api_key_dict=None,
-    db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
+    db_batch_object: object | None = None,
     unified_batch_id: str | Literal[False] | None = None,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before DB persistence."""

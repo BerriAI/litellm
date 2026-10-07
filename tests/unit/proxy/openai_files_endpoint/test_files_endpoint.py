@@ -4849,7 +4849,7 @@ def _setup_unscoped_list_files_route_over_real_hook(
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
     from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
+        PROXY_LiteLLMManagedFiles,
     )
 
     for env_var in ("OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "OPENAI_ORGANIZATION"):
@@ -4857,7 +4857,7 @@ def _setup_unscoped_list_files_route_over_real_hook(
     monkeypatch.setattr(litellm, "api_key", None, raising=False)
     monkeypatch.setattr(litellm, "openai_key", None, raising=False)
 
-    managed_files = _PROXY_LiteLLMManagedFiles(
+    managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(), prisma_client=MagicMock()
     )
     managed_files.prisma_client.db.litellm_managedfiletable = _ManagedFileTableOverRows(rows)

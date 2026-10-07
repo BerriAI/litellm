@@ -117,7 +117,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             returned_response.model = custom_llm_provider + "/" + (returned_response.model or "")
 
         if base_model is not None:
-            returned_response._hidden_params["model"] = base_model
+            returned_response.hidden_params["model"] = base_model
         return returned_response
 
     def transform_response(

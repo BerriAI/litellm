@@ -126,10 +126,11 @@ from litellm.router_strategy.complexity_router.config import resolve_complexity_
 from litellm.router_utils.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
+    GatedAutoRouterCapability,
     capability_limit_violation,
     carries_complexity_router_settings,
     count_capability_routers,
-    gated_capability_of,
+    gated_capabilities_of,
     is_complexity_router_model,
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
@@ -559,6 +560,20 @@ def _raise_on_tuning_quota_violation(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}")
 
 
+async def _claimed_capability_violation(
+    tables: _TxModelTables,
+    *,
+    capability: GatedAutoRouterCapability,
+    config_rows: Sequence[Mapping[str, object]],
+    model_id: str | None,
+    limit: int | None,
+) -> str | None:
+    rows: Final = await tables.query_raw(_CAPABILITY_DB_ROWS_SQL[capability.key], model_id or "")
+    db_held: Final = sum(1 for row in rows if is_complexity_router_model(_decrypted_model(row.get("model"))))
+    held: Final = db_held + count_capability_routers(config_rows, capability=capability)
+    return capability_limit_violation(capability=capability, held=held + 1, limit=limit)
+
+
 @asynccontextmanager
 async def _auto_router_capability_slot(
     prisma_client: PrismaClient,
@@ -591,11 +606,11 @@ async def _auto_router_capability_slot(
     )
 
     limit: Final = _license_check.auto_router_capability_limit()
-    capability: Final = gated_capability_of(effective_params)
+    capabilities: Final = gated_capabilities_of(effective_params)
     baselines: Final = heuristic_v1_tuning_baselines
     tuning_candidate: Final = _tuning_candidate(effective_params, model_id=model_id)
     judges_tuning: Final = baselines is not None and is_mutable_tuned_candidate(tuning_candidate, baselines)
-    if member_write is None and (limit is None or (capability is None and not judges_tuning)):
+    if member_write is None and (limit is None or (not capabilities and not judges_tuning)):
         yield _proxy_model_table(prisma_client)
         return
     transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
@@ -685,14 +700,12 @@ async def _auto_router_capability_slot(
                 prisma_client=pinned_client,
                 llm_router=llm_router,
             )
-        if capability is not None:
-            rows: Sequence[Mapping[str, object]] = await tx_ctx.query_raw(
-                _CAPABILITY_DB_ROWS_SQL[capability.key], model_id or ""
-            )
-            db_held: Final = sum(1 for row in rows if is_complexity_router_model(_decrypted_model(row.get("model"))))
-            held: Final = db_held + count_capability_routers(config_rows, capability=capability)
-            violation: Final = capability_limit_violation(capability=capability, held=held + 1, limit=limit)
-            if violation is not None:
+        for capability in capabilities:
+            if (
+                violation := await _claimed_capability_violation(
+                    tables, capability=capability, config_rows=config_rows, model_id=model_id, limit=limit
+                )
+            ) is not None:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}"
                 )
