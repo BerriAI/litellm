@@ -10,6 +10,7 @@ import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 import { AddToDatasetButton } from "../../../datasets/AddToDatasetDialog";
+import { FeedbackPanel } from "../feedback/FeedbackPanel";
 import type { TraceHandoff } from "../../api";
 import { runCost } from "../../list/AgentTracesTable";
 import { traceRefOf, traceShareUrl } from "../../routing";
@@ -83,6 +84,7 @@ function RunIcon({ summary, failed }: { summary: Trace["summary"]; failed: boole
 
 interface RunHeaderProps {
   trace: Trace;
+  accessToken: string;
   handoff: TraceHandoff;
   onBack: () => void;
   embedded: boolean;
@@ -97,6 +99,7 @@ interface RunHeaderProps {
 /** Run identity, view switch and totals in two tight rows. */
 export function RunHeader({
   trace,
+  accessToken,
   handoff,
   onBack,
   embedded,
@@ -149,6 +152,7 @@ export function RunHeader({
               <RefreshCw className={cn("size-3", refreshing && "animate-spin")} />
               Refresh
             </Button>
+            <FeedbackPanel summary={summary} accessToken={accessToken} />
             <AddToDatasetButton
               sources={[{ kind: "trace", trace_id: summary.trace_id, trace_ref: summary.trace_ref ?? "", span_id: "" }]}
               agentName={traceAgentNames(summary)[0]}

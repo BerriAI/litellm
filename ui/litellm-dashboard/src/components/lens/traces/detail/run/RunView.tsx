@@ -165,6 +165,7 @@ function LoadedRun({
     >
       <RunHeader
         trace={trace}
+        accessToken={accessToken}
         handoff={traces.handoff(trace.summary.trace_id, null, trace.summary.trace_ref)}
         onBack={onBack}
         embedded={embedded}
