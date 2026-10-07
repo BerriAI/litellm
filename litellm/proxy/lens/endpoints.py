@@ -1,10 +1,11 @@
 import hashlib
 import secrets
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from functools import reduce
 from itertools import chain
 from types import MappingProxyType
-from typing import Annotated, Final, TypeAlias
+from typing import Annotated, Final, Protocol, TypeAlias
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -49,7 +50,7 @@ from litellm.proxy.lens.models import (
     WorkerCreated,
 )
 from litellm.proxy.lens.release import PROTOCOL_VERSION, release_tag, worker_image
-from litellm.proxy.lens.repository import LensRepository, WriterDatabase
+from litellm.proxy.lens.repository import DueLens, LensRepository, WriterDatabase
 from litellm.proxy.lens.reviews import criteria_key
 from litellm.proxy.lens.signal_repository import SignalRepository
 from litellm.proxy.lens.signals import SignalConfig, TraceSignals, trace_signals
@@ -74,9 +75,25 @@ from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"])
+CLAIM_CANDIDATES: Final = 20
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 StorageDep: TypeAlias = Annotated[Storage | None, Depends(provide_storage)]
+SAMPLE_PAGE_SIZE: Final = 10_000
+SAMPLE_PAGE_SIZES: Final = (SAMPLE_PAGE_SIZE, 5_000, 2_500, 1_250, 625, 312, 156, 100)
+SAMPLE_RESPONSE_TOO_LARGE: Final = "ClickHouse query exceeded the response size limit"
+
+
+class _ClaimRepository(Protocol):
+    async def due(
+        self, scope: Scope, now: datetime, limit: int, after: DueLens | None = None
+    ) -> tuple[DueLens, ...]: ...
+
+    async def sync_due(self, lens: Lens) -> None: ...
+
+    async def update(
+        self, lens_id: str, transform: Callable[[Lens], Lens], attempts: int, *, changed_only: bool
+    ) -> Lens | None: ...
 
 
 def repository() -> LensRepository:
@@ -559,13 +576,29 @@ async def claim(worker: WorkerAuth, protocol_version: int = 1, worker_release: s
     if worker.analysis_key_id is None:
         raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     now: Final = datetime.now(timezone.utc)
-    await repository().heartbeat(worker.id, now.isoformat())
-    for candidate in await repository().lenses():
-        if not can_access(worker.scope, candidate.scope):
-            continue
-        if claimed := await claim_candidate(candidate, worker, now):
-            return claimed
-    return None
+    lens_repository: Final = repository()
+    await lens_repository.heartbeat(worker.id, now.isoformat())
+    return await claim_due(worker, now, lens_repository)
+
+
+async def claim_due(
+    worker: Worker,
+    now: datetime,
+    lens_repository: _ClaimRepository,
+    supports_model: Callable[[Worker, LensSettings], Awaitable[bool]] = worker_supports_model,
+) -> Claim | None:
+    after: DueLens | None = None  # rebind-ok: keyset cursor advances one page at a time
+    while True:
+        page = await lens_repository.due(worker.scope, now, CLAIM_CANDIDATES, after)
+        for candidate in page:
+            if not can_access(worker.scope, candidate.lens.scope):
+                continue
+            if claimed := await claim_candidate(candidate.lens, worker, now, lens_repository, supports_model):
+                return claimed
+            await lens_repository.sync_due(candidate.lens)
+        if len(page) < CLAIM_CANDIDATES:
+            return None
+        after = page[-1]
 
 
 @router.post("/worker/{lens_id}/{job_id}/progress", response_model=bool)
@@ -598,24 +631,37 @@ async def sample(lens_id: str, job_id: str, worker: WorkerAuth, storage: Storage
     lens, job = await assigned(lens_id, job_id, worker)
     if job.sample is not None:
         return job.sample
-    pages: list[Sample] = []  # mutable-ok: freeze selection after stable cursor traversal
+
+    async def read_page(cursor: str, sizes: tuple[int, ...]) -> tuple[Sample, tuple[int, ...]]:
+        page_size: Final = sizes[0]
+        try:
+            page: Final = await source_reader(storage).sample(
+                lens.scope,
+                job.settings,
+                int(job.start.timestamp() * 1000),
+                int(job.end.timestamp() * 1000),
+                page_size=page_size,
+                cursor=cursor,
+            )
+        except RuntimeError as error:
+            if type(error) is not RuntimeError or str(error) != SAMPLE_RESPONSE_TOO_LARGE or len(sizes) == 1:
+                raise
+            return await read_page(cursor, sizes[1:])
+        return page, sizes
+
+    pages: list[tuple[Sample, tuple[int, ...]]] = []  # mutable-ok: freeze selection after stable cursor traversal
     cursor = ""  # rebind-ok: advance by immutable identity, never by shifting row positions
     while True:
-        page = await source_reader(storage).sample(
-            lens.scope,
-            job.settings,
-            int(job.start.timestamp() * 1000),
-            int(job.end.timestamp() * 1000),
-            cursor=cursor,
-        )
-        pages.append(page)
-        if not page.next_cursor or sum(len(p.executions) for p in pages) >= pages[0].selected:
+        sizes: Final = pages[-1][1] if pages else SAMPLE_PAGE_SIZES
+        page, usable_sizes = await read_page(cursor, sizes)
+        pages.append((page, usable_sizes))
+        if not page.next_cursor or sum(len(p.executions) for p, _ in pages) >= pages[0][0].selected:
             break
         cursor = page.next_cursor
     executions: Final = tuple(
-        execution for p in pages for execution in p.executions
+        execution for p, _ in pages for execution in p.executions
     )  # comprehension-ok: flatten query pages
-    selected: Final = Sample(executions=executions, eligible=pages[0].eligible, selected=len(executions))
+    selected: Final = Sample(executions=executions, eligible=pages[0][0].eligible, selected=len(executions))
 
     def freeze(e: Lens) -> Lens:
         active: Final = current_job(e)
@@ -810,9 +856,15 @@ async def heartbeat(lens_id: str, job_id: str, worker: WorkerAuth) -> bool:
     return await progress(lens_id, job_id, Progress(), worker)
 
 
-async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Claim | None:
+async def claim_candidate(
+    candidate: Lens,
+    worker: Worker,
+    now: datetime,
+    lens_repository: _ClaimRepository,
+    supports_model: Callable[[Worker, LensSettings], Awaitable[bool]] = worker_supports_model,
+) -> Claim | None:
     active: Final = current_job(candidate)
-    if not await worker_supports_model(worker, active.settings if active else candidate.settings):
+    if not await supports_model(worker, active.settings if active else candidate.settings):
         return None
     job_id: Final = str(uuid4())
 
@@ -823,7 +875,7 @@ async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Cla
             return e
         return claim_job(scheduled, worker, now)
 
-    updated: Final = await repository().update(candidate.id, schedule, changed_only=True)
+    updated: Final = await lens_repository.update(candidate.id, schedule, attempts=1, changed_only=True)
     if updated is None:
         return None
     job: Final = current_job(updated)

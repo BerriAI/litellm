@@ -3088,7 +3088,7 @@ class TestOpenAIPromptCacheBreakpoint:
         messages, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
         assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
         assert messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
         assert not _contains_key(system, "cache_control")
 
     def test_v1_messages_list_system_marks_last_block_only(self):
@@ -3099,7 +3099,7 @@ class TestOpenAIPromptCacheBreakpoint:
             {"type": "text", "text": "a"},
             {"type": "text", "text": "b", "prompt_cache_breakpoint": self.EXPLICIT},
         ]
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_v1_messages_targets_by_role(self):
         messages = [
@@ -3115,7 +3115,7 @@ class TestOpenAIPromptCacheBreakpoint:
         ]
         assert result[1] == messages[1]
         assert result[2]["content"] == [{"type": "text", "text": "last", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_v1_messages_targets_by_index(self):
         messages = [
@@ -3142,8 +3142,9 @@ class TestOpenAIPromptCacheBreakpoint:
         assert not _contains_key(system, "cache_control")
         assert not _contains_key(messages, "cache_control")
 
-    def test_v1_messages_keeps_caller_prompt_cache_options(self):
-        caller_options = {"mode": "explicit", "ttl": "30m"}
+    @pytest.mark.parametrize("mode", ["explicit", "implicit"])
+    def test_v1_messages_keeps_caller_prompt_cache_options(self, mode):
+        caller_options = {"mode": mode, "ttl": "30m"}
         kwargs = {
             "cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT),
             "prompt_cache_options": dict(caller_options),
@@ -3151,6 +3152,15 @@ class TestOpenAIPromptCacheBreakpoint:
         _, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
         assert system[0]["prompt_cache_breakpoint"] == self.EXPLICIT
         assert kwargs["prompt_cache_options"] == caller_options
+
+    def test_v1_messages_and_chat_paths_default_to_the_same_implicit_mode(self):
+        messages_kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        self._inject([{"role": "user", "content": "hi"}], "sys", messages_kwargs)
+        _, _, chat_params = self._chat(
+            [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)},
+        )
+        assert messages_kwargs["prompt_cache_options"] == chat_params["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_v1_messages_no_prompt_cache_options_when_nothing_injected(self):
         kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
@@ -3185,7 +3195,7 @@ class TestOpenAIPromptCacheBreakpoint:
         result, system = self._inject(messages, "sys", kwargs)
         assert result == messages
         assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
-        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
 
     def test_v1_messages_tail_point_applies_beside_client_system_breakpoint(self):
         system = [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
@@ -3196,7 +3206,7 @@ class TestOpenAIPromptCacheBreakpoint:
             {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]}
         ]
         assert result_system == system
-        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
 
     def test_chat_system_string_wrapped_with_block_breakpoint(self):
         params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
@@ -3375,7 +3385,7 @@ class TestOpenAIPromptCacheBreakpointPlacementRules:
             {"type": "tool_result", "tool_use_id": "t1", "content": "sunny"},
             {"type": "text", "text": "thanks", "prompt_cache_breakpoint": self.EXPLICIT},
         ]
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_marker_walks_back_to_last_eligible_block(self):
         messages = [
@@ -3656,12 +3666,12 @@ class TestMessagesPathApiBaseGate:
     def test_regional_openai_api_base_uses_openai_dialect(self):
         block, kwargs = self._inject("gpt-5.6", api_base="https://eu.api.openai.com/v1")
         assert block == self.BREAKPOINT_BLOCK
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_default_api_base_uses_openai_dialect(self):
         block, kwargs = self._inject("openai/gpt-5.6")
         assert block == self.BREAKPOINT_BLOCK
-        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
 
 class TestToolConfigSlotInOpenAIDialect:
@@ -3752,7 +3762,7 @@ class TestPromptCacheBreakpointCapability:
             [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
         )
         assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
-        assert kwargs == {"prompt_cache_options": {"mode": "explicit"}}
+        assert kwargs == {"prompt_cache_options": {"mode": "implicit"}}
 
     @pytest.mark.parametrize("model,expected", [("gpt-5.6-2026-01-01", True), ("gpt-5.5-preview-unlisted", False)])
     def test_unlisted_model_falls_back_to_the_version_rule(self, model, expected):
