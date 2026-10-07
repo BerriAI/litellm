@@ -4,6 +4,7 @@ Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers
 
 import asyncio, datetime, importlib, litellm, os, pytest_asyncio
 import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -98,6 +99,24 @@ class TestTruncateBase64InString:
     def test_no_data_uri(self):
         text = "hello world, no base64 here"
         assert _truncate_base64_in_string(text) == text
+
+    def test_large_sse_text_scans_quickly(self):
+        # Regression: the MIME group used to be unbounded, so a text with
+        # many "data:" tokens and no ";" cost O(n^2) (seconds per MB).
+        sse_line = 'data: {"id": "chatcmpl-x", "choices": [{"delta": {"content": "hello"}}]}\n\n'
+        text = sse_line * 10_000  # ~1 MB, no semicolons anywhere
+        start = time.perf_counter()
+        assert _truncate_base64_in_string(text) == text
+        elapsed = time.perf_counter() - start
+        assert elapsed < 1.0, f"took {elapsed:.2f}s: pattern may be quadratic again"
+
+    def test_real_data_uri_inside_sse_stream_truncated(self):
+        payload = "D" * 300
+        text = 'data: {"x": 1}\n\n' * 5000 + f"data:image/png;base64,{payload}"
+        result = _truncate_base64_in_string(text)
+        assert "base64_data truncated" in result
+        assert "image/png" in result
+        assert payload not in result
 
 
 # ---------------------------------------------------------------------------
