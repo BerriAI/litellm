@@ -4,8 +4,38 @@ from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import Gateway, object_value, string_value
-from pydantic import JsonValue
+from integration._support.client import Gateway, Scenario, object_value, string_value
+from integration._support.database import read_rows
+from pydantic import BaseModel, JsonValue
+
+
+class _ObservedRequest(BaseModel):
+    body: dict[str, JsonValue]
+
+
+class _Observations(BaseModel):
+    requests: list[_ObservedRequest]
+
+
+class _TeamState(BaseModel):
+    team_id: str
+    models: list[str] | None = None
+
+
+class _TeamModelRow(BaseModel):
+    models: list[str] | None = None
+
+
+class _TeamInfo(BaseModel):
+    team_info: _TeamState
+
+
+class _ProxyError(BaseModel):
+    type: str
+
+
+class _ErrorResponse(BaseModel):
+    error: _ProxyError
 
 
 @pytest.fixture
@@ -21,6 +51,13 @@ def _observed_models(upstream: httpx.Client) -> list[JsonValue]:
     return [request["body"]["model"] for request in observed.json()["requests"]]
 
 
+def _observed_provider_models(upstream: httpx.Client) -> tuple[str, ...]:
+    observed: Final = upstream.get("/__observations")
+    assert observed.status_code == 200, observed.text
+    response: Final = _Observations.model_validate_json(observed.text)
+    return tuple(string_value(request.body["model"]) for request in response.requests)
+
+
 def _chat(gateway: Gateway, model: str, key: str) -> httpx.Response:
     return gateway.request(
         "POST",
@@ -28,6 +65,28 @@ def _chat(gateway: Gateway, model: str, key: str) -> httpx.Response:
         {"model": model, "messages": [{"role": "user", "content": f"team model {uuid.uuid4().hex}"}]},
         key=key,
     )
+
+
+def _team_model(scenario: Scenario) -> tuple[str, str]:
+    provider_model: Final = f"team-model-{uuid.uuid4().hex}"
+    return scenario.model(model=f"openai/{provider_model}"), provider_model
+
+
+def _team_info(gateway: Gateway, team_id: str) -> _TeamInfo:
+    response: Final = gateway.request("GET", "/team/info", params={"team_id": team_id})
+    assert response.status_code == 200, response.text
+    return _TeamInfo.model_validate_json(response.text)
+
+
+def _stored_team_models(team_id: str) -> _TeamModelRow:
+    rows: Final = read_rows('SELECT models FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team_id,))
+    assert len(rows) == 1, repr(rows)
+    return _TeamModelRow.model_validate(rows[0])
+
+
+def _model_denied(response: httpx.Response) -> None:
+    assert response.status_code == 403, response.text
+    assert _ErrorResponse.model_validate_json(response.text).error.type == "team_model_access_denied", response.text
 
 
 def _ids(listing: dict[str, JsonValue]) -> set[JsonValue]:
@@ -103,3 +162,89 @@ def test_team_model_alias_routes_a_team_key_to_its_target(
         assert unaliased.status_code == 403, unaliased.text
         assert unaliased.json()["error"]["type"] == "key_model_access_denied"
         assert _observed_models(upstream) == []
+
+
+def test_team_model_add_and_delete_change_what_a_warmed_team_key_can_call(
+    gateway: Gateway, upstream: httpx.Client
+) -> None:
+    with gateway.scenario() as scenario:
+        model_one, provider_one = _team_model(scenario)
+        model_two, provider_two = _team_model(scenario)
+        model_three, provider_three = _team_model(scenario)
+        team: Final = scenario.team(models=[model_one])
+        key: Final = scenario.key(team_id=team)
+
+        first: Final = _chat(gateway, model_one, key)
+        assert first.status_code == 200, first.text
+        initially_denied: Final = _chat(gateway, model_two, key)
+        _model_denied(initially_denied)
+        observed_before_add: Final = _observed_provider_models(upstream)
+        assert observed_before_add == (provider_one,), repr(observed_before_add)
+
+        added: Final = gateway.request("POST", "/team/model/add", {"team_id": team, "models": [model_two, model_three]})
+        assert added.status_code == 200, added.text
+        added_state: Final = _TeamState.model_validate_json(added.text)
+        expected_added: Final = sorted((model_one, model_two, model_three))
+        assert sorted(added_state.models or ()) == expected_added, added.text
+        added_info: Final = _team_info(gateway, team)
+        assert sorted(added_info.team_info.models or ()) == expected_added, repr(added_info)
+        added_row: Final = _stored_team_models(team)
+        assert sorted(added_row.models or ()) == expected_added, repr(added_row)
+
+        second: Final = _chat(gateway, model_two, key)
+        assert second.status_code == 200, second.text
+        third: Final = _chat(gateway, model_three, key)
+        assert third.status_code == 200, third.text
+        deleted: Final = gateway.request("POST", "/team/model/delete", {"team_id": team, "models": [model_two]})
+        assert deleted.status_code == 200, deleted.text
+        deleted_state: Final = _TeamState.model_validate_json(deleted.text)
+        expected_remaining: Final = sorted((model_one, model_three))
+        assert sorted(deleted_state.models or ()) == expected_remaining, deleted.text
+        deleted_info: Final = _team_info(gateway, team)
+        assert sorted(deleted_info.team_info.models or ()) == expected_remaining, repr(deleted_info)
+        deleted_row: Final = _stored_team_models(team)
+        assert sorted(deleted_row.models or ()) == expected_remaining, repr(deleted_row)
+
+        denied_after_delete: Final = _chat(gateway, model_two, key)
+        _model_denied(denied_after_delete)
+        still_allowed_one: Final = _chat(gateway, model_one, key)
+        assert still_allowed_one.status_code == 200, still_allowed_one.text
+        still_allowed_three: Final = _chat(gateway, model_three, key)
+        assert still_allowed_three.status_code == 200, still_allowed_three.text
+        observed_after_add_and_delete: Final = _observed_provider_models(upstream)
+        assert observed_before_add + observed_after_add_and_delete == (
+            provider_one,
+            provider_two,
+            provider_three,
+            provider_one,
+            provider_three,
+        ), repr((observed_before_add, observed_after_add_and_delete))
+
+
+def test_team_model_add_on_an_unrestricted_team_keeps_every_other_model(
+    gateway: Gateway, upstream: httpx.Client
+) -> None:
+    with gateway.scenario() as scenario:
+        model_one, provider_one = _team_model(scenario)
+        model_two, provider_two = _team_model(scenario)
+        team: Final = scenario.team(models=[])
+        key: Final = scenario.key(team_id=team)
+
+        before_add: Final = _chat(gateway, model_two, key)
+        assert before_add.status_code == 200, before_add.text
+
+        added: Final = gateway.request("POST", "/team/model/add", {"team_id": team, "models": [model_one]})
+        assert added.status_code == 200, added.text
+        expected: Final = sorted(("all-proxy-models", model_one))
+        added_state: Final = _TeamState.model_validate_json(added.text)
+        assert sorted(added_state.models or ()) == expected, added.text
+        added_info: Final = _team_info(gateway, team)
+        assert sorted(added_info.team_info.models or ()) == expected, repr(added_info)
+        added_row: Final = _stored_team_models(team)
+        assert sorted(added_row.models or ()) == expected, repr(added_row)
+        still_unrestricted: Final = _chat(gateway, model_two, key)
+        assert still_unrestricted.status_code == 200, still_unrestricted.text
+        added_model: Final = _chat(gateway, model_one, key)
+        assert added_model.status_code == 200, added_model.text
+        observed_after_add: Final = _observed_provider_models(upstream)
+        assert observed_after_add == (provider_two, provider_two, provider_one), repr(observed_after_add)
