@@ -66,6 +66,14 @@ pub struct AgentNode {
     pub priced_calls: u64,
 }
 
+/// Where the run was started, from the `lens.source.url` and `lens.source.title` span attributes.
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunSource {
+    pub url: String,
+    pub title: String,
+}
+
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct TraceSummary {
@@ -95,6 +103,9 @@ pub struct TraceSummary {
     pub models: Vec<String>,
     pub spend: Option<f64>,
     pub priced_calls: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub source: Option<RunSource>,
 }
 
 #[macro_rules_attribute::apply(response_type)]
