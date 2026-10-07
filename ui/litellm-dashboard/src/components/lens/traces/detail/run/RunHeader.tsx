@@ -14,6 +14,7 @@ import type { TraceHandoff } from "../../api";
 import { runCost } from "../../list/AgentTracesTable";
 import { traceRefOf, traceShareUrl } from "../../routing";
 import { IdChip } from "../../ui/IdChip";
+import { RunSourceLink } from "../../ui/RunSource";
 import { SpanIcon } from "../../ui/SpanIcon";
 import { FrameworkLogo, traceFramework } from "../../ui/TraceFramework";
 import type { SignalFlag, Trace } from "../../types";
@@ -119,7 +120,9 @@ export function RunHeader({
               <ArrowLeft className="size-4" />
             </Button>
           )}
-          <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{traceDisplayName(summary)}</h1>
+          <h1 className="min-w-0 truncate text-base font-semibold">{traceDisplayName(summary)}</h1>
+          {summary.source && <RunSourceLink source={summary.source} />}
+          <span className="flex-1" />
           <IdChip value={summary.trace_id} label="Copy trace ID" />
           <RunIcon summary={summary} failed={failed} />
         </div>
