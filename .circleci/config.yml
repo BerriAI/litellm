@@ -3063,6 +3063,11 @@ jobs:
       PYTHONPATH: tests/e2e
     steps:
       - checkout_migration_source
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - install_uv
       - install_rust
       - restore_cache:
