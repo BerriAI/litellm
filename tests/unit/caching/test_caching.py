@@ -20,6 +20,7 @@ from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
 from litellm.types.caching import (
     DEFAULT_CACHING_SUPPORTED_CALL_TYPES,
     EMBEDDING_CACHE_FORMAT_VERSION,
+    CachingSupportedCallTypes,
     LiteLLMCacheType,
     SemanticCacheScope,
 )
@@ -1019,19 +1020,38 @@ def test_completion_past_max_messages_is_neither_served_from_nor_written_to_the_
     assert answer(five, "five second") == "five second", "a 5-message repeat was served from the cache"
 
 
-def test_default_supported_call_types_are_not_shared_between_cache_instances():
-    first = Cache(type=LiteLLMCacheType.LOCAL)
-    second = Cache(type=LiteLLMCacheType.LOCAL)
+def test_default_supported_call_types_are_not_shared_between_cache_instances() -> None:
+    first: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    second: Final = Cache(type=LiteLLMCacheType.LOCAL)
 
     assert first.supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
 
-    removed = first.supported_call_types[0]
+    removed: Final = first.supported_call_types[0]
     first.supported_call_types.remove(removed)
 
-    assert removed in second.supported_call_types
+    third: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    assert second.supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
+    assert third.supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
 
 
-def test_supported_call_types_none_is_preserved():
-    cache = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=None)
+def test_explicit_supported_call_types_are_not_shared() -> None:
+    supported_call_types: Final[list[CachingSupportedCallTypes]] = ["completion", "embedding"]
+    first: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported_call_types)
+    second: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported_call_types)
 
-    assert cache.supported_call_types is None
+    supported_call_types.remove("embedding")
+    assert first.supported_call_types == ["completion", "embedding"]
+    assert second.supported_call_types == ["completion", "embedding"]
+
+    first.supported_call_types.remove("completion")
+    assert second.supported_call_types == ["completion", "embedding"]
+    assert supported_call_types == ["completion"]
+
+
+@pytest.mark.parametrize("supported_call_types", [None, []])
+def test_disabled_supported_call_types_are_preserved(
+    supported_call_types: list[CachingSupportedCallTypes] | None,
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported_call_types)
+
+    assert cache.supported_call_types == supported_call_types
