@@ -1057,10 +1057,7 @@ from litellm.passthrough.timeout_utils import (
 
 
 def _has_default_on_guardrail_callback() -> bool:
-    return any(
-        isinstance(callback, CustomGuardrail) and callback.default_on is True
-        for callback in litellm.callbacks
-    )
+    return any(isinstance(callback, CustomGuardrail) and callback.default_on is True for callback in litellm.callbacks)
 
 
 async def pass_through_request(
