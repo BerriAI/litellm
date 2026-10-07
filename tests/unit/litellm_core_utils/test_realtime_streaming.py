@@ -2022,7 +2022,7 @@ async def test_provider_path_suppresses_duplicate_session_created_after_syntheti
         model="gemini-2.5-flash",
     )
     # Simulate synthetic session.created already sent by llm_http_handler.
-    streaming._session_created_sent_to_client = True
+    streaming.session_created_sent_to_client = True
 
     await streaming.backend_to_client_send_messages()
 
@@ -2074,7 +2074,7 @@ async def test_duplicate_session_created_still_triggers_guardrail_turn_detection
         model="gemini-2.5-flash",
     )
     # Synthetic session.created already sent by llm_http_handler.
-    streaming._session_created_sent_to_client = True
+    streaming.session_created_sent_to_client = True
     streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
     streaming._send_to_backend = AsyncMock()  # type: ignore[method-assign]
 
@@ -2897,7 +2897,7 @@ def test_setup_folds_in_auto_response_disable_when_transcription_guardrail_activ
             }
         }
     )
-    out = json.loads(streaming._maybe_inject_guardrail_auto_response_disable(setup))
+    out = json.loads(streaming.maybe_inject_guardrail_auto_response_disable(setup))
     aad = out["setup"]["realtimeInputConfig"]["automaticActivityDetection"]
     assert aad["disabled"] is True
 
@@ -2908,7 +2908,7 @@ def test_setup_unchanged_without_transcription_guardrail(monkeypatch: pytest.Mon
     monkeypatch.setattr(litellm, "callbacks", [])
     streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
     setup = json.dumps({"setup": {"model": "x", "generationConfig": {"responseModalities": ["AUDIO"]}}})
-    out = streaming._maybe_inject_guardrail_auto_response_disable(setup)
+    out = streaming.maybe_inject_guardrail_auto_response_disable(setup)
     assert json.loads(out) == json.loads(setup)
 
 
@@ -2920,7 +2920,7 @@ def test_non_bidi_setup_left_untouched_for_followup_capable_providers(monkeypatc
     monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
     streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
     msg = json.dumps({"type": "session.update", "session": {"instructions": "hi"}})
-    assert streaming._maybe_inject_guardrail_auto_response_disable(msg) == msg
+    assert streaming.maybe_inject_guardrail_auto_response_disable(msg) == msg
 
 
 @pytest.mark.asyncio

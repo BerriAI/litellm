@@ -105,7 +105,7 @@ class AWSEventStreamDecoder:
                 message = self._parse_message_from_event(event)
                 if message:
                     # remove data: prefix and "\n\n" at the end
-                    message = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(message) or ""
+                    message = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(message) or ""
                     message = message.replace("\n\n", "")
 
                     # Accumulate JSON data
@@ -154,7 +154,7 @@ class AWSEventStreamDecoder:
                     if message:
                         verbose_logger.debug("sagemaker  parsed chunk bytes %s", message)
                         # remove data: prefix and "\n\n" at the end
-                        message = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(message) or ""
+                        message = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(message) or ""
                         message = message.replace("\n\n", "")
 
                         # Accumulate JSON data

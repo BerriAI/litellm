@@ -1271,43 +1271,41 @@ def test_process_gemini_media():
 
 
 def test_get_image_mime_type_from_url():
-    """Test the _get_image_mime_type_from_url function for different image URLs"""
-    from litellm.llms.vertex_ai.gemini.transformation import (
-        _get_image_mime_type_from_url,
-    )
+    """Test MIME type inference for remote media URLs"""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import get_image_mime_type_from_url
 
     # Test JPEG images
     assert (
-        _get_image_mime_type_from_url("https://example.com/image.jpg") == "image/jpeg"
+        get_image_mime_type_from_url("https://example.com/image.jpg") == "image/jpeg"
     )
     assert (
-        _get_image_mime_type_from_url("https://example.com/image.jpeg") == "image/jpeg"
+        get_image_mime_type_from_url("https://example.com/image.jpeg") == "image/jpeg"
     )
     assert (
-        _get_image_mime_type_from_url("https://example.com/IMAGE.JPG") == "image/jpeg"
+        get_image_mime_type_from_url("https://example.com/IMAGE.JPG") == "image/jpeg"
     )
 
     # Test PNG images
-    assert _get_image_mime_type_from_url("https://example.com/image.png") == "image/png"
-    assert _get_image_mime_type_from_url("https://example.com/IMAGE.PNG") == "image/png"
+    assert get_image_mime_type_from_url("https://example.com/image.png") == "image/png"
+    assert get_image_mime_type_from_url("https://example.com/IMAGE.PNG") == "image/png"
 
     # Test WebP images
     assert (
-        _get_image_mime_type_from_url("https://example.com/image.webp") == "image/webp"
+        get_image_mime_type_from_url("https://example.com/image.webp") == "image/webp"
     )
     assert (
-        _get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
+        get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
     )
 
     # Test audio formats
-    assert _get_image_mime_type_from_url("https://example.com/audio.ogg") == "audio/ogg"
-    assert _get_image_mime_type_from_url("https://example.com/track.OGG") == "audio/ogg"
+    assert get_image_mime_type_from_url("https://example.com/audio.ogg") == "audio/ogg"
+    assert get_image_mime_type_from_url("https://example.com/track.OGG") == "audio/ogg"
 
     # Test unsupported formats
-    assert _get_image_mime_type_from_url("https://example.com/image.gif") is None
-    assert _get_image_mime_type_from_url("https://example.com/image.bmp") is None
-    assert _get_image_mime_type_from_url("https://example.com/image") is None
-    assert _get_image_mime_type_from_url("invalid_url") is None
+    assert get_image_mime_type_from_url("https://example.com/image.gif") is None
+    assert get_image_mime_type_from_url("https://example.com/image.bmp") is None
+    assert get_image_mime_type_from_url("https://example.com/image") is None
+    assert get_image_mime_type_from_url("invalid_url") is None
 
 
 @pytest.mark.parametrize(
