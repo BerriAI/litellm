@@ -11,9 +11,7 @@ coding agents such as OpenCode consume.
 The deployments set drop_params because Ollama has no parallel_tool_calls,
 which the matrix surfaces send alongside a forced tool_choice. Live only: Ollama
 Cloud has no provider edge mount, and its requests are not priced in the cost
-map, so there is no cost cell here. `ollama/` has no multi-turn cell yet: after a
-tool result it still prompts for JSON-only output, so the model calls the tool
-again instead of answering.
+map, so there is no cost cell here.
 """
 
 from __future__ import annotations
@@ -73,16 +71,14 @@ class Cell:
         return f"{self.surface}-{self.route}"
 
 
-def _cells(
-    capability: Capability, streaming: Streaming, routes: tuple[OllamaRoute, ...] = ROUTES
-) -> tuple[ParameterSet, ...]:
+def _cells(capability: Capability, streaming: Streaming) -> tuple[ParameterSet, ...]:
     return tuple(
         pytest.param(
             Cell(surface=surface, route=route),
             id=f"{surface}-{route}",
             marks=pytest.mark.covers(f"llm.{surface}.{route}.{capability}.{streaming}.works"),
         )
-        for surface, route in product(SURFACES, routes)
+        for surface, route in product(SURFACES, ROUTES)
     )
 
 
@@ -202,7 +198,7 @@ class TestOllamaConversation:
     ) -> None:
         _ = _weather_call(cell, surfaces[cell.surface], resources.key(), aliases[cell.route])
 
-    @pytest.mark.parametrize("cell", _cells("multi_turn", "nonstream", routes=("ollama_chat",)))
+    @pytest.mark.parametrize("cell", _cells("multi_turn", "nonstream"))
     @meta(_subject(Mode.NONSTREAM, tools=True))
     def test_tool_result_round_trip_reaches_the_model(
         self,
