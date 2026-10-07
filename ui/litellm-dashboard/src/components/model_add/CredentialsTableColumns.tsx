@@ -7,6 +7,7 @@ import { CredentialItem } from "@/components/networking";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { IdentityCell } from "@/components/shared/table_cells";
+import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -18,7 +19,9 @@ import {
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-function CredentialProviderCell({ provider }: { provider: string | undefined }) {
+import { isFederatedCredential } from "./anthropic_federation";
+
+function CredentialProviderCell({ provider, federated }: { provider: string | undefined; federated: boolean }) {
   if (!provider) {
     return <span className="text-sm text-muted-foreground">-</span>;
   }
@@ -36,6 +39,7 @@ function CredentialProviderCell({ provider }: { provider: string | undefined }) 
         />
       ) : null}
       <span className="truncate text-sm">{displayName || provider}</span>
+      {federated && <Badge variant="secondary">Workload identity federation</Badge>}
     </div>
   );
 }
@@ -110,9 +114,14 @@ export const getCredentialsTableColumns = ({
       accessorKey: "credential_info.custom_llm_provider",
       meta: { title: "Provider" },
       header: "Provider",
-      size: 200,
+      size: 320,
       enableSorting: false,
-      cell: ({ row }) => <CredentialProviderCell provider={row.original.credential_info?.custom_llm_provider} />,
+      cell: ({ row }) => (
+        <CredentialProviderCell
+          provider={row.original.credential_info?.custom_llm_provider}
+          federated={isFederatedCredential(row.original.credential_values)}
+        />
+      ),
     },
   ];
 

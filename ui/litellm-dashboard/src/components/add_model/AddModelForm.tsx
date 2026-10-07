@@ -24,7 +24,10 @@ import {
   type MountedFormValues,
 } from "../common_components/MountedFormField";
 import type { Team } from "../key_team_helpers/key_list";
-import { type CredentialItem, type ProviderCreateInfo, modelAvailableCall } from "../networking";
+import { type CredentialItem, type ProviderCreateInfo, credentialCreateCall, modelAvailableCall } from "../networking";
+import CredentialModal from "../model_add/CredentialModal";
+import { isAnthropicProvider } from "../model_add/anthropic_federation";
+import { buildCredential, withoutRestrictedFields } from "../model_add/credential_form_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import AdvancedSettings from "./advanced_settings";
@@ -34,6 +37,11 @@ import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
 import { TEST_MODES } from "./add_model_modes";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { credentialsKeys } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { extractProxyErrorMessage } from "@/lib/http/client";
+import { toast } from "@/lib/toast";
+import { isProxyAdminRole } from "@/utils/roles";
+import { useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddModelFormProps {
@@ -91,6 +99,23 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
   const { data: tagsList } = useTags();
   const selectedCredentialName = useWatch({ control: form.control, name: "litellm_credential_name" });
+  const queryClient = useQueryClient();
+  const [isFederatedCredentialModalOpen, setIsFederatedCredentialModalOpen] = useState(false);
+  const canCreateFederatedCredential = isProxyAdminRole(userRole ?? "") && isAnthropicProvider(selectedProvider);
+
+  const handleCreateFederatedCredential = async (values: Record<string, unknown>) => {
+    const credential = buildCredential(values, withoutRestrictedFields(values));
+    try {
+      await credentialCreateCall(accessToken, credential);
+    } catch (error) {
+      toast.error(extractProxyErrorMessage(error));
+      return;
+    }
+    toast.success("Credential added successfully");
+    setIsFederatedCredentialModalOpen(false);
+    await queryClient.invalidateQueries({ queryKey: credentialsKeys.all });
+    form.setValue("litellm_credential_name", credential.credential_name, { shouldDirty: true });
+  };
 
   const handleTestConnection = async () => {
     setIsTestingConnection(true);
@@ -317,6 +342,20 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             <div className="grow border-t border-border"></div>
                           </div>
                           <ProviderSpecificFields selectedProvider={selectedProvider} />
+                          {canCreateFederatedCredential && (
+                            <div className="mb-4 flex flex-col items-start gap-2">
+                              <span className="text-sm text-muted-foreground">
+                                Workload identity federation is saved as a credential, then attached to this model.
+                              </span>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => setIsFederatedCredentialModalOpen(true)}
+                              >
+                                Use workload identity federation
+                              </Button>
+                            </div>
+                          )}
                         </>
                       )}
                       <div className="flex items-center my-4">
@@ -447,6 +486,17 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
         </CardContent>
       </Card>
 
+      {isFederatedCredentialModalOpen && (
+        <CredentialModal
+          open
+          mode="add"
+          initialProvider={selectedProvider}
+          initialAuthMethod="federation"
+          providerLocked
+          onCancel={() => setIsFederatedCredentialModalOpen(false)}
+          onSubmit={handleCreateFederatedCredential}
+        />
+      )}
       {/* Test Connection Results Modal */}
       <Dialog
         open={isResultModalVisible}

@@ -63,6 +63,26 @@ describe("CredentialsTable", () => {
     expect(screen.getByText("Azure")).toBeInTheDocument();
   });
 
+  it("should mark only the credential that stores federation values as federated", () => {
+    const credentials: CredentialItem[] = [
+      {
+        credential_name: "a-anthropic-federated",
+        credential_values: { anthropic_federation_rule_id: "fdrl_stored", anthropic_organization_id: "org-stored" },
+        credential_info: { custom_llm_provider: "anthropic" },
+      },
+      {
+        credential_name: "b-anthropic-key",
+        credential_values: { api_key: "sk-a****" },
+        credential_info: { custom_llm_provider: "anthropic" },
+      },
+    ];
+    render(<CredentialsTable {...defaultProps} credentials={credentials} />);
+    const [federatedRow, apiKeyRow] = screen.getAllByRole("row").slice(1);
+    expect(within(federatedRow).getByText("a-anthropic-federated")).toBeInTheDocument();
+    expect(within(federatedRow).getByText("Workload identity federation")).toBeInTheDocument();
+    expect(within(apiKeyRow).queryByText("Workload identity federation")).not.toBeInTheDocument();
+  });
+
   it("should render a dash when a credential has no provider", () => {
     const credentials: CredentialItem[] = [
       { credential_name: "no-provider", credential_values: {}, credential_info: {} },
