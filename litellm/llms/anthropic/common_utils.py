@@ -754,11 +754,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def _get_model_capability(model: str, key: str) -> bool | None:
         """Read boolean capability ``key`` from the model map, or None when
         no entry declares it."""
-        from litellm.utils import _get_bundled_model_cost_map
+        from litellm.utils import get_bundled_model_cost_map
 
         try:
             candidates: Final = AnthropicModelInfo._model_map_lookup_candidates(model)
-            for model_cost in (litellm.model_cost, _get_bundled_model_cost_map()):
+            for model_cost in (litellm.model_cost, get_bundled_model_cost_map()):
                 for cand in candidates:
                     value = model_cost.get(cand, {}).get(key)
                     if isinstance(value, bool):
@@ -793,13 +793,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         model does not resolve under that provider or the resolved entry has no
         opinion on ``key``.
         """
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
         try:
             resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
                 model=model, custom_llm_provider=custom_llm_provider
             )
-            value: Final = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
+            value: Final = get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
         except Exception:  # noqa: BLE001  # _get_model_info_helper raises bare Exception for unmapped models
             return None
         return value if isinstance(value, bool) else None
@@ -813,13 +813,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Otherwise ``_supports_factory``'s provider-level fallbacks and the raw
         model-map walk remain as backstops for alias forms the lookup misses.
         """
-        from litellm.utils import _supports_factory
+        from litellm.utils import supports_factory
 
         resolved: Final = AnthropicModelInfo._get_provider_resolved_capability(model, key, custom_llm_provider)
         if resolved is not None:
             return resolved
         try:
-            if _supports_factory(
+            if supports_factory(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 key=key,

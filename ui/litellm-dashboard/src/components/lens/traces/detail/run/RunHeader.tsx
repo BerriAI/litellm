@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, Copy, Link, RefreshCw } from "lucide-react";
+import { ArrowLeft, Check, Copy, Link, ListTree, MessagesSquare, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useTimeout } from "usehooks-ts";
 
@@ -9,6 +9,7 @@ import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
+import { AddToDatasetButton } from "../../../datasets/AddToDatasetDialog";
 import type { TraceHandoff } from "../../api";
 import { runCost } from "../../list/AgentTracesTable";
 import { traceRefOf, traceShareUrl } from "../../routing";
@@ -121,11 +122,13 @@ export function RunHeader({
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 @xl/run-header:ml-auto">
           <TabsList aria-label="Trace view" className="group-data-horizontal/tabs:h-7">
-            <TabsTrigger value="steps" className="px-2.5 text-xs">
+            <TabsTrigger value="steps" className="gap-1.5 px-2.5 text-xs">
+              <ListTree className="size-3.5" />
               Steps
             </TabsTrigger>
-            <TabsTrigger value="conversation" className="px-2.5 text-xs">
-              Conversation
+            <TabsTrigger value="thread" className="gap-1.5 px-2.5 text-xs">
+              <MessagesSquare className="size-3.5" />
+              Thread
             </TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-1.5">
@@ -143,6 +146,10 @@ export function RunHeader({
               <RefreshCw className={cn("size-3", refreshing && "animate-spin")} />
               Refresh
             </Button>
+            <AddToDatasetButton
+              sources={[{ kind: "trace", trace_id: summary.trace_id, trace_ref: summary.trace_ref ?? "", span_id: "" }]}
+              agentName={traceAgentNames(summary)[0]}
+            />
             <CopyButton
               label="Copy link"
               icon={Link}

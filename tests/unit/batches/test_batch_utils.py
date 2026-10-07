@@ -86,6 +86,13 @@ def test_get_response_body_present():
     }
 
 
+def test_get_response_body_is_returned_without_validation():
+    response_body = ["provider-specific response"]
+    row = {"response": {"body": response_body}}
+
+    assert bu._get_response_from_batch_job_output_file(row) is response_body
+
+
 @pytest.mark.parametrize(
     "row",
     [
@@ -345,6 +352,10 @@ def test_count_tokens_unsupported_shape_is_zero(fake_token_counter):
 def test_count_entry_messages_path(fake_token_counter):
     entry = {"body": {"model": "gpt-4o", "messages": [{"role": "user"}, {"role": "x"}]}}
     assert bu._count_entry_tokens(entry) == 2  # len(messages)
+
+
+def test_count_entry_uses_dynamic_length_for_messages(fake_token_counter):
+    assert bu._count_entry_tokens({"body": {"messages": "abc"}}) == 3
 
 
 def test_count_entry_prompt_path(fake_token_counter):
@@ -1895,9 +1906,9 @@ class TestFileAccessCredentialsCarryFederation:
     has to inherit the federation fields or it cannot authenticate and the batch is never billed."""
 
     def test_federation_fields_survive_extraction(self):
-        from litellm.batches.batch_utils import _extract_file_access_credentials
+        from litellm.batches.batch_utils import extract_file_access_credentials
 
-        credentials = _extract_file_access_credentials(
+        credentials = extract_file_access_credentials(
             {
                 "model": "anthropic/claude-sonnet-4-5",
                 "anthropic_federation_rule_id": "fdrl_x",
@@ -1914,12 +1925,12 @@ class TestFileAccessCredentialsCarryFederation:
 
     def test_every_federation_field_is_carried(self):
         """Derived from the kwargs set, so a new federation field is carried without an edit here."""
-        from litellm.batches.batch_utils import _extract_file_access_credentials
+        from litellm.batches.batch_utils import extract_file_access_credentials
         from litellm.litellm_core_utils.get_litellm_params import ANTHROPIC_WIF_KWARGS_KEYS
 
         params = {name: f"value-{name}" for name in ANTHROPIC_WIF_KWARGS_KEYS}
 
-        credentials = _extract_file_access_credentials(params)
+        credentials = extract_file_access_credentials(params)
 
         assert set(credentials) == set(ANTHROPIC_WIF_KWARGS_KEYS)
 
@@ -2488,7 +2499,7 @@ async def test_flag_sends_every_vertex_row_down_the_native_path_when_a_model_is_
 
 
 @pytest.mark.asyncio
-async def test_handle_completed_batch_with_files_returns_bytes_and_fetches_error_once(monkeypatch):
+async def testhandle_completed_batch_with_files_returns_bytes_and_fetches_error_once(monkeypatch):
     rows = [_success_row(model="gpt-4o", usage=_usage(10, 5))]
     output_bytes = _vertex_jsonl(rows)
     error_bytes = _vertex_jsonl([{"custom_id": "req-bad", "error": {"message": "rejected"}}])
@@ -2511,7 +2522,7 @@ async def test_handle_completed_batch_with_files_returns_bytes_and_fetches_error
 
     batch = _batch("of").model_copy(update={"error_file_id": "ef"})
 
-    result, files = await bu._handle_completed_batch_with_files(batch, custom_llm_provider="openai")
+    result, files = await bu.handle_completed_batch_with_files(batch, custom_llm_provider="openai")
 
     assert result.cost == 3.3
     assert result.failed_requests == 1
@@ -2521,7 +2532,7 @@ async def test_handle_completed_batch_with_files_returns_bytes_and_fetches_error
 
 
 @pytest.mark.asyncio
-async def test_handle_completed_batch_with_files_no_output_returns_error_bytes(monkeypatch):
+async def testhandle_completed_batch_with_files_no_output_returns_error_bytes(monkeypatch):
     error_bytes = _vertex_jsonl([{"custom_id": "req-bad", "error": {"message": "rejected"}}])
 
     async def fake_afile_content(**kw):
@@ -2533,7 +2544,7 @@ async def test_handle_completed_batch_with_files_no_output_returns_error_bytes(m
 
     batch = _batch(None).model_copy(update={"error_file_id": "ef"})
 
-    result, files = await bu._handle_completed_batch_with_files(batch, custom_llm_provider="openai")
+    result, files = await bu.handle_completed_batch_with_files(batch, custom_llm_provider="openai")
 
     assert result.failed_requests == 1
     assert result.usage.total_tokens == 0

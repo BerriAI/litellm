@@ -64,7 +64,7 @@ class PassThroughStreamingHandler:
     @staticmethod
     def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
         if litellm_logging_obj.completion_start_time is None:
-            litellm_logging_obj._update_completion_start_time(completion_start_time=datetime.now())
+            litellm_logging_obj.update_completion_start_time(completion_start_time=datetime.now())
 
     @staticmethod
     async def schedule_stream_failure_logging(

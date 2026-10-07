@@ -5005,12 +5005,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if is_batch_line_item_event(kwargs):
             return
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
         rate_limit_type: Final = self.get_rate_limit_type()
 
-        litellm_parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs)
+        litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs)
         try:
             verbose_proxy_logger.debug("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
@@ -5130,11 +5130,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if is_batch_line_item_event(kwargs):
             return
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
         try:
-            litellm_parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs)
+            litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs)
 
             pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
 

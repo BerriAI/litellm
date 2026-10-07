@@ -508,7 +508,7 @@ def test_completion_model_stream(model):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_gemini_stream(sync_mode):
     try:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         print("Streaming gemini response")
         function1 = [
             {
@@ -3338,7 +3338,7 @@ def test_mock_response_iterator_tool_use():
 def test_reasoning_content_completion(model):
     # litellm.set_verbose = True
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         resp = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],

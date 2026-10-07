@@ -182,7 +182,7 @@ class OTELMetricAttributeFilter:
     exclude_list: list[str] | None = None
 
 
-def _build_metric_attribute_filter(value: object) -> OTELMetricAttributeFilter:
+def build_metric_attribute_filter(value: object) -> OTELMetricAttributeFilter:
     if isinstance(value, OTELMetricAttributeFilter):
         return value
     if not isinstance(value, dict):
@@ -196,7 +196,10 @@ def _build_metric_attribute_filter(value: object) -> OTELMetricAttributeFilter:
     )
 
 
-def _resolve_metric_attribute_filter(
+_build_metric_attribute_filter = build_metric_attribute_filter
+
+
+def resolve_metric_attribute_filter(
     attributes: OTELMetricAttributeFilter | None,
 ) -> tuple[frozenset[str] | None, frozenset[str] | None]:
     if attributes is None:
@@ -219,6 +222,9 @@ def _resolve_metric_attribute_filter(
         frozenset(include) if include else None,
         frozenset(exclude) if exclude else None,
     )
+
+
+_resolve_metric_attribute_filter = resolve_metric_attribute_filter
 
 
 def _provider_label(custom_llm_provider: object) -> str | None:
@@ -409,7 +415,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if metadata_keys_override is not None:
             config.baggage_metadata_keys = _normalize_team_metadata_keys(metadata_keys_override)
         if metric_attributes_override is not None:
-            config.attributes = _build_metric_attribute_filter(metric_attributes_override)
+            config.attributes = build_metric_attribute_filter(metric_attributes_override)
 
         self.config = config
         self.callback_name = callback_name
@@ -1644,11 +1650,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             otel_settings: Final = (litellm.callback_settings or {}).get("otel") or {}
             raw: Final[object] = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
             if raw is not None:
-                attributes = _build_metric_attribute_filter(raw)
+                attributes = build_metric_attribute_filter(raw)
         (
             self._metric_attr_include,
             self._metric_attr_exclude,
-        ) = _resolve_metric_attribute_filter(attributes)
+        ) = resolve_metric_attribute_filter(attributes)
         self._metric_attr_filter_resolved = True
 
     def _filter_metric_attributes(self, attrs: Mapping[str, str | None]) -> dict[str, str]:

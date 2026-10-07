@@ -38,9 +38,9 @@ from litellm.litellm_core_utils.core_helpers import (
     is_batch_line_item_event,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.router_utils.cooldown_callbacks import (
-    _get_prometheus_logger_from_callbacks,
+    get_prometheus_logger_from_callbacks,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, RouterErrors
@@ -191,7 +191,7 @@ class RouterBudgetLimiting(CustomLogger):
                 deployment_providers=deployment_providers,
                 spend_map=spend_map,
                 potential_deployments=potential_deployments,
-                request_tags=_get_tags_from_request_kwargs(
+                request_tags=get_tags_from_request_kwargs(
                     request_kwargs=request_kwargs,
                     metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
                 ),
@@ -318,7 +318,7 @@ class RouterBudgetLimiting(CustomLogger):
         # Resolve tags once before the loop (loop-invariant)
         _request_tags: list[str] = []
         if self.tag_budget_config:
-            _request_tags = _get_tags_from_request_kwargs(
+            _request_tags = get_tags_from_request_kwargs(
                 request_kwargs=request_kwargs,
                 metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
             )
@@ -535,7 +535,7 @@ class RouterBudgetLimiting(CustomLogger):
                 response_cost=response_cost,
             )
 
-        request_tags: Final = _get_tags_from_request_kwargs(
+        request_tags: Final = get_tags_from_request_kwargs(
             kwargs,
             metadata_variable_name=get_metadata_variable_name_from_kwargs(kwargs or {}),
         )
@@ -750,7 +750,7 @@ class RouterBudgetLimiting(CustomLogger):
         This is helpful for debugging and monitoring provider budget limits.
         """
 
-        prometheus_logger: Final = _get_prometheus_logger_from_callbacks()
+        prometheus_logger: Final = get_prometheus_logger_from_callbacks()
         if prometheus_logger:
             prometheus_logger.track_provider_remaining_budget(
                 provider=provider,

@@ -9,7 +9,7 @@ from base_responses_api import BaseResponsesAPITest
 
 @pytest.mark.asyncio
 async def test_basic_google_ai_studio_responses_api_with_tools():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.set_verbose = True
     request_model = "gemini/gemini-2.5-flash"
     response = await litellm.aresponses(
@@ -28,7 +28,7 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
     litellm.acompletion(messages=[{'role': 'user', 'content': 'what is the latest version of supabase python package and when was it released?'}], model='gemini-2.5-flash', tools=[], web_search_options={'search_context_size': 'low', 'user_location': None})
     """
     # Mock the acompletion function
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     mock_response = litellm.ModelResponse(
         id="test-id",
         created=1234567890,
@@ -276,7 +276,7 @@ async def test_gemini_3_responses_api_streaming_with_thought_signatures():
 
 class TestGoogleAIStudioResponsesAPITest(BaseResponsesAPITest):
     def get_base_completion_call_args(self):
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         return {"model": "gemini/gemini-2.5-flash-lite"}
 
     async def test_basic_openai_responses_delete_endpoint(self, sync_mode=False):

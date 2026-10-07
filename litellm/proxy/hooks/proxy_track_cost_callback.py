@@ -10,10 +10,10 @@ from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
-    _get_parent_otel_span_from_kwargs,
     budget_reservation_from_metadata,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    get_parent_otel_span_from_kwargs,
     is_batch_line_item_event,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -312,7 +312,7 @@ class _ProxyDBLogger(CustomLogger):
                 kwargs.get("stream", None),
                 kwargs.get("complete_streaming_response", None),
             )
-            parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
+            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs=kwargs)
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             end_user_id: Final = get_end_user_id_for_cost_tracking(litellm_params)
             metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
