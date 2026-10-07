@@ -17,8 +17,6 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     check_complete_credentials,
     custom_auth_common_checks_warning,
-    log_once_if_budget_reservation_disabled,
-    warn_once_if_custom_auth_skips_common_checks,
     get_end_user_id_from_request_body,
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
@@ -30,6 +28,8 @@ from litellm.proxy.auth.auth_utils import (
     get_project_model_tpm_limit,
     get_request_route_template,
     is_request_body_safe,
+    log_once_if_budget_reservation_disabled,
+    warn_once_if_custom_auth_skips_common_checks,
 )
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
@@ -1209,6 +1209,25 @@ def test_get_model_from_request_includes_fine_tuning_target_model_query():
         )
         == "fine-tune-model"
     )
+
+
+def test_get_model_from_request_includes_video_query_model_for_plain_id():
+    result = get_model_from_request(
+        request_data={"video_id": "plain-xai-id"},
+        route="/v1/videos/{video_id}",
+        request_query_params={"model": "grok-imagine-video-1.5"},
+    )
+    assert result == "grok-imagine-video-1.5"
+
+
+def test_get_model_from_request_includes_video_query_model_on_content_route():
+    result = get_model_from_request(
+        request_data={"video_id": "plain-xai-id"},
+        route="/v1/videos/{video_id}/content",
+        request_query_params={"model": "restricted-xai-model"},
+        request_headers={"x-litellm-model": "also-restricted"},
+    )
+    assert result == ["restricted-xai-model", "also-restricted"]
 
 
 def test_get_model_from_request_extracts_video_id_model():

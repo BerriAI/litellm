@@ -33,7 +33,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
-
+from fastapi import Response
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.video_endpoints.endpoints as endpoints
@@ -45,9 +46,6 @@ from litellm.types.videos.utils import (
     encode_character_id_with_provider,
     encode_video_id_with_provider,
 )
-
-from fastapi import Response
-from starlette.datastructures import UploadFile as StarletteUploadFile
 
 # --------------------------------------------------------------------------- #
 # A real model-encoded video id: decodes (for real) to provider "azure",
@@ -309,6 +307,40 @@ async def test_status__header_provider_beats_decoded_id(harness):
     assert data["model"] == "azure-sora"
 
 
+@pytest.mark.asyncio
+async def test_status__resolve_fail_keeps_decoded_model_id(harness):
+    encoded = encode_video_id_with_provider(
+        "9b444cea-aaaa-bbbb-cccc-dddddddddddd",
+        "xai",
+        "grok-imagine-video-1.5",
+    )
+
+    await call_status(harness, encoded)
+
+    harness.resolve_model.assert_called_once_with("grok-imagine-video-1.5")
+    assert harness.processor_data() == {
+        "video_id": encoded,
+        "custom_llm_provider": "xai",
+        "model": "grok-imagine-video-1.5",
+    }
+
+
+@pytest.mark.asyncio
+async def test_status__query_model_on_plain_id_leaves_provider_to_the_model(harness):
+    # an "openai" default here would override the provider the router / SDK derive from the model
+    await call_status(
+        harness,
+        "9b444cea-aaaa-bbbb-cccc-dddddddddddd",
+        query={"model": "xai/grok-imagine-video-1.5"},
+    )
+
+    harness.resolve_model.assert_not_called()
+    assert harness.processor_data() == {
+        "video_id": "9b444cea-aaaa-bbbb-cccc-dddddddddddd",
+        "model": "xai/grok-imagine-video-1.5",
+    }
+
+
 # =========================================================================== #
 #   GET /v1/videos/{video_id}/content  -  video_content                        #
 # =========================================================================== #
@@ -362,6 +394,42 @@ async def test_content__model_encoded_id(harness):
         "video_id": AZURE_VIDEO_ID,
         "custom_llm_provider": "azure",
         "model": "azure-sora",
+    }
+
+
+@pytest.mark.asyncio
+async def test_content__query_model_on_plain_id(harness):
+    harness.base_process.return_value = b"x"
+
+    await call_content(
+        harness,
+        "9b444cea-aaaa-bbbb-cccc-dddddddddddd",
+        query={"model": "grok-imagine-video-1.5"},
+    )
+
+    harness.resolve_model.assert_not_called()
+    assert harness.processor_data() == {
+        "video_id": "9b444cea-aaaa-bbbb-cccc-dddddddddddd",
+        "model": "grok-imagine-video-1.5",
+    }
+
+
+@pytest.mark.asyncio
+async def test_content__resolve_fail_keeps_decoded_model_id(harness):
+    harness.base_process.return_value = b"x"
+    encoded = encode_video_id_with_provider(
+        "9b444cea-aaaa-bbbb-cccc-dddddddddddd",
+        "xai",
+        "grok-imagine-video-1.5",
+    )
+
+    await call_content(harness, encoded)
+
+    harness.resolve_model.assert_called_once_with("grok-imagine-video-1.5")
+    assert harness.processor_data() == {
+        "video_id": encoded,
+        "custom_llm_provider": "xai",
+        "model": "grok-imagine-video-1.5",
     }
 
 
