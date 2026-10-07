@@ -4833,6 +4833,9 @@ def test_bedrock_tool_calling_pt():
     converted_tools = _bedrock_tools_pt(tools=tools)
 
     print(converted_tools)
+    assert converted_tools[0]["toolSpec"]["name"] == "get_current_weather" and (
+        converted_tools[0]["toolSpec"]["inputSchema"]["json"] == tools[0]["function"]["parameters"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -5883,6 +5886,7 @@ def test_ollama_pt():
     ]
     prompt = ollama_pt(model="ollama/llama3.1", messages=messages)
     print(prompt)
+    assert "You are a helpful assistant." in prompt["prompt"] and "Hello!" in prompt["prompt"]
 
 
 def test_convert_to_anthropic_tool_invoke_regular_tool():

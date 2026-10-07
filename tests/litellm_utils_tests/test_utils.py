@@ -715,3 +715,24 @@ def test_get_valid_models_from_dynamic_api_key():
     )
     assert len(valid_models) > 0
     assert "anthropic/claude-sonnet-4-6" in valid_models
+
+
+def test_get_whitelisted_models():
+    """
+    Snapshot of all bedrock models as of 12/24/2024.
+
+    Enforce any new bedrock chat model to be added as `bedrock_converse` unless explicitly whitelisted.
+
+    Create whitelist to prevent naming regressions for older litellm versions.
+    """
+    whitelisted_models = []
+    for model, info in litellm.model_cost.items():
+        if info.get("litellm_provider") == "bedrock" and info.get("mode") == "chat":
+            whitelisted_models.append(model)
+
+        # Write to a local file
+    with open("whitelisted_bedrock_models.txt", "w") as file:
+        for model in whitelisted_models:
+            file.write(f"{model}\n")
+
+    print("whitelisted_models written to whitelisted_bedrock_models.txt")

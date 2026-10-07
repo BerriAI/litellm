@@ -220,6 +220,10 @@ def test_bedrock_optional_params_simple(model):
         temperature=0.1,
         custom_llm_provider="bedrock",
     )
+    assert (
+        get_optional_params(model=model, max_tokens=10, temperature=0.1, custom_llm_provider="bedrock")["temperature"]
+        == 0.1
+    )
 
 
 @pytest.mark.parametrize(
@@ -907,6 +911,9 @@ def test_ollama_pydantic_obj():
         custom_llm_provider="ollama",
         response_format=ResponseFormat,
     )
+    assert get_optional_params(model="qwen2:0.5b", custom_llm_provider="ollama", response_format=ResponseFormat)[
+        "format"
+    ]["required"] == ["x", "y"]
 
 
 def test_gemini_frequency_penalty_listed_in_vertex_ai_supported_params():
@@ -1592,6 +1599,7 @@ def test_azure_response_format_param():
             }
         ],
     )
+    assert optional_params["tools"][0]["function"]["name"] == "get_current_time"
 
 
 @pytest.mark.parametrize(

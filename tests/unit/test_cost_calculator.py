@@ -6592,6 +6592,7 @@ def test_completion_cost_databricks_embedding(model, monkeypatch):
 
         print(resp)
         cost = completion_cost(completion_response=resp)
+        assert cost == resp.usage.prompt_tokens * litellm.get_model_info(model)["input_cost_per_token"]
 
 
 @pytest.mark.parametrize(
@@ -7525,6 +7526,7 @@ def test_together_ai_embedding_completion_cost():
         custom_llm_provider="together_ai",
         call_type="embedding",
     )
+    assert cost == 0
 
 
 def test_completion_cost_params():

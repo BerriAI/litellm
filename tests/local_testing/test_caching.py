@@ -1848,6 +1848,13 @@ async def test_logging_turn_off_message_logging_streaming(sync_mode):
                 raise e
 
 
+def test_basic_caching_import():
+    from litellm.caching import Cache
+
+    assert Cache is not None
+    print("Cache imported successfully")
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio()
 async def test_caching_kwargs_input(sync_mode):

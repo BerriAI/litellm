@@ -7500,6 +7500,7 @@ def test_validate_environment_empty_model():
     api_key = validate_environment()
     if api_key is None:
         raise Exception()
+    assert api_key == {"keys_in_environment": False, "missing_keys": []}
 
 
 def test_validate_environment_api_key():
@@ -8130,6 +8131,17 @@ def test_models_by_provider():
         )
 
 
+@pytest.fixture
+def restore_end_user_cost_tracking_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", litellm.disable_end_user_cost_tracking)
+    monkeypatch.setattr(
+        litellm,
+        "enable_end_user_cost_tracking_prometheus_only",
+        litellm.enable_end_user_cost_tracking_prometheus_only,
+    )
+
+
+@pytest.mark.usefixtures("restore_end_user_cost_tracking_flags")
 @pytest.mark.parametrize(
     "litellm_params, disable_end_user_cost_tracking, expected_end_user_id",
     [
@@ -8150,6 +8162,7 @@ def test_get_end_user_id_for_cost_tracking(
     )
 
 
+@pytest.mark.usefixtures("restore_end_user_cost_tracking_flags")
 @pytest.mark.parametrize(
     "litellm_params, enable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
     [
@@ -8559,6 +8572,10 @@ def test_dict_to_response_format_helper():
         "ref_template": "/$defs/{model}",
     }
     _dict_to_response_format_helper(**args)
+    assert (
+        _dict_to_response_format_helper(**args)["json_schema"]["schema"]["properties"]["events"]["items"]["$ref"]
+        == "/$defs/CalendarEvent"
+    )
 
 
 def test_validate_user_messages_invalid_content_type():
@@ -8757,27 +8774,6 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY")
 
     assert _model_cache.get_cached_model_info("openai") is None
-
-
-def test_get_whitelisted_models():
-    """
-    Snapshot of all bedrock models as of 12/24/2024.
-
-    Enforce any new bedrock chat model to be added as `bedrock_converse` unless explicitly whitelisted.
-
-    Create whitelist to prevent naming regressions for older litellm versions.
-    """
-    whitelisted_models = []
-    for model, info in litellm.model_cost.items():
-        if info.get("litellm_provider") == "bedrock" and info.get("mode") == "chat":
-            whitelisted_models.append(model)
-
-        # Write to a local file
-    with open("whitelisted_bedrock_models.txt", "w") as file:
-        for model in whitelisted_models:
-            file.write(f"{model}\n")
-
-    print("whitelisted_models written to whitelisted_bedrock_models.txt")
 
 
 def test_delta_tool_calls_sequential_indices():

@@ -925,8 +925,6 @@ async def test_arouter_async_get_healthy_deployments():
     assert result[0]["litellm_params"]["model"] == "gpt-3.5-turbo"
 
 
-
-
 def test_arouter_test_team_model():
     """
     Test that router.test_team_model returns the correct model
@@ -9060,7 +9058,6 @@ async def test_health_probe_preserves_normal_caller_policy(
     assert await router.cooldown_cache.async_get_active_cooldowns(["dep-0", "dep-1"], parent_otel_span=None) == []
 
 
-
 @pytest.mark.asyncio
 async def test_async_get_fully_unhealthy_model_names_keeps_name_when_partial():
     router = _router_with_two_deployments([False, False])
@@ -13791,7 +13788,6 @@ def test_model_group_info_reasoning_efforts_are_unknown_when_any_deployment_is_o
 
     assert result is not None
     assert result.supported_reasoning_efforts is None
-
 
 
 @pytest.mark.parametrize(
@@ -23056,12 +23052,6 @@ class TestRouterIndexManagement:
         )
 
 
-def test_router_deployment_typing() -> None:
-    deployment_typed_dict = DeploymentTypedDict(model_name="hi", litellm_params={"model": "hello-world"})
-    for value in deployment_typed_dict.items():
-        assert not isinstance(value, BaseModel)
-
-
 def test_router_multi_org_list() -> None:
     """
     Pass list of orgs in 1 model definition,
@@ -23103,6 +23093,10 @@ def test_router_specific_model_via_id():
     )
 
     router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
+    assert (
+        router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}]).choices[0].message.content
+        == "Hello world"
+    )
 
 
 def test_router_order() -> None:
@@ -23301,6 +23295,7 @@ def test_router_context_window_check_pre_call_check_out_group():
         )
 
         print(f"response: {response}")
+        assert response.choices[0].message.content == "Alexander was a great conqueror."
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
@@ -23572,35 +23567,14 @@ def test_router_context_window_pre_call_check(model, base_model, llm_provider):
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-def test_router_correctly_reraise_error():
-    """
-    User feedback: There is a problem with my messages array, but the error exception thrown is a Rate Limit error.
-    ```
-    Rate Limit: Error code: 429 - {'error': {'message': 'No deployments available for selected model, Try again in 60 seconds. Passed model=gemini-2.5-flash-lite..
-    ```
-    What they want? Propagation of the real error.
-    """
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gemini-1.5-pro",
-                "litellm_params": {
-                    "model": "vertex_ai/gemini-1.5-pro",
-                    "mock_response": "litellm.RateLimitError",
-                },
-            }
-        ]
+@pytest.fixture
+def restore_retry_after_header_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm.utils, "_get_retry_after_from_exception_header", litellm.utils._get_retry_after_from_exception_header
     )
 
-    try:
-        router.completion(
-            model="gemini-1.5-pro",
-            messages=[{"role": "admin", "content": "Fail on this!"}],
-        )
-    except litellm.RateLimitError:
-        pass
 
-
+@pytest.mark.usefixtures("restore_retry_after_header_parser")
 def test_router_dynamic_cooldown_correct_retry_after_time():
     """
     User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"

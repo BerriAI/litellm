@@ -7753,6 +7753,7 @@ def test_tool_call_no_arguments(tool_call_no_arguments):
 
     result = convert_to_gemini_tool_call_invoke(tool_call_no_arguments)
     print(result)
+    assert result == [{"function_call": {"name": "Get-FAQ", "args": {}}}]
 
 
 def vertex_httpx_mock_post_valid_response(*args, **kwargs):

@@ -9,11 +9,13 @@ from unittest.mock import patch
 
 import pytest
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 import litellm
 import litellm.types
 import litellm.types.router
 from litellm import Router
+from litellm.types.router import DeploymentTypedDict
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 load_dotenv()
@@ -21,6 +23,14 @@ load_dotenv()
 
 
 
+
+
+def test_router_deployment_typing():
+    deployment_typed_dict = DeploymentTypedDict(
+        model_name="hi", litellm_params={"model": "hello-world"}
+    )
+    for value in deployment_typed_dict.items():
+        assert not isinstance(value, BaseModel)
 
 
 @pytest.mark.asyncio()
@@ -862,6 +872,35 @@ def test_router_cooldown_api_connection_error():
             messages=[{"role": "admin", "content": "Fail on this!"}],
         )
     except litellm.APIConnectionError:
+        pass
+
+
+def test_router_correctly_reraise_error():
+    """
+    User feedback: There is a problem with my messages array, but the error exception thrown is a Rate Limit error.
+    ```
+    Rate Limit: Error code: 429 - {'error': {'message': 'No deployments available for selected model, Try again in 60 seconds. Passed model=gemini-2.5-flash-lite..
+    ```
+    What they want? Propagation of the real error.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini-1.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-1.5-pro",
+                    "mock_response": "litellm.RateLimitError",
+                },
+            }
+        ]
+    )
+
+    try:
+        router.completion(
+            model="gemini-1.5-pro",
+            messages=[{"role": "admin", "content": "Fail on this!"}],
+        )
+    except litellm.RateLimitError:
         pass
 
 

@@ -1143,6 +1143,7 @@ def test_is_web_search_tool_detection():
             failed += 1
 
     print(f"\n📊 Results: {passed} passed, {failed} failed")
+    assert failed == 0
 
     if failed == 0:
         print("\n" + "=" * 80)

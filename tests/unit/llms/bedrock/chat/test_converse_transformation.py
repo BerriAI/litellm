@@ -9201,6 +9201,7 @@ def test_bedrock_meta_llama_function_calling():
     )
 
     print(response)
+    assert response["raw_request_body"]["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_current_weather"
 
 
 def test_bedrock_nova_provider_detection():
