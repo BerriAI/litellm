@@ -3170,6 +3170,36 @@ def test_completion_streaming_iterator_preserves_response_headers():
     assert result._hidden_params["additional_headers"]["llm_provider-x-request-id"] == "req-provider-sync"
 
 
+@pytest.mark.parametrize("response_cost", (None, 0.00015))
+def test_apply_fallback_hidden_params_to_item_keeps_the_chunks_own_response_cost(
+    response_cost: float | None,
+) -> None:
+    chunk: Final = litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "chunk"}}])
+    chunk._hidden_params = {
+        "response_cost": response_cost,
+        "model_id": "failed-deployment",
+        "additional_headers": {"x-a": "1"},
+    }
+
+    Router._apply_fallback_hidden_params_to_item(
+        chunk,
+        (
+            {
+                "response_cost": 0.0,
+                "model_id": "fallback-deployment",
+                "additional_headers": {"x-b": "2"},
+            },
+            {"x-b": "2"},
+        ),
+    )
+
+    assert chunk._hidden_params == {
+        "response_cost": response_cost,
+        "model_id": "fallback-deployment",
+        "additional_headers": {"x-a": "1", "x-b": "2"},
+    }
+
+
 def test_adopt_fallback_response_headers_replaces_rather_than_merges():
     """LIT-6767: direct unit for FallbackAwareStreamWrapper.adopt_fallback_response_headers.
 
