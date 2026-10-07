@@ -36,6 +36,10 @@ from ..base_aws_llm import (
     run_aws_signing,
 )
 from ..common_utils import BedrockError
+from ..request_metadata import (
+    bedrock_request_metadata_headers,
+    merge_bedrock_invoke_headers,
+)
 from .amazon_nova_transformation import AmazonNovaEmbeddingConfig
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
 from .amazon_titan_multimodal_transformation import (
@@ -411,6 +415,10 @@ class BedrockEmbedding(BaseAWSLLM):
         credentials, aws_region_name = self._load_credentials(
             optional_params, bearer_token=bedrock_bearer_token(api_key)
         )
+
+        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+        if owned_names or metadata_headers:
+            extra_headers = merge_bedrock_invoke_headers(dict(extra_headers or {}), (), metadata_headers, owned_names)
 
         ### TRANSFORMATION ###
         unencoded_model_id: Final = optional_params.pop("model_id", None) or model  # default to model if not passed
