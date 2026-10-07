@@ -3,6 +3,7 @@
 
 import asyncio
 import importlib
+import json
 import os
 from collections.abc import Sequence
 from typing import Final
@@ -166,6 +167,34 @@ async def test_poll_during_cooldown_admits_only_the_head_of_the_queue():
     assert await scheduler.poll(id="head", model_name="sched-model", health_deployments=[])
     assert await scheduler.get_queue("sched-model") == [(2, "later")]
 
+
+
+class _JsonRoundTripRedisCache:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:
+        raw: Final = self.store.get(key)
+        return None if raw is None else json.loads(raw)
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.store[key] = json.dumps(value)
+
+
+@pytest.mark.asyncio
+async def test_second_replica_enqueues_behind_a_queue_decoded_from_redis():
+    redis_cache: Final = _JsonRoundTripRedisCache()
+    replica_a: Final = Scheduler(redis_cache=redis_cache)
+    replica_b: Final = Scheduler(redis_cache=redis_cache)
+    await replica_a.add_request(FlowItem(priority=1, request_id="waiting-on-a", model_name="sched-model"))
+
+    await replica_b.add_request(FlowItem(priority=0, request_id="urgent-on-b", model_name="sched-model"))
+
+    assert await replica_b.get_queue("sched-model") == [(0, "urgent-on-b"), (1, "waiting-on-a")]
+    assert await replica_b.poll(id="urgent-on-b", model_name="sched-model", health_deployments=[])
+    assert await replica_b.poll(id="waiting-on-a", model_name="sched-model", health_deployments=[])
+    await replica_b.remove_request(request_id="waiting-on-a", model_name="sched-model")
+    assert await replica_b.get_queue("sched-model") == []
 
 class _PausesAfterEnqueueScheduler(Scheduler):
     def __init__(self) -> None:

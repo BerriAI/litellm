@@ -3,7 +3,9 @@ import enum
 import heapq
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Final
+from typing import Final, TypeAlias
+
+from pydantic import TypeAdapter
 
 from litellm import print_verbose
 from litellm._internal_context import with_service_target
@@ -13,6 +15,8 @@ from litellm.exceptions import Timeout
 from litellm.types.llms.base import LiteLLMBaseModel
 
 SCHEDULER_QUEUE_TARGET: Final = "scheduler_queue"
+QueueEntry: TypeAlias = tuple[int, str]
+_QUEUE_ENTRIES: Final = TypeAdapter(list[QueueEntry])
 
 
 class SchedulerCacheKeys(enum.Enum):
@@ -37,7 +41,7 @@ class Scheduler:
         """
         polling_interval: float or null - frequency of polling queue. Default is 3ms.
         """
-        self.queue: list = []
+        self.queue: list[QueueEntry] = []
         default_in_memory_ttl: float | None = None
         if redis_cache is not None:
             # if redis-cache available frequently poll that instead of using in-memory.
@@ -137,21 +141,23 @@ class Scheduler:
         return self.queue
 
     @with_service_target(SCHEDULER_QUEUE_TARGET)
-    async def get_queue(self, model_name: str) -> list:
+    async def get_queue(self, model_name: str) -> list[QueueEntry]:
         """
-        Return a queue for that specific model group
+        Return a queue for that specific model group.
+
+        Redis hands the queue back as JSON lists, so every entry is validated into the
+        (priority, request_id) tuple the heap operations compare against.
         """
         if self.cache is not None:
             _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
             response: Final = await self.cache.async_get_cache(key=_cache_key)
-            if response is None or not isinstance(response, list):
+            if not isinstance(response, list):
                 return []
-            elif isinstance(response, list):
-                return response
+            return _QUEUE_ENTRIES.validate_python(response)
         return self.queue
 
     @with_service_target(SCHEDULER_QUEUE_TARGET)
-    async def save_queue(self, queue: list, model_name: str) -> None:
+    async def save_queue(self, queue: list[QueueEntry], model_name: str) -> None:
         """
         Save the updated queue of the model group
         """
