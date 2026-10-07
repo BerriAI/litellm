@@ -443,6 +443,45 @@ describe("AgentTracesSection", () => {
     expect(screen.getByText("1 run from 1 agent")).toBeVisible();
   });
 
+  it("shows every run the server matched to the agent, even when the run's own names differ", async () => {
+    const wrapperRun = { ...runs[0], trace_id: "wrapper-run", agent_names: ["writer"], service: "wrap-app" };
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: [wrapperRun], next_cursor: null });
+    renderWithProviders(<AgentTracesSection accessToken="sk-test" isActive range={ROLLING_DAY} />, {
+      searchParams: "?agent=Agent%20workflow",
+    });
+    expect(await screen.findByTestId("agent-trace-row")).toHaveTextContent("writer");
+    expect(vi.mocked(agentTraceListCall).mock.lastCall?.[0]).toMatchObject({ agent: "Agent workflow" });
+  });
+
+  it("treats an agent with no runs as a filter miss, not as a range waiting for its first trace", async () => {
+    vi.mocked(agentTraceListCall).mockImplementation(async ({ agent }) => ({
+      data: agent ? [] : runs,
+      next_cursor: null,
+    }));
+    vi.mocked(agentTraceAgentsCall).mockResolvedValue({ data: ["idle-agent"] });
+    vi.mocked(apiClient.get).mockClear();
+    const user = userEvent.setup();
+    renderWithProviders(<AgentTracesSection accessToken="sk-test" isActive range={ROLLING_DAY} />, {
+      searchParams: "?agent=idle-agent",
+    });
+    expect(await screen.findByText("No runs match these filters.")).toBeVisible();
+    expect(screen.queryByText("No runs in this time range")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
+    expect(apiClient.get).not.toHaveBeenCalledWith("/v1/traces", expect.anything());
+    await waitFor(() => expect(agentTraceAgentsCall).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length));
+    expect(screen.queryByText("Traces received. Select a run to inspect it.")).not.toBeInTheDocument();
+  });
+
+  it("does not ask for the agent list while the range has no runs", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: [], next_cursor: null });
+    renderSection();
+    await screen.findByTestId("tracing-setup-card");
+    expect(agentTraceAgentsCall).not.toHaveBeenCalled();
+  });
+
   it("shows each run's agent name with the logo of the SDK that produced it", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
