@@ -110,8 +110,8 @@ def test_apimodels_is_available_in_add_model_form():
     apimodels = next(provider for provider in providers if provider["litellm_provider"] == "apimodels")
 
     assert apimodels["provider"] == "APIMODELS"
-    assert apimodels["provider_display_name"] == "APIMODELS"
-    assert apimodels["default_model_placeholder"] == "apimodels/gpt-5.6-luna"
+    assert apimodels["provider_display_name"] == "apimodels.app"
+    assert apimodels["default_model_placeholder"] == "apimodels/claude-opus-5-5"
     assert {field["key"]: field["required"] for field in apimodels["credential_fields"]} == {
         "api_base": False,
         "api_key": True,
@@ -181,30 +181,13 @@ def test_apimodels_chat_completion_request_honours_api_base_override():
     assert response.choices[0].message.content == "Hello from APIMODELS"
 
 
-def test_apimodels_responses_request():
+def test_apimodels_responses_request_is_bridged_to_chat_completions():
     with respx.mock() as upstream:
-        route: Final = upstream.post("https://api.apimodels.app/v1/responses").respond(
-            200,
-            json={
-                "id": "resp_apimodels",
-                "object": "response",
-                "created_at": 1_790_000_000,
-                "model": "gpt-5.6-luna",
-                "status": "completed",
-                "output": [
-                    {
-                        "id": "msg_apimodels",
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": "Hello from APIMODELS", "annotations": []}],
-                    }
-                ],
-                "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
-            },
+        route: Final = upstream.post("https://api.apimodels.app/v1/chat/completions").respond(
+            200, json=_chat_completion("claude-opus-5-5")
         )
         response: Final = litellm.responses(
-            model="apimodels/gpt-5.6-luna",
+            model="apimodels/claude-opus-5-5",
             input="Say hello",
             api_key="apimodels-test-key",
         )
@@ -212,10 +195,9 @@ def test_apimodels_responses_request():
     request: Final = route.calls.last.request
     body: Final = json.loads(request.content)
     assert route.call_count == 1
-    assert str(request.url) == "https://api.apimodels.app/v1/responses"
     assert request.headers["authorization"] == "Bearer apimodels-test-key"
-    assert body["model"] == "gpt-5.6-luna"
-    assert body["input"] == "Say hello"
+    assert body["model"] == "claude-opus-5-5"
+    assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response.output[0].content[0].text == "Hello from APIMODELS"
 
 
