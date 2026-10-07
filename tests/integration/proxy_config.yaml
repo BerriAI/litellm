@@ -322,6 +322,30 @@ model_list:
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-mantle-key
       aws_region_name: us-east-1
+  - model_name: perplexity/pplx-decider-v1-27b
+    litellm_params:
+      model: perplexity/pplx-decider-v1-27b
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-perplexity-key
+  - model_name: typesafe/jev-1.13.0
+    litellm_params:
+      model: typesafe/jev-1.13.0
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-typesafe-key
+  - model_name: openrouter/typesafe/jev-1.13
+    litellm_params:
+      model: openrouter/typesafe/jev-1.13
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openrouter-key
+  - model_name: cloudflare/@cf/cloudflare/clef
+    litellm_params:
+      model: cloudflare/@cf/cloudflare/clef
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-cloudflare-key
+  - model_name: strands_decider/strands-decider-2B-hobson-v19
+    litellm_params:
+      model: strands_decider/strands-decider-2B-hobson-v19
+      api_base: http://127.0.0.1:8191
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL

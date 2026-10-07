@@ -252,10 +252,7 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
         answers={},
         usage=DecisionsUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
     )
-    response._hidden_params = {
-        "model": "perplexity/pplx-decider-v1-27b",
-        "custom_llm_provider": "perplexity",
-    }
+    response.set_hidden_params({"model": "perplexity/pplx-decider-v1-27b", "custom_llm_provider": "perplexity"})
 
     cost: Final = litellm.completion_cost(completion_response=response)
     perplexity_cost: Final = litellm.model_cost["perplexity/pplx-decider-v1-27b"]
@@ -308,7 +305,7 @@ async def test_decisions_cost_is_in_standard_logging_object(respx_mock: respx.Mo
 
 @pytest.mark.asyncio
 async def test_unknown_provider_is_rejected_before_http(respx_mock: respx.MockRouter) -> None:
-    with pytest.raises(litellm.BadRequestError, match="Supported providers"):
+    with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
         await litellm.adecisions(
             model="unknown/jev-1.13",
             state="review",
@@ -320,17 +317,79 @@ async def test_unknown_provider_is_rejected_before_http(respx_mock: respx.MockRo
 
 
 @pytest.mark.asyncio
-async def test_empty_custom_provider_is_rejected_before_http(respx_mock: respx.MockRouter) -> None:
-    with pytest.raises(litellm.BadRequestError, match="Supported providers"):
+async def test_provider_without_decisions_support_is_rejected_before_http(respx_mock: respx.MockRouter) -> None:
+    with pytest.raises(litellm.BadRequestError, match=r"Unknown Decisions provider 'anthropic'\. Supported providers"):
+        await litellm.adecisions(
+            model="anthropic/claude-sonnet-4-5",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_key="caller-key",
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_custom_provider_falls_back_to_the_model_prefix(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="perplexity/pplx-decider-v1-27b",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_key="caller-key",
+        custom_llm_provider="",
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content)["model"] == "pplx-decider-v1-27b"
+    assert response._hidden_params["custom_llm_provider"] == "perplexity"
+
+
+@pytest.mark.asyncio
+async def test_upstream_reply_without_answers_is_a_server_error(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
+        json={"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}
+    )
+
+    with pytest.raises(litellm.InternalServerError, match="unexpected response"):
         await litellm.adecisions(
             model="perplexity/pplx-decider-v1-27b",
             state="review",
             questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
             api_key="caller-key",
-            custom_llm_provider="",
         )
 
-    assert len(respx_mock.calls) == 0
+
+@pytest.mark.asyncio
+async def test_router_sends_the_openrouter_deployment_key_when_the_provider_is_already_resolved(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "jev",
+                "litellm_params": {
+                    "model": "openrouter/typesafe/jev-1.13",
+                    "api_key": "deployment-key",
+                    "api_base": "https://egress.example/openrouter",
+                },
+            }
+        ]
+    )
+    upstream: Final = respx_mock.post("https://egress.example/openrouter/alpha/decisions").respond(json=_RESPONSE)
+
+    await router.adecisions(
+        model="jev",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert upstream.called
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer deployment-key"
+    assert json.loads(respx_mock.calls[0].request.content)["model"] == "typesafe/jev-1.13"
 
 
 @pytest.mark.asyncio
