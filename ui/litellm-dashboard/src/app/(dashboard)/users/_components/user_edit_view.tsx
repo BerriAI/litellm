@@ -68,7 +68,7 @@ const userEditShape = {
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
 };
 
-const budgetSchema = (unlimitedBudget: boolean) =>
+const userEditSchema = (unlimitedBudget: boolean) =>
   z.object({
     ...userEditShape,
     max_budget: z
@@ -76,6 +76,9 @@ const budgetSchema = (unlimitedBudget: boolean) =>
       .nullish()
       .refine((value) => unlimitedBudget || !isBlank(value), "Please enter a budget or select Unlimited Budget"),
   });
+
+type UserEditFormInput = z.input<ReturnType<typeof userEditSchema>>;
+type UserEditFormValues = z.output<ReturnType<typeof userEditSchema>>;
 
 const buildMcpFieldValues = (objectPermission: ObjectPermission | null | undefined) => ({
   mcp_servers_and_groups: {
@@ -94,7 +97,7 @@ const toFormValues = (
   objectPermission: ObjectPermission | null | undefined,
   isBulkEdit: boolean,
   canEditMcpPermissions: boolean,
-): z.input<ReturnType<typeof budgetSchema>> => {
+): UserEditFormInput => {
   const maxBudget = userData.user_info?.max_budget;
   const isUnlimited = maxBudget === null || maxBudget === undefined;
   return {
@@ -163,7 +166,7 @@ export function UserEditView({
     userData.user_id,
     () => userData.user_info?.model_max_budget ?? {},
   );
-  const schema = useMemo(() => budgetSchema(unlimitedBudget), [unlimitedBudget]);
+  const schema = useMemo(() => userEditSchema(unlimitedBudget), [unlimitedBudget]);
   const form = useZodForm(schema, {
     defaultValues: toFormValues(userData, objectPermission, isBulkEdit, canEditMcpPermissions),
   });
@@ -181,7 +184,7 @@ export function UserEditView({
     }
   };
 
-  const handleSubmit = (values: z.output<ReturnType<typeof budgetSchema>>) => {
+  const handleSubmit = (values: UserEditFormValues) => {
     const metadata = parseMetadata(values.metadata);
     if (!metadata.ok) {
       return;
