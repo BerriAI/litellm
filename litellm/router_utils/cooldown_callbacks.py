@@ -57,7 +57,7 @@ async def router_cooldown_event_callback(
         pass
 
     # get the prometheus logger from in memory loggers
-    prometheusLogger: Final[PrometheusLogger | None] = _get_prometheus_logger_from_callbacks()
+    prometheusLogger: Final[PrometheusLogger | None] = get_prometheus_logger_from_callbacks()
 
     if prometheusLogger is not None:
         prometheusLogger.set_deployment_complete_outage(
@@ -78,7 +78,7 @@ async def router_cooldown_event_callback(
     return
 
 
-def _get_prometheus_logger_from_callbacks() -> PrometheusLogger | None:
+def get_prometheus_logger_from_callbacks() -> PrometheusLogger | None:
     """
     Checks if prometheus is a initalized callback, if yes returns it
     """
@@ -95,3 +95,6 @@ def _get_prometheus_logger_from_callbacks() -> PrometheusLogger | None:
             return global_callback
 
     return None
+
+
+_get_prometheus_logger_from_callbacks = get_prometheus_logger_from_callbacks
