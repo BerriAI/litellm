@@ -2142,6 +2142,25 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             guardrail_span.end(end_time=self._to_ns(end_time_datetime))
 
+    @staticmethod
+    def _extract_error_description(kwargs: object) -> str | None:
+        if not isinstance(kwargs, dict):
+            return None
+        standard_logging_payload: Final = kwargs.get("standard_logging_object")
+        if isinstance(standard_logging_payload, dict):
+            error_information: Final = standard_logging_payload.get("error_information")
+            if isinstance(error_information, dict):
+                error_message: Final = error_information.get("error_message")
+                if error_message:
+                    return f"{error_message}"
+            error_str: Final = standard_logging_payload.get("error_str")
+            if error_str:
+                return f"{error_str}"
+        exception: Final = kwargs.get("exception")
+        if exception:
+            return f"{exception}"
+        return None
+
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
 
@@ -2176,6 +2195,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # OR if USE_OTEL_LITELLM_REQUEST_SPAN is explicitly enabled
         should_create_primary_span: Final = parent_otel_span is None or get_secret_bool("USE_OTEL_LITELLM_REQUEST_SPAN")
 
+        error_description: Final = self._extract_error_description(
+            kwargs  # pyright: ignore[reportUnknownArgumentType]  # kwargs is untyped at failure boundary
+        )
+
         span = None
         if should_create_primary_span:
             # Span 1: Request sent to litellm SDK
@@ -2188,7 +2211,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if self._gen_ai_semconv_latest_experimental:
                 span_kwargs["kind"] = self.span_kind.CLIENT
             span = otel_tracer.start_span(**span_kwargs)
-            span.set_status(Status(StatusCode.ERROR))
+            span.set_status(Status(StatusCode.ERROR, description=error_description))
             self.set_attributes(span, kwargs, response_obj)
 
             # Record exception information using OTEL standard method
@@ -2201,7 +2224,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # Only set attributes if the span is still recording (not closed)
             # Note: parent_otel_span is guaranteed to be not None here
             if parent_otel_span.is_recording():
-                parent_otel_span.set_status(Status(StatusCode.ERROR))
+                parent_otel_span.set_status(Status(StatusCode.ERROR, description=error_description))
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
                 self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
 
