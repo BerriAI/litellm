@@ -554,6 +554,7 @@ class LiteLLMRoutes(enum.Enum):
         "/lens/workers/{worker_id}",
         "/v1/traces",
         "/v1/logs",
+        "/v1/traces/agents",
         "/v1/traces/query",
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
