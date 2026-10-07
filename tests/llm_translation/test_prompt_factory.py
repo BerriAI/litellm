@@ -225,6 +225,41 @@ def test_create_anthropic_image_param_with_https_url():
     assert image_param["source"]["url"] == "https://example.com/image.png"
 
 
+@patch("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64")
+def test_create_anthropic_image_param_with_http_url_forwards_url(
+    mock_convert_url: MagicMock,
+):
+    """Plain http:// image URLs are forwarded as URL sources, like https://.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/43098: the
+    proxy used to download http:// URLs and send them as base64 without notice.
+    """
+    image_param = create_anthropic_image_param(
+        "http://example.com/image.png", format=None
+    )
+
+    mock_convert_url.assert_not_called()
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "url"
+    assert image_param["source"]["url"] == "http://example.com/image.png"
+
+
+@patch("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64")
+def test_create_anthropic_image_param_with_http_url_still_base64_for_bedrock(
+    mock_convert_url: MagicMock,
+):
+    """Bedrock invoke keeps converting URLs to base64 (provider has no URL source)."""
+    mock_convert_url.return_value = "data:image/png;base64,/9j/4AAQSkZJRg=="
+
+    image_param = create_anthropic_image_param(
+        "http://example.com/image.png", format=None, is_bedrock_invoke=True
+    )
+
+    mock_convert_url.assert_called_once_with(url="http://example.com/image.png")
+    assert image_param["type"] == "image"
+    assert image_param["source"]["type"] == "base64"
+
+
 def test_create_anthropic_image_param_with_dict_input():
     """Test that dict input with URL is handled correctly."""
     image_param = create_anthropic_image_param(
@@ -290,6 +325,37 @@ def test_anthropic_messages_pt_with_url_image():
     assert result[0]["content"][1]["type"] == "image"
     assert result[0]["content"][1]["source"]["type"] == "url"
     assert result[0]["content"][1]["source"]["url"] == "https://example.com/image.jpg"
+
+
+@patch("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64")
+def test_anthropic_messages_pt_with_http_url_image(mock_convert_url: MagicMock):
+    """Plain http:// image URLs are forwarded as URL sources for regular Anthropic.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/43098.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": "http://example.com/image.jpg",
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic"
+    )
+
+    mock_convert_url.assert_not_called()
+    assert len(result) == 1
+    image_content = result[0]["content"][1]
+    assert image_content["type"] == "image"
+    assert image_content["source"]["type"] == "url"
+    assert image_content["source"]["url"] == "http://example.com/image.jpg"
 
 
 def test_anthropic_messages_pt_with_base64_image():
