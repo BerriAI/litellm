@@ -26,7 +26,11 @@ export function useTraceFeedback(accessToken: string, runs: TraceSummary[], isAc
   const queries = useQueries({
     queries: batches.map((traces) => ({
       queryKey: [...traceFeedbackKey(accessToken), traces],
-      queryFn: () => api.feedbackSummary(traces),
+      queryFn: async () => {
+        const summaries: unknown = await api.feedbackSummary(traces);
+        if (!Array.isArray(summaries)) throw new Error("Unexpected feedback summary response");
+        return summaries as TraceFeedbackSummary[];
+      },
       enabled: isActive,
       staleTime: 15000,
       refetchInterval: isActive && api.live ? 15000 : false,
