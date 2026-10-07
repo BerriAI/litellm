@@ -613,7 +613,7 @@ def test_deployment_callback_respects_cooldown_time(model_list):
         },
     }
 
-    with patch("litellm.router._set_cooldown_deployments") as mock_set:
+    with patch("litellm.router_backends.python_router._set_cooldown_deployments") as mock_set:
         router.deployment_callback_on_failure(
             kwargs=kwargs,
             completion_response=None,
@@ -974,7 +974,7 @@ def _rpm_tpm_router(model_id: str) -> Router:
 @pytest.fixture
 def router_minute_pinned(monkeypatch):
     pinned = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
-    monkeypatch.setattr("litellm.router.get_utc_datetime", lambda: pinned)
+    monkeypatch.setattr("litellm.router_backends.python_router.get_utc_datetime", lambda: pinned)
 
 
 def _ratelimit_headers(response: ModelResponse | CustomStreamWrapper) -> dict[str, int]:

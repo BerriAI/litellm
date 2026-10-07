@@ -8,6 +8,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from litellm import Router, CustomLogger
+from litellm.router_backends.python_router import PythonRouter
 from litellm.types.utils import StandardLoggingPayload
 
 ## Get the current directory of the file being run
@@ -845,7 +846,7 @@ def test_apply_default_settings():
     assert mock_callback in router_with_callbacks.optional_callbacks
 
     # Test that the method is called during router initialization
-    with patch.object(Router, "apply_default_settings") as mock_apply:
+    with patch.object(PythonRouter, "apply_default_settings") as mock_apply:
         Router()
         mock_apply.assert_called_once()
 
@@ -1468,6 +1469,6 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
         ]
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is True
-        assert encrypted_content_callbacks[0].router is router
+        assert encrypted_content_callbacks[0].router is router.backend
     finally:
         router.discard()

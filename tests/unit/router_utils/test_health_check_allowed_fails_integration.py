@@ -605,7 +605,7 @@ class TestAllDeploymentsInCooldownSafetyNet:
 
         # Simulate all deployments in cooldown
         with patch(
-            "litellm.router._async_get_cooldown_deployments",
+            "litellm.router_backends.python_router._async_get_cooldown_deployments",
             new=AsyncMock(return_value=["deploy-1", "deploy-2"]),
         ):
             # The safety net in async_get_available_deployment should restore

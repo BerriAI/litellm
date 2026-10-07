@@ -57,7 +57,7 @@ def check_function_lengths(router_file):
 
 def main():
     # Update this path to point to the correct location of router.py
-    router_file = "../../litellm/router.py"  # LOCAL TESTING
+    router_file = "../../litellm/router_backends/python_router.py"  # LOCAL TESTING
 
     check_function_lengths(router_file)
 

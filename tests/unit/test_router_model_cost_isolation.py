@@ -20,6 +20,7 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.router_backends.python_router import PythonRouter
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
@@ -717,7 +718,7 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         _invalidate_model_cost_lowercase_map()
 
         router = Router(model_list=[])
-        with patch.object(Router, "_add_deployment", lambda self, deployment: deployment):
+        with patch.object(PythonRouter, "_add_deployment", lambda self, deployment: deployment):
             router._create_deployment(
                 deployment_info={},
                 _model_name="chatgpt/gpt-5.4",
@@ -2381,7 +2382,7 @@ def test_replay_live_router_model_cost_rebuilds_every_live_router():
     A process can hold more than one Router, so the rebuild has to fan out across
     all of them rather than restoring whichever one happens to be reachable.
     """
-    from litellm.router import _replay_live_router_model_cost
+    from litellm.router_backends.python_router import _replay_live_router_model_cost
 
     saved_model_cost = litellm.model_cost
     try:

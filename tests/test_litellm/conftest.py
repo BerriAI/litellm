@@ -19,7 +19,7 @@ from pytest_socket import _remove_restrictions
 import asyncio
 
 import litellm
-from litellm import router as litellm_router_module
+from litellm.router_backends import python_router as litellm_router_module
 from litellm import utils as litellm_utils_module
 from litellm._logging import ALL_LOGGERS
 from litellm.litellm_core_utils.prompt_templates import (

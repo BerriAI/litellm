@@ -168,7 +168,7 @@ class TestRouterFallbackFailureTracebackRedaction:
         secret = "sk-testsecretvalue1234567890abcdef"
 
         with patch(
-            "litellm.router.run_async_fallback",
+            "litellm.router_backends.python_router.run_async_fallback",
             new=AsyncMock(side_effect=RuntimeError(f"boom api_key={secret}")),
         ):
             try:

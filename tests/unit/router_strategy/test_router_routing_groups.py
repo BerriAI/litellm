@@ -235,7 +235,7 @@ async def test_async_dispatch_uses_group_strategy_for_grouped_model():
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
         patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
+            "litellm.router_backends.python_router.simple_shuffle", wraps=litellm.router_backends.python_router.simple_shuffle
         ) as shuffle_spy,
     ):
         await router.async_get_available_deployment(
@@ -270,7 +270,7 @@ async def test_async_dispatch_falls_back_to_default_for_ungrouped_models():
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
         patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
+            "litellm.router_backends.python_router.simple_shuffle", wraps=litellm.router_backends.python_router.simple_shuffle
         ) as shuffle_spy,
     ):
         await router.async_get_available_deployment(
@@ -330,7 +330,7 @@ async def test_async_dispatch_uses_default_selector_when_constructed_with_enum()
             wraps=default_selector.async_get_available_deployments,
         ) as latency_spy,
         patch(
-            "litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle
+            "litellm.router_backends.python_router.simple_shuffle", wraps=litellm.router_backends.python_router.simple_shuffle
         ) as shuffle_spy,
     ):
         await router.async_get_available_deployment(
@@ -1375,7 +1375,7 @@ async def test_group_call_dispatches_via_group_selector():
             "async_get_available_deployments",
             wraps=group_selector.async_get_available_deployments,
         ) as latency_spy,
-        patch("litellm.router.simple_shuffle", wraps=litellm.router.simple_shuffle) as shuffle_spy,
+        patch("litellm.router_backends.python_router.simple_shuffle", wraps=litellm.router_backends.python_router.simple_shuffle) as shuffle_spy,
     ):
         deployment = await router.async_get_available_deployment(model="quality", request_kwargs={})
 

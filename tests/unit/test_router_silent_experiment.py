@@ -14,8 +14,8 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router import Router
-from litellm.router import _silent_experiment_kwargs_snapshot
-from litellm.router import _silent_experiment_targets
+from litellm.router_backends.python_router import _silent_experiment_kwargs_snapshot
+from litellm.router_backends.python_router import _silent_experiment_targets
 
 
 class _RecordingLogger(CustomLogger):
@@ -317,7 +317,7 @@ def test_sync_shadow_gets_kwargs_snapshot_taken_before_primary_mutates_them(reco
 
     router = Router(model_list=_tagged_primary_model_list())
     with patch(  # test-quality-ok: Router has no thread factory to inject; deferring start is the only deterministic way to expose the race
-        "litellm.router.threading", SimpleNamespace(Thread=_DeferredThread)
+        "litellm.router_backends.python_router.threading", SimpleNamespace(Thread=_DeferredThread)
     ):
         response = router.completion(
             model="primary-model",
@@ -349,7 +349,7 @@ def test_sync_shadow_workers_do_not_share_metadata_with_each_other(recording_log
 
     router = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
     with patch(  # test-quality-ok: Router has no thread factory to inject; deferring start is the only deterministic way to expose the race
-        "litellm.router.threading", SimpleNamespace(Thread=_DeferredThread)
+        "litellm.router_backends.python_router.threading", SimpleNamespace(Thread=_DeferredThread)
     ):
         router.completion(
             model="primary-model",

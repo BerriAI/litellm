@@ -7419,7 +7419,7 @@ class TestStreamingClientDisconnectBilling:
         from litellm.llms.anthropic.pass_through.adapters.transformation import (
             AnthropicAdapter,
         )
-        from litellm.router import FallbackAwareAnthropicMessagesStream
+        from litellm.router_backends.python_router import FallbackAwareAnthropicMessagesStream
 
         async def _sse_frames() -> AsyncGenerator[bytes, None]:
             yield b"event: message_start\n\n"

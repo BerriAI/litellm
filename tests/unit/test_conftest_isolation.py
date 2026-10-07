@@ -1,6 +1,6 @@
 import litellm
 from litellm import Router
-from litellm import router as litellm_router_module
+from litellm.router_backends import python_router as litellm_router_module
 from litellm import utils as litellm_utils_module
 
 CANARY_MODEL = "conftest-isolation-canary-model"
@@ -28,9 +28,9 @@ def test_live_router_membership_is_scoped_to_this_test():
             }
         ]
     )
-    assert _CanaryRouterHolder.router in litellm_router_module._live_routers
+    assert _CanaryRouterHolder.router.backend in litellm_router_module._live_routers
 
 
 def test_live_router_membership_was_rolled_back():
     assert _CanaryRouterHolder.router is not None
-    assert _CanaryRouterHolder.router not in litellm_router_module._live_routers
+    assert _CanaryRouterHolder.router.backend not in litellm_router_module._live_routers

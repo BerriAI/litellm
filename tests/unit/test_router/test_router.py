@@ -39,7 +39,8 @@ from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator imp
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, ProxyException, UserAPIKeyAuth
-from litellm.router import (
+from litellm.router_backends.python_router import (
+    PythonRouter,
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
     MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS,
     FallbackAwareAnthropicMessagesStream,
@@ -2084,7 +2085,7 @@ async def test_ageneric_api_call_does_not_add_session_model():
     ],
 )
 def test_with_router_resolved_session_model(session, expected):
-    from litellm.router import _with_router_resolved_session_model
+    from litellm.router_backends.python_router import _with_router_resolved_session_model
 
     assert dict(_with_router_resolved_session_model(session, "resolved")) == expected
 
@@ -2484,7 +2485,7 @@ def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selecto
     ],
 )
 def test_cost_value_as_float(value, expected):
-    from litellm.router import _cost_value_as_float
+    from litellm.router_backends.python_router import _cost_value_as_float
 
     assert _cost_value_as_float(value) == expected
 
@@ -3170,7 +3171,8 @@ def test_adopt_fallback_response_headers_replaces_rather_than_merges():
     """
     from unittest.mock import MagicMock
 
-    from litellm.router import FallbackAwareStreamWrapper, Router
+    from litellm.router import Router
+    from litellm.router_backends.python_router import FallbackAwareStreamWrapper
 
     wrapper = FallbackAwareStreamWrapper(
         completion_stream=iter([]),
@@ -3215,7 +3217,8 @@ def test_adopt_fallback_response_headers_survives_a_collected_wrapper():
     import weakref
     from unittest.mock import MagicMock
 
-    from litellm.router import FallbackAwareStreamWrapper, Router
+    from litellm.router import Router
+    from litellm.router_backends.python_router import FallbackAwareStreamWrapper
 
     fallback: Final = MagicMock()
     fallback._response_headers = {"x-request-id": "req-FALLBACK"}
@@ -3251,7 +3254,8 @@ def test_adopt_fallback_response_headers_drops_headers_the_fallback_cannot_repla
     """
     from unittest.mock import MagicMock
 
-    from litellm.router import FallbackAwareStreamWrapper, Router
+    from litellm.router import Router
+    from litellm.router_backends.python_router import FallbackAwareStreamWrapper
 
     wrapper = FallbackAwareStreamWrapper(
         completion_stream=iter([]),
@@ -3283,7 +3287,8 @@ def test_adopt_fallback_response_headers_keeps_identity_when_fallback_has_none()
     """
     from unittest.mock import MagicMock
 
-    from litellm.router import FallbackAwareStreamWrapper, Router
+    from litellm.router import Router
+    from litellm.router_backends.python_router import FallbackAwareStreamWrapper
 
     wrapper = FallbackAwareStreamWrapper(
         completion_stream=iter([]),
@@ -4365,7 +4370,7 @@ def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
     )
 
 
-class _InjectedFallbackRouter(Router):
+class _InjectedFallbackRouter(PythonRouter):
     def __init__(self, fallback_response: object) -> None:
         super().__init__(model_list=[], fallbacks=[{"primary": ["fallback"]}])
         self._fallback_response: Final = fallback_response
@@ -10018,7 +10023,7 @@ class TestCallerTimeoutCooldown:
 
 
 def test_stream_chunks_have_generated_content_detects_text_and_non_text():
-    from litellm.router import _stream_chunks_have_generated_content
+    from litellm.router_backends.python_router import _stream_chunks_have_generated_content
     from litellm.types.utils import (
         ChatCompletionDeltaToolCall,
         Delta,
@@ -11479,7 +11484,7 @@ def test_model_info_is_active_for_environment_matrix(monkeypatch):
     """The model-write endpoints consult this predicate to tell a deliberately
     environment-inactive model from one dropped by a failed reload; the Router's own
     deployment gate delegates to it, so the two can never diverge."""
-    from litellm.router import model_info_is_active_for_environment
+    from litellm.router_backends.python_router import model_info_is_active_for_environment
 
     assert model_info_is_active_for_environment(model_info=None) is True
     assert model_info_is_active_for_environment(model_info={"id": "m1"}) is True
@@ -13610,7 +13615,7 @@ class TestAzureBaseModelFallbackLogging:
         router = self._router_with_azure_deployment("azure/gpt-4o")
 
         with patch(
-            "litellm.router.verbose_router_logger.error"
+            "litellm.router_backends.python_router.verbose_router_logger.error"
         ) as mock_error:
             model_info = router.get_router_model_info(
                 deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
@@ -13628,7 +13633,7 @@ class TestAzureBaseModelFallbackLogging:
         router = self._router_with_azure_deployment("azure/my-custom-deployment-name")
 
         with patch(
-            "litellm.router.verbose_router_logger.error"
+            "litellm.router_backends.python_router.verbose_router_logger.error"
         ) as mock_error:
             model_info = router.get_router_model_info(
                 deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
@@ -15650,7 +15655,7 @@ def test_anthropic_messages_stream_can_retry_direct_call():
 
 
 def test_retry_policy_ceiling_is_the_largest_budget_any_error_class_is_granted():
-    from litellm.router import _retry_policy_ceiling
+    from litellm.router_backends.python_router import _retry_policy_ceiling
 
     assert _retry_policy_ceiling(RetryPolicy(InternalServerErrorRetries=1, RateLimitErrorRetries=3)) == 3
     assert _retry_policy_ceiling(RetryPolicy()) == 0
@@ -17739,7 +17744,7 @@ class TestPreRoutingTierDrivesFallbacks:
     lookup stayed on the router name, so the tier's configured chain never ran and a
     provider failure on the tier's first hop was returned to the client."""
 
-    class _TierRouter(litellm.Router):
+    class _TierRouter(PythonRouter):
         async def async_pre_routing_hook(
             self, model, request_kwargs, messages=None, input=None, specific_deployment=False
         ):
@@ -18222,7 +18227,7 @@ def test_router_retry_skip_stamp_feeds_deployment_ids_to_skip_on_retry(
     ],
 )
 def test_router_as_retry_skipped_deployment_ids_keeps_only_a_tuple_of_strings(value, expected):
-    from litellm.router import _as_retry_skipped_deployment_ids
+    from litellm.router_backends.python_router import _as_retry_skipped_deployment_ids
 
     assert _as_retry_skipped_deployment_ids(value) == expected
 
@@ -19953,7 +19958,7 @@ def test_a_failed_routing_read_prefetch_logs_the_request_model_without_its_line_
 async def test_router_subclass_overriding_async_get_healthy_deployments_with_the_old_signature_still_routes(
     routing_strategy: str,
 ) -> None:
-    class OldSignatureRouter(litellm.Router):
+    class OldSignatureRouter(PythonRouter):
         async def async_get_healthy_deployments(
             self,
             model: str,
@@ -20161,7 +20166,7 @@ def _record_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dic
     def record(name: str, attributes: dict[str, str | int]) -> None:
         events.append((name, dict(attributes)))
 
-    monkeypatch.setattr(litellm.router, "phase_event", record)
+    monkeypatch.setattr(litellm.router_backends.python_router, "phase_event", record)
     return events
 
 

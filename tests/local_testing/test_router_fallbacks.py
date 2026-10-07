@@ -1432,7 +1432,7 @@ async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
 
 @pytest.mark.asyncio
 async def test_router_disable_fallbacks_dynamically():
-    from litellm.router import run_async_fallback
+    from litellm.router_backends.python_router import run_async_fallback
 
     router = Router(
         model_list=[

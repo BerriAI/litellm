@@ -3242,7 +3242,7 @@ def model_info_as_mapping(model_info: object) -> Mapping[str, object] | None:
 
 
 def _expects_liveness_on_this_pod(model_info: object) -> bool:
-    from litellm.router import model_info_is_active_for_environment
+    from litellm.router_backends.python_router import model_info_is_active_for_environment
 
     try:
         return model_info_is_active_for_environment(model_info=model_info_as_mapping(model_info))
