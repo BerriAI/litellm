@@ -271,6 +271,32 @@ describe("MCPServerView", () => {
     expect(screen.queryByText("All tools enabled")).not.toBeInTheDocument();
   });
 
+  it("shows the approval policy when one is stored", async () => {
+    renderView({
+      approval_policy: {
+        tools: ["delete_records", "wipe_records"],
+        issuer: "https://approvals.example.com",
+        jwks_url: "https://approvals.example.com/.well-known/jwks.json",
+        audience: "mcp-gateway",
+      },
+    });
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+    expect(await screen.findByText("Approval references")).toBeInTheDocument();
+    expect(screen.getByText("delete_records, wipe_records")).toBeInTheDocument();
+    expect(screen.getByText("https://approvals.example.com")).toBeInTheDocument();
+    expect(screen.getByText("https://approvals.example.com/.well-known/jwks.json")).toBeInTheDocument();
+    expect(screen.getByText("mcp-gateway")).toBeInTheDocument();
+  });
+
+  it("says approval references are not set when no policy is stored", async () => {
+    renderView();
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+    expect(await screen.findByText("Approval references")).toBeInTheDocument();
+    expect(screen.getByText("Not set")).toBeInTheDocument();
+  });
+
   it("says all tools are enabled when no allowlist is stored", async () => {
     renderView({ allowed_tools: [] });
     await userEvent.click(screen.getByRole("tab", { name: "Settings" }));

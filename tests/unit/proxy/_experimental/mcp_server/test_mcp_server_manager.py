@@ -54,6 +54,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
     _obo_retry_applies,
+    _openapi_forwarded_extra_headers,
     _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
     listed_tools_caller_for,
@@ -708,6 +709,51 @@ class TestMCPServerManager:
 
         # When the header isn't provided, the key is omitted entirely
         assert env == {}
+
+    def test_build_stdio_env_skips_approval_reference_header(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-server-approval-env",
+            name="stdio_approval_env",
+            transport=MCPTransport.stdio,
+            command="node",
+            args=["server.js"],
+            extra_headers=["x-litellm-mcp-approval-reference", "x-trace-id"],
+            env={
+                "APPROVAL": "${X-LiteLLM-MCP-Approval-Reference}",
+                "TRACE": "${X-Trace-Id}",
+            },
+        )
+
+        env = manager._build_stdio_env(
+            server,
+            raw_headers={
+                "X-LiteLLM-MCP-Approval-Reference": "signed-approval-token",
+                "X-Trace-Id": "trace-token",
+            },
+        )
+
+        assert env == {"TRACE": "trace-token"}
+
+    def test_openapi_forwarded_extra_headers_skips_approval_reference(self):
+        server = MCPServer(
+            server_id="openapi-server-approval-header",
+            name="openapi_approval_header",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            extra_headers=["x-litellm-mcp-approval-reference", "x-trace-id"],
+        )
+
+        forwarded = _openapi_forwarded_extra_headers(
+            mcp_server=server,
+            raw_headers={
+                "X-LiteLLM-MCP-Approval-Reference": "signed-approval-token",
+                "x-trace-id": "trace-token",
+            },
+            user_api_key_auth=None,
+        )
+
+        assert forwarded == {"x-trace-id": "trace-token"}
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_debug_dump_redacts_secrets(self, caplog):
@@ -2017,6 +2063,94 @@ class TestMCPServerManager:
 
         assert captured_extra_headers == {"Authorization": "Bearer token"}
         assert isinstance(result, CallToolResult)
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_skips_approval_reference_extra_header(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-approval-call",
+            name="approval-call-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            extra_headers=["x-litellm-mcp-approval-reference", "x-trace-id"],
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, **kwargs
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={
+                "X-LiteLLM-MCP-Approval-Reference": "signed-approval-token",
+                "x-trace-id": "trace-token",
+            },
+            proxy_logging_obj=None,
+        )
+
+        assert captured_extra_headers == {"x-trace-id": "trace-token"}
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_filters_approval_reference_from_hook_headers(self):
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="server-hook-approval-call",
+            name="hook-approval-call-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+        mock_client: Final = AsyncMock()
+        mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        class HeaderCapture:
+            def __init__(self) -> None:
+                self.extra_headers: dict[str, str] | None = None
+
+        header_capture: Final = HeaderCapture()
+
+        async def capture_create_mcp_client(
+            server: MCPServer,
+            mcp_auth_header: str | dict[str, str] | None = None,
+            extra_headers: dict[str, str] | None = None,
+            stdio_env: dict[str, str] | None = None,
+            **kwargs: object,
+        ) -> AsyncMock:
+            header_capture.extra_headers = extra_headers
+            return mock_client
+
+        with patch.object(manager, "_create_mcp_client", AsyncMock(side_effect=capture_create_mcp_client)):
+            result: Final = await manager._call_regular_mcp_tool(
+                mcp_server=server,
+                original_tool_name="tool",
+                arguments={},
+                tasks=[],
+                mcp_auth_header=None,
+                mcp_server_auth_headers=None,
+                oauth2_headers=None,
+                raw_headers=None,
+                proxy_logging_obj=None,
+                hook_extra_headers={
+                    "X-LiteLLM-MCP-Approval-Reference": "signed-approval-token",
+                    "x-trace-id": "trace-token",
+                },
+            )
+
+        assert isinstance(result, CallToolResult)
+        assert header_capture.extra_headers == {"x-trace-id": "trace-token"}
 
     async def _capture_list_subject_token(self, server, oauth2_headers, raw_headers=None):
         """Run _get_tools_from_server and return the subject_token it threaded to _create_mcp_client."""
@@ -7605,6 +7739,34 @@ class TestMCPServerManager:
         assert for_a is not None and for_a.description == "Catalog A"
         assert for_b is not None and for_b.description == "Catalog B"
         assert manager.get_listed_tool(server, "turn", ListedToolsCaller()) is None
+
+    def test_forwarded_header_identity_ignores_approval_reference(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv",
+            name="srv",
+            transport=MCPTransport.http,
+            url="http://srv",
+            extra_headers=["x-litellm-mcp-approval-reference", "x-trace-id"],
+        )
+
+        identity_a = manager._forwarded_header_values(
+            server,
+            {
+                "X-LiteLLM-MCP-Approval-Reference": "signed-approval-token-a",
+                "x-trace-id": "trace-token",
+            },
+        )
+        identity_b = manager._forwarded_header_values(
+            server,
+            {
+                "X-LiteLLM-MCP-Approval-Reference": "signed-approval-token-b",
+                "x-trace-id": "trace-token",
+            },
+        )
+
+        assert identity_a == identity_b
+        assert identity_a == (("x-trace-id", "trace-token"),)
 
     def test_shared_server_ignores_headers_it_never_forwards(self):
         manager = MCPServerManager()
@@ -18421,8 +18583,11 @@ async def test_upstream_preparation_honors_case_sensitive_extra_command(monkeypa
     monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
     monkeypatch.setattr(upstream, "MCP_STDIO_ALLOWED_COMMANDS", frozenset({"CustomRunner"}))
     server: Final = MCPServer(
-        server_id="custom-stdio", name="custom-stdio", transport=MCPTransport.stdio,
-        command="/opt/tools/CustomRunner", args=[],
+        server_id="custom-stdio",
+        name="custom-stdio",
+        transport=MCPTransport.stdio,
+        command="/opt/tools/CustomRunner",
+        args=[],
     )
     client: Final = await MCPServerManager()._create_mcp_client(server)
     assert client.stdio_config is not None
@@ -18990,3 +19155,230 @@ async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_
         with pytest.raises(MCPError, match="LITELLM_SALT_KEY"):
             await listing
         assert manager._get_mcp_server_from_tool_name("first") is None
+
+
+def _approval_policy_for_builder_tests():
+    from litellm.types.mcp_server.mcp_server_manager import MCPApprovalPolicy
+
+    return MCPApprovalPolicy(
+        tools=("delete_records",),
+        issuer="https://approvals.example.com",
+        jwks_url="https://approvals.example.com/.well-known/jwks.json",
+    )
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_list_table_carries_approval_policy():
+    manager = MCPServerManager()
+    policy = _approval_policy_for_builder_tests()
+    server = MCPServer(
+        server_id="approval-list-server",
+        name="records",
+        server_name="records_mcp",
+        url="https://example.com/mcp",
+        transport=MCPTransport.http,
+        approval_policy=policy,
+    )
+
+    assert manager._build_mcp_server_table(server).approval_policy == policy
+
+    manager.registry[server.server_id] = server
+    try:
+        listed = await manager.get_all_mcp_servers_unfiltered()
+    finally:
+        manager.registry.pop(server.server_id, None)
+    assert listed[0].approval_policy == policy
+
+
+@pytest.mark.asyncio
+async def test_health_check_table_carries_approval_policy():
+    policy = _approval_policy_for_builder_tests()
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="approval-health-server",
+        name="records",
+        url="https://example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        approval_policy=policy,
+    )
+    manager.registry[server.server_id] = server
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager._mcp_server_reachability",
+            AsyncMock(return_value=("healthy", None)),
+        ):
+            table = await manager.health_check_server(server.server_id)
+    finally:
+        manager.registry.pop(server.server_id, None)
+    assert table.approval_policy == policy
+
+
+def test_temporary_mcp_server_record_carries_approval_policy():
+    from litellm.proxy._types import NewMCPServerRequest
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import _build_temporary_mcp_server_record
+
+    policy = _approval_policy_for_builder_tests()
+    payload = NewMCPServerRequest(
+        server_name="records_mcp",
+        url="https://example.com/mcp",
+        transport="http",
+        approval_policy=policy,
+    )
+
+    table = _build_temporary_mcp_server_record(payload, "admin", "temp-id")
+    assert table.approval_policy == policy
+
+
+@pytest.mark.asyncio
+async def test_approval_reference_does_not_cross_servers_sharing_a_name():
+    """A's alias equals B's server_name: a reference minted for A's server_id must not
+    authorize the same tool on B, only on A."""
+    import json as _json
+    import time
+
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from litellm.constants import MCP_APPROVAL_REFERENCE_HEADER
+    from litellm.proxy._experimental.mcp_server.approval_reference import _jwks_cache
+    from litellm.types.mcp_server.mcp_server_manager import MCPApprovalPolicy
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwks_url = "https://approvals.example.com/.well-known/jwks.json"
+    jwks_doc: Final = {
+        **TypeAdapter(dict[str, object]).validate_python(
+            _json.loads(pyjwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
+        ),
+        "kid": "kid-1",
+        "use": "sig",
+        "alg": "RS256",
+    }
+    await _jwks_cache.async_set_cache(jwks_url, (jwks_doc,))
+    try:
+        policy = MCPApprovalPolicy(
+            tools=("delete_records",),
+            issuer="https://approvals.example.com",
+            jwks_url=jwks_url,
+        )
+        manager = MCPServerManager()
+        server_a = MCPServer(
+            server_id="srv-a",
+            name="records",
+            alias="records",
+            url="https://a.example.com/mcp",
+            transport=MCPTransport.http,
+            approval_policy=policy,
+        )
+        server_b = MCPServer(
+            server_id="srv-b",
+            name="records",
+            server_name="records",
+            url="https://b.example.com/mcp",
+            transport=MCPTransport.http,
+            approval_policy=policy,
+        )
+        reference_for_a = pyjwt.encode(
+            {
+                "iss": "https://approvals.example.com",
+                "exp": int(time.time()) + 600,
+                "jti": "jti-shared",
+                "mcp_server": "srv-a",
+                "mcp_tool": "delete_records",
+                "sub": "agent-7",
+            },
+            key,
+            algorithm="RS256",
+            headers={"kid": "kid-1"},
+        )
+        call = {
+            "name": "delete_records",
+            "arguments": {},
+            "server_name": "records",
+            "user_api_key_auth": None,
+            "proxy_logging_obj": None,
+            "raw_headers": {MCP_APPROVAL_REFERENCE_HEADER: reference_for_a},
+        }
+
+        await manager.pre_call_tool_check(server=server_a, **call)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(server=server_b, **call)
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "mcp_approval_reference_invalid"
+    finally:
+        _jwks_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_reference", [False, True])
+async def test_prefixed_high_risk_tool_requires_and_accepts_approval_reference(include_reference: bool):
+    import json as _json
+    import time
+
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from litellm.constants import MCP_APPROVAL_REFERENCE_HEADER
+    from litellm.proxy._experimental.mcp_server.approval_reference import _jwks_cache
+    from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR, get_server_prefix
+    from litellm.types.mcp_server.mcp_server_manager import MCPApprovalPolicy
+
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwks_url: Final = "https://approvals.example.com/.well-known/prefixed-jwks.json"
+    jwks_doc: Final = {
+        **TypeAdapter(dict[str, object]).validate_python(
+            _json.loads(pyjwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
+        ),
+        "kid": "kid-prefixed",
+        "use": "sig",
+        "alg": "RS256",
+    }
+    await _jwks_cache.async_set_cache(jwks_url, (jwks_doc,))
+    try:
+        policy: Final = MCPApprovalPolicy(
+            tools=("delete_records",),
+            issuer="https://approvals.example.com",
+            jwks_url=jwks_url,
+        )
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="srv-prefixed-approval",
+            name="prefixed-approval-server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            approval_policy=policy,
+        )
+        prefixed_name: Final = f"{get_server_prefix(server)}{MCP_TOOL_PREFIX_SEPARATOR}delete_records"
+        reference: Final = pyjwt.encode(
+            {
+                "iss": "https://approvals.example.com",
+                "exp": int(time.time()) + 600,
+                "jti": "jti-prefixed",
+                "mcp_server": server.server_id,
+                "mcp_tool": "delete_records",
+                "sub": "agent-7",
+            },
+            key,
+            algorithm="RS256",
+            headers={"kid": "kid-prefixed"},
+        )
+        check: Final = manager.pre_call_tool_check(
+            name=prefixed_name,
+            arguments={},
+            server_name=server.name,
+            user_api_key_auth=None,
+            proxy_logging_obj=None,
+            server=server,
+            raw_headers={MCP_APPROVAL_REFERENCE_HEADER: reference} if include_reference else {},
+        )
+
+        if include_reference:
+            await check
+        else:
+            with pytest.raises(HTTPException) as exc_info:
+                await check
+            assert exc_info.value.status_code == 403
+            assert exc_info.value.detail["error"] == "mcp_approval_reference_required"
+    finally:
+        _jwks_cache.flush_cache()

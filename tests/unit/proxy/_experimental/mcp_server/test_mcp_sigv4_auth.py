@@ -841,6 +841,7 @@ class TestSigV4BuildFromTable:
         table_record.token_exchange_profile = None
         table_record.instructions = None
         table_record.source_url = None
+        table_record.approval_policy = None
 
         manager = MCPServerManager()
 
@@ -903,6 +904,7 @@ class TestSigV4BuildFromTable:
         table_record.token_exchange_profile = None
         table_record.instructions = None
         table_record.source_url = None
+        table_record.approval_policy = None
 
         manager = MCPServerManager()
 

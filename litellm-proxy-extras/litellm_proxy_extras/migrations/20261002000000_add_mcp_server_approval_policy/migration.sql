@@ -1,0 +1,1 @@
+ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN IF NOT EXISTS "approval_policy" JSONB;

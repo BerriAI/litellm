@@ -31279,6 +31279,50 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "MCPApprovalPolicy": {
+          "additionalProperties": false,
+          "description": "Per-server policy for tools an admin marks high-risk: calls must carry a signed,\nnon-expired approval reference issued by the external approval service pinned here.",
+          "properties": {
+            "audience": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
+            "issuer": {
+              "minLength": 1,
+              "title": "Issuer",
+              "type": "string"
+            },
+            "jwks_url": {
+              "minLength": 1,
+              "title": "Jwks Url",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Tools",
+              "type": "array"
+            }
+          },
+          "required": [
+            "tools",
+            "issuer",
+            "jwks_url"
+          ],
+          "title": "MCPApprovalPolicy",
+          "type": "object"
+        },
         "MCPCredentials": {
           "properties": {
             "audience": {
@@ -31655,6 +31699,16 @@
                 }
               ],
               "title": "Allowed Tools"
+            },
+            "approval_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPApprovalPolicy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "approval_status": {
               "anyOf": [
@@ -33403,6 +33457,16 @@
               "title": "Allowed Tools",
               "type": "array"
             },
+            "approval_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPApprovalPolicy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "approval_status": {
               "anyOf": [
                 {
@@ -34017,6 +34081,50 @@
           "title": "LiteLLM_MCPServerTable",
           "type": "object"
         },
+        "MCPApprovalPolicy": {
+          "additionalProperties": false,
+          "description": "Per-server policy for tools an admin marks high-risk: calls must carry a signed,\nnon-expired approval reference issued by the external approval service pinned here.",
+          "properties": {
+            "audience": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
+            "issuer": {
+              "minLength": 1,
+              "title": "Issuer",
+              "type": "string"
+            },
+            "jwks_url": {
+              "minLength": 1,
+              "title": "Jwks Url",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Tools",
+              "type": "array"
+            }
+          },
+          "required": [
+            "tools",
+            "issuer",
+            "jwks_url"
+          ],
+          "title": "MCPApprovalPolicy",
+          "type": "object"
+        },
         "MCPCredentials": {
           "properties": {
             "audience": {
@@ -34393,6 +34501,16 @@
                 }
               ],
               "title": "Allowed Tools"
+            },
+            "approval_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPApprovalPolicy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "approval_status": {
               "anyOf": [
@@ -36687,6 +36805,16 @@
               "title": "Allowed Tools",
               "type": "array"
             },
+            "approval_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPApprovalPolicy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "approval_status": {
               "anyOf": [
                 {
@@ -37299,6 +37427,50 @@
             "transport"
           ],
           "title": "LiteLLM_MCPServerTable",
+          "type": "object"
+        },
+        "MCPApprovalPolicy": {
+          "additionalProperties": false,
+          "description": "Per-server policy for tools an admin marks high-risk: calls must carry a signed,\nnon-expired approval reference issued by the external approval service pinned here.",
+          "properties": {
+            "audience": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
+            "issuer": {
+              "minLength": 1,
+              "title": "Issuer",
+              "type": "string"
+            },
+            "jwks_url": {
+              "minLength": 1,
+              "title": "Jwks Url",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Tools",
+              "type": "array"
+            }
+          },
+          "required": [
+            "tools",
+            "issuer",
+            "jwks_url"
+          ],
+          "title": "MCPApprovalPolicy",
           "type": "object"
         },
         "MCPConnectorEntry": {
@@ -38522,6 +38694,16 @@
               ],
               "title": "Allowed Tools"
             },
+            "approval_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPApprovalPolicy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "approval_status": {
               "anyOf": [
                 {
@@ -39076,6 +39258,16 @@
                 }
               ],
               "title": "Allowed Tools"
+            },
+            "approval_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPApprovalPolicy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "args": {
               "items": {
@@ -41534,6 +41726,50 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "MCPApprovalPolicy": {
+          "additionalProperties": false,
+          "description": "Per-server policy for tools an admin marks high-risk: calls must carry a signed,\nnon-expired approval reference issued by the external approval service pinned here.",
+          "properties": {
+            "audience": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Audience"
+            },
+            "issuer": {
+              "minLength": 1,
+              "title": "Issuer",
+              "type": "string"
+            },
+            "jwks_url": {
+              "minLength": 1,
+              "title": "Jwks Url",
+              "type": "string"
+            },
+            "tools": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Tools",
+              "type": "array"
+            }
+          },
+          "required": [
+            "tools",
+            "issuer",
+            "jwks_url"
+          ],
+          "title": "MCPApprovalPolicy",
+          "type": "object"
+        },
         "MCPCredentials": {
           "properties": {
             "audience": {
@@ -41910,6 +42146,16 @@
                 }
               ],
               "title": "Allowed Tools"
+            },
+            "approval_policy": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPApprovalPolicy"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "approval_status": {
               "anyOf": [

@@ -1,8 +1,19 @@
+import ipaddress
 import json
 from datetime import datetime
 from typing import Annotated, Any, Final, Literal
+from urllib.parse import urlparse
 
-from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Self
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -71,6 +82,37 @@ class MCPOAuthIdentityBinding(LiteLLMBaseModel):
     require_email_verified: bool = True
 
 
+def _is_loopback_host(hostname: str | None) -> bool:
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback if hostname else False
+    except ValueError:
+        return False
+
+
+class MCPApprovalPolicy(BaseModel):
+    """Per-server policy for tools an admin marks high-risk: calls must carry a signed,
+    non-expired approval reference issued by the external approval service pinned here."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tools: tuple[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)], ...] = Field(min_length=1)
+    issuer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    jwks_url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    audience: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
+
+    @field_validator("jwks_url")
+    @classmethod
+    def _check_jwks_url(cls, value: str) -> str:
+        parsed: Final = urlparse(value)
+        if parsed.scheme == "https":
+            return value
+        if parsed.scheme == "http" and _is_loopback_host(parsed.hostname):
+            return value
+        raise ValueError(f"jwks_url must be an https URL, or http to a loopback host, got {value!r}")
+
+
 class PinnedMCPTool(LiteLLMBaseModel):
     """One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving."""
 
@@ -86,6 +128,16 @@ _PINNED_TOOLS: Final[TypeAdapter[dict[str, PinnedMCPTool] | None]] = TypeAdapter
 def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
     decoded: Final = json.loads(value) if isinstance(value, str) and value else value
     return _PINNED_TOOLS.validate_python(decoded or None)
+
+
+_APPROVAL_POLICY: Final[TypeAdapter[MCPApprovalPolicy | None]] = TypeAdapter(MCPApprovalPolicy | None)
+
+
+def parse_approval_policy(value: object) -> MCPApprovalPolicy | None:
+    decoded: Final = json.loads(value) if isinstance(value, str) and value else value
+    if decoded is None:
+        return None
+    return _APPROVAL_POLICY.validate_python(decoded)
 
 
 class MCPServer(LiteLLMBaseModel):
@@ -109,6 +161,7 @@ class MCPServer(LiteLLMBaseModel):
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
     pinned_tools: dict[str, PinnedMCPTool] | None = None
+    approval_policy: MCPApprovalPolicy | None = None
     allowed_params: dict[str, list[str]] | None = None  # map of tool names to allowed parameter lists
     static_headers: dict[str, str] | None = None  # static headers to forward to the MCP server
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
