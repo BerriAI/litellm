@@ -1058,6 +1058,122 @@ def test_get_supported_params_thinking():
     assert "thinking" in params
 
 
+def test_transform_request_promotes_anthropic_thinking_from_extra_body():
+    config = AnthropicConfig()
+    optional_params = {
+        "extra_body": {
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        },
+    }
+
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Think carefully."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert "extra_body" not in result
+
+
+def test_transform_request_drops_non_thinking_extra_body_from_anthropic_body():
+    config = AnthropicConfig()
+    optional_params = {
+        "extra_body": {
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "custom_field": "preserved",
+        },
+    }
+
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Think carefully."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert "custom_field" not in result
+    assert "extra_body" not in result
+
+
+def test_transform_extra_body_promotes_only_anthropic_thinking():
+    config = AnthropicConfig()
+
+    result = config.transform_extra_body(
+        extra_body={"thinking": {"type": "enabled", "budget_tokens": 1024}, "custom_field": "ignored"},
+        request={},
+        model="claude-sonnet-4-20250514",
+        litellm_params={},
+    )
+
+    assert result == {"thinking": {"type": "enabled", "budget_tokens": 1024}}
+
+
+def test_transform_extra_body_preserves_bedrock_extra_body_behavior():
+    config = AmazonAnthropicClaudeConfig()
+    extra_body = {"thinking": {"type": "enabled", "budget_tokens": 1024}, "custom_field": "preserved"}
+
+    result = config.transform_extra_body(
+        extra_body=extra_body,
+        request={},
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        litellm_params={},
+    )
+
+    assert result == extra_body
+
+
+@pytest.mark.parametrize(
+    "config",
+    [AmazonAnthropicClaudeConfig(), VertexAIAnthropicConfig()],
+)
+def test_transform_request_does_not_promote_extra_body_for_bedrock_or_vertex(config):
+    optional_params = {
+        "extra_body": {
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "custom_field": "preserved",
+        },
+    }
+
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Think carefully."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "thinking" not in result
+    assert result["extra_body"] == optional_params["extra_body"]
+
+
+def test_transform_request_keeps_azure_extra_body_promotion():
+    config = AzureAnthropicConfig()
+    expected_thinking = {"type": "enabled", "budget_tokens": 1024}
+    optional_params = {
+        "extra_body": {
+            "thinking": expected_thinking,
+            "custom_field": "preserved",
+        },
+    }
+
+    result = config.transform_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Think carefully."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["thinking"] == expected_thinking
+    assert result["custom_field"] == "preserved"
+    assert "extra_body" not in result
+
+
 def test_anthropic_memory_tool_auto_adds_beta_header():
     """
     Tests that LiteLLM automatically adds the required 'anthropic-beta' header

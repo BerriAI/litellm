@@ -323,6 +323,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def custom_llm_provider(self) -> str | None:
         return "anthropic"
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        if self._resolved_provider != "anthropic":
+            return extra_body
+        thinking: Final = extra_body.get("thinking")
+        return {"thinking": thinking} if thinking is not None else {}
+
     @property
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
@@ -1912,6 +1924,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
+
+        if self.custom_llm_provider == "anthropic":
+            extra_body: Final = optional_params.get("extra_body")
+            if isinstance(extra_body, dict):
+                thinking: Final = extra_body.get("thinking")
+                if thinking is not None:
+                    optional_params["thinking"] = thinking
+                    optional_params.pop("extra_body", None)
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
