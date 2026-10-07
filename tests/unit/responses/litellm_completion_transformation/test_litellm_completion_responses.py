@@ -4458,7 +4458,7 @@ class TestEnsureOutputItemContentPartAdded:
                     Choices(
                         finish_reason=finish_reason,
                         index=0,
-                        message=Message(content="", role="assistant"),
+                        message=Message(content="Partial answer", role="assistant"),
                     )
                 ],
                 usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),

@@ -1,5 +1,6 @@
 import time
 import uuid
+from itertools import filterfalse
 from collections.abc import Sequence
 from typing import Any, Final, cast
 
@@ -1305,7 +1306,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             "reasoning",
             self._cached_reasoning_item_id,
         )
-        return tuple(sorted(reasoning_aligned, key=self._streamed_output_position))
+        streamed_items: Final = filterfalse(self._is_unstreamed_empty_message, reasoning_aligned)
+        return tuple(sorted(streamed_items, key=self._streamed_output_position))
+
+    def _is_unstreamed_empty_message(self, item: object) -> bool:
+        if getattr(item, "type", None) != "message" or self._message_output_index is not None:
+            return False
+        return not any(getattr(part, "text", None) for part in getattr(item, "content", None) or ())
 
     def _emit_terminal_response_event(
         self, litellm_model_response: ModelResponse

@@ -1274,6 +1274,41 @@ async def test_completed_output_follows_the_streamed_output_indexes(sync_mode: b
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+async def test_reasoning_only_stream_lists_no_message_item_it_never_announced(sync_mode: bool):
+    iterator: Final = _build_iterator([_reasoning_chunk("thinking"), _chunk("", finish_reason="stop")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    added: Final = [
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    assert [event.item.type for event in added] == ["reasoning"]
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [item.type for item in completed.response.output] == ["reasoning"]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_empty_answer_stream_keeps_the_message_item_it_announced(sync_mode: bool):
+    iterator: Final = _build_iterator([_chunk("", finish_reason="stop")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    added: Final = [
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    assert [event.item.type for event in added] == ["message"]
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert [item.type for item in completed.response.output] == ["message"]
+    assert [item.id for item in completed.response.output] == [added[0].item.id]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
 async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: bool):
     iterator: Final = _build_iterator([_chunk("Hel"), _chunk("lo", finish_reason="stop")])
 

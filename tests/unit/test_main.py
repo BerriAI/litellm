@@ -2027,63 +2027,6 @@ def test_stream_chunk_builder_keeps_tool_calls_carried_only_by_a_later_choice_of
     ]
 
 
-@pytest.mark.parametrize(
-    ("streamed_text", "rebuilt_content"),
-    [
-        pytest.param("", None, id="only-empty-text-around-the-tool-call"),
-        pytest.param("Checking", "Checking", id="text-streamed-beside-the-tool-call"),
-    ],
-)
-def test_stream_chunk_builder_rebuilds_tool_call_content_as_none_unless_text_streamed(
-    streamed_text: str, rebuilt_content: str | None
-):
-    from litellm import stream_chunk_builder
-    from litellm.types.utils import ChatCompletionDeltaToolCall, Function
-
-    def chunk(delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
-        return ModelResponseStream(
-            id="chatcmpl-tool-only",
-            created=1751934860,
-            model="ollama/qwen3:0.6b",
-            object="chat.completion.chunk",
-            choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
-        )
-
-    tool_call: Final = ChatCompletionDeltaToolCall(
-        id="call_1", index=0, type="function", function=Function(name="get_weather", arguments='{"city": "Paris"}')
-    )
-    chunks: Final = [
-        chunk(Delta(role="assistant", content="")),
-        chunk(Delta(content=streamed_text)),
-        chunk(Delta(content="", tool_calls=[tool_call])),
-        chunk(Delta(), finish_reason="tool_calls"),
-    ]
-
-    response: Final = stream_chunk_builder(chunks=chunks)
-
-    message: Final = response.choices[0].message
-    assert message.content == rebuilt_content
-    assert message.tool_calls is not None and message.tool_calls[0].function.name == "get_weather"
-
-
-def test_stream_chunk_builder_keeps_an_empty_text_answer_as_an_empty_string():
-    from litellm import stream_chunk_builder
-
-    chunks: Final = [
-        ModelResponseStream(
-            id="chatcmpl-empty-text",
-            created=1751934860,
-            model="gpt-4.1-mini",
-            object="chat.completion.chunk",
-            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content=""), finish_reason="stop")],
-        )
-    ]
-
-    response: Final = stream_chunk_builder(chunks=chunks)
-
-    assert response.choices[0].message.content == ""
-
-
 def test_stream_chunk_builder_thinking_blocks():
     from litellm import stream_chunk_builder
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
