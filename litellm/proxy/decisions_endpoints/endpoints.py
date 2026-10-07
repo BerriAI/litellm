@@ -40,6 +40,14 @@ async def _invalid_request(
     )
 
 
+async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
+    body: Final = await request.body()
+    try:
+        return _REQUEST_DATA_ADAPTER.validate_json(body)
+    except ValidationError as error:
+        raise await _invalid_request(raw_data={}, error=error, user_api_key_dict=user_api_key_dict)
+
+
 async def _process_systemone(
     request: Request,
     fastapi_response: Response,
@@ -133,7 +141,7 @@ async def systemone(
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
-        raw_data=_REQUEST_DATA_ADAPTER.validate_json(await request.body()),
+        raw_data=await _request_data(request, user_api_key_dict),
         openai_body=None,
     )
 
@@ -155,7 +163,7 @@ async def decisions(
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
-    raw_data: Final = _REQUEST_DATA_ADAPTER.validate_json(await request.body())
+    raw_data: Final = await _request_data(request, user_api_key_dict)
     try:
         openai_body: Final = _OPENAI_DECISION_REQUEST_BODY_ADAPTER.validate_python(raw_data)
     except ValidationError as error:

@@ -421,6 +421,22 @@ def test_openai_format_decisions_rejects_bodies_it_cannot_translate(
     assert not upstream.called
 
 
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/v1/decisions"))
+@pytest.mark.parametrize("raw_body", (b"", b"{not json"), ids=("empty", "malformed"))
+def test_a_body_that_is_not_json_is_a_client_error(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    raw_body: bytes,
+) -> None:
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(endpoint, content=raw_body, headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 400, response.text
+    assert not upstream.called
+
+
 def _decisions_feature() -> LazyFeature:
     return next(feature for feature in LAZY_FEATURES if feature.name == "decisions")
 
