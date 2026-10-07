@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -161,7 +162,7 @@ async def create_fine_tuning_job(
 
             response = cast(LiteLLMFineTuningJob, await llm_router.acreate_fine_tuning_job(**data))
             response.training_file = unified_file_id
-            response._hidden_params["unified_file_id"] = unified_file_id
+            set_hidden_param(response, "unified_file_id", unified_file_id)
         ## ELSE, Route based on custom_llm_provider
         elif fine_tuning_request.custom_llm_provider:
             # get configs for custom_llm_provider
@@ -304,7 +305,7 @@ async def retrieve_fine_tuning_job(
                     **data,
                 ),
             )
-            response._hidden_params["unified_finetuning_job_id"] = unified_finetuning_job_id
+            set_hidden_param(response, "unified_finetuning_job_id", unified_finetuning_job_id)
         elif custom_llm_provider:
             # get configs for custom_llm_provider
             llm_provider_config: Final = get_fine_tuning_provider_config(custom_llm_provider=custom_llm_provider)
@@ -577,7 +578,7 @@ async def cancel_fine_tuning_job(
                     **data,
                 ),
             )
-            response._hidden_params["unified_finetuning_job_id"] = unified_finetuning_job_id
+            set_hidden_param(response, "unified_finetuning_job_id", unified_finetuning_job_id)
         else:
             # get configs for custom_llm_provider
             llm_provider_config: Final = get_fine_tuning_provider_config(custom_llm_provider=custom_llm_provider)

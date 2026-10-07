@@ -524,7 +524,15 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
+      - &postgres16_sidecar
+        image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
     working_directory: ~/project
+    environment: &sidecar_database_url
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
     parallelism: 4
     steps:
       - checkout
@@ -545,6 +553,9 @@ jobs:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
       - save_cargo_target
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -599,7 +610,9 @@ jobs:
   local_testing_part2:
     docker:
       - *python312_image
+      - *postgres16_sidecar
     working_directory: ~/project
+    environment: *sidecar_database_url
     parallelism: 4
     steps:
       - checkout
@@ -619,6 +632,9 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -673,7 +689,9 @@ jobs:
   langfuse_logging_unit_tests:
     docker:
       - *python312_image
+      - *postgres16_sidecar
     working_directory: ~/project
+    environment: *sidecar_database_url
     resource_class: medium
 
     steps:
@@ -694,6 +712,9 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -722,14 +743,9 @@ jobs:
   auth_ui_unit_tests:
     docker:
       - *python312_image
-      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
-        environment:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: litellm_test
+      - *postgres16_sidecar
     working_directory: ~/project
-    environment:
-      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    environment: *sidecar_database_url
 
     steps:
       - checkout
@@ -1470,7 +1486,9 @@ jobs:
   installing_litellm_on_python:
     docker:
       - *python312_image
+      - *postgres16_sidecar
     working_directory: ~/project
+    environment: *sidecar_database_url
 
     steps:
       - checkout
@@ -1483,6 +1501,9 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - setup_litellm_enterprise_pip
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Run tests
           command: |
@@ -1494,7 +1515,9 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
+      - *postgres16_sidecar
     working_directory: ~/project
+    environment: *sidecar_database_url
     resource_class: medium
 
     steps:
@@ -1507,6 +1530,9 @@ jobs:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.13
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Run tests
           command: |
@@ -1515,14 +1541,9 @@ jobs:
   installing_litellm_on_python_v2_migration_resolver:
     docker:
       - *python312_image
-      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
-        environment:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: litellm_test
+      - *postgres16_sidecar
     working_directory: ~/project
-    environment:
-      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    environment: *sidecar_database_url
 
     steps:
       - checkout
@@ -3144,9 +3165,13 @@ jobs:
       parallelism:
         type: integer
         default: 1
+      resource_class:
+        type: enum
+        enum: [large, xlarge]
+        default: large
     machine:
       image: ubuntu-2204:2024.04.1
-    resource_class: large
+    resource_class: << parameters.resource_class >>
     working_directory: ~/project
     parallelism: << parameters.parallelism >>
     steps:
@@ -3489,7 +3514,11 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, mcp, sdk, cost, security, browser]
+              suite: [management, accounting, database, providers, sdk, cost, security, browser]
+      - integration_contracts:
+          name: integration-mcp
+          suite: mcp
+          resource_class: xlarge
       - integration_contracts:
           name: integration-extensions
           suite: extensions
