@@ -631,6 +631,10 @@ describe("AgentTracesPage", () => {
     const live = screen.getByRole("button", { name: "Live" });
     expect(live).toHaveAttribute("aria-pressed", "true");
     expect(trigger).toHaveTextContent("Last 24 hours");
+    expect(screen.getByRole("combobox", { name: "Filter traces by agent" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Filter traces by status" })).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh traces" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Set up tracing" })).toBeEnabled();
 
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last 7 days" }));
@@ -646,6 +650,13 @@ describe("AgentTracesPage", () => {
     expect(trigger).not.toHaveTextContent("Last 7 days");
 
     await waitFor(() => expect(vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0].endMs).toBe(pausedAt));
+    expect(screen.getByRole("button", { name: "Set up tracing" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh traces" })).toBeEnabled());
+
+    fireEvent.click(live);
+    await waitFor(() => expect(live).toHaveAttribute("aria-pressed", "true"));
+    expect(trigger).toHaveTextContent("Last 7 days");
+    expect(screen.getByRole("button", { name: "Set up tracing" })).toBeEnabled();
   });
 
   it("keeps the time controls on an empty range the user picked, instead of showing onboarding", async () => {

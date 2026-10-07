@@ -185,8 +185,9 @@ export function AgentTracesSection({
         >
           <TracingSetupAction available={traces.traces.length > 0} live={live} onSetup={() => setShowSetup(true)} />
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon-sm"
+            className="h-full w-10 shrink-0 rounded-none border-l"
             aria-label="Refresh traces"
             title="Refresh traces"
             disabled={traces.isFetching}
@@ -195,15 +196,13 @@ export function AgentTracesSection({
             <RefreshCw className="size-3.5" />
           </Button>
           {timeControls && (
-            <div className="h-8 min-w-0 overflow-hidden rounded-md border [&>div]:h-full [&>div]:border-l-0">
-              <TimeRangeControls
-                range={range}
-                zoom={zoom}
-                onHoursChange={(hours) => changeRange(hours, timeControls.setHours)}
-                showLive={live}
-                onLiveChange={timeControls.setLive}
-              />
-            </div>
+            <TimeRangeControls
+              range={range}
+              zoom={zoom}
+              onHoursChange={(hours) => changeRange(hours, timeControls.setHours)}
+              showLive={live}
+              onLiveChange={timeControls.setLive}
+            />
           )}
         </RunsToolbar>
         <TraceCounts runs={filtered} />
@@ -259,7 +258,13 @@ function TraceFooter({ runs, hasMore }: { runs: readonly TraceSummary[]; hasMore
 function TracingSetupAction({ available, live, onSetup }: { available: boolean; live: boolean; onSetup: () => void }) {
   if (!available) return null;
   return (
-    <Button variant="outline" size="sm" className="h-8 text-xs" disabled={!live} onClick={onSetup}>
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-full shrink-0 rounded-none border-l px-3 text-xs"
+      disabled={!live}
+      onClick={onSetup}
+    >
       Set up tracing
     </Button>
   );
