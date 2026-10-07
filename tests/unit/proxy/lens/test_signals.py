@@ -19,7 +19,6 @@ from litellm.proxy.lens.signals import (
     SIGNAL_MAX_SCAN_PAGES,
     SIGNAL_TASK,
     DecisionQuestions,
-    DecisionState,
     Signal,
     SignalAttempt,
     SignalClassifier,
@@ -45,8 +44,13 @@ from litellm.rust_bridge.trace.generated.models import (
     LensSampleParams,
     PartRow,
 )
-from litellm.types.decisions import DecisionsResponse
-from litellm.types.decisions import NoulAnswer as DecisionsNoulAnswer
+from litellm.types.decisions import (
+    DecisionsInputTokensDetails,
+    DecisionsOutputTokensDetails,
+    DecisionsResponse,
+    DecisionsUsage,
+)
+from litellm.types.decisions import PredicateAnswer as DecisionsPredicateAnswer
 
 NOW: Final = datetime(2026, 10, 7, 12, tzinfo=timezone.utc)
 CURRENT_CONFIG_KEY: Final = SignalConfig(model="decision").key()
@@ -215,6 +219,15 @@ def saved_result(args: tuple[object, ...]) -> SignalData:
     return SignalData.model_validate_json(payload)
 
 
+_ZERO_USAGE: Final = DecisionsUsage(
+    input_tokens=0,
+    input_tokens_details=DecisionsInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
+    output_tokens=0,
+    output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
+    total_tokens=0,
+)
+
+
 @pytest.mark.asyncio
 async def test_signal_repository_reads_defaults_and_saves_the_global_config() -> None:
     database: Final = SignalDatabase(None)
@@ -345,34 +358,32 @@ async def test_classifier_sends_noul_questions_and_keeps_every_signal_score() ->
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
     ) -> object:
         assert model == "decision"
-        assert state == {
-            "task": SIGNAL_TASK,
-            "steps": ({"kind": "agent", "name": "agent", "content": "user asks for a result"},),
-        }
-        assert _STORED_DATA.validate_json(json.dumps(state)) == {
+        assert _STORED_DATA.validate_json(input) == {
             "task": SIGNAL_TASK,
             "steps": [{"kind": "agent", "name": "agent", "content": "user asks for a result"}],
         }
-        expected_questions: Final = {
-            signal.id: {"type": "noul", "instructions": signal.question} for signal in config.signals
-        }
+        expected_questions: Final = tuple(
+            {"type": "predicate", "name": signal.id, "instructions": signal.question} for signal in config.signals
+        )
         assert questions == expected_questions
-        assert _STORED_DATA.validate_json(json.dumps(questions)) == expected_questions
+        assert _STORED_DATA.validate_json(json.dumps(questions)) == list(expected_questions)
         assert timeout == 60
         assert metadata == {"tags": ["litellm-lens-signals"]}
         return DecisionsResponse(
-            answers={
-                "user_frustration": DecisionsNoulAnswer(type="noul", noul=0.9),
-                "missing_capability": DecisionsNoulAnswer(type="noul", noul=0.6),
-                "repeated_request": DecisionsNoulAnswer(type="noul", noul=0.2),
-                "unknown": DecisionsNoulAnswer(type="noul", noul=1.0),
-            }
+            model="decision",
+            answers=(
+                DecisionsPredicateAnswer(type="predicate", name="user_frustration", probability=0.9),
+                DecisionsPredicateAnswer(type="predicate", name="missing_capability", probability=0.6),
+                DecisionsPredicateAnswer(type="predicate", name="repeated_request", probability=0.2),
+                DecisionsPredicateAnswer(type="predicate", name="unknown", probability=1.0),
+            ),
+            usage=_ZERO_USAGE,
         )
 
     attempt: Final = await SignalClassifier(SourceReader(storage), decide, lambda: NOW).classify(
@@ -387,21 +398,21 @@ async def test_classifier_sends_noul_questions_and_keeps_every_signal_score() ->
 
 
 @pytest.mark.asyncio
-async def test_missing_noul_answer_fails_while_unknown_and_non_noul_answers_are_ignored() -> None:
+async def test_missing_predicate_answer_fails_while_unknown_and_non_predicate_answers_are_ignored() -> None:
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
     ) -> object:
         return {
-            "answers": {
-                "user_frustration": {"type": "noul", "noul": 0.9},
-                "missing_capability": {"type": "choice", "choice": "yes"},
-                "unknown": {"type": "noul", "noul": 1.0},
-            }
+            "answers": [
+                {"type": "predicate", "name": "user_frustration", "probability": 0.9},
+                {"type": "choice", "name": "missing_capability", "choice": "yes"},
+                {"type": "predicate", "name": "unknown", "probability": 1.0},
+            ]
         }
 
     attempt: Final = await SignalClassifier(
@@ -412,7 +423,7 @@ async def test_missing_noul_answer_fails_while_unknown_and_non_noul_answers_are_
 
     assert attempt.status == "failed"
     assert attempt.scores == {"user_frustration": 0.9}
-    assert attempt.error == "Decisions response omitted a configured noul answer"
+    assert attempt.error == "Decisions response omitted a configured predicate answer"
 
 
 @pytest.mark.asyncio
@@ -420,7 +431,7 @@ async def test_classifier_turns_decisions_errors_into_failed_attempts() -> None:
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
@@ -574,19 +585,19 @@ async def test_signal_tick_classifies_at_most_50_traces_and_persists_scores() ->
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
     ) -> object:
-        steps: Final = TypeAdapter(tuple[SignalStep, ...]).validate_python(state["steps"])
+        steps: Final = TypeAdapter(tuple[SignalStep, ...]).validate_python(json.loads(input)["steps"])
         await database.calls.put(steps[0].name)
         return {
-            "answers": {
-                "user_frustration": {"type": "noul", "noul": 0.9},
-                "missing_capability": {"type": "noul", "noul": 0.6},
-                "repeated_request": {"type": "noul", "noul": 0.2},
-            }
+            "answers": [
+                {"type": "predicate", "name": "user_frustration", "probability": 0.9},
+                {"type": "predicate", "name": "missing_capability", "probability": 0.6},
+                {"type": "predicate", "name": "repeated_request", "probability": 0.2},
+            ]
         }
 
     await run_signal_tick(storage, repository, decide, lambda: NOW)
@@ -648,12 +659,12 @@ async def test_signal_tick_claims_with_worker_start_time_and_skips_lost_claims()
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
     ) -> object:
-        return {"answers": {}}
+        return {"answers": []}
 
     await run_signal_tick(SignalStorage(executions=executions), repository, decide, AdvancingClock())
 
@@ -704,12 +715,12 @@ async def test_signal_tick_resumes_after_ten_pages_and_resets_after_a_short_page
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
     ) -> object:
-        return {"answers": {}}
+        return {"answers": []}
 
     first_cursor: Final = await run_signal_tick(storage, repository, decide, lambda: NOW)
     first_calls: Final = tuple(storage.cursors.get_nowait() for _ in range(storage.cursors.qsize()))
@@ -764,17 +775,17 @@ async def test_signal_tick_resumes_a_partially_consumed_page() -> None:
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
     ) -> object:
         return {
-            "answers": {
-                "user_frustration": {"type": "noul", "noul": 0.9},
-                "missing_capability": {"type": "noul", "noul": 0.6},
-                "repeated_request": {"type": "noul", "noul": 0.2},
-            }
+            "answers": [
+                {"type": "predicate", "name": "user_frustration", "probability": 0.9},
+                {"type": "predicate", "name": "missing_capability", "probability": 0.6},
+                {"type": "predicate", "name": "repeated_request", "probability": 0.2},
+            ]
         }
 
     first_database: Final = SignalDatabase(config, stored_rows=initial_rows)
@@ -835,12 +846,12 @@ async def test_signal_tick_skips_claims_and_writes_when_router_is_not_ready() ->
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
     ) -> object:
-        return {"answers": {}}
+        return {"answers": []}
 
     await run_signal_tick(
         storage,
@@ -865,7 +876,7 @@ async def test_signal_tick_skips_missing_dependencies_and_disabled_configs() -> 
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
@@ -902,17 +913,17 @@ async def test_signal_tick_continues_when_storing_a_result_fails() -> None:
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
     ) -> object:
         return {
-            "answers": {
-                "user_frustration": {"type": "noul", "noul": 0.9},
-                "missing_capability": {"type": "noul", "noul": 0.6},
-                "repeated_request": {"type": "noul", "noul": 0.2},
-            }
+            "answers": [
+                {"type": "predicate", "name": "user_frustration", "probability": 0.9},
+                {"type": "predicate", "name": "missing_capability", "probability": 0.6},
+                {"type": "predicate", "name": "repeated_request", "probability": 0.2},
+            ]
         }
 
     await run_signal_tick(
@@ -943,12 +954,12 @@ async def test_signal_loop_continues_after_a_tick_error() -> None:
     async def decide(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
     ) -> object:
-        return {"answers": {}}
+        return {"answers": []}
 
     task: Final = asyncio.create_task(run_signal_loop(SignalStorage(), repository, decide, lambda: NOW))
     await repository.started.wait()
@@ -965,7 +976,7 @@ async def test_proxy_signal_call_resolves_the_current_router(monkeypatch: pytest
     async def first_decisions(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
@@ -975,7 +986,7 @@ async def test_proxy_signal_call_resolves_the_current_router(monkeypatch: pytest
     async def second_decisions(
         *,
         model: str,
-        state: DecisionState,
+        input: str,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
@@ -985,8 +996,8 @@ async def test_proxy_signal_call_resolves_the_current_router(monkeypatch: pytest
     async def call_current_router() -> object:
         return await proxy_server._call_current_lens_signal_router(
             model="decision",
-            state={"task": "task"},
-            questions={},
+            input='{"task": "task"}',
+            questions=(),
             timeout=60,
             metadata={"tags": ["test"]},
         )

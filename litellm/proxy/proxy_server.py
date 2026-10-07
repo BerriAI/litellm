@@ -586,7 +586,6 @@ from litellm.proxy.lens.signal_repository import SignalRepository
 from litellm.proxy.lens.signals import (
     DecisionQuestions,
     DecisionsCall,
-    DecisionState,
     run_signal_loop,
 )
 from litellm.proxy.list_api.common import (
@@ -1286,7 +1285,7 @@ async def _connect_to_count_stored_values() -> SupportsRawQueries:
 async def _call_current_lens_signal_router(
     *,
     model: str,
-    state: DecisionState,
+    input: str,
     questions: DecisionQuestions,
     timeout: float,
     metadata: Mapping[str, object],
@@ -1297,7 +1296,7 @@ async def _call_current_lens_signal_router(
     decisions: Final[DecisionsCall] = cast(DecisionsCall, current_router.adecisions)
     return await decisions(
         model=model,
-        state=state,
+        input=input,
         questions=questions,
         timeout=timeout,
         metadata=metadata,
