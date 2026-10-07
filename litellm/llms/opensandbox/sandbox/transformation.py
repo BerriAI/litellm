@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import Final
+from typing import Final, cast
 
 import httpx
 
@@ -18,6 +18,7 @@ from litellm.constants import (
     OPEN_SANDBOX_POLL_INTERVAL,
     OPEN_SANDBOX_READY_TIMEOUT,
 )
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.sandbox.transformation import (
     SANDBOX_MAX_OUTPUT_BYTES,
     BaseSandboxConfig,
@@ -115,7 +116,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         )
 
         handle: Final = ContainerHandle(id=sandbox_id, provider="opensandbox", domain=base)
-        handle._hidden_params = {
+        handle.hidden_params = {
             "api_base": base,
             "api_key": key,
             "execd_endpoint": endpoint,
@@ -147,9 +148,12 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             poll_interval=(float(poll_interval) if poll_interval is not None else DEFAULT_POLL_INTERVAL),
             client=client,
         )
-        endpoint: Final = str(handle._hidden_params["execd_endpoint"])
-        endpoint_headers: Final = self._as_str_dict(handle._hidden_params.get("execd_headers"))
-        base: Final = str(handle._hidden_params.get("api_base") or handle.domain or self._api_base(api_base))
+        hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
+            dict[str, object], getattr(handle, HIDDEN_PARAMS_ATTR)
+        )
+        endpoint: Final = str(hidden_params["execd_endpoint"])
+        endpoint_headers: Final = self._as_str_dict(hidden_params.get("execd_headers"))
+        base: Final = str(hidden_params.get("api_base") or handle.domain or self._api_base(api_base))
         lines: Final = await self._post_code(
             url=f"{self._endpoint_base_url(endpoint, base)}/code",
             headers={
@@ -176,7 +180,10 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         **kwargs,
     ) -> bool:
         handle: Final = self._as_handle(container, api_base=api_base)
-        base: Final = str(handle._hidden_params.get("api_base") or self._api_base(api_base))
+        hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
+            dict[str, object], getattr(handle, HIDDEN_PARAMS_ATTR)
+        )
+        base: Final = str(hidden_params.get("api_base") or self._api_base(api_base))
         key: Final = self._api_key(api_key=api_key, handle=handle)
         try:
             response: Final = await self._http(client).delete(
@@ -201,12 +208,15 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         client: AsyncHTTPHandler | None,
     ) -> ContainerHandle:
         handle: Final = self._as_handle(container, api_base=api_base)
-        if handle._hidden_params.get("execd_endpoint"):
+        hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
+            dict[str, object], getattr(handle, HIDDEN_PARAMS_ATTR)
+        )
+        if hidden_params.get("execd_endpoint"):
             return handle
 
-        base: Final = str(handle._hidden_params.get("api_base") or self._api_base(api_base))
+        base: Final = str(hidden_params.get("api_base") or self._api_base(api_base))
         key: Final = self._api_key(api_key=api_key, handle=handle)
-        resolved_use_server_proxy: Final = bool(handle._hidden_params.get("use_server_proxy", use_server_proxy))
+        resolved_use_server_proxy: Final = bool(hidden_params.get("use_server_proxy", use_server_proxy))
         endpoint, endpoint_headers = await self._wait_for_execd_endpoint(
             sandbox_id=handle.id,
             api_base=base,
@@ -217,14 +227,17 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             poll_interval=poll_interval,
         )
         handle.domain = base
-        handle._hidden_params = {
-            **handle._hidden_params,
-            "api_base": base,
-            "api_key": key,
-            "execd_endpoint": endpoint,
-            "execd_headers": endpoint_headers,
-            "use_server_proxy": resolved_use_server_proxy,
-        }
+        set_hidden_params(
+            handle,
+            {
+                **hidden_params,
+                "api_base": base,
+                "api_key": key,
+                "execd_endpoint": endpoint,
+                "execd_headers": endpoint_headers,
+                "use_server_proxy": resolved_use_server_proxy,
+            },
+        )
         return handle
 
     async def _wait_until_running(
@@ -329,8 +342,11 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     def _api_key(self, *, api_key: str | None, handle: ContainerHandle) -> str:
         if api_key is not None:
             return api_key
-        if "api_key" in handle._hidden_params:
-            return str(handle._hidden_params["api_key"])
+        hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
+            dict[str, object], getattr(handle, HIDDEN_PARAMS_ATTR)
+        )
+        if "api_key" in hidden_params:
+            return str(hidden_params["api_key"])
         return self.validate_environment()
 
     @staticmethod
@@ -421,7 +437,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             provider="opensandbox",
             domain=OpenSandboxSandboxConfig._api_base(api_base),
         )
-        handle._hidden_params = {}
+        handle.hidden_params = {}
         return handle
 
     @staticmethod

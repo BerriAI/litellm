@@ -12,11 +12,13 @@ from openai.types.responses.response_function_web_search import (
 )
 
 import litellm
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.base import HiddenParams
 from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -765,6 +767,43 @@ class TestLiteLLMCompletionResponsesConfig:
             "cache_key": "some-cache-key",
             "custom_llm_provider": "openai",
         }
+
+    @pytest.mark.parametrize(
+        "storage",
+        [
+            HiddenParams(model_id="m1", provider_specific_fields={"k": "v"}),
+            {"model_id": "m1", "provider_specific_fields": {"k": "v"}},
+        ],
+    )
+    def test_transform_chat_completion_response_preserves_hidden_params_storage_identity(
+        self, storage: dict[str, object] | HiddenParams
+    ) -> None:
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Test response", role="assistant"),
+                )
+            ],
+        )
+        setattr(chat_completion_response, HIDDEN_PARAMS_ATTR, storage)
+
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Test",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
+        )
+
+        assert getattr(responses_api_response, HIDDEN_PARAMS_ATTR) is storage
+        assert responses_api_response.hidden_params["model_id"] == "m1"
+        assert responses_api_response.provider_specific_fields == {"k": "v"}
 
     def test_transform_chat_completion_response_handles_missing_hidden_params(self):
         """Test that missing _hidden_params defaults to empty dict"""

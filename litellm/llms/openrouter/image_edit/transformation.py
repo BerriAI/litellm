@@ -334,20 +334,20 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             cost: Final = usage_data.get("cost")
             if cost is not None:
                 if not hasattr(model_response, "_hidden_params"):
-                    model_response._hidden_params = {}
-                if "additional_headers" not in model_response._hidden_params:
-                    model_response._hidden_params["additional_headers"] = {}
-                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                    cost
+                    model_response.hidden_params = {}
+                additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
+                    dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
                 )
+                additional_headers["llm_provider-x-litellm-response-cost"] = float(cost)
 
             cost_details: Final = usage_data.get("cost_details", {})
             if cost_details:
-                if "response_cost_details" not in model_response._hidden_params:
-                    model_response._hidden_params["response_cost_details"] = {}
-                model_response._hidden_params["response_cost_details"].update(cost_details)
+                response_cost_details: Final = cast(  # cast-ok: provider cost details are stored as a mutable mapping
+                    dict[str, object], model_response.hidden_params.setdefault("response_cost_details", {})
+                )
+                response_cost_details.update(cost_details)
 
-        model_response._hidden_params["model"] = response_json.get("model", model)
+        model_response.hidden_params["model"] = response_json.get("model", model)
 
     def _read_image_bytes(self, image: FileTypes) -> bytes:
         """Read raw bytes from various image input types."""

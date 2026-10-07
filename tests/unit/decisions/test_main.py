@@ -267,6 +267,15 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
     assert cost == pytest.approx(expected_cost)
 
 
+def test_decisions_response_hidden_params_getter_preserves_mutable_identity() -> None:
+    response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
+
+    assert response.hidden_params is response._hidden_params
+
+    response.hidden_params["mutation"] = "visible"
+    assert response._hidden_params["mutation"] == "visible"
+
+
 @pytest.mark.asyncio
 async def test_decisions_cost_is_in_standard_logging_object(respx_mock: respx.MockRouter) -> None:
     respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)

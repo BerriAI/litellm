@@ -206,7 +206,7 @@ def _parse_response(
     response.raise_for_status()
     payload: Final[object] = _DECISIONS_PAYLOAD_ADAPTER.validate_json(response.content)
     result: Final = _DECISIONS_RESPONSE_ADAPTER.validate_python(prepared.config.unwrap_response(payload))
-    result._hidden_params.update(
+    result.hidden_params.update(
         {
             "model": f"{prepared.provider}/{prepared.upstream_model}",
             "custom_llm_provider": prepared.provider,

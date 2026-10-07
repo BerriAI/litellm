@@ -81,8 +81,8 @@ class GeminiPassthroughLoggingHandler:
 
             # Set response_cost in _hidden_params to prevent recalculation
             if not hasattr(litellm_video_response, "_hidden_params"):
-                litellm_video_response._hidden_params = {}
-            litellm_video_response._hidden_params["response_cost"] = response_cost
+                litellm_video_response.hidden_params = {}
+            litellm_video_response.hidden_params["response_cost"] = response_cost
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model

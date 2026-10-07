@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
 from typing_extensions import ReadOnly, Required
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
@@ -265,7 +266,11 @@ class ChunkProcessor:
             return model_response
         # set hidden params from chunk to model_response
         if model_response is not None and hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params = chunk.get("_hidden_params", {})
+            chunk_hidden_params: Final = chunk.get("_hidden_params", {})
+            if isinstance(chunk_hidden_params, dict):
+                set_hidden_params(model_response, chunk_hidden_params)
+            else:
+                setattr(model_response, HIDDEN_PARAMS_ATTR, chunk_hidden_params)
         return model_response
 
     @staticmethod
@@ -841,7 +846,7 @@ class ChunkProcessor:
         elif (isinstance(chunk, ModelResponse) or isinstance(chunk, ModelResponseStream)) and hasattr(
             chunk, "_hidden_params"
         ):
-            usage_chunk = chunk._hidden_params.get("usage", None)
+            usage_chunk = chunk.hidden_params.get("usage", None)
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)

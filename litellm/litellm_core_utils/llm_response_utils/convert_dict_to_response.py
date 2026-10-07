@@ -9,6 +9,7 @@ from typing import Final, Literal, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_reasoning_content,
 )
@@ -516,7 +517,8 @@ class LiteLLMResponseObjectHandler:
 
         text_completion_response["choices"] = choices_list
         text_completion_response["usage"] = response.get("usage", None)
-        text_completion_response._hidden_params = HiddenParams(**response._hidden_params)
+        response_hidden_params: Final = get_hidden_params(response) or {}
+        text_completion_response.hidden_params = HiddenParams.model_validate(response_hidden_params)
         return text_completion_response
 
     @staticmethod
@@ -747,9 +749,9 @@ def convert_to_model_response_object(
                     model_response_object._response_ms = (end_time - start_time).total_seconds() * 1000
 
             if hidden_params is not None:
-                if model_response_object._hidden_params is None:
-                    model_response_object._hidden_params = {}
-                model_response_object._hidden_params.update(hidden_params)
+                if model_response_object.hidden_params is None:
+                    model_response_object.hidden_params = {}
+                model_response_object.hidden_params.update(hidden_params)
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
@@ -787,7 +789,7 @@ def convert_to_model_response_object(
                 ).total_seconds() * 1000  # return response latency in ms like openai
 
             if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
+                model_response_object.hidden_params = hidden_params
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
@@ -833,13 +835,13 @@ def convert_to_model_response_object(
                     setattr(model_response_object, "usage", tr_usage_object)
 
             if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
+                model_response_object.hidden_params = hidden_params
 
             # Store internally-calculated duration in _hidden_params for cost
             # tracking without exposing it in the response body. Must be set
             # after hidden_params assignment to avoid being overwritten.
             if "_audio_transcription_duration" in response_object:
-                model_response_object._hidden_params["audio_transcription_duration"] = response_object[
+                model_response_object.hidden_params["audio_transcription_duration"] = response_object[
                     "_audio_transcription_duration"
                 ]
 

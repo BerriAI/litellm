@@ -591,7 +591,7 @@ class BaseResponsesAPIStreamingIterator:
         target: Final[object] = getattr(logging_response, "response", None)
         if not isinstance(target, ResponsesAPIResponse):
             return
-        existing: Final[Mapping[str, object]] = target._hidden_params
+        existing: Final[Mapping[str, object]] = target.hidden_params
         source_hidden: Final[object] = getattr(
             getattr(self.completed_response, "response", None), "_hidden_params", None
         )
@@ -602,7 +602,7 @@ class BaseResponsesAPIStreamingIterator:
         raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
         # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
-        target._hidden_params = {
+        target.hidden_params = {
             "additional_headers": {**headers},
             "headers": {**raw_headers},
             **existing,

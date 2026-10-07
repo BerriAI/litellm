@@ -68,7 +68,7 @@ class AzureAICohereConfig:
         return image_embeddings_request, v1_embeddings_request, image_embedding_idx
 
     def _transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:
-        additional_headers: Final[dict | None] = response._hidden_params.get("additional_headers")
+        additional_headers: Final[dict | None] = response.hidden_params.get("additional_headers")
         if additional_headers:
             # CALCULATE USAGE
             input_tokens: Final[str | None] = additional_headers.get("llm_provider-num_tokens")

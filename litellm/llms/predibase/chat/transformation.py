@@ -260,7 +260,7 @@ class PredibaseConfig(BaseConfig):
             if k.startswith("x-"):
                 response_headers[f"llm_provider-{k}"] = v
 
-        model_response._hidden_params["additional_headers"] = response_headers
+        model_response.hidden_params["additional_headers"] = response_headers
 
         return model_response
 

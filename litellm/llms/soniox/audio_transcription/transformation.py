@@ -260,7 +260,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         # Stash the raw Soniox payload so power-users can read tokens, segments,
         # speaker/language data, etc.
-        response._hidden_params.update(
+        response.hidden_params.update(
             {
                 "soniox_raw": {
                     "transcription": transcription_meta,

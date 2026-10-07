@@ -49,6 +49,11 @@ def _unified_job_id() -> str:
     return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
 
 
+def _decode_unified_id(encoded_id: str) -> str:
+    padding: Final = "=" * (-len(encoded_id) % 4)
+    return base64.urlsafe_b64decode(f"{encoded_id}{padding}").decode()
+
+
 def _job() -> LiteLLMFineTuningJob:
     job = LiteLLMFineTuningJob(
         id=RAW_JOB_ID,
@@ -211,11 +216,13 @@ async def test_create__raw_validation_file_rejected_when_managed_files_required(
 @pytest.mark.asyncio
 async def test_create__unified_training_file_allowed_when_managed_files_required(seams):
     seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+    unified_file_id: Final = _unified_file_id()
 
     with patch.object(litellm, "require_managed_files", True):
-        await _create(_unified_file_id())
+        response: Final = await _create(unified_file_id)
 
     assert seams.router.acreate_fine_tuning_job.call_count == 1
+    assert response.hidden_params["unified_file_id"] == _decode_unified_id(unified_file_id)
 
 
 @pytest.mark.asyncio
@@ -251,11 +258,13 @@ async def test_retrieve__raw_job_id_rejected_when_managed_files_required(seams):
 @pytest.mark.asyncio
 async def test_retrieve__unified_job_id_allowed_when_managed_files_required(seams):
     seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+    unified_job_id: Final = _unified_job_id()
 
     with patch.object(litellm, "require_managed_files", True):
-        await _retrieve(_unified_job_id())
+        response: Final = await _retrieve(unified_job_id)
 
     assert seams.router.aretrieve_fine_tuning_job.call_count == 1
+    assert response.hidden_params["unified_finetuning_job_id"] == _decode_unified_id(unified_job_id)
 
 
 @pytest.mark.asyncio
@@ -271,11 +280,13 @@ async def test_cancel__raw_job_id_rejected_when_managed_files_required(seams):
 @pytest.mark.asyncio
 async def test_cancel__unified_job_id_allowed_when_managed_files_required(seams):
     seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+    unified_job_id: Final = _unified_job_id()
 
     with patch.object(litellm, "require_managed_files", True):
-        await _cancel(_unified_job_id())
+        response: Final = await _cancel(unified_job_id)
 
     assert seams.router.acancel_fine_tuning_job.call_count == 1
+    assert response.hidden_params["unified_finetuning_job_id"] == _decode_unified_id(unified_job_id)
 
 
 FINE_TUNING_API_BASE: Final = "https://fine-tuning.test/v1"

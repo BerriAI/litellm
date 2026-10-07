@@ -366,6 +366,14 @@ class AnthropicMessagesStreamingResponse:
         self._hidden_params = hidden_params
 
     @property
+    def hidden_params(self) -> AnthropicMessagesStreamHiddenParams:
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: AnthropicMessagesStreamHiddenParams) -> None:
+        self._hidden_params = hidden_params
+
+    @property
     def has_buffered_provider_output(self) -> bool:
         return getattr(self.completion_stream, "has_buffered_provider_output", False) is True
 

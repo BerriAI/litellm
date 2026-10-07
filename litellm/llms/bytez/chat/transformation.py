@@ -231,7 +231,7 @@ class BytezChatConfig(BaseConfig):
 
         model_response.usage = usage
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
+        model_response.hidden_params["additional_headers"] = raw_response.headers
         message.provider_specific_fields = {
             "ratelimit-limit": raw_response.headers.get("ratelimit-limit"),
             "ratelimit-remaining": raw_response.headers.get("ratelimit-remaining"),

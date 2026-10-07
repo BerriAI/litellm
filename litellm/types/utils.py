@@ -2092,6 +2092,14 @@ class ModelResponseBase(OpenAIObject):
 
     _hidden_params: dict = {}
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     _response_headers: dict | None = None
 
     def set_provider_response_headers(self, headers: httpx.Headers) -> None:
@@ -2314,6 +2322,15 @@ class EmbeddingResponse(OpenAIObject):
     """Usage statistics for the embedding request."""
 
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     _response_headers: dict | None = None
     _response_ms: float | None = None
 
@@ -2453,6 +2470,14 @@ class TextCompletionResponse(OpenAIObject):
     usage: Usage | None
     _response_ms: int | None = None
     _hidden_params: HiddenParams
+
+    @property
+    def hidden_params(self) -> HiddenParams:
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: HiddenParams) -> None:
+        self._hidden_params = hidden_params
 
     def __init__(
         self,
@@ -2618,6 +2643,14 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     usage: ImageUsage | None = None
     """
     Users might use litellm with older python versions, we don't want this to break for them.
@@ -2752,6 +2785,14 @@ class TranscriptionResponse(OpenAIObject):
 
     _hidden_params: dict = {}
     _response_headers: dict | None = None
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __init__(self, text=None) -> None:
         super().__init__(text=text)
@@ -4343,6 +4384,15 @@ class SelectTokenizerResponse(TypedDict):
 
 class LiteLLMFineTuningJob(FineTuningJob):
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     seed: int | None = None
 
     def __init__(self, **kwargs) -> None:
@@ -4356,6 +4406,15 @@ class LiteLLMFineTuningJob(FineTuningJob):
 
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     usage: Usage | None = None
 
     def __contains__(self, key) -> bool:
@@ -4387,6 +4446,14 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     usage: Usage
     service_tier: str | None = None
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     @field_serializer("results")
     def _serialize_results(self, results: OpenAIRealtimeStreamList) -> list[dict[str, Any]]:

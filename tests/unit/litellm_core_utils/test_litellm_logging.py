@@ -21,6 +21,7 @@ import pytest_asyncio
 from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent
 from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
+from pydantic import BaseModel
 
 import litellm
 from litellm._internal_context import in_post_response_phase
@@ -545,6 +546,38 @@ def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
         assert cost == pytest.approx(expected_cost), f"Expected {expected_cost}, got {cost}"
     finally:
         litellm.model_cost.pop(custom_model_id, None)
+
+
+def test_logging_success_path_reads_custom_pydantic_hidden_params() -> None:
+    class CustomLLMResponse(BaseModel):
+        _hidden_params = {"response_cost": 0.25, "custom_field": "preserved"}
+
+    response: Final = CustomLLMResponse()
+    logging_obj: Final = _make_dict_logging_obj()
+    metadata: Final[dict[str, object]] = {"request_tag": "preserved"}
+    logging_obj.model_call_details["litellm_params"] = {"metadata": metadata}
+
+    with (
+        patch.object(
+            logging_obj,
+            "_build_standard_logging_payload",
+            return_value={"response_cost": 0.25},
+        ),
+        patch("litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"),
+        patch.object(logging_obj, "_is_recognized_call_type_for_logging", return_value=True),
+        patch.object(logging_obj, "_transform_usage_objects", side_effect=lambda result: result),
+    ):
+        logging_obj.success_handler(
+            result=response,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+
+    assert logging_obj.model_call_details["response_cost"] == 0.25
+    assert metadata == {
+        "request_tag": "preserved",
+        "hidden_params": {"response_cost": 0.25, "custom_field": "preserved"},
+    }
 
 
 class TestZeroCostDiagnostic:

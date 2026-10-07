@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     prompt_cache_key_from_user_id,
@@ -1739,10 +1740,13 @@ class LiteLLMAnthropicMessagesAdapter:
             )
             if getattr(response, "usage", None) is not None:
                 litellm_usage_chunk: Usage | None = response.usage
-            elif hasattr(response, "_hidden_params") and "usage" in response._hidden_params:
-                litellm_usage_chunk = response._hidden_params["usage"]
             else:
-                litellm_usage_chunk = None
+                response_hidden_params: Final = get_hidden_params(response)
+                litellm_usage_chunk = (
+                    Usage.model_validate(response_hidden_params["usage"])
+                    if response_hidden_params is not None and "usage" in response_hidden_params
+                    else None
+                )
             if litellm_usage_chunk is not None:
                 usage_delta = self._translate_openai_usage_to_anthropic_usage_delta(litellm_usage_chunk)
             else:

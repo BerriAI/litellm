@@ -756,7 +756,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 tool_calls=optional_params.get("tools", None),
             )
 
-        response._hidden_params = {
+        response.hidden_params = {
             "additional_headers": additional_headers,
             **_extract_fireworks_hidden_params(completion_response),
         }

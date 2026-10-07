@@ -626,7 +626,7 @@ class OCIChatConfig(BaseConfig):
         else:
             model_response = handle_generic_response(response_json, model, model_response, raw_response)
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
+        model_response.hidden_params["additional_headers"] = raw_response.headers
         return model_response
 
     @track_llm_api_timing()

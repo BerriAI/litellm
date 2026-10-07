@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Any, Final, cast
 
 import litellm
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
@@ -649,11 +650,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             ),
         )
         if response is not None and self._accumulated_provider_specific_fields:
-            if not hasattr(response, "_hidden_params") or response._hidden_params is None:
-                response._hidden_params = {}
-            response._hidden_params.setdefault("provider_specific_fields", {}).update(
-                self._accumulated_provider_specific_fields
+            response_hidden_params: Final = get_or_create_hidden_params(response)
+            provider_specific_fields: Final = cast(  # cast-ok: provider fields are stored as a mutable mapping
+                dict[str, object], response_hidden_params.setdefault("provider_specific_fields", {})
             )
+            provider_specific_fields.update(self._accumulated_provider_specific_fields)
         return response
 
     @staticmethod
