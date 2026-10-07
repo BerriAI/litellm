@@ -400,7 +400,7 @@ class OllamaChatConfig(BaseConfig):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
-                cache_read_input_tokens=cached_tokens,
+                prompt_tokens_details={"cached_tokens": cached_tokens},
             ),
         )
         return model_response
