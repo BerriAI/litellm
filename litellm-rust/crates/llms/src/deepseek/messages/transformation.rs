@@ -623,4 +623,24 @@ mod tests {
             ])
         );
     }
+
+    #[rstest]
+    fn explicit_null_optional_params_are_omitted() {
+        let transformed = transformed(
+            json!({
+                "model": "deepseek-v4-pro",
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": "hello"}],
+                "tools": null,
+                "thinking": null,
+                "metadata": null,
+                "tool_choice": null
+            }),
+            &MessagesTransformContext::default(),
+        );
+        assert!(transformed.get("tools").is_none());
+        assert!(transformed.get("thinking").is_none());
+        assert!(transformed.get("metadata").is_none());
+        assert!(transformed.get("tool_choice").is_none());
+    }
 }
