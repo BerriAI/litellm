@@ -102,6 +102,8 @@ pub(crate) fn value_route_options(fields: &Bound<'_, PyDict>) -> PyResult<RouteO
     })
 }
 
+/// Builds a route's optional body fields from the caller's Python arguments, in `names` order.
+/// `lookup` decides what counts as unset: a name it returns `None` for is left out of the map.
 pub(crate) fn project_optional_fields<'a, 'py>(
     names: impl IntoIterator<Item = &'a str>,
     lookup: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
@@ -116,6 +118,8 @@ pub(crate) fn project_optional_fields<'a, 'py>(
         .collect()
 }
 
+/// Converts a Rust route response to Python and returns `module.response(...)` called on it,
+/// so each route's Python factory builds the public LiteLLM response object.
 pub(crate) fn public_response(
     py: Python<'_>,
     module: &str,
