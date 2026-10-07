@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,11 @@ from litellm.types.integrations.anthropic_cache_control_hook import CacheControl
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CostPerToken, ModelResponse
+
+if sys.version_info >= (3, 11):
+    from asyncio import timeout
+else:
+    from async_timeout import timeout
 
 BUDGET_LEASE: Final = timedelta(minutes=5)
 BUDGET_RENEW_INTERVAL: Final = 30.0
@@ -317,7 +323,7 @@ async def renew_budget_reservation(
     while True:
         await asyncio.sleep(BUDGET_RENEW_INTERVAL)
         try:
-            async with asyncio.timeout(BUDGET_RENEW_INTERVAL):
+            async with timeout(BUDGET_RENEW_INTERVAL):
                 if (
                     await repo.update(
                         lens_id, lambda e: renew_reservation(e, reservation_id, datetime.now(timezone.utc))
@@ -325,7 +331,7 @@ async def renew_budget_reservation(
                     is None
                 ):
                     raise HTTPException(503, "Could not renew analysis budget reservation")
-        except TimeoutError as error:
+        except (TimeoutError, asyncio.TimeoutError) as error:
             raise HTTPException(503, "Analysis budget reservation renewal timed out") from error
 
 
@@ -363,15 +369,15 @@ async def reserved_budget(
     repo: LensRepository, lens_id: str, reservation_id: str, reserve: Callable[[Lens], Lens], admitted: asyncio.Event
 ) -> AsyncGenerator[None]:
     try:
-        async with asyncio.timeout(float(litellm.request_timeout)):
+        async with timeout(float(litellm.request_timeout)):
             try:
-                async with asyncio.timeout(BUDGET_WAIT_TIMEOUT):
+                async with timeout(BUDGET_WAIT_TIMEOUT):
                     await wait_for_reservation(repo, lens_id, reservation_id, reserve)
-            except TimeoutError as error:
+            except (TimeoutError, asyncio.TimeoutError) as error:
                 raise HTTPException(504, "Analysis request timed out waiting for budget") from error
             admitted.set()
             yield
-    except TimeoutError as error:
+    except (TimeoutError, asyncio.TimeoutError) as error:
         raise HTTPException(504, "Analysis request timed out waiting for budget or model output") from error
 
 

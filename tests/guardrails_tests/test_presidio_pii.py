@@ -18,7 +18,7 @@ from litellm.exceptions import BlockedPiiEntityError
 async def test_presidio_with_blocked_entities():
     """Test for Presidio guardrail with blocked entities - requires actual Presidio API"""
     # Setup the guardrail with specific entities config - BLOCK for credit card
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     pii_entities_config = {
         PiiEntityType.CREDIT_CARD: PiiAction.BLOCK,  # This entity should cause a block
         PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,  # This entity should be masked
@@ -377,7 +377,7 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
 @pytest.mark.asyncio
 async def test_presidio_language_configuration():
     """Test that presidio_language parameter is properly set and used in analyze requests"""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Test with German language using mock testing to avoid API calls
     presidio_guardrail_de = _OPTIONAL_PresidioPIIMasking(
@@ -433,7 +433,7 @@ async def test_presidio_language_configuration():
 @pytest.mark.asyncio
 async def test_presidio_language_configuration_with_per_request_override():
     """Test that per-request language configuration overrides the default configured language"""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Set up guardrail with German as default language
     presidio_guardrail = _OPTIONAL_PresidioPIIMasking(

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
 from litellm.caching import DualCache
 from litellm.proxy._types import CallTypes
@@ -17,7 +17,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 
 
 def test_get_file_ids_from_messages():
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )
     messages = [
@@ -41,7 +41,7 @@ def test_get_file_ids_from_messages():
 
 
 def test_get_file_ids_from_messages_skips_bedrock_content_blocks_without_type():
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )
     messages = [
@@ -81,7 +81,7 @@ async def test_async_pre_call_hook_batch_retrieve():
     return_value = MagicMock()
     return_value.created_by = "123"
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = return_value
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
     data = {
@@ -107,7 +107,7 @@ async def test_list_user_batches_limit_zero_returns_empty_page_without_db_query(
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = MagicMock()
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
 
     page = await proxy_managed_files.list_user_batches(
         user_api_key_dict=UserAPIKeyAuth(user_id="123"),
@@ -126,7 +126,7 @@ async def test_async_pre_call_deployment_hook_resolves_model_id_from_litellm_met
     async_pre_call_deployment_hook must check both locations so the managed
     file ID is resolved to the provider-specific file ID.
     """
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )
 
@@ -160,7 +160,7 @@ async def test_async_pre_call_deployment_hook_prefers_top_level_model_info():
     When model_info exists at top-level kwargs, async_pre_call_deployment_hook
     should use it without falling back to litellm_metadata.
     """
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )
 
@@ -199,7 +199,7 @@ async def test_async_pre_call_deployment_hook_no_model_info_leaves_file_id_uncha
     When model_info is absent from both top-level and litellm_metadata,
     the managed file ID should remain unchanged.
     """
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )
 
@@ -222,7 +222,7 @@ async def test_async_pre_call_deployment_hook_no_model_info_leaves_file_id_uncha
 
 
 # def test_list_managed_files():
-#     proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache())
+#     proxy_managed_files = PROXY_LiteLLMManagedFiles(DualCache())
 
 #     # Create some test files
 #     file1 = proxy_managed_files.create_file(
@@ -245,7 +245,7 @@ async def test_async_pre_call_deployment_hook_no_model_info_leaves_file_id_uncha
 #     assert all(f.purpose == "assistants" for f in files)
 
 # def test_retrieve_managed_file():
-#     proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache())
+#     proxy_managed_files = PROXY_LiteLLMManagedFiles(DualCache())
 
 #     # Create a test file
 #     test_content = b"test content for retrieve"
@@ -265,7 +265,7 @@ async def test_async_pre_call_deployment_hook_no_model_info_leaves_file_id_uncha
 #     assert retrieved_file.status == "uploaded"
 
 # def test_delete_managed_file():
-#     proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache())
+#     proxy_managed_files = PROXY_LiteLLMManagedFiles(DualCache())
 
 #     # Create a test file
 #     created_file = proxy_managed_files.create_file(
@@ -289,21 +289,21 @@ async def test_async_pre_call_deployment_hook_no_model_info_leaves_file_id_uncha
 #     assert created_file.id not in [f.id for f in files]
 
 # def test_retrieve_nonexistent_file():
-#     proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache())
+#     proxy_managed_files = PROXY_LiteLLMManagedFiles(DualCache())
 
 #     # Try to retrieve a non-existent file
 #     with pytest.raises(Exception):
 #         proxy_managed_files.retrieve_file("nonexistent-file-id")
 
 # def test_delete_nonexistent_file():
-#     proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache())
+#     proxy_managed_files = PROXY_LiteLLMManagedFiles(DualCache())
 
 #     # Try to delete a non-existent file
 #     with pytest.raises(Exception):
 #         proxy_managed_files.delete_file("nonexistent-file-id")
 
 # def test_list_files_with_purpose_filter():
-#     proxy_managed_files = _PROXY_LiteLLMManagedFiles(DualCache())
+#     proxy_managed_files = PROXY_LiteLLMManagedFiles(DualCache())
 
 #     # Create files with different purposes
 #     file1 = proxy_managed_files.create_file(
@@ -351,7 +351,7 @@ async def test_async_post_call_success_hook_for_unified_finetuning_job():
         "unified_file_id": unified_file_id,
         "model_id": "gpt-3.5-turbo-0613",
     }
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=AsyncMock()
     )
     data = {
@@ -376,7 +376,7 @@ async def test_async_pre_call_hook_for_unified_finetuning_job():
     return_value = MagicMock()
     return_value.created_by = "123"
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = return_value
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
     data = {
@@ -408,7 +408,7 @@ async def test_can_user_call_unified_file_id(call_type):
     return_value = MagicMock()
     return_value.created_by = "123"
     prisma_client.db.litellm_managedfiletable.find_first.return_value = return_value
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(), prisma_client=prisma_client
     )
     unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9vY3RldC1zdHJlYW07dW5pZmllZF9pZCxmMTNlNDAzZS01YWM3LTRhZjktOGQzNS0wNDgwZDMxOTgyYTg7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00by1taW5pLW9wZW5haTtsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1Ib3UxZDFXc3c1SDNKcjFMYllpZDJiO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxmODBiNWU2NzQ1NzdkNjkyMjM4YmVhNTIxZDdiMGI5ZGYyY2FmMTEwMTU2YmU5YzBjM2NjMmNkNTBjOTM1ZDI0"
@@ -435,7 +435,7 @@ async def test_router_acreate_batch_only_selects_from_file_id_mapping(monkeypatc
     return_value = MagicMock()
     return_value.created_by = "123"
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = return_value
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -522,7 +522,7 @@ async def test_output_file_id_for_batch_retrieve():
         "litellm_model_name": "gpt-5.5",
         "unified_batch_id": "litellm_proxy;model_id:12345679;llm_batch_id:batch_685c5e5d63988190b85bdb2147ba131d",
     }
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=AsyncMock()
     )
 
@@ -582,7 +582,7 @@ async def test_output_file_id_preserves_target_model_names_when_model_name_missi
         # Intentionally omit model_name to mimic Vertex issue.
     }
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=AsyncMock()
     )
 
@@ -658,7 +658,7 @@ async def test_error_file_id_for_failed_batch():
         "unified_batch_id": "litellm_proxy;model_id:test-model-id;llm_batch_id:batch_abc123",
     }
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=AsyncMock()
     )
 
@@ -728,7 +728,7 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
         "unified_batch_id": "litellm_proxy;model_id:12345679;llm_batch_id:batch_685c5e5d63988190b85bdb2147ba131d",
     }
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -1104,7 +1104,7 @@ def test_get_file_ids_from_responses_tools():
     Test that get_file_ids_from_responses_tools correctly extracts
     file IDs from the tools parameter.
     """
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )
 
@@ -1127,7 +1127,7 @@ def test_get_file_ids_from_responses_tools_multiple_tools():
     """
     Test that get_file_ids_from_responses_tools handles multiple tools.
     """
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )
 
@@ -1161,7 +1161,7 @@ def test_get_file_ids_from_responses_tools_empty():
     """
     Test that get_file_ids_from_responses_tools handles empty or None tools.
     """
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )
 
@@ -1194,7 +1194,7 @@ async def test_check_file_ids_access_with_unified_file_ids():
     prisma_client = AsyncMock()
     internal_usage_cache = MagicMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1231,7 +1231,7 @@ async def test_check_file_ids_access_denied():
     prisma_client = AsyncMock()
     internal_usage_cache = MagicMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1268,7 +1268,7 @@ async def test_check_file_ids_access_with_regular_files_only():
     prisma_client = AsyncMock()
     internal_usage_cache = MagicMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1306,7 +1306,7 @@ async def test_completion_with_file_access_check():
     internal_usage_cache = MagicMock()
     internal_usage_cache.async_get_cache = AsyncMock(return_value=None)
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1366,7 +1366,7 @@ async def test_responses_with_file_access_check():
     internal_usage_cache = MagicMock()
     internal_usage_cache.async_get_cache = AsyncMock(return_value=None)
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1431,7 +1431,7 @@ async def test_store_unified_file_id_with_none_file_object():
     internal_usage_cache = MagicMock()
     internal_usage_cache.async_set_cache = AsyncMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1466,7 +1466,7 @@ async def test_store_unified_file_id_updates_file_metadata_on_existing_row():
     internal_usage_cache = MagicMock()
     internal_usage_cache.async_set_cache = AsyncMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1545,7 +1545,7 @@ async def test_afile_delete_returns_provider_response_when_stored_file_object_no
     )
     internal_usage_cache.async_set_cache = AsyncMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1588,7 +1588,7 @@ async def test_afile_retrieve_fetches_from_provider_when_file_object_none():
     prisma_client = AsyncMock()
     internal_usage_cache = MagicMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1642,7 +1642,7 @@ async def test_afile_retrieve_raises_error_when_no_router_and_file_object_none()
     prisma_client = AsyncMock()
     internal_usage_cache = MagicMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1676,7 +1676,7 @@ async def test_afile_retrieve_returns_stored_file_object_when_exists():
     prisma_client = AsyncMock()
     internal_usage_cache = MagicMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1713,7 +1713,7 @@ async def test_afile_retrieve_raises_error_for_non_managed_file():
     prisma_client = AsyncMock()
     internal_usage_cache = MagicMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=internal_usage_cache,
         prisma_client=prisma_client,
     )
@@ -1773,7 +1773,7 @@ async def test_list_batches_from_managed_objects_table():
         batch_record_2,
     ]
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -1804,7 +1804,7 @@ async def test_list_batches_from_managed_objects_table_empty_list():
     prisma_client = AsyncMock()
     prisma_client.db.litellm_managedobjecttable.find_many.return_value = []
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -1897,7 +1897,7 @@ async def test_list_batches_registers_and_returns_unified_output_file_ids():
     )
     prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -1977,7 +1977,7 @@ async def test_list_batches_resolves_existing_managed_rows_without_minting():
     )
     prisma_client.db.litellm_managedfiletable.find_first = AsyncMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2002,7 +2002,7 @@ async def test_list_batches_caps_page_size_at_100():
     prisma_client = AsyncMock()
     prisma_client.db.litellm_managedobjecttable.find_many.return_value = []
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2024,7 +2024,7 @@ async def test_list_batches_from_managed_objects_table_provider_filter_raises_ex
 
     prisma_client = AsyncMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2050,7 +2050,7 @@ async def test_list_batches_from_managed_objects_table_target_model_name_filter_
 
     prisma_client = AsyncMock()
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2108,7 +2108,7 @@ async def test_list_batches_from_managed_objects_table_filters_by_created_by():
         }
     )
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2158,7 +2158,7 @@ async def test_list_batches_pagination_uses_unified_object_id_cursor():
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = MagicMock()
     prisma_client.db.litellm_managedobjecttable.find_many.return_value = []
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2255,7 +2255,7 @@ async def test_list_batches_pagination_walks_all_pages_without_loops_or_gaps():
         side_effect=fake_find_first
     )
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
     user = UserAPIKeyAuth(user_id="test-user")
@@ -2376,7 +2376,7 @@ async def test_list_batches_pagination_stable_when_created_at_ties():
         side_effect=fake_find_first
     )
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
     user = UserAPIKeyAuth(user_id="test-user")
@@ -2491,7 +2491,7 @@ async def test_list_batches_rejects_unknown_after_cursor():
     )
     prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[])
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2526,7 +2526,7 @@ async def test_list_batches_treats_empty_after_as_no_cursor():
     rows = [_managed_batch_row(i) for i in range(2)]
     prisma_client = _fake_managed_object_table(rows)
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2568,7 +2568,7 @@ async def test_list_batches_rejects_after_cursor_owned_by_another_user():
     )
     prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[])
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2596,7 +2596,7 @@ async def test_list_batches_has_more_false_on_exactly_full_final_page():
     rows = [_managed_batch_row(i) for i in range(4)]
     prisma_client = _fake_managed_object_table(rows)
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2624,7 +2624,7 @@ async def test_list_batches_unparseable_row_does_not_truncate_pagination():
     rows[2].file_object = "{ not valid json"
     prisma_client = _fake_managed_object_table(rows)
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2653,7 +2653,7 @@ async def test_list_batches_fills_a_page_past_a_full_page_of_unparseable_rows():
         corrupt_row.file_object = "{ not valid json"
     prisma_client = _fake_managed_object_table(rows)
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2684,7 +2684,7 @@ async def test_list_batches_bounds_the_queries_a_deep_unparseable_run_costs():
     ]
     prisma_client = _fake_managed_object_table(rows)
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2708,7 +2708,7 @@ async def test_list_batches_reads_one_chunk_when_the_first_one_fills_the_page():
     rows = [_managed_batch_row(index) for index in range(_DEEP_BATCH_SCAN_ROW_COUNT)]
     prisma_client = _fake_managed_object_table(rows)
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2748,7 +2748,7 @@ async def test_return_unified_file_id_includes_expires_at():
 
     internal_usage_cache = MagicMock()
 
-    result = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
+    result = await PROXY_LiteLLMManagedFiles.return_unified_file_id(
         file_objects=[file_object],
         create_file_request=create_file_request,
         internal_usage_cache=internal_usage_cache,
@@ -2789,7 +2789,7 @@ async def test_user_b_cannot_retrieve_user_a_batch():
     batch_record.created_by = "user_a_id"
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = batch_record
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2826,7 +2826,7 @@ async def test_user_b_cannot_cancel_user_a_batch():
     batch_record.created_by = "user_a_id"
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = batch_record
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2866,7 +2866,7 @@ async def test_user_a_can_retrieve_own_batch():
     batch_record.created_by = "user_a_id"
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = batch_record
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -2904,7 +2904,7 @@ async def test_user_b_cannot_retrieve_user_a_file():
     file_record.created_by = "user_a_id"
     prisma_client.db.litellm_managedfiletable.find_first.return_value = file_record
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(), prisma_client=prisma_client
     )
 
@@ -2941,7 +2941,7 @@ async def test_user_b_cannot_download_user_a_file_content():
     file_record.created_by = "user_a_id"
     prisma_client.db.litellm_managedfiletable.find_first.return_value = file_record
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(), prisma_client=prisma_client
     )
 
@@ -2978,7 +2978,7 @@ async def test_user_b_cannot_delete_user_a_file():
     file_record.created_by = "user_a_id"
     prisma_client.db.litellm_managedfiletable.find_first.return_value = file_record
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(), prisma_client=prisma_client
     )
 
@@ -3028,7 +3028,7 @@ async def test_user_a_can_retrieve_own_file():
     )
     prisma_client.db.litellm_managedfiletable.find_first.return_value = file_record
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(), prisma_client=prisma_client
     )
 
@@ -3081,7 +3081,7 @@ async def test_list_batches_only_returns_user_own_batches():
     # Mock database to only return User A's batches
     prisma_client.db.litellm_managedobjecttable.find_many.return_value = [batch_user_a]
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -3120,7 +3120,7 @@ async def test_same_user_different_keys_can_access_batch():
     batch_record.created_by = "user_a_id"
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = batch_record
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -3212,7 +3212,7 @@ async def test_team_b_cannot_access_team_a_provider_format_batch(
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -3253,7 +3253,7 @@ async def test_authorized_callers_can_access_provider_format_batch(caller_kwargs
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -3280,7 +3280,7 @@ async def test_provider_format_batch_without_ownership_row_stays_accessible():
 
     prisma_client = AsyncMock()
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = None
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -3308,7 +3308,7 @@ async def test_fine_tuning_provider_format_id_not_enforced():
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -3345,7 +3345,7 @@ async def test_team_b_cannot_access_team_a_provider_format_file(
     prisma_client.db.litellm_managedfiletable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(), prisma_client=prisma_client
     )
 
@@ -3373,7 +3373,7 @@ async def test_same_team_can_access_provider_format_file():
     prisma_client.db.litellm_managedfiletable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(), prisma_client=prisma_client
     )
 
@@ -3395,7 +3395,7 @@ async def test_provider_format_file_without_ownership_row_stays_accessible():
 
     prisma_client = AsyncMock()
     prisma_client.db.litellm_managedfiletable.find_first.return_value = None
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(), prisma_client=prisma_client
     )
 
@@ -3417,7 +3417,7 @@ async def test_post_call_batch_create_stores_ownership_row(batch_id):
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
     )
 
@@ -3452,7 +3452,7 @@ async def test_post_call_batch_sync_does_not_claim_ownership():
 
     prisma_client = AsyncMock()
     prisma_client.db.litellm_managedobjecttable.update_many.return_value = 0
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
     )
 
@@ -3477,7 +3477,7 @@ async def test_post_call_batch_sync_updates_existing_row():
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
     )
 
@@ -3511,7 +3511,7 @@ async def test_post_call_batch_sync_stores_output_file_ownership_from_batch_row(
     prisma_client.db.litellm_managedobjecttable.find_first.return_value = (
         _owned_record(created_by="user_a", team_id="team_a")
     )
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
     )
 
@@ -3542,7 +3542,7 @@ async def test_post_call_batch_create_does_not_store_output_file_ownership():
     from litellm.proxy._types import UserAPIKeyAuth
 
     prisma_client = AsyncMock()
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client
     )
 
@@ -3592,7 +3592,7 @@ async def test_file_list_cursors_are_scoped_to_the_caller():
 
     prisma_client = AsyncMock()
     prisma_client.db.litellm_managedfiletable.find_many.return_value = []
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -3649,7 +3649,7 @@ async def test_file_list_cursors_follow_the_owner_scoped_page():
     }
     prisma_client = AsyncMock()
     prisma_client.db.litellm_managedfiletable.find_many.return_value = [managed_row]
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=prisma_client
     )
 
@@ -3671,7 +3671,7 @@ async def test_file_list_cursors_follow_the_owner_scoped_page():
 async def test_list_user_batches_provider_filter_rejected_with_400():
     from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )
 
@@ -3691,7 +3691,7 @@ async def test_list_user_batches_provider_filter_rejected_with_400():
 async def test_list_user_batches_target_model_names_filter_rejected_with_400():
     from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
-    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
         DualCache(), prisma_client=MagicMock()
     )
 

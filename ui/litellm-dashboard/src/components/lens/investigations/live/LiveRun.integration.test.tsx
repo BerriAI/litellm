@@ -1,5 +1,5 @@
-import { fireEvent, screen, within } from "@testing-library/react";
-import { beforeEach, expect, it } from "vitest";
+import { act, fireEvent, screen, within } from "@testing-library/react";
+import { beforeEach, expect, it, vi } from "vitest";
 
 import { renderWithLens, stubGateway } from "@/../tests/lens-test-utils";
 import { testQueryClient } from "@/../tests/test-utils";
@@ -61,6 +61,28 @@ function activity(overrides: Partial<Activity> = {}): Activity {
     ...overrides,
   };
 }
+
+it("keeps completed trace rows idle while the reading clock advances", async () => {
+  vi.useFakeTimers();
+  const parseTime = vi.spyOn(Date, "parse");
+  const reviewed = review();
+  const active = job({ stage: "Reading executions", activities: [], reading: [] });
+  const { unmount } = renderWithLens(<LiveRun job={active} reviews={[reviewed]} name="Tool quality" />);
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "View run" }));
+    const traces = within(screen.getByRole("list", { name: "Reviewed traces" }));
+    expect(traces.getByRole("button", { name: /research-agent/ })).toBeVisible();
+    parseTime.mockClear();
+    await act(async () => vi.advanceTimersByTime(500));
+    expect(parseTime.mock.calls.filter(([value]) => value === reviewed.at)).toHaveLength(0);
+    fireEvent.click(traces.getByRole("button", { name: /research-agent/ }));
+    expect(traces.getByText("Tool calls: Read × 2 · Python × 1")).toBeVisible();
+  } finally {
+    unmount();
+    parseTime.mockRestore();
+    vi.useRealTimers();
+  }
+});
 
 it("shows real candidate and grouping activity, durable tool counts, and preliminary review scope", async () => {
   const reviewed = review();

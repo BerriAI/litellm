@@ -405,22 +405,22 @@ def test_multi_chunk_reasoning_and_content(
 def test_strip_sse_data_from_chunk():
     """Test the static method that strips 'data: ' prefix from SSE chunks"""
     # Test with string inputs
-    assert CustomStreamWrapper._strip_sse_data_from_chunk("data: content") == "content"
+    assert CustomStreamWrapper.strip_sse_data_from_chunk("data: content") == "content"
     assert (
-        CustomStreamWrapper._strip_sse_data_from_chunk("data:  spaced content")
+        CustomStreamWrapper.strip_sse_data_from_chunk("data:  spaced content")
         == " spaced content"
     )
     assert (
-        CustomStreamWrapper._strip_sse_data_from_chunk("regular content")
+        CustomStreamWrapper.strip_sse_data_from_chunk("regular content")
         == "regular content"
     )
     assert (
-        CustomStreamWrapper._strip_sse_data_from_chunk("regular content with data:")
+        CustomStreamWrapper.strip_sse_data_from_chunk("regular content with data:")
         == "regular content with data:"
     )
 
     # Test with None input
-    assert CustomStreamWrapper._strip_sse_data_from_chunk(None) is None
+    assert CustomStreamWrapper.strip_sse_data_from_chunk(None) is None
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

@@ -16,7 +16,7 @@ import re
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
@@ -26,7 +26,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.proxy_server import (
     ProxyConfig,
@@ -2330,6 +2330,40 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
+@pytest.mark.parametrize(("yaml_value", "expected"), [("true", True), ("false", False)])
+async def test_load_config_yaml_deny_by_default_is_boolean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, yaml_value: str, expected: bool
+):
+    config_file: Final = tmp_path / "deny_by_default.yaml"
+    config_file.write_text(f"model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  {setting}: {yaml_value}\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    _, _, general_settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert general_settings[setting] is expected
+    assert getattr(ConfigGeneralSettings.model_validate(dict(general_settings)), setting) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
+@pytest.mark.parametrize("yaml_value", ["", "enabled"], ids=["null", "string"])
+async def test_load_config_rejects_non_boolean_deny_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, yaml_value: str
+):
+    config_file: Final = tmp_path / "deny_by_default.yaml"
+    config_file.write_text(f"model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  {setting}: {yaml_value}\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    with pytest.raises(ValidationError, match=setting):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):
     """Regression: router_settings.plugins dotted-path strings must be resolved to
     live RoutingPlugin instances on the created Router. Previously they were passed
@@ -2942,7 +2976,7 @@ def test_ProxyConfig__add_deployment_pinned_row_follows_the_cost_map_across_relo
     assert ProxyConfig()._add_deployment(db_models=[pinned, typed]) == 2
 
     monkeypatch.setitem(litellm.model_cost["gpt-5.6"], "input_cost_per_token", 1e-06)
-    router._replay_model_cost_registrations()
+    router.replay_model_cost_registrations()
 
     assert litellm.model_cost.get("pinned-row", {}).get("input_cost_per_token") is None
     assert router.get_deployment(model_id="pinned-row").model_info.input_cost_per_token is None
@@ -2974,7 +3008,7 @@ def test_ProxyConfig__add_deployment_ptu_row_with_a_cost_map_copy_still_bills_ze
     )
 
     assert ProxyConfig()._add_deployment(db_models=[ptu]) == 1
-    router._replay_model_cost_registrations()
+    router.replay_model_cost_registrations()
 
     assert litellm.model_cost["ptu-row"]["input_cost_per_token"] == 0.0
     assert litellm.model_cost["ptu-row"]["output_cost_per_token"] == 0.0
@@ -3616,9 +3650,7 @@ def test_ProxyConfig__decrypt_and_set_db_env_variables_cannot_enable_mcp_stdio(m
     assert os.environ.get("LITELLM_ENABLE_MCP_STDIO") is None
 
 
-def test_ProxyConfig__decrypt_and_set_db_env_variables_warns_once_about_the_ignored_mcp_stdio_flag(
-    monkeypatch, caplog
-):
+def test_ProxyConfig__decrypt_and_set_db_env_variables_warns_once_about_the_ignored_mcp_stdio_flag(monkeypatch, caplog):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
         lambda value, key, return_original_value=False: value,
@@ -4246,6 +4278,7 @@ async def test_ProxyConfig__update_general_settings_leaves_first_registration_to
 async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries_the_stagger_offset(monkeypatch):
     """Once the scheduler is running the sync owns registration and the job it adds is staggered."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
 
     from litellm.proxy.common_utils.scheduled_job_stagger import _OffsetTrigger
 
@@ -4254,12 +4287,17 @@ async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries
     monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     pc = ProxyConfig()
+    pc.settings.load_yaml({"scheduled_job_stagger": {"offsets": {"spend_log_cleanup_job": 120}}})
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
     try:
         await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
         jobs = real_scheduler.get_jobs()
         assert [job.id for job in jobs] == ["spend_log_cleanup_job"]
-        assert isinstance(jobs[0].trigger, _OffsetTrigger), repr(jobs[0].trigger)
+        trigger: Final = jobs[0].trigger
+        assert isinstance(trigger, _OffsetTrigger), repr(trigger)
+        assert trigger.offset == timedelta(seconds=120)
+        assert isinstance(trigger.base, IntervalTrigger)
+        assert trigger.base.interval == timedelta(days=1)
     finally:
         real_scheduler.shutdown(wait=False)
 

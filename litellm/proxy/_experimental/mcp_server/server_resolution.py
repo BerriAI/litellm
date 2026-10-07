@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from fastapi import HTTPException, status
 
 from litellm.proxy._experimental.mcp_server.ui_session_utils import can_access_mcp_server
 from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult, OperationContext
 
 
 class MCPServerRegistry(Protocol):
@@ -130,6 +133,12 @@ class MCPServerTargetCatalog:
     id_client_ip: str | None = None
     name_client_ip: str | None = None
     match_name: bool = False
+    listing: Callable[[OperationContext, CatalogListRequest], Awaitable[CatalogListResult]] | None = None
+
+    async def list(self, context: OperationContext, request: CatalogListRequest) -> CatalogListResult:
+        if self.listing is None:
+            raise RuntimeError("Catalog listing dependency is not configured")
+        return await self.listing(context, request)
 
     async def resolve(
         self,
