@@ -27,6 +27,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
@@ -54,6 +55,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.types import utils as types_utils
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -7961,6 +7963,7 @@ async def test_config_pass_through_forwards_non_object_json_bytes_unchanged(
     assert len(upstream_requests) == 1
     assert upstream_requests[0].content == body
     assert json.loads(upstream_requests[0].content) == [1, {"a": 2}]
+    assert upstream_requests[0].headers["content-type"] == "application/json"
 
 
 @pytest.mark.asyncio
@@ -7986,6 +7989,37 @@ async def test_config_pass_through_rejects_non_object_json_when_guardrails_run(
         "/cfg-guarded",
         {"Content-Type": "application/json"},
         body=b"[]",
+    )
+
+    assert response.status_code == 400, response.text
+    assert "JSON request body must be an object" in response.text
+    assert upstream_requests == []
+
+
+@pytest.mark.asyncio
+async def test_config_pass_through_rejects_non_object_json_for_default_on_guardrail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-default-guarded", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="default-on-test-guardrail",
+        default_on=True,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    response, upstream_requests = await _send_through_proxy(
+        "/cfg-default-guarded",
+        {"Content-Type": "application/json"},
+        body=b'["blocked"]',
     )
 
     assert response.status_code == 400, response.text

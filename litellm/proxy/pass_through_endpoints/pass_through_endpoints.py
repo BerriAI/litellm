@@ -1056,6 +1056,13 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
+def _has_default_on_guardrail_callback() -> bool:
+    return any(
+        isinstance(callback, CustomGuardrail) and callback.default_on is True
+        for callback in litellm.callbacks
+    )
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1163,6 +1170,16 @@ async def pass_through_request(
             if not isinstance(_parsed_body, dict)
             else None
         )
+        raw_body_headers: Final = (
+            {
+                **upstream_headers,
+                "Content-Type": "application/json",
+            }
+            if raw_body_to_forward is not None
+            and state_raw_body is None
+            and not any(header.lower() == "content-type" for header in upstream_headers)
+            else upstream_headers
+        )
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
@@ -1188,7 +1205,7 @@ async def pass_through_request(
             passthrough_guardrails_config=guardrails_config,
         )
 
-        if guardrails_to_run and not isinstance(_parsed_body, dict):
+        if (guardrails_to_run or _has_default_on_guardrail_callback()) and not isinstance(_parsed_body, dict):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="JSON request body must be an object when guardrails run on this pass-through endpoint",
@@ -1466,7 +1483,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=upstream_headers,
+                        headers=raw_body_headers,
                         content=raw_body_to_forward,
                     )
                     if raw_body_to_forward is not None
@@ -1552,7 +1569,7 @@ async def pass_through_request(
             raw_body_request: Final = async_client.build_request(
                 request.method,
                 url,
-                headers=upstream_headers,
+                headers=raw_body_headers,
                 params=requested_query_params,
                 content=raw_body_to_forward,
             )
@@ -1907,7 +1924,7 @@ async def pass_through_request(
         # Monitoring: Trigger post_call_failure_hook
         # for pass through endpoint failure
         #########################################################
-        request_payload: Final[dict] = _parsed_body or {}
+        request_payload: Final[dict] = _parsed_body if isinstance(_parsed_body, dict) else {}
         # add user_api_key_dict, litellm_call_id, passthrough_logging_payloa for logging
         if kwargs:
             for key, value in kwargs.items():
