@@ -3,6 +3,7 @@
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { isProxyAdminTierRole } from "@/utils/roles";
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -102,7 +103,7 @@ const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): strin
 };
 
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
-  const { userId } = useAuthorized();
+  const { userId, userRole } = useAuthorized();
   const { data: fetchedOrganizations } = useOrganizations();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const { data: fetchedTeams } = useAllTeams();
@@ -121,9 +122,16 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     onColumnFiltersChange: setUrlColumnFilters,
   } = useUrlTableState(TABLE_STATE_OPTIONS);
   const myKeysEnabled = isMyKeysEnabled(myKeysParam, userId);
+  const canFilterByUserId = isProxyAdminTierRole(userRole ?? "");
   const columnFilters = useMemo(
-    () => withMyKeysFilter(urlColumnFilters.filter(isUsableFilter), myKeysEnabled),
-    [urlColumnFilters, myKeysEnabled],
+    () =>
+      withMyKeysFilter(
+        urlColumnFilters
+          .filter(isUsableFilter)
+          .filter((filter) => canFilterByUserId || filter.id !== "user_id"),
+        myKeysEnabled,
+      ),
+    [urlColumnFilters, myKeysEnabled, canFilterByUserId],
   );
   const onColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
     (updaterOrValue) => {
@@ -351,14 +359,16 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                       emptyText="No organizations found"
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="User ID">
-                    <Input
-                      value={get(MY_KEYS_FILTER_ID) === true ? userId ?? "" : (get("user_id") as string) ?? ""}
-                      onChange={(event) => set("user_id", event.target.value)}
-                      placeholder="Enter User ID…"
-                      disabled={get(MY_KEYS_FILTER_ID) === true}
-                    />
-                  </DataTableFilterField>
+                  {canFilterByUserId && (
+                    <DataTableFilterField label="User ID">
+                      <Input
+                        value={get(MY_KEYS_FILTER_ID) === true ? userId ?? "" : (get("user_id") as string) ?? ""}
+                        onChange={(event) => set("user_id", event.target.value)}
+                        placeholder="Enter User ID…"
+                        disabled={get(MY_KEYS_FILTER_ID) === true}
+                      />
+                    </DataTableFilterField>
+                  )}
                   <DataTableFilterField label="Key ID">
                     <Input
                       value={(get("key_hash") as string) ?? ""}

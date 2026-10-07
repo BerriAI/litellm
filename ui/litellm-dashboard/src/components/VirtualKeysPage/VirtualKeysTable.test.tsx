@@ -153,7 +153,7 @@ const mockTeam: Team = {
   spend: 0,
 };
 
-const authorizedUser = (overrides: { userId?: string | null } = {}) => ({
+const authorizedUser = (overrides: { userId?: string | null; userRole?: string } = {}) => ({
   accessToken: "test-token",
   userId: "test-user",
   userRole: "Admin",
@@ -1366,6 +1366,72 @@ describe("My Keys filter", () => {
         1,
         50,
         expect.objectContaining({ userID: undefined, includeTeamKeys: true }),
+      );
+    });
+  });
+
+  it.each(["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "Internal User", "org_admin"])(
+    "starts with My Keys off for %s",
+    async (userRole) => {
+      authorizedSession.mockReturnValue(authorizedUser({ userRole }));
+      renderWithProviders(<VirtualKeysTable />);
+
+      openFilters();
+
+      expect(await myKeysSwitch()).not.toBeChecked();
+      expect(screen.queryByTestId("filter-chip-my_keys")).not.toBeInTheDocument();
+    },
+  );
+});
+
+describe("User ID filter role access", () => {
+  it.each(["Admin", "proxy_admin_viewer"])("shows the User ID filter for %s", async (userRole) => {
+    authorizedSession.mockReturnValue(authorizedUser({ userRole }));
+    renderWithProviders(<VirtualKeysTable />);
+
+    openFilters();
+
+    expect(await screen.findByPlaceholderText(/Enter User ID/)).toBeInTheDocument();
+  });
+
+  it.each(["Internal User", "org_admin"])("hides the User ID filter for %s", async (userRole) => {
+    authorizedSession.mockReturnValue(authorizedUser({ userRole }));
+    renderWithProviders(<VirtualKeysTable />);
+
+    openFilters();
+
+    expect(screen.queryByPlaceholderText(/Enter User ID/)).not.toBeInTheDocument();
+  });
+
+  it("ignores a stale user ID URL filter for internal users", async () => {
+    authorizedSession.mockReturnValue(authorizedUser({ userRole: "Internal User" }));
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { filter_user: "bob" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: undefined }));
+    });
+    expect(screen.queryByTestId("filter-chip-user_id")).not.toBeInTheDocument();
+  });
+
+  it("keeps My Keys available to internal users", async () => {
+    authorizedSession.mockReturnValue(authorizedUser({ userId: "self", userRole: "Internal User" }));
+    renderWithProviders(<VirtualKeysTable />);
+
+    openFilters();
+    expect(await myKeysSwitch()).not.toBeChecked();
+    fireEvent.click(await myKeysSwitch());
+    fireEvent.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({
+          userID: "self",
+          includeTeamKeys: false,
+          includeCreatedByKeys: false,
+          substringMatching: false,
+        }),
       );
     });
   });
