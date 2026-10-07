@@ -42,7 +42,7 @@ class BaseImageGenTest(ABC):
     async def test_basic_image_generation(self):
         """Test basic image generation"""
         try:
-            litellm._turn_on_debug()
+            litellm.turn_on_debug()
             custom_logger = TestCustomLogger()
             litellm.logging_callback_manager._reset_all_callbacks()
             litellm.callbacks = [custom_logger]

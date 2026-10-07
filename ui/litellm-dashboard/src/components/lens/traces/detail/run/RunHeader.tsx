@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, Copy, Link } from "lucide-react";
+import { ArrowLeft, Check, Copy, Link, ListTree, MessagesSquare, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useTimeout } from "usehooks-ts";
 
@@ -9,6 +9,7 @@ import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
+import { AddToDatasetButton } from "../../../datasets/AddToDatasetDialog";
 import type { TraceHandoff } from "../../api";
 import { runCost } from "../../list/AgentTracesTable";
 import { traceRefOf, traceShareUrl } from "../../routing";
@@ -52,13 +53,14 @@ function Stat({ label, value, error = false }: { label: string; value: string; e
 function StatusPill({ failed }: { failed: boolean }) {
   return (
     <span
+      title="Status of received spans. More spans may still arrive."
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-medium",
         failed ? "bg-destructive/10 text-destructive" : "bg-trace-ok text-trace-ok-glyph",
       )}
     >
       <span className={cn("size-1.5 rounded-full", failed ? "bg-destructive" : "bg-trace-ok-glyph")} />
-      {failed ? "Failed" : "Completed"}
+      {failed ? "Errors recorded" : "Recorded"}
     </span>
   );
 }
@@ -83,10 +85,25 @@ interface RunHeaderProps {
   handoff: TraceHandoff;
   onBack: () => void;
   embedded: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+  live: boolean;
+  canLive: boolean;
+  onLiveChange: () => void;
 }
 
 /** Run identity, view switch and totals in two tight rows. */
-export function RunHeader({ trace, handoff, onBack, embedded }: RunHeaderProps) {
+export function RunHeader({
+  trace,
+  handoff,
+  onBack,
+  embedded,
+  refreshing,
+  onRefresh,
+  live,
+  canLive,
+  onLiveChange,
+}: RunHeaderProps) {
   const { summary } = trace;
   const failed = summary.status === "error";
   const cost = runCost(summary);
@@ -105,14 +122,34 @@ export function RunHeader({ trace, handoff, onBack, embedded }: RunHeaderProps) 
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 @xl/run-header:ml-auto">
           <TabsList aria-label="Trace view" className="group-data-horizontal/tabs:h-7">
-            <TabsTrigger value="steps" className="px-2.5 text-xs">
+            <TabsTrigger value="steps" className="gap-1.5 px-2.5 text-xs">
+              <ListTree className="size-3.5" />
               Steps
             </TabsTrigger>
-            <TabsTrigger value="conversation" className="px-2.5 text-xs">
-              Conversation
+            <TabsTrigger value="thread" className="gap-1.5 px-2.5 text-xs">
+              <MessagesSquare className="size-3.5" />
+              Thread
             </TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="xs"
+              aria-pressed={live}
+              disabled={!canLive}
+              onClick={onLiveChange}
+              aria-label="Live updates"
+            >
+              Live
+            </Button>
+            <Button variant="outline" size="xs" disabled={refreshing} onClick={onRefresh} aria-label="Refresh run">
+              <RefreshCw className={cn("size-3", refreshing && "animate-spin")} />
+              Refresh
+            </Button>
+            <AddToDatasetButton
+              sources={[{ kind: "trace", trace_id: summary.trace_id, trace_ref: summary.trace_ref ?? "", span_id: "" }]}
+              agentName={traceAgentNames(summary)[0]}
+            />
             <CopyButton
               label="Copy link"
               icon={Link}

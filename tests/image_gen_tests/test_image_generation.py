@@ -188,7 +188,7 @@ class TestAimlImageGeneration(BaseImageGenTest):
             mock_sync_post.return_value = mock_response
 
             try:
-                litellm._turn_on_debug()
+                litellm.turn_on_debug()
                 custom_logger = TestCustomLogger()
                 litellm.logging_callback_manager._reset_all_callbacks()
                 litellm.callbacks = [custom_logger]

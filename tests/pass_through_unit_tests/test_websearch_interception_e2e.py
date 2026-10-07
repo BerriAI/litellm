@@ -21,7 +21,7 @@ async def test_websearch_interception_non_streaming():
     Test WebSearch interception with non-streaming request.
     Validates that agentic loop executes transparently.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     print("\n" + "=" * 80)
     print("E2E TEST 1: WebSearch Interception (Non-Streaming)")
@@ -921,7 +921,7 @@ async def test_pre_request_hook_modifies_request_body():
     from unittest.mock import AsyncMock, patch, MagicMock
     from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     print("\n" + "=" * 80)
     print("UNIT TEST: Pre-Request Hook Modifies Request Body")

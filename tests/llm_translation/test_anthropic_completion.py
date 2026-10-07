@@ -356,7 +356,7 @@ def test_process_anthropic_headers_with_no_matching_headers():
 def test_anthropic_tool_use(tool_type, tool_config, message_content):
     """Test Anthropic tool use with computer use and web fetch tools."""
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     tools = [tool_config]
     model = "claude-sonnet-4-5-20250929"
@@ -1015,7 +1015,7 @@ def test_anthropic_citations_api_streaming():
 )
 def test_anthropic_thinking_output(model):
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     resp = completion(
         model=model,
@@ -1045,7 +1045,7 @@ def test_anthropic_thinking_output(model):
 def test_anthropic_thinking_output_stream(model):
     litellm.set_verbose = True
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         resp = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],
@@ -1183,7 +1183,7 @@ async def test_anthropic_api_max_completion_tokens(model: str):
     ],
 )
 def test_anthropic_websearch(optional_params: dict):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     params = {
         "model": "anthropic/claude-sonnet-4-5-20250929",
         "messages": [
@@ -1209,7 +1209,7 @@ def test_anthropic_websearch(optional_params: dict):
 
 
 def test_anthropic_text_editor():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     params = {
         "model": "anthropic/claude-sonnet-4-5-20250929",
         "messages": [
@@ -1236,7 +1236,7 @@ def test_anthropic_text_editor():
     os.getenv("ZAPIER_CI_CD_MCP_TOKEN") is None, reason="ZAPIER_CI_CD_MCP_TOKEN not set"
 )
 def test_anthropic_mcp_server_tool_use(spec: str):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     if spec == "anthropic":
         tools = [
@@ -1282,7 +1282,7 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 def test_anthropic_mcp_server_responses_api(model: str):
     from litellm import responses
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     tools = [
         {
             "type": "mcp",

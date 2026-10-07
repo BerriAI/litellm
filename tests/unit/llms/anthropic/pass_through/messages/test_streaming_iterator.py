@@ -615,7 +615,7 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
         request_body={},
     )
     detached_hook = _DetachedFailureRecorder()
-    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
+    iterator.litellm_logging_obj.on_detached_stream_failure = detached_hook
 
     received = []
 
@@ -660,7 +660,7 @@ async def test_async_sse_wrapper_logs_failure_on_upstream_error_after_disconnect
         request_body={},
     )
     detached_hook = _DetachedFailureRecorder()
-    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
+    iterator.litellm_logging_obj.on_detached_stream_failure = detached_hook
 
     gen = iterator.async_sse_wrapper(_gated_failing_stream())
     received = [await gen.__anext__(), await gen.__anext__()]
@@ -701,7 +701,7 @@ async def test_async_sse_wrapper_logs_failure_when_queued_error_is_never_consume
         request_body={},
     )
     detached_hook = _DetachedFailureRecorder()
-    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
+    iterator.litellm_logging_obj.on_detached_stream_failure = detached_hook
 
     gen = iterator.async_sse_wrapper(_failing_stream())
     received = [await gen.__anext__(), await gen.__anext__()]
