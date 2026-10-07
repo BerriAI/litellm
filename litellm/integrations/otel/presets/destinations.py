@@ -15,7 +15,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import OtelSpanScope, StandardCallbackDynamicParams
 
 #: An endpoint plus the OTLP transport to reach it with, or ``None`` when the backend
 #: names no destination. The transport is ``None`` where the backend has only one.
@@ -63,7 +63,7 @@ def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destinatio
 def _arize_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
     from litellm.integrations.arize.arize import ArizeLogger
 
-    config: Final = ArizeLogger.get_arize_config()
+    config: Final = ArizeLogger.get_arize_config(params.get("arize_otlp_protocol"))
     return (config.endpoint, config.protocol)
 
 
@@ -111,11 +111,76 @@ _REQUIRED_HEADERS_BY_CALLBACK: Final[Mapping[str, frozenset[str]]] = MappingProx
 _NO_ATTRS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
+def _arize_project() -> Mapping[str, str]:
+    from litellm.integrations.arize.arize import ArizeLogger
+
+    project: Final = ArizeLogger.get_arize_config().project_name
+    return MappingProxyType({"model_id": project} if project else {})
+
+
+def _arize_default_project() -> Mapping[str, str]:
+    from litellm.integrations.otel.presets.arize import ARIZE_DEFAULT_PROJECT
+
+    return MappingProxyType({"model_id": ARIZE_DEFAULT_PROJECT})
+
+
+#: Resource attributes the operator chose for a backend, applied to every export the
+#: team receives over the span's own resource: ``ARIZE_PROJECT_NAME`` for Arize.
+_RESOURCE_ATTRIBUTES_BY_CALLBACK: Final[Mapping[str, Callable[[], Mapping[str, str]]]] = MappingProxyType(
+    {"arize": _arize_project}
+)
+
+#: Resource attributes a backend needs on every export to accept it, filled only where
+#: the span's own resource names none. Arize rejects a span that names no project.
+_RESOURCE_DEFAULTS_BY_CALLBACK: Final[Mapping[str, Callable[[], Mapping[str, str]]]] = MappingProxyType(
+    {"arize": _arize_default_project}
+)
+
+
+def _resource_attributes(callback_name: str, service_name: str | None) -> Mapping[str, str]:
+    backend: Final = _RESOURCE_ATTRIBUTES_BY_CALLBACK.get(callback_name)
+    return MappingProxyType(
+        {
+            **({"service.name": service_name} if service_name else {}),
+            **(backend() if backend is not None else {}),
+        }
+    )
+
+
+def _resource_defaults(callback_name: str) -> Mapping[str, str]:
+    backend: Final = _RESOURCE_DEFAULTS_BY_CALLBACK.get(callback_name)
+    return backend() if backend is not None else _NO_ATTRS
+
+
+def _span_scope(callback_name: str, params: StandardCallbackDynamicParams) -> OtelSpanScope:
+    if callback_name != "langfuse_otel":
+        return "full"
+    return params.get("langfuse_span_scope") or "full"
+
+
 def destination_capable_backends() -> frozenset[str]:
     """Backends a key or team can point at its own account."""
     from litellm.integrations.otel.presets import DYNAMIC_HEADERS_BY_CALLBACK
 
     return frozenset(_DESTINATION_BY_CALLBACK) & frozenset(DYNAMIC_HEADERS_BY_CALLBACK)
+
+
+_SAMPLING_RATE_VARS_BY_CALLBACK: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
+    {"arize": ("arize_success_sampling_rate", "arize_error_sampling_rate")}
+)
+
+
+def _sampling_rates(callback_name: str, params: StandardCallbackDynamicParams) -> tuple[float | None, float | None]:
+    from litellm.integrations.arize.arize import parse_sampling_rate
+
+    rate_vars: Final = _SAMPLING_RATE_VARS_BY_CALLBACK.get(callback_name)
+    if rate_vars is None:
+        return (None, None)
+    success_var, error_var = rate_vars
+    return (
+        parse_sampling_rate(params.get(success_var), success_var),
+        parse_sampling_rate(params.get(error_var), error_var),
+    )
 
 
 def destination_for(
@@ -143,10 +208,15 @@ def destination_for(
     if resolved is None:
         return None
     endpoint, protocol = resolved
+    success_sampling_rate, error_sampling_rate = _sampling_rates(callback_name, params)
     return OtelDestination(
         endpoint=endpoint,
-        headers=MappingProxyType(dict(headers)),  # mutable-ok: MappingProxyType needs a concrete mapping to wrap
-        resource_attributes=MappingProxyType({"service.name": service_name}) if service_name else _NO_ATTRS,
+        headers=MappingProxyType(dict(headers)),
+        resource_attributes=_resource_attributes(callback_name, service_name),
+        resource_defaults=_resource_defaults(callback_name),
         callback_name=callback_name,
         protocol=protocol,
+        span_scope=_span_scope(callback_name, params),
+        success_sampling_rate=success_sampling_rate,
+        error_sampling_rate=error_sampling_rate,
     )

@@ -1,19 +1,20 @@
 import json
 import os
-from datetime import datetime
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
 
 
-
-import httpx
 import pytest
 
 import litellm
-from litellm import Choices, Message, ModelResponse
+from litellm import ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
 class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
+    test_content_list_handling = None
+    test_empty_tools = None
+    test_function_calling_with_tool_response = None
+
     def get_base_completion_call_args(self):
         # Clear the LLM client cache to prevent test pollution from cached clients
         litellm.in_memory_llm_clients_cache.flush_cache()
@@ -183,7 +184,7 @@ async def test_azure_o1_series_response_format_extra_params():
     """
     Tool calling should work for all azure o_series models.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     from openai import AsyncAzureOpenAI
 

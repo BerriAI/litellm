@@ -2,7 +2,7 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from collections.abc import Coroutine
+from collections.abc import AsyncIterable, Coroutine, Iterable
 from typing import TYPE_CHECKING, Any, Final, Union
 
 from typing_extensions import TypedDict
@@ -74,7 +74,7 @@ class ResponsesToCompletionBridgeHandler:
                     existing.setdefault(key, value)
         return response
 
-    def _collect_response_from_stream(self, stream_iter: Any) -> "ResponsesAPIResponse":
+    def _collect_response_from_stream(self, stream_iter: Iterable[object]) -> "ResponsesAPIResponse":
         for _ in stream_iter:
             pass
 
@@ -89,7 +89,7 @@ class ResponsesToCompletionBridgeHandler:
             raise ValueError("Stream completed response is invalid")
         return response
 
-    async def _collect_response_from_stream_async(self, stream_iter: Any) -> "ResponsesAPIResponse":
+    async def _collect_response_from_stream_async(self, stream_iter: AsyncIterable[object]) -> "ResponsesAPIResponse":
         async for _ in stream_iter:
             pass
 
@@ -194,6 +194,8 @@ class ResponsesToCompletionBridgeHandler:
         # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
+        if kwargs.get("cache") is not None:
+            request_data["cache"] = kwargs["cache"]
         result: Final = responses(
             **request_data,
         )
@@ -289,6 +291,8 @@ class ResponsesToCompletionBridgeHandler:
         # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
+        if kwargs.get("cache") is not None:
+            request_data["cache"] = kwargs["cache"]
         result: Final = await aresponses(
             **request_data,
             aresponses=True,

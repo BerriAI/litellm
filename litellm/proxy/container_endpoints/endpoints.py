@@ -52,7 +52,7 @@ async def create_container(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/containers" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "name": "My Container",
@@ -66,7 +66,7 @@ async def create_container(
     Or specify provider via header:
     ```bash
     curl -X POST "http://localhost:4000/v1/containers" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "custom-llm-provider: azure" \
         -H "Content-Type: application/json" \
         -d '{
@@ -106,7 +106,7 @@ async def create_container(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response: Final = await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -187,13 +187,13 @@ async def list_containers(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Or specify provider via header or query param:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -216,7 +216,7 @@ async def list_containers(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    data: Final[dict[str, Any]] = {
+    data: Final[dict[str, object]] = {
         "query_params": query_params,
         "model": query_params.get("model"),
         "order": order,
@@ -290,13 +290,13 @@ async def retrieve_container(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Or specify provider via header:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "custom-llm-provider: azure"
     ```
     """
@@ -341,7 +341,7 @@ async def retrieve_container(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        container: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -366,6 +366,7 @@ async def retrieve_container(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    return container
 
 
 @router.delete(
@@ -395,13 +396,13 @@ async def delete_container(
     Example:
     ```bash
     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Or specify provider via header:
     ```bash
     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "custom-llm-provider: azure"
     ```
     """
@@ -446,7 +447,7 @@ async def delete_container(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        deleted_container: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -471,6 +472,7 @@ async def delete_container(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    return deleted_container
 
 
 # Register JSON-configured container file endpoints

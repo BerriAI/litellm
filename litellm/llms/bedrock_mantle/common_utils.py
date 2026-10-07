@@ -14,7 +14,7 @@ global state.
 
 import re
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, Literal
 
 from botocore.exceptions import (
     CredentialRetrievalError,
@@ -48,7 +48,7 @@ def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
 def resolve_mantle_region(params: Mapping[str, object]) -> str:
     region: Final = params.get("aws_region_name")
     if isinstance(region, str) and region:
-        BaseAWSLLM._validate_aws_region_name(region)
+        BaseAWSLLM.validate_aws_region_name(region)
         return region
     api_base: Final = params.get("api_base")
     base: Final = (api_base if isinstance(api_base, str) else None) or get_secret_str("BEDROCK_MANTLE_API_BASE")
@@ -125,6 +125,14 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
                 "or pass api_key for Bearer auth, or provide AWS credentials "
                 "(IAM role / access key / profile / web identity) for SigV4."
             ) from e
+
+
+def is_mantle_claude_model(model: str) -> bool:
+    return "claude" in model.lower()
+
+
+def mantle_health_check_mode(model: str) -> Literal["anthropic_messages"] | None:
+    return "anthropic_messages" if is_mantle_claude_model(model) else None
 
 
 def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:

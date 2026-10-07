@@ -1,6 +1,6 @@
 # Complexity Router
 
-A rule-based routing strategy that classifies requests by complexity and routes them to appropriate models - with zero API calls and sub-millisecond latency.
+A routing strategy that classifies requests by complexity and routes them to appropriate models. The default rule-based classifier scores requests locally. Optional classifiers and cache-aware routing can make provider calls
 
 ## Overview
 
@@ -67,6 +67,45 @@ still resolve to a deployment in `model_list`; this configuration does not creat
                 reasoning_effort: xhigh
             - abc
 ```
+
+### Opt in to prompt-cache costs
+
+Set `cache_aware_routing: true` to consider observed prompt-cache savings after classification. This is disabled by default. A warm model in the same or a higher tier can replace the classified model when its estimated input and output cost is strictly lower. Cache savings never lower the required tier
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        cache_aware_routing: true
+        cache_aware_routing_output_tokens: 1024
+        cache_aware_routing_timeout_ms: 2000
+        context_compaction: false
+        tiers:
+          SIMPLE: haiku
+          COMPLEX: sonnet
+  - model_name: haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+This first version supports the proxy's native `POST /v1/messages` endpoint with Anthropic, text and client tools, and one explicit message-content `cache_control` breakpoint. Each tier must name one model group with one deployment. The default v3 rate limiter must be enabled. It uses the same observations and token counting as `/cost/predict-cache`; it does not prewarm caches or enable provider caching on the application's behalf
+
+The proxy must have observed a successful cache read or write for the candidate's matching prefix, under the same caller key, deployment, provider key and model. A fresh observation allows a cache discount; missing or expired evidence does not. Provider eviction can still turn an expected hit into a miss
+
+The comparison includes uncached input, cache writes at the requested TTL, cache reads and expected output tokens. Set `cache_aware_routing_output_tokens` to your workload's expected response length; it defaults to 1024 and is capped separately by each model's effective output limit. With `max_tokens_from_tier_model: true` (the default), this is the model's known output ceiling; when disabled or unknown, the caller's `max_tokens` applies. The full effective output limit, together with the counted input, must fit the candidate's known limits. Custom deployment prices are respected
+
+Prediction makes up to two token-count requests per compared model. These use rate and concurrency capacity and add latency. The default total timeout is two seconds; timeout, missing counts or prices, and prediction failures preserve the classified route. No provider count requests run when there is no warm eligible alternative
+
+Session affinity, user-turn classification, adaptive routing, routing plugins, custom tier ladders, tier pools and per-tier parameter overrides keep their existing behavior without a cache adjustment. The same applies to unsupported providers or prompt shapes, beta headers, custom provider endpoints, request transforms, and pending context compaction. Disable context compaction as in the example so it cannot rewrite the predicted prompt. Alias markers should contain only routing configuration and rate, timeout or tag settings
+
+When cache costs change the model, the routing decision reports `cause: prompt_cache_cost`. Its signals include the original model, classification cause and both estimated costs
 
 ### Capability forecasting
 
@@ -191,6 +230,7 @@ model_list:
       model: auto_router/complexity_router
       complexity_router_config:
         classifier_type: heuristic_v2
+        heuristic_v2_success_threshold: 0.9
         tiers:
           SIMPLE: luna
           MEDIUM: terra
@@ -201,9 +241,18 @@ model_list:
 No classifier model call or per-model training data is required. The classifier
 uses global tier quality, request-type quality, and similar-request cohorts from
 the bundled UltraFeedback artifact. It estimates success at every tier, enforces
-monotonic probabilities, and returns the first tier meeting the trained 0.75
-threshold. The existing complexity-router tier pool then selects and dispatches
-a model from that tier
+monotonic probabilities, and returns the first tier meeting the success threshold,
+or REASONING if no tier meets it. The existing complexity-router tier pool then
+selects and dispatches a model from that tier
+
+Set `heuristic_v2_success_threshold` to a value from 0 to 1 to override the
+artifact's threshold. For example, `0.9` requires a predicted success probability
+of at least 90%. Higher thresholds favor more capable tiers. Omit the setting or
+set it to `null` to use the artifact's `routing_threshold`, which is `0.75` for
+the bundled artifact. The override leaves the predicted probabilities unchanged
+
+In the dashboard, select Heuristic v2 under Advanced: Classification Method and
+set Success threshold. Clear the field to restore the artifact's default
 
 Spend logs record `routing_decision.cause: heuristic_v2`, the detected request
 type, and all four predicted probabilities. Existing `classifier_type: heuristic`
@@ -332,7 +381,7 @@ Each dimension contributes its weight once when any matcher hits the current ask
 
 The API and YAML store exactly the weights written. A `dimension_weights` map and inline custom weights are read literally, missing recognized built-in names score zero, and nothing renormalizes the vector, so a total other than 1 is legal and scores accordingly. The dashboard's heuristic scoring editor is the one place that rebalances: editing one weight there holds it and redistributes the remainder across the other active dimensions in the draft, then Save sends the resulting explicit values, which the backend stores and scores as written. Opening a router, applying a preset, editing matchers, changing `scoring_mode`, or saving unrelated fields never normalizes existing weights
 
-Only `heuristic`, `heuristic_first` and `hybrid` accept custom dimensions. Each name must be a unique ASCII identifier starting with a letter, at most 64 characters, and cannot reuse a built-in dimension name or a key in `dimension_weights`. Set its weight inline, greater than zero and at most one
+Only `heuristic`, `heuristic_first` and `hybrid` using heuristic v1 accept custom dimensions. Each name must be a unique ASCII identifier starting with a letter, at most 64 characters, and cannot reuse a built-in dimension name or a key in `dimension_weights`. Set its weight inline, greater than zero and at most one
 
 Patterns are checked at configuration time against a grammar whose worst case stays a few milliseconds on 2048 characters. Every quantifier needs an explicit upper bound of at most 64 and must repeat a single character or character class, so `\s{1,4}` is accepted while `\s+`, `(a|aa){0,12}` and `(?:ab){0,64}` are refused. Backreferences, lookarounds, atomic groups and possessive quantifiers are refused as well. Each pattern is then costed: alternation branches and repeat lengths multiply the ways the engine can retry, and every later piece of the pattern is charged once per path that can reach it, so `a?a?a?a?a?a?a?a?` followed by a long fixed tail is refused even though each quantifier is small. The budget is 2048 work units per pattern and 8192 across the router. An invalid or over-budget pattern fails the write with a message naming the pattern and the rule it broke
 
@@ -506,7 +555,7 @@ on by default; set `classifier_llm_config.circuit_breaker_enabled: false` to dis
 fallback is the local heuristic scorer, so a classifier outage does not repeat its timeout across
 every turn or session handled by the router process.
 
-A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
+With the default heuristic v1, a request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least
 one signal. Everything else goes to the classifier, which then decides as it normally would.
 
@@ -526,6 +575,13 @@ except that the heuristic outcome is the one already computed rather than a seco
 
 Spend logs record `routing_decision.cause` as `heuristic_first_short_circuit` when the classifier
 was skipped, and `llm_classifier` when it ran, so the two are told apart per request.
+
+Set `local_heuristic: heuristic_v2` to chain the trained predictor instead. Its selected tier must
+meet `heuristic_v2_success_threshold` and remain at or below `heuristic_first_max_tier` to skip the judge
+
+Omitting `local_heuristic` keeps v1. Both choices preserve the configured classifier failure fallback;
+the heuristic fallback uses the selected local scorer. V2 short-circuits and fallbacks also record
+`heuristic_v2_forecast` with the probabilities and success threshold used for the decision
 
 ### Hybrid
 
@@ -552,7 +608,7 @@ model_list:
           REASONING: o1-preview
 ```
 
-A request routes on the scorer's own tier when its score is further than `hybrid_boundary_margin`
+With the default heuristic v1, a request routes on the scorer's own tier when its score is further than `hybrid_boundary_margin`
 from every active boundary. Everything else goes to the classifier: a score inside the band, where a
 hair's difference would have named the adjacent tier and its model pool, and a prompt where no
 dimension fired at all, which has no opinion to be confident about. `hybrid_boundary_margin` is
@@ -569,6 +625,10 @@ was skipped and `llm_classifier` when it ran.
 Operator-defined tier sets (`tier_definitions`) are not supported here, for the same reason they are
 not supported under heuristic-first: the scorer only produces the built-in tiers. Classifier failure
 behaves exactly as it does under `classifier_type: llm`.
+
+For `local_heuristic: heuristic_v2`, the selected tier must meet `heuristic_v2_success_threshold`.
+The judge decides when any probability at or below the selected tier is within `hybrid_boundary_margin`
+of that threshold, or when no tier meets the threshold. A zero margin still defers exact-threshold predictions
 
 ### Reasoning Override
 

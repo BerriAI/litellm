@@ -8,7 +8,7 @@ surface from silently dropping a field: omitting the auth headers, for instance,
 still executes the tool, just with no credentials.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -33,10 +33,10 @@ class MCPRequestContext:
 
     user_api_key_auth: "UserAPIKeyAuth | None"
     mcp_auth_header: str | None = None
-    mcp_server_auth_headers: Mapping[str, Mapping[str, str]] | None = None
-    oauth2_headers: Mapping[str, str] | None = None
-    raw_headers: Mapping[str, str] | None = None
-    request_tags: Sequence[str] | None = None
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None
+    oauth2_headers: dict[str, str] | None = None
+    raw_headers: dict[str, str] | None = None
+    request_tags: list[str] | None = None
     litellm_trace_id: str | None = None
     litellm_call_id: str | None = None
     guardrail_context: Mapping[str, object] | None = None
@@ -83,7 +83,7 @@ class MCPRequestContext:
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
-            request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(dict(kwargs)),
+            request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(dict(kwargs)),
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             litellm_call_id=kwargs.get("litellm_call_id"),
             guardrail_context=cls.resolve_guardrail_context(kwargs),
@@ -124,7 +124,7 @@ class MCPRequestContext:
                     )
                 ),
                 "guardrail_config": deepcopy(
-                    {  # mutable-ok: per-request guardrail configuration is a mutable JSON object in existing callbacks
+                    {
                         key: value
                         for source in sources
                         for key, value in TypeAdapter(dict[str, object])
