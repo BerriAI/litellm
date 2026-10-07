@@ -286,6 +286,8 @@ fn span(index: usize) -> TraceSpansRow {
         call_keys: Vec::new(),
         call_evidence: None,
         tool_call_id: String::new(),
+        source_url: String::new(),
+        source_title: String::new(),
         team_id: "team".into(),
         api_key_hash: "key".into(),
         user_id: "user".into(),
