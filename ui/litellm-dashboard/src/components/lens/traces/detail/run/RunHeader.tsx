@@ -120,9 +120,7 @@ export function RunHeader({
               <ArrowLeft className="size-4" />
             </Button>
           )}
-          <h1 className="min-w-0 truncate text-base font-semibold">{traceDisplayName(summary)}</h1>
-          {summary.source && <RunSourceLink source={summary.source} />}
-          <span className="flex-1" />
+          <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{traceDisplayName(summary)}</h1>
           <IdChip value={summary.trace_id} label="Copy trace ID" />
           <RunIcon summary={summary} failed={failed} />
         </div>
@@ -168,6 +166,7 @@ export function RunHeader({
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
         <StatusPill failed={failed} />
+        {summary.source && <RunSourceLink source={summary.source} />}
         {signals.length > 0 && <SignalPills flags={signals} showScore className="flex-wrap" />}
         <Stat label="Duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="Steps" value={summary.span_count.toLocaleString()} />
