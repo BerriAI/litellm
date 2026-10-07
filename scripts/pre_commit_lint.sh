@@ -10,7 +10,8 @@
 #     with origin's current default branch, untracked files included
 # The per-area checks:
 #   - litellm/ Python  -> `make lint` (test-linting.yml's lint job)
-#   - tests/e2e Python -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
+#   - tests/e2e and tests/e2e_harness Python
+#                      -> `make lint-e2e-basedpyright` (test-linting.yml's e2e type-check step)
 #                         + raw HTTP client ban (test-code-quality.yml's check_e2e_no_raw_requests)
 #   - tests/ Python, ruff-tests.toml, test-quality-budget.json, scripts/check_test_quality.py,
 #     scripts/test_quality_gate.py
@@ -95,7 +96,7 @@ existing_files() {
 }
 
 litellm_py_pattern='^litellm/.*\.py$'
-e2e_py_pattern='^tests/e2e/.*\.py$'
+e2e_py_pattern='^tests/e2e(_harness)?/.*\.py$'
 test_tree_pattern='^(tests/.*\.py|ruff-tests\.toml|test-quality-budget\.json|scripts/(check_test_quality|test_quality_gate)\.py)$'
 spec_pattern='^(litellm/(proxy|types)/.*|ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$'
 ui_prettier_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$'

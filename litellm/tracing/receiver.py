@@ -14,15 +14,23 @@ The proxy endpoints are thin wrappers: auth -> build tenant/scope -> call one me
 
 import asyncio
 from collections.abc import AsyncIterable, Callable, Mapping
+from datetime import datetime, timezone
 from io import BytesIO
 from threading import BoundedSemaphore
 from typing import Final
 
-from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_BODY_BYTES, OTLP_MAX_CONCURRENT_INGESTS
+from litellm.constants import (
+    AGENT_TRACING_AGENT_LIST_LIMIT,
+    AGENT_TRACING_LIST_PAGE_SIZE,
+    OTLP_MAX_BODY_BYTES,
+    OTLP_MAX_CONCURRENT_INGESTS,
+)
+from litellm.rust_bridge.trace.generated.models import TraceAgentsParams
 from litellm.rust_bridge.trace.generated.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
 from litellm.tracing.config import trace_storage_config
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError, TracingPayloadTooLargeError, decompress
+from litellm.tracing.types import TraceAgent, TraceAgentList
 
 
 class TracingOverloadedError(RuntimeError):
@@ -100,6 +108,30 @@ class TraceReceiver:
 
     async def list_traces(self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None = None) -> TracePage:
         return await self.storage.list_traces(scope, start_ms, end_ms, cursor, AGENT_TRACING_LIST_PAGE_SIZE)
+
+    async def list_agents(self, scope: TraceScope, start_ms: int, end_ms: int) -> TraceAgentList:
+        rows: Final = await self.storage.trace_agents(
+            TraceAgentsParams(
+                all_teams=scope["all_teams"],
+                user_id=scope["user_id"],
+                team_ids=tuple(scope["team_ids"]),
+                start_ms=start_ms,
+                end_ms=end_ms,
+                limit=AGENT_TRACING_AGENT_LIST_LIMIT,
+            )
+        )
+        return TraceAgentList(
+            agents=tuple(
+                TraceAgent(
+                    name=row.agent_name,
+                    runs=row.runs,
+                    failed_runs=row.failed_runs,
+                    last_seen=datetime.fromtimestamp(row.last_seen_ms / 1000, tz=timezone.utc),
+                    frameworks=row.frameworks,
+                )
+                for row in rows
+            )
+        )
 
     async def get_trace(
         self,

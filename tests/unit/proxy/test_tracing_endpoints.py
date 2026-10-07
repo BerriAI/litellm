@@ -4,6 +4,7 @@ Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from types import ModuleType
 from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, call
@@ -15,7 +16,7 @@ from httpx import Response
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
 
-from litellm.constants import TRACE_READ_RETRY_AFTER_SECONDS
+from litellm.constants import DEFAULT_AGENT_TRACING_RETENTION_DAYS, TRACE_READ_RETRY_AFTER_SECONDS
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import OwnedRows, ReadScope
@@ -29,6 +30,7 @@ from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
+from litellm.tracing.types import TraceAgent, TraceAgentList
 
 SQL_ROWS: Final[tuple[Mapping[str, JsonValue], ...]] = (
     {
@@ -198,6 +200,7 @@ def receiver(client) -> MagicMock:
     fake.list_traces = AsyncMock(return_value={"data": [], "next_cursor": None})
     fake.get_trace = AsyncMock(return_value=None)
     fake.get_span = AsyncMock(return_value=None)
+    fake.list_agents = AsyncMock(return_value=TraceAgentList(agents=()))
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: fake
     return fake
 
@@ -322,6 +325,69 @@ def test_list_traces_resolves_default_bounds_from_injected_clock(
         end_ms=expected_end_ms,
         cursor=None,
     )
+
+
+@pytest.mark.parametrize(
+    ("params", "expected_start_ms", "expected_end_ms"),
+    (
+        ({}, NOW_MS - DEFAULT_AGENT_TRACING_RETENTION_DAYS * tracing_endpoints.MS_PER_DAY, NOW_MS),
+        ({"start_ms": 123, "end_ms": 456}, 123, 456),
+    ),
+)
+def test_list_trace_agents_passes_reader_scope_and_window(
+    client: TestClient,
+    receiver: MagicMock,
+    params: Mapping[str, int],
+    expected_start_ms: int,
+    expected_end_ms: int,
+) -> None:
+    client.app.dependency_overrides[tracing_endpoints.current_time_ms] = lambda: NOW_MS
+    receiver.list_agents.return_value = TraceAgentList(
+        agents=(
+            TraceAgent(
+                name="moyai",
+                runs=3,
+                failed_runs=1,
+                last_seen=datetime(2026, 10, 7, 20, 31, tzinfo=timezone.utc),
+                frameworks=("openai-agents",),
+            ),
+        )
+    )
+    response: Final = client.get("/v1/traces/agents", params=params)
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "agents": [
+            {
+                "name": "moyai",
+                "runs": 3,
+                "failed_runs": 1,
+                "last_seen": "2026-10-07T20:31:00Z",
+                "frameworks": ["openai-agents"],
+            }
+        ]
+    }
+    receiver.list_agents.assert_awaited_once_with(
+        scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+        start_ms=expected_start_ms,
+        end_ms=expected_end_ms,
+    )
+    receiver.get_trace.assert_not_awaited()
+
+
+def test_list_trace_agents_requires_read_access(client: TestClient, receiver: MagicMock) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token="hashed-key", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    response: Final = client.get("/v1/traces/agents")
+    assert response.status_code == 403, response.text
+    receiver.list_agents.assert_not_awaited()
+
+
+def test_list_trace_agents_maps_storage_outage_to_503(client: TestClient, receiver: MagicMock) -> None:
+    receiver.list_agents.side_effect = RuntimeError("private database details")
+    response: Final = client.get("/v1/traces/agents")
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "unavailable"
 
 
 def test_list_traces_forwards_large_and_negative_bounds_unchanged(client: TestClient, receiver: MagicMock) -> None:
