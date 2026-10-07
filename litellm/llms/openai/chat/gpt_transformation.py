@@ -387,6 +387,26 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         )
             return hoisted_messages
 
+    @overload
+    def transform_messages(
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...  # mutable-ok: matches override
+
+    @overload
+    def transform_messages(
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[False] = False
+    ) -> list[AllMessageValues]: ...  # mutable-ok: matches override
+
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: exact API
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]  # mutable-ok: exact API
+    ):
+        return self._transform_messages(messages, model, is_async)
+
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,  # allows overrides to selectively run this

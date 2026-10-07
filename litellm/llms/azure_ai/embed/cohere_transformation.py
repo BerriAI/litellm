@@ -29,7 +29,9 @@ class AzureAICohereConfig:
 
         return model
 
-    def _transform_request_image_embeddings(self, input: list[str], optional_params: dict) -> ImageEmbeddingRequest:
+    def _transform_request_image_embeddings(
+        self, input: list[str], optional_params: dict[str, object]
+    ) -> ImageEmbeddingRequest:
         """
         Assume all str in list is base64 encoded string
         """
@@ -40,7 +42,7 @@ class AzureAICohereConfig:
         return ImageEmbeddingRequest(input=image_input, **optional_params)
 
     def _transform_request(
-        self, input: list[str], optional_params: dict, model: str
+        self, input: list[str], optional_params: dict[str, object], model: str
     ) -> tuple[ImageEmbeddingRequest, EmbeddingCreateParams, list[int]]:
         """
         Return the list of input to `/image/embeddings`, `/v1/embeddings`, list of image_embedding_idx for recombination
@@ -67,6 +69,14 @@ class AzureAICohereConfig:
 
         return image_embeddings_request, v1_embeddings_request, image_embedding_idx
 
+    def transform_request(
+        self,
+        input: list[str],  # mutable-ok: matches extension signature
+        optional_params: dict[str, object],  # mutable-ok: matches extension signature
+        model: str,
+    ) -> tuple[ImageEmbeddingRequest, EmbeddingCreateParams, list[int]]:  # mutable-ok: mirrors override contract
+        return self._transform_request(input, optional_params, model)
+
     def _transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:
         additional_headers: Final[dict | None] = response.hidden_params.get("additional_headers")
         if additional_headers:
@@ -84,3 +94,6 @@ class AzureAICohereConfig:
                 response.model = self._map_azure_model_group(base_model)
 
         return response
+
+    def transform_response(self, response: EmbeddingResponse) -> EmbeddingResponse:
+        return self._transform_response(response)

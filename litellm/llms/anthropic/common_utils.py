@@ -641,10 +641,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _apply_sampling_param(
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         param: str,
-        value: Any,
+        value: object,
         drop_params: bool,
         output_key: str,
     ) -> None:
@@ -663,6 +663,19 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 ),
                 status_code=400,
             )
+
+    @classmethod
+    def apply_sampling_param(
+        cls,
+        /,
+        optional_params: dict[str, object],  # mutable-ok: exact forwarding signature
+        model: str,
+        param: str,
+        value: object,
+        drop_params: bool,
+        output_key: str,
+    ) -> None:
+        return cls._apply_sampling_param(optional_params, model, param, value, drop_params, output_key)
 
     @staticmethod
     def forced_tool_use_unsupported(model: str) -> bool:
@@ -829,6 +842,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             pass
         return AnthropicModelInfo._get_model_capability(model, key) is True
 
+    @classmethod
+    def supports_model_capability(cls, /, model: str, key: str, custom_llm_provider: str) -> bool:
+        return cls._supports_model_capability(model, key, custom_llm_provider)
+
     @staticmethod
     def _is_adaptive_thinking_model(model: str, custom_llm_provider: str) -> bool:
         """Whether ``model`` uses adaptive thinking (``output_config.effort``).
@@ -840,6 +857,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         in that declarative rule, not here.
         """
         return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking", custom_llm_provider)
+
+    @classmethod
+    def is_adaptive_thinking_model(cls, /, model: str, custom_llm_provider: str) -> bool:
+        return cls._is_adaptive_thinking_model(model, custom_llm_provider)
 
     @staticmethod
     def _is_always_on_thinking_model(model: str, custom_llm_provider: str) -> bool:
@@ -2053,7 +2074,7 @@ def normalize_cache_control_in_anthropic_payload(
     return {key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()}
 
 
-def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
+def process_anthropic_headers(headers: httpx.Headers | dict[str, str]) -> dict[str, str]:
     openai_headers: Final = {}
     if "anthropic-ratelimit-requests-limit" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]

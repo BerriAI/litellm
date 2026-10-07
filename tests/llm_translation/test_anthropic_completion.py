@@ -436,7 +436,7 @@ def test_anthropic_tool_helper(cache_control_location):
     else:
         tool["cache_control"] = {"type": "ephemeral"}
 
-    tool, _ = AnthropicConfig()._map_tool_helper(tool=tool)
+    tool, _ = AnthropicConfig().map_tool_helper(tool=tool)
 
     assert tool["cache_control"] == {"type": "ephemeral"}
 
@@ -581,7 +581,7 @@ def test_convert_tool_response_to_message_with_values():
         )
     ]
 
-    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is not None
     assert message.content == '{"name": "John", "age": 30}'
@@ -606,7 +606,7 @@ def test_convert_tool_response_to_message_without_values():
         )
     ]
 
-    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is not None
     assert message.content == '{"name": "John", "age": 30}'
@@ -618,14 +618,12 @@ def test_convert_tool_response_to_message_invalid_json():
         ChatCompletionToolCallChunk(
             id="test_id",
             type="function",
-            function=ChatCompletionToolCallFunctionChunk(
-                name="json_tool_call", arguments="invalid json"
-            ),
+            function=ChatCompletionToolCallFunctionChunk(name="json_tool_call", arguments="invalid json"),
             index=0,
         )
     ]
 
-    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is not None
     assert message.content == "invalid json"
@@ -642,14 +640,15 @@ def test_convert_tool_response_to_message_no_arguments():
         )
     ]
 
-    message = AnthropicConfig._convert_tool_response_to_message(tool_calls=tool_calls)
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is None
 
 
 def test_anthropic_tool_with_image():
-    from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
     import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 
     b64_data = "iVBORw0KGgoAAAANSUhEu6U3//C9t/fKv5wDgpP1r5796XwC4zyH1D565bHGDqbY85AMb0nIQe+u3J390Xbtb9XgXxcK0/aqRXpdYcwgARbCN03FJk"
     image_url = f"data:image/png;base64,{b64_data}"
@@ -915,7 +914,7 @@ def test_map_stop_sequences(stop_input, expected_output, drop_params):
     """Test the _map_stop_sequences method of AnthropicConfig"""
     litellm.drop_params = drop_params
     config = AnthropicConfig()
-    result = config._map_stop_sequences(stop_input)
+    result = config.map_stop_sequences(stop_input)
     assert result == expected_output
 
 

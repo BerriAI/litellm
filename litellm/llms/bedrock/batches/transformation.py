@@ -453,7 +453,9 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             "data": None,
         }
 
-    def _parse_timestamps_and_status(self, response_data, status_str: str):
+    def _parse_timestamps_and_status(
+        self, response_data: dict[str, object], status_str: str  # mutable-ok: preserves private override signature
+    ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
         """Helper to parse timestamps based on status."""
         import datetime
 
@@ -506,6 +508,13 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             cancelled_at,
             expires_at,
         )
+
+    def parse_timestamps_and_status(
+        self,
+        response_data: dict[str, object],  # mutable-ok: preserves extension signature
+        status_str: str,
+    ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
+        return self._parse_timestamps_and_status(response_data, status_str)
 
     def _extract_file_configs(self, response_data):
         """Helper to extract input and output file configurations."""

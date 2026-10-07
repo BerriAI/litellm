@@ -1311,7 +1311,7 @@ def convert_to_gemini_tool_call_invoke(
             VertexGeminiConfig,
         )
 
-        needs_dummy_signature: Final = model is not None and VertexGeminiConfig._is_gemini_3_or_newer(model)
+        needs_dummy_signature: Final = model is not None and VertexGeminiConfig.is_gemini_3_or_newer(model)
 
         if tool_calls is not None:
             for tool in tool_calls:
@@ -5320,7 +5320,7 @@ def prompt_factory(
     if custom_llm_provider == "ollama":
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
-        if litellm.AnthropicTextConfig._is_anthropic_text_model(model):
+        if litellm.AnthropicTextConfig.is_anthropic_text_model(model):
             return anthropic_pt(messages=messages)
         return anthropic_messages_pt(messages=messages, model=model, llm_provider=custom_llm_provider)
     elif custom_llm_provider == "anthropic_xml":
@@ -5335,7 +5335,7 @@ def prompt_factory(
         else:
             return gemini_text_image_pt(messages=messages)
     elif custom_llm_provider == "mistral":
-        return litellm.MistralConfig()._transform_messages(messages=messages, model=model)
+        return litellm.MistralConfig().transform_messages(messages=messages, model=model)
     elif custom_llm_provider == "bedrock":
         if "amazon.titan-text" in model:
             return amazon_titan_pt(messages=messages)

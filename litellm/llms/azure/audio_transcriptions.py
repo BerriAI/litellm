@@ -78,7 +78,9 @@ class AzureAudioTranscription(AzureChatCompletion):
             api_key=azure_client.api_key,
             additional_args={
                 "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
-                "api_base": azure_client._base_url._uri_reference,
+                "api_base": (
+                    azure_client._base_url._uri_reference  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
+                ),
                 "atranscription": True,
                 "complete_input_dict": data,
             },
@@ -149,7 +151,9 @@ class AzureAudioTranscription(AzureChatCompletion):
                 api_key=async_azure_client.api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {async_azure_client.api_key}"},
-                    "api_base": async_azure_client._base_url._uri_reference,
+                    "api_base": (
+                        async_azure_client._base_url._uri_reference  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
+                    ),
                     "atranscription": True,
                     "complete_input_dict": data,
                 },
@@ -175,7 +179,9 @@ class AzureAudioTranscription(AzureChatCompletion):
                 api_key=api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {async_azure_client.api_key}"},
-                    "api_base": async_azure_client._base_url._uri_reference,
+                    "api_base": (
+                        async_azure_client._base_url._uri_reference  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
+                    ),
                     "atranscription": True,
                     "complete_input_dict": data,
                 },

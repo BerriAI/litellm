@@ -41,8 +41,10 @@ async def test_watsonx_text_gpt_oss_async_completion_fetches_hf_template_off_the
             return httpx.Response(200, content=chat_template.encode())
         return httpx.Response(200, json={"chat_template": chat_template, "bos_token": None, "eos_token": None})
 
-    monkeypatch.setattr(huggingface_template_handler, "_get_httpx_client", forbid_sync_client)
-    monkeypatch.setattr(huggingface_template_handler, "get_async_httpx_client", lambda **kwargs: Mock(get=serve_hf_file))
+    monkeypatch.setattr(huggingface_template_handler, "get_httpx_client", forbid_sync_client)
+    monkeypatch.setattr(
+        huggingface_template_handler, "get_async_httpx_client", lambda **kwargs: Mock(get=serve_hf_file)
+    )
 
     def handle(request):
         captured["body"] = json.loads(request.content)

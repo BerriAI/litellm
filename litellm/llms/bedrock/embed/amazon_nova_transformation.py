@@ -86,11 +86,11 @@ class AmazonNovaEmbeddingConfig:
     def _transform_request(
         self,
         input: str,
-        inference_params: dict,
+        inference_params: dict[str, object],
         async_invoke_route: bool = False,
         model_id: str | None = None,
         output_s3_uri: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform OpenAI-style input to Nova format.
 
@@ -111,7 +111,7 @@ class AmazonNovaEmbeddingConfig:
         task_type: Final = "SEGMENTED_EMBEDDING" if async_invoke_route else "SINGLE_EMBEDDING"
 
         # Build the base request structure
-        request: Final[dict] = {
+        request: Final[dict[str, object]] = {
             "schemaVersion": "nova-multimodal-embed-v1",
             "taskType": task_type,
         }
@@ -204,6 +204,16 @@ class AmazonNovaEmbeddingConfig:
 
         return request
 
+    def transform_request(
+        self,
+        input: str,
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+        async_invoke_route: bool = False,
+        model_id: str | None = None,
+        output_s3_uri: str | None = None,
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._transform_request(input, inference_params, async_invoke_route, model_id, output_s3_uri)
+
     def _wrap_async_invoke_request(
         self,
         model_input: dict,
@@ -240,9 +250,9 @@ class AmazonNovaEmbeddingConfig:
 
     def _transform_response(
         self,
-        response_list: list[dict],
+        response_list: list[dict[str, object]],
         model: str,
-        batch_data: list[dict] | None = None,
+        batch_data: list[dict[str, object]] | None = None,
     ) -> EmbeddingResponse:
         """
         Transform Nova response to OpenAI format.
@@ -299,7 +309,7 @@ class AmazonNovaEmbeddingConfig:
                     "singleEmbeddingParams",
                     request_data.get("segmentedEmbeddingParams", {}),
                 )
-                if "image" in params:
+                if isinstance(params, dict) and "image" in params:
                     image_count += 1
 
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
@@ -316,7 +326,15 @@ class AmazonNovaEmbeddingConfig:
 
         return EmbeddingResponse(data=embeddings, model=model, usage=usage)
 
-    def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
+    def transform_response(
+        self,
+        response_list: list[dict[str, object]],  # mutable-ok: exact API
+        model: str,
+        batch_data: list[dict[str, object]] | None = None,  # mutable-ok: exact API
+    ) -> EmbeddingResponse:
+        return self._transform_response(response_list, model, batch_data)
+
+    def _transform_async_invoke_response(self, response: dict[str, object], model: str) -> EmbeddingResponse:
         """
         Transform async invoke response (invocation ARN) to OpenAI format.
 
@@ -351,3 +369,10 @@ class AmazonNovaEmbeddingConfig:
             usage=usage,
             hidden_params=hidden_params,
         )
+
+    def transform_async_invoke_response(
+        self,
+        response: dict[str, object],  # mutable-ok: exact API
+        model: str,
+    ) -> EmbeddingResponse:
+        return self._transform_async_invoke_response(response, model)

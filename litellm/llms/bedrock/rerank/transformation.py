@@ -6,6 +6,8 @@ Why separate file? Make it easy to see how transformation works
 
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._uuid import uuid
 from litellm.types.llms.bedrock import (
     BedrockRerankBedrockRerankingConfiguration,
@@ -77,15 +79,20 @@ class BedrockRerankConfig:
             sources=_sources,
         )
 
-    def _transform_response(self, response: dict) -> RerankResponse:
+    def transform_request(self, request_data: RerankRequest) -> BedrockRerankRequest:
+        return self._transform_request(request_data)
+
+    def _transform_response(self, response: dict[str, object]) -> RerankResponse:
         """
         Transform the response from Bedrock into the RerankResponse format.
 
         example input:
         {"results":[{"index":0,"relevanceScore":0.6847912669181824},{"index":1,"relevanceScore":0.5980774760246277}]}
         """
-        _billed_units = RerankBilledUnits(**response.get("usage", {"search_units": 1}))  # by default 1 search unit
-        _tokens: Final = RerankTokens(**response.get("usage", {}))
+        _billed_units: Final = TypeAdapter(RerankBilledUnits).validate_python(
+            response.get("usage", {"search_units": 1})
+        )
+        _tokens: Final = TypeAdapter(RerankTokens).validate_python(response.get("usage", {}))
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         _results: list[RerankResponseResult] | None = None
@@ -108,3 +115,9 @@ class BedrockRerankConfig:
             results=_results,
             meta=rerank_meta,
         )  # Return response
+
+    def transform_response(
+        self,
+        response: dict[str, object],  # mutable-ok: preserves extension signature
+    ) -> RerankResponse:
+        return self._transform_response(response)

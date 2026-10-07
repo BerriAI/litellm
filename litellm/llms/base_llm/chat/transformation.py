@@ -133,7 +133,9 @@ class BaseConfig(ABC):
         """
         return False
 
-    def _add_tools_to_optional_params(self, optional_params: dict, tools: list) -> dict:
+    def _add_tools_to_optional_params(
+        self, optional_params: dict[str, object], tools: list[object]
+    ) -> dict[str, object]:
         """
         Helper util to add tools to optional_params.
         """
@@ -145,6 +147,13 @@ class BaseConfig(ABC):
                 *tools,
             ]
         return optional_params
+
+    def add_tools_to_optional_params(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: exact API
+        tools: list[object],  # mutable-ok: exact API
+    ) -> dict[str, object]:  # mutable-ok: matches extension signature
+        return self._add_tools_to_optional_params(optional_params, tools)
 
     def translate_developer_role_to_system_role(
         self,

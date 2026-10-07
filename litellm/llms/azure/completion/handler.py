@@ -225,7 +225,9 @@ class AzureTextCompletion(BaseAzureLLM):
                 api_key=azure_client.api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
-                    "api_base": azure_client._base_url._uri_reference,
+                    "api_base": (
+                        azure_client._base_url._uri_reference  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
+                    ),
                     "acompletion": True,
                     "complete_input_dict": data,
                 },
@@ -284,7 +286,9 @@ class AzureTextCompletion(BaseAzureLLM):
             api_key=azure_client.api_key,
             additional_args={
                 "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
-                "api_base": azure_client._base_url._uri_reference,
+                "api_base": (
+                    azure_client._base_url._uri_reference  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
+                ),
                 "acompletion": True,
                 "complete_input_dict": data,
             },
@@ -334,7 +338,9 @@ class AzureTextCompletion(BaseAzureLLM):
                 api_key=azure_client.api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
-                    "api_base": azure_client._base_url._uri_reference,
+                    "api_base": (
+                        azure_client._base_url._uri_reference  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
+                    ),
                     "acompletion": True,
                     "complete_input_dict": data,
                 },

@@ -16,7 +16,7 @@ else:
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import HuggingFaceError, _fetch_inference_provider_mapping
+from ..common_utils import HuggingFaceError, fetch_inference_provider_mapping
 
 logger: Final = logging.getLogger(__name__)
 
@@ -138,19 +138,32 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if "/" in remaining:
             provider: Final = first_part
             model_id: Final = remaining
-            provider_mapping = _fetch_inference_provider_mapping(model_id)
+            provider_mapping = fetch_inference_provider_mapping(model_id)
             if provider not in provider_mapping:
                 raise HuggingFaceError(
                     message=f"Model {model_id} is not supported for provider {provider}",
                     status_code=404,
                     headers={},
                 )
-            provider_mapping = provider_mapping[provider]
-            if provider_mapping["status"] == "staging":
+            provider_mapping_entry: Final = provider_mapping[provider]
+            if not isinstance(provider_mapping_entry, dict):
+                raise HuggingFaceError(
+                    message=f"Provider mapping for {provider} is invalid",
+                    status_code=404,
+                    headers={},
+                )
+            if provider_mapping_entry.get("status") == "staging":
                 logger.warning(
                     "Model %s is in staging mode for provider %s. Meant for test purposes only.", model_id, provider
                 )
-            mapped_model = provider_mapping["providerId"]
+            mapped_model_value: Final = provider_mapping_entry.get("providerId")
+            if not isinstance(mapped_model_value, str):
+                raise HuggingFaceError(
+                    message=f"Provider mapping for {provider} has no model ID",
+                    status_code=404,
+                    headers={},
+                )
+            mapped_model = mapped_model_value
 
         messages = self._transform_messages(messages=messages, model=mapped_model)
         return dict(ChatCompletionRequest(model=mapped_model, messages=messages, **optional_params))

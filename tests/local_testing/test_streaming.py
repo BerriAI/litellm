@@ -3017,7 +3017,7 @@ def test_mock_response_iterator_tool_use():
         service_tier=None,
     )
     completion_stream = MockResponseIterator(model_response=response)
-    response_chunk = completion_stream._chunk_parser(chunk_data=response)
+    response_chunk = completion_stream.chunk_parser(chunk_data=response)
 
     assert response_chunk["tool_use"] is not None
 

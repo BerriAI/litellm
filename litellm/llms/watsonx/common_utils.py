@@ -70,14 +70,17 @@ def generate_iam_token(api_key=None, **params) -> str:
     return cast(str, result)
 
 
-def _generate_watsonx_token(api_key: str | None, token: str | None) -> str:
+def generate_watsonx_token(api_key: str | None, token: str | None) -> str:
     if token is not None:
         return token
     token = generate_iam_token(api_key)
     return token
 
 
-def _get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
+_generate_watsonx_token = generate_watsonx_token
+
+
+def get_api_params(params: dict[str, object], model: str | None = None) -> WatsonXAPIParams:
     """
     Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
     """
@@ -118,6 +121,9 @@ def _get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
         space_id=space_id,
         region_name=region_name,
     )
+
+
+_get_api_params = get_api_params
 
 
 async def _aconvert_watsonx_messages_core(
@@ -252,7 +258,7 @@ class IBMWatsonXMixin:
         elif zen_api_key:
             headers["Authorization"] = f"ZenApiKey {zen_api_key}"
         else:
-            token = _generate_watsonx_token(api_key=api_key, token=token)
+            token = generate_watsonx_token(api_key=api_key, token=token)
             # build auth headers
             headers["Authorization"] = f"Bearer {token}"
         return {**default_headers, **headers}
@@ -333,8 +339,8 @@ class IBMWatsonXMixin:
             )
         return WatsonXCredentials(api_key=api_key, api_base=api_base, token=cast(str | None, token))
 
-    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
-        payload: Final[dict] = {}
+    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict[str, object]:
+        payload: Final[dict[str, object]] = {}
         if model.startswith("deployment/"):
             return {}  # Deployment models do not support 'space_id' or 'project_id' in their payload
         payload["model_id"] = model
@@ -343,3 +349,10 @@ class IBMWatsonXMixin:
         else:
             payload["space_id"] = api_params["space_id"]
         return payload
+
+    def prepare_payload(
+        self,
+        model: str,
+        api_params: WatsonXAPIParams,
+    ) -> dict[str, object]:  # mutable-ok: matches extension signature
+        return self._prepare_payload(model, api_params)

@@ -159,6 +159,26 @@ class GroqChatConfig(OpenAILikeChatConfig):
         else:
             return super()._transform_messages(messages=messages, model=model, is_async=False)
 
+    @overload
+    def transform_messages(
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...  # mutable-ok: matches override
+
+    @overload
+    def transform_messages(
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[False] = False
+    ) -> list[AllMessageValues]: ...  # mutable-ok: matches override
+
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: exact API
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]  # mutable-ok: exact API
+    ):
+        return self._transform_messages(messages, model, is_async)
+
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:

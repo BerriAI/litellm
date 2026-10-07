@@ -183,7 +183,7 @@ class TwelveLabsMarengoEmbeddingConfig:
     def _transform_request(
         self,
         input: str,
-        inference_params: dict,
+        inference_params: dict[str, object],
         async_invoke_route: bool = False,
         model_id: str | None = None,
         output_s3_uri: str | None = None,
@@ -272,6 +272,19 @@ class TwelveLabsMarengoEmbeddingConfig:
 
         return transformed_request
 
+    def transform_request(
+        self,
+        input: str,
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+        async_invoke_route: bool = False,
+        model_id: str | None = None,
+        output_s3_uri: str | None = None,
+        drop_params: bool = False,
+    ) -> TwelveLabsMarengoEmbeddingRequest | TwelveLabsMarengo3EmbeddingRequest | TwelveLabsAsyncInvokeRequest:
+        return self._transform_request(
+            input, inference_params, async_invoke_route, model_id, output_s3_uri, drop_params
+        )
+
     def _wrap_async_invoke_request(
         self,
         model_input: TwelveLabsMarengoEmbeddingRequest | TwelveLabsMarengo3EmbeddingRequest,
@@ -309,7 +322,10 @@ class TwelveLabsMarengoEmbeddingConfig:
         )
 
     def _transform_response(
-        self, response_list: list[dict], model: str, batch_data: list[dict] | None = None
+        self,
+        response_list: list[dict[str, object]],
+        model: str,
+        batch_data: list[dict[str, object]] | None = None,
     ) -> EmbeddingResponse:
         vectors: Final = tuple(
             vector for response in INVOKE_RESPONSES.validate_python(response_list) for vector in response.vectors()
@@ -319,7 +335,15 @@ class TwelveLabsMarengoEmbeddingConfig:
         ]
         return EmbeddingResponse(data=embeddings, model=model, usage=_billed_usage(batch_data))
 
-    def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
+    def transform_response(
+        self,
+        response_list: list[dict[str, object]],  # mutable-ok: exact API
+        model: str,
+        batch_data: list[dict[str, object]] | None = None,  # mutable-ok: exact API
+    ) -> EmbeddingResponse:
+        return self._transform_response(response_list, model, batch_data)
+
+    def _transform_async_invoke_response(self, response: dict[str, object], model: str) -> EmbeddingResponse:
         """
         Transform async invoke response (invocation ARN) to OpenAI format.
 
@@ -366,3 +390,10 @@ class TwelveLabsMarengoEmbeddingConfig:
             usage=usage,
             hidden_params=hidden_params,
         )
+
+    def transform_async_invoke_response(
+        self,
+        response: dict[str, object],  # mutable-ok: exact API
+        model: str,
+    ) -> EmbeddingResponse:
+        return self._transform_async_invoke_response(response, model)

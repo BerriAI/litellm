@@ -628,7 +628,7 @@ def retrieve_batch(
                 async_kwargs: Final = kwargs.copy()
                 async_kwargs.pop("aws_region_name", None)
 
-                return BedrockBatchesHandler._handle_async_invoke_status(
+                return BedrockBatchesHandler.handle_async_invoke_status(
                     batch_id=batch_id,
                     aws_region_name=kwargs.get("aws_region_name", "us-east-1"),
                     logging_obj=litellm_logging_obj,
@@ -638,7 +638,7 @@ def retrieve_batch(
                 mij_kwargs: Final = kwargs.copy()
                 mij_kwargs.pop("aws_region_name", None)
 
-                return BedrockBatchesHandler._handle_model_invocation_job_status(
+                return BedrockBatchesHandler.handle_model_invocation_job_status(
                     batch_id=batch_id,
                     aws_region_name=kwargs.get("aws_region_name"),
                     logging_obj=litellm_logging_obj,
@@ -1107,7 +1107,7 @@ def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj
         embedding_handler: Final = BedrockEmbedding()
 
         # Get the status of the async invoke job
-        status_response: Final = await embedding_handler._get_async_invoke_status(
+        status_response: Final = await embedding_handler.get_async_invoke_status(
             invocation_arn=batch_id,
             aws_region_name=aws_region_name,
             logging_obj=logging_obj,
@@ -1133,11 +1133,14 @@ def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj
         )  # Default to "failed" if unknown status
 
         # Get output S3 URI safely
-        output_s3_uri = ""
-        try:
-            output_s3_uri = status_response["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"]
-        except (KeyError, TypeError):
-            pass
+        output_data_config: Final = status_response.get("outputDataConfig")
+        s3_output_data_config: Final = (
+            output_data_config.get("s3OutputDataConfig") if isinstance(output_data_config, dict) else None
+        )
+        output_s3_uri_value: Final = (
+            s3_output_data_config.get("s3Uri") if isinstance(s3_output_data_config, dict) else None
+        )
+        output_s3_uri: Final = output_s3_uri_value if isinstance(output_s3_uri_value, str) else ""
 
         # Use BedrockBatchesConfig's timestamp parsing method (expects raw AWS status string)
         import time
@@ -1151,7 +1154,7 @@ def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj
             failed_at,
             _,
             _,
-        ) = BedrockBatchesConfig()._parse_timestamps_and_status(status_response, aws_status_raw)
+        ) = BedrockBatchesConfig().parse_timestamps_and_status(status_response, aws_status_raw)
         result: Final = LiteLLMBatch(
             id=status_response["invocationArn"],
             object="batch",

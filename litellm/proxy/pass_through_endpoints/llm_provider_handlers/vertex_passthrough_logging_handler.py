@@ -644,7 +644,7 @@ class VertexPassthroughLoggingHandler:
             )
             chunk_parsing_logic = vertex_iterator.chunk_parser
             for chunk in all_chunks:
-                dict_chunk = BaseModelResponseIterator._string_to_dict_parser(chunk)
+                dict_chunk = BaseModelResponseIterator.string_to_dict_parser(chunk)
                 if dict_chunk is None:
                     continue
                 parsed_chunks.append(chunk_parsing_logic(dict_chunk))
@@ -824,7 +824,7 @@ class VertexPassthroughLoggingHandler:
                 )
 
                 # Extract batch ID and model from the response
-                batch_id = VertexAIBatchTransformation._get_batch_id_from_vertex_ai_batch_response(_json_response)
+                batch_id = VertexAIBatchTransformation.get_batch_id_from_vertex_ai_batch_response(_json_response)
                 model_name: Final = _json_response.get("model", "unknown")
 
                 # Create unified object ID for tracking

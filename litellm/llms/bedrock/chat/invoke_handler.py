@@ -18,8 +18,8 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
@@ -297,7 +297,7 @@ def make_sync_call(
 ) -> "tuple[MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
-            client = _get_httpx_client(
+            client = get_httpx_client(
                 params=(
                     {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
                     if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
@@ -722,7 +722,10 @@ class AWSEventStreamDecoder:
         except Exception as e:
             raise Exception(f"Received streaming error - {e}")
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
+    def _chunk_parser(
+        self,
+        chunk_data: dict,  # pyright: ignore[reportMissingTypeArgument]  # mirrors Bedrock event payloads
+    ) -> GChunk | ModelResponseStream | dict:  # pyright: ignore[reportMissingTypeArgument]  # mirrors Bedrock results
         text = ""
         is_finished = False
         finish_reason = ""
@@ -777,6 +780,12 @@ class AWSEventStreamDecoder:
             tool_use=None,
         )
 
+    def chunk_parser(
+        self,
+        chunk_data: dict,  # pyright: ignore[reportMissingTypeArgument]  # Bedrock  # mutable-ok: exact API
+    ) -> GChunk | ModelResponseStream | dict:  # pyright: ignore[reportMissingTypeArgument]  # Boto  # mutable-ok: exact
+        return self._chunk_parser(chunk_data=chunk_data)
+
     def iter_bytes(
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> Iterator[GChunk | ModelResponseStream | dict]:
@@ -793,7 +802,7 @@ class AWSEventStreamDecoder:
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
@@ -813,7 +822,7 @@ class AWSEventStreamDecoder:
                 message = self._decode_event(event, tally)
                 if message:
                     _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
@@ -883,7 +892,10 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
             json_mode=json_mode,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
+    def _chunk_parser(
+        self,
+        chunk_data: dict,  # pyright: ignore[reportMissingTypeArgument]  # mirrors Bedrock event payloads
+    ) -> ModelResponseStream:
         return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
@@ -903,7 +915,10 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
             sync_stream=sync_stream,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
+    def _chunk_parser(
+        self,
+        chunk_data: dict,  # pyright: ignore[reportMissingTypeArgument]  # mirrors Bedrock event payloads
+    ) -> GChunk | ModelResponseStream | dict:  # pyright: ignore[reportMissingTypeArgument]  # mirrors Bedrock results
         return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
@@ -955,7 +970,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         """
         tool_use: ChatCompletionToolCallChunk | None = None
         if self.json_mode is True and tool_calls is not None:
-            message: Final = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=tool_calls)
+            message: Final = litellm.AnthropicConfig().convert_tool_response_to_message(tool_calls=tool_calls)
             if message is not None:
                 text = message.content or ""
                 tool_use = None

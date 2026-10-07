@@ -44,7 +44,7 @@ class CohereEmbeddingConfig:
         return "3" in model
 
     def _transform_request(
-        self, model: str, input: list[str], inference_params: dict
+        self, model: str, input: list[str], inference_params: dict[str, object]
     ) -> CohereEmbeddingRequestWithModel:
         is_encoded = False
         for input_str in input:
@@ -67,6 +67,14 @@ class CohereEmbeddingConfig:
             transformed_request[k] = v
 
         return transformed_request
+
+    def transform_request(
+        self,
+        model: str,
+        input: list[str],  # mutable-ok: matches extension signature
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> CohereEmbeddingRequestWithModel:
+        return self._transform_request(model, input, inference_params)
 
     def _calculate_usage(self, input: list[str], encoding: _SupportsEncode, meta: dict) -> Usage:
         input_tokens = 0
@@ -101,11 +109,11 @@ class CohereEmbeddingConfig:
         response: httpx.Response,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
-        data: dict | CohereEmbeddingRequest,
+        data: dict[str, object] | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
         encoding: _SupportsEncode,
-        input: list,
+        input: list[str],
     ) -> EmbeddingResponse:
         response_json: Final = response.json()
         ## LOGGING
@@ -123,13 +131,26 @@ class CohereEmbeddingConfig:
             input=input,
         )
 
-    def _populate_embedding_response(
+    def transform_response(
         self,
-        response_json: dict,
+        response: httpx.Response,
+        api_key: str | None,
+        logging_obj: LiteLLMLoggingObj,
+        data: dict[str, object] | CohereEmbeddingRequest,  # mutable-ok: mirrors override contract
         model_response: EmbeddingResponse,
         model: str,
         encoding: _SupportsEncode,
-        input: list,
+        input: list[str],  # mutable-ok: mirrors override contract
+    ) -> EmbeddingResponse:
+        return self._transform_response(response, api_key, logging_obj, data, model_response, model, encoding, input)
+
+    def _populate_embedding_response(
+        self,
+        response_json: dict[str, object],
+        model_response: EmbeddingResponse,
+        model: str,
+        encoding: _SupportsEncode,
+        input: list[str],
     ) -> EmbeddingResponse:
         """
         Parse a Cohere embed response body into an OpenAI-style EmbeddingResponse.
@@ -153,9 +174,11 @@ class CohereEmbeddingConfig:
         if isinstance(embeddings, dict):
             is_embeddings_by_type = True
 
-        if is_embeddings_by_type:
-            for embedding_type in embeddings:
-                for idx, embedding in enumerate(embeddings[embedding_type]):
+        if is_embeddings_by_type and isinstance(embeddings, dict):
+            for embedding_type, embedding_values in embeddings.items():
+                if not isinstance(embedding_values, list):
+                    continue
+                for idx, embedding in enumerate(embedding_values):
                     output_data.append(
                         {
                             "object": "embedding",
@@ -164,9 +187,11 @@ class CohereEmbeddingConfig:
                             "type": embedding_type,
                         }
                     )
-        else:
+        elif isinstance(embeddings, list):
             for idx, embedding in enumerate(embeddings):
                 output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
+        else:
+            raise ValueError("Cohere response embeddings must be a list or mapping")
         model_response.object = "list"
         model_response.data = output_data
         model_response.model = model
@@ -178,3 +203,13 @@ class CohereEmbeddingConfig:
         )
 
         return model_response
+
+    def populate_embedding_response(
+        self,
+        response_json: dict[str, object],  # mutable-ok: exact API
+        model_response: EmbeddingResponse,
+        model: str,
+        encoding: _SupportsEncode,
+        input: list[str],  # mutable-ok: exact API
+    ) -> EmbeddingResponse:
+        return self._populate_embedding_response(response_json, model_response, model, encoding, input)

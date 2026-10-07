@@ -171,7 +171,7 @@ class AzureAIAgentsConfig(BaseConfig):
         # Return base URL - actual endpoints will be constructed during request
         return api_base
 
-    def _get_agent_id(self, model: str, optional_params: dict) -> str:
+    def _get_agent_id(self, model: str, optional_params: dict[str, object]) -> str:
         """
         Get the agent ID from model or optional_params.
 
@@ -183,6 +183,13 @@ class AzureAIAgentsConfig(BaseConfig):
 
         # Extract from model name using the static method
         return self.get_agent_id_from_model(model)
+
+    def get_agent_id(
+        self,
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: preserves extension signature
+    ) -> str:
+        return self._get_agent_id(model, optional_params)
 
     def transform_request(
         self,

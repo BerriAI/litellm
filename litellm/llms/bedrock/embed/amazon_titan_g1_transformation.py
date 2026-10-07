@@ -57,10 +57,17 @@ class AmazonTitanG1Config:
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         return optional_params
 
-    def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanG1EmbeddingRequest:
+    def _transform_request(self, input: str, inference_params: dict[str, object]) -> AmazonTitanG1EmbeddingRequest:
         return AmazonTitanG1EmbeddingRequest(inputText=input)
 
-    def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
+    def transform_request(
+        self,
+        input: str,
+        inference_params: dict[str, object],  # mutable-ok: exact API
+    ) -> AmazonTitanG1EmbeddingRequest:
+        return self._transform_request(input, inference_params)
+
+    def _transform_response(self, response_list: list[dict[str, object]], model: str) -> EmbeddingResponse:
         total_prompt_tokens = 0
 
         transformed_responses: Final[list[Embedding]] = []
@@ -81,3 +88,10 @@ class AmazonTitanG1Config:
             total_tokens=total_prompt_tokens,
         )
         return EmbeddingResponse(model=model, usage=usage, data=transformed_responses)
+
+    def transform_response(
+        self,
+        response_list: list[dict[str, object]],  # mutable-ok: exact API
+        model: str,
+    ) -> EmbeddingResponse:
+        return self._transform_response(response_list, model)

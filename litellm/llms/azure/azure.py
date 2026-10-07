@@ -112,8 +112,8 @@ class AzureOpenAIAssistantsAPIConfig:
         return optional_params
 
 
-def _check_dynamic_azure_params(
-    azure_client_params: dict,
+def check_dynamic_azure_params(
+    azure_client_params: dict[str, object],
     azure_client: AzureOpenAI | AsyncAzureOpenAI | None,
 ) -> bool:
     """
@@ -127,10 +127,19 @@ def _check_dynamic_azure_params(
     dynamic_params: Final = ["api_version"]
     for k, v in azure_client_params.items():
         if k in dynamic_params and k == "api_version":
-            if v is not None and v != azure_client._custom_query["api-version"]:
+            if (
+                v is not None
+                and v
+                != (
+                    azure_client._custom_query["api-version"]  # pyright: ignore[reportPrivateUsage]  # SDK query internals
+                )
+            ):
                 return True
 
     return False
+
+
+_check_dynamic_azure_params = check_dynamic_azure_params
 
 
 class AzureChatCompletion(BaseAzureLLM, BaseLLM):
