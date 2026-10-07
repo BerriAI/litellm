@@ -2,7 +2,7 @@
 Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers.
 """
 
-import datetime
+import asyncio, datetime, importlib, litellm, os, pytest_asyncio
 import threading
 from unittest.mock import MagicMock
 
@@ -10,12 +10,26 @@ import pytest
 
 from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.logging_utils import (
+    assemble_complete_response_from_streaming_chunks,
     _set_duration_in_model_call_details,
     _truncate_base64_in_string,
     format_base64_size,
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
+from collections.abc import AsyncIterator
+from datetime import datetime as datetime_assemble_streaming
+from litellm import(
+    Choices,
+    ModelResponse,
+    ModelResponseStream,
+    TextChoices,
+    TextCompletionResponse,
+)
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from typing import Final
 
 
 class TestSetDurationInModelCallDetails:
@@ -249,3 +263,428 @@ class TestTruncateBase64InMessagesAsync:
         messages = _image_messages("K" * 20_000)
         assert await truncate_base64_in_messages_async(messages) is messages
         assert scan_threads == []
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
+    yield
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+
+LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm state to the true defaults captured at conftest import time,
+    then restores after the test. This prevents module-level mutations (e.g.
+    `litellm.num_retries = 3` at the top of test_langfuse_e2e_test.py) from
+    leaking across tests within the same xdist worker.
+    """
+    from litellm.litellm_core_utils import litellm_logging as ll_logging
+    from litellm.proxy.management_helpers import audit_logs as ll_audit_logs
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+    yield
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+
+_LIST_ATTRS = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+    "service_callback",
+    "pre_call_rules",
+    "post_call_rules",
+)
+
+_SCALAR_ATTRS = (
+    "set_verbose",
+    "cache",
+    "num_retries",
+    "num_retries_per_request",
+    "turn_off_message_logging",
+    "redact_messages_in_exceptions",
+    "redact_user_api_key_info",
+    "s3_callback_params",
+    "s3_audit_callback_params",
+    "datadog_params",
+    "vector_store_registry",
+)
+
+_DEFAULTS: dict = {}
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception:
+            pass
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize("is_async", [True, False])
+def test_assemble_complete_response_from_streaming_chunks_1(is_async):
+    """
+    Test 1 - ModelResponse with 1 list of streaming chunks. Assert chunks are added to the streaming_chunks, after final chunk sent assert complete_streaming_response is not None
+    """
+
+    request_kwargs = {
+        "model": "test_model",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+    }
+
+    list_streaming_chunks = []
+    chunk = {
+        "id": "chatcmpl-9mWtyDnikZZoB75DyfUzWUxiiE2Pi",
+        "choices": [
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(
+                    content="hello in response",
+                    function_call=None,
+                    role=None,
+                    tool_calls=None,
+                ),
+                index=0,
+                logprobs=None,
+            )
+        ],
+        "created": 1721353246,
+        "model": "gpt-5-mini",
+        "object": "chat.completion.chunk",
+        "system_fingerprint": None,
+        "usage": None,
+    }
+    chunk = ModelResponseStream(**chunk)
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
+        result=chunk,
+        start_time=datetime_assemble_streaming.now(),
+        end_time=datetime_assemble_streaming.now(),
+        request_kwargs=request_kwargs,
+        streaming_chunks=list_streaming_chunks,
+        is_async=is_async,
+    )
+
+    # this is the 1st chunk - complete_streaming_response should be None
+
+    print("list_streaming_chunks", list_streaming_chunks)
+    print("complete_streaming_response", complete_streaming_response)
+    assert complete_streaming_response is None
+    assert len(list_streaming_chunks) == 1
+    assert list_streaming_chunks[0] == chunk
+
+    # Add final chunk
+    chunk = {
+        "id": "chatcmpl-9mWtyDnikZZoB75DyfUzWUxiiE2Pi",
+        "choices": [
+            litellm.utils.StreamingChoices(
+                finish_reason="stop",
+                delta=litellm.utils.Delta(
+                    content="end of response",
+                    function_call=None,
+                    role=None,
+                    tool_calls=None,
+                ),
+                index=0,
+                logprobs=None,
+            )
+        ],
+        "created": 1721353246,
+        "model": "gpt-5-mini",
+        "object": "chat.completion.chunk",
+        "system_fingerprint": None,
+        "usage": None,
+    }
+    chunk = ModelResponseStream(**chunk)
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
+        result=chunk,
+        start_time=datetime_assemble_streaming.now(),
+        end_time=datetime_assemble_streaming.now(),
+        request_kwargs=request_kwargs,
+        streaming_chunks=list_streaming_chunks,
+        is_async=is_async,
+    )
+
+    print("list_streaming_chunks", list_streaming_chunks)
+    print("complete_streaming_response", complete_streaming_response)
+
+    # this is the 2nd chunk - complete_streaming_response should not be None
+    assert complete_streaming_response is not None
+    assert len(list_streaming_chunks) == 2
+
+    assert isinstance(complete_streaming_response, ModelResponse)
+    assert isinstance(complete_streaming_response.choices[0], Choices)
+
+    pass
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize("is_async", [True, False])
+def test_assemble_complete_response_from_streaming_chunks_2(is_async):
+    """
+    Test 2 - TextCompletionResponse with 1 list of streaming chunks. Assert chunks are added to the streaming_chunks, after final chunk sent assert complete_streaming_response is not None
+    """
+
+    from litellm.utils import TextCompletionStreamWrapper
+
+    _text_completion_stream_wrapper = TextCompletionStreamWrapper(completion_stream=None, model="test_model")
+
+    request_kwargs = {
+        "model": "test_model",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+    }
+
+    list_streaming_chunks = []
+    chunk = {
+        "id": "chatcmpl-9mWtyDnikZZoB75DyfUzWUxiiE2Pi",
+        "choices": [
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(
+                    content="hello in response",
+                    function_call=None,
+                    role=None,
+                    tool_calls=None,
+                ),
+                index=0,
+                logprobs=None,
+            )
+        ],
+        "created": 1721353246,
+        "model": "gpt-5-mini",
+        "object": "chat.completion.chunk",
+        "system_fingerprint": None,
+        "usage": None,
+    }
+    chunk = ModelResponseStream(**chunk)
+    chunk = _text_completion_stream_wrapper.convert_to_text_completion_object(chunk)
+
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
+        result=chunk,
+        start_time=datetime_assemble_streaming.now(),
+        end_time=datetime_assemble_streaming.now(),
+        request_kwargs=request_kwargs,
+        streaming_chunks=list_streaming_chunks,
+        is_async=is_async,
+    )
+
+    # this is the 1st chunk - complete_streaming_response should be None
+
+    print("list_streaming_chunks", list_streaming_chunks)
+    print("complete_streaming_response", complete_streaming_response)
+    assert complete_streaming_response is None
+    assert len(list_streaming_chunks) == 1
+    assert list_streaming_chunks[0] == chunk
+
+    # Add final chunk
+    chunk = {
+        "id": "chatcmpl-9mWtyDnikZZoB75DyfUzWUxiiE2Pi",
+        "choices": [
+            litellm.utils.StreamingChoices(
+                finish_reason="stop",
+                delta=litellm.utils.Delta(
+                    content="end of response",
+                    function_call=None,
+                    role=None,
+                    tool_calls=None,
+                ),
+                index=0,
+                logprobs=None,
+            )
+        ],
+        "created": 1721353246,
+        "model": "gpt-5-mini",
+        "object": "chat.completion.chunk",
+        "system_fingerprint": None,
+        "usage": None,
+    }
+    chunk = ModelResponseStream(**chunk)
+    chunk = _text_completion_stream_wrapper.convert_to_text_completion_object(chunk)
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
+        result=chunk,
+        start_time=datetime_assemble_streaming.now(),
+        end_time=datetime_assemble_streaming.now(),
+        request_kwargs=request_kwargs,
+        streaming_chunks=list_streaming_chunks,
+        is_async=is_async,
+    )
+
+    print("list_streaming_chunks", list_streaming_chunks)
+    print("complete_streaming_response", complete_streaming_response)
+
+    # this is the 2nd chunk - complete_streaming_response should not be None
+    assert complete_streaming_response is not None
+    assert len(list_streaming_chunks) == 2
+
+    assert isinstance(complete_streaming_response, TextCompletionResponse)
+    assert isinstance(complete_streaming_response.choices[0], TextChoices)
+
+    pass
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize("is_async", [True, False])
+def test_assemble_complete_response_from_streaming_chunks_3(is_async):
+
+    request_kwargs = {
+        "model": "test_model",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+    }
+
+    list_streaming_chunks_1 = []
+    list_streaming_chunks_2 = []
+
+    chunk = {
+        "id": "chatcmpl-9mWtyDnikZZoB75DyfUzWUxiiE2Pi",
+        "choices": [
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(
+                    content="hello in response",
+                    function_call=None,
+                    role=None,
+                    tool_calls=None,
+                ),
+                index=0,
+                logprobs=None,
+            )
+        ],
+        "created": 1721353246,
+        "model": "gpt-5-mini",
+        "object": "chat.completion.chunk",
+        "system_fingerprint": None,
+        "usage": None,
+    }
+    chunk = ModelResponseStream(**chunk)
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
+        result=chunk,
+        start_time=datetime_assemble_streaming.now(),
+        end_time=datetime_assemble_streaming.now(),
+        request_kwargs=request_kwargs,
+        streaming_chunks=list_streaming_chunks_1,
+        is_async=is_async,
+    )
+
+    # this is the 1st chunk - complete_streaming_response should be None
+
+    print("list_streaming_chunks_1", list_streaming_chunks_1)
+    print("complete_streaming_response", complete_streaming_response)
+    assert complete_streaming_response is None
+    assert len(list_streaming_chunks_1) == 1
+    assert list_streaming_chunks_1[0] == chunk
+    assert len(list_streaming_chunks_2) == 0
+
+    # now add a chunk to the 2nd list
+
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
+        result=chunk,
+        start_time=datetime_assemble_streaming.now(),
+        end_time=datetime_assemble_streaming.now(),
+        request_kwargs=request_kwargs,
+        streaming_chunks=list_streaming_chunks_2,
+        is_async=is_async,
+    )
+
+    print("list_streaming_chunks_2", list_streaming_chunks_2)
+    print("complete_streaming_response", complete_streaming_response)
+    assert complete_streaming_response is None
+    assert len(list_streaming_chunks_2) == 1
+    assert list_streaming_chunks_2[0] == chunk
+    assert len(list_streaming_chunks_1) == 1
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize("is_async", [True, False])
+def test_assemble_complete_response_from_streaming_chunks_4(is_async):
+    """
+    Test 4 - build a complete response when 1 chunk is poorly formatted
+
+    - Assert complete_streaming_response is None
+    - Assert list_streaming_chunks is not empty
+    """
+
+    request_kwargs = {
+        "model": "test_model",
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+    }
+
+    list_streaming_chunks = []
+
+    chunk = {
+        "id": "chatcmpl-9mWtyDnikZZoB75DyfUzWUxiiE2Pi",
+        "choices": [
+            litellm.utils.StreamingChoices(
+                finish_reason="stop",
+                delta=litellm.utils.Delta(
+                    content="end of response",
+                    function_call=None,
+                    role=None,
+                    tool_calls=None,
+                ),
+                index=0,
+                logprobs=None,
+            )
+        ],
+        "created": 1721353246,
+        "model": "gpt-5-mini",
+        "object": "chat.completion.chunk",
+        "system_fingerprint": None,
+        "usage": None,
+    }
+    chunk = ModelResponseStream(**chunk)
+
+    # remove attribute id from chunk
+    del chunk.object
+
+    complete_streaming_response = assemble_complete_response_from_streaming_chunks(
+        result=chunk,
+        start_time=datetime_assemble_streaming.now(),
+        end_time=datetime_assemble_streaming.now(),
+        request_kwargs=request_kwargs,
+        streaming_chunks=list_streaming_chunks,
+        is_async=is_async,
+    )
+
+    print("complete_streaming_response", complete_streaming_response)
+    assert complete_streaming_response is None
+
+    print("list_streaming_chunks", list_streaming_chunks)
+
+    assert len(list_streaming_chunks) == 1

@@ -7,7 +7,6 @@ import traceback
 
 import pytest
 
-
 import litellm
 from litellm import completion, embedding
 from litellm.integrations.custom_logger import CustomLogger
@@ -236,42 +235,6 @@ def test_async_custom_handler_stream():
 # test_async_custom_handler_stream()
 
 
-@pytest.mark.skip(reason="Flaky test")
-def test_azure_completion_stream():
-    # [PROD Test] - Do not DELETE
-    # test if completion() + sync custom logger get the same complete stream response
-    try:
-        # checks if the model response available in the async + stream callbacks is equal to the received response
-        customHandler2 = MyCustomHandler()
-        litellm.callbacks = [customHandler2]
-        litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": f"write 1 sentence about litellm being amazing {time.time()}",
-            },
-        ]
-        complete_streaming_response = ""
-
-        response = litellm.completion(
-            model="azure/gpt-4.1-mini", messages=messages, stream=True
-        )
-        for chunk in response:
-            complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""
-            print(complete_streaming_response)
-
-        time.sleep(0.5)  # wait 1/2 second before checking callbacks
-        response_in_success_handler = customHandler2.sync_stream_collected_response
-        response_in_success_handler = response_in_success_handler["choices"][0][
-            "message"
-        ]["content"]
-        print("\n\n")
-        print("response_in_success_handler: ", response_in_success_handler)
-        print("complete_streaming_response: ", complete_streaming_response)
-        assert response_in_success_handler == complete_streaming_response
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.asyncio
@@ -420,25 +383,6 @@ async def test_async_custom_handler_embedding_optional_param():
 # asyncio.run(test_async_custom_handler_embedding_optional_param())
 
 
-@pytest.mark.skip(reason="AWS Account suspended. Pending their approval")
-@pytest.mark.asyncio
-async def test_async_custom_handler_embedding_optional_param_bedrock():
-    """
-    Tests if the openai optional params for embedding - user + encoding_format,
-    are logged
-
-    but makes sure these are not sent to the non-openai/azure endpoint (raises errors).
-    """
-    litellm.drop_params = True
-    litellm.set_verbose = True
-    customHandler_optional_params = MyCustomHandler()
-    litellm.callbacks = [customHandler_optional_params]
-    response = await litellm.aembedding(
-        model="bedrock/amazon.titan-embed-text-v1", input=["hello world"], user="John"
-    )
-    await asyncio.sleep(1)  # success callback is async
-    assert customHandler_optional_params.user == "John"
-    assert "user" not in customHandler_optional_params.data_sent_to_api
 
 
 @pytest.mark.asyncio

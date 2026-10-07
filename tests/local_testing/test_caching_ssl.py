@@ -1,16 +1,19 @@
 #### What this tests ####
 #    This tests using caching w/ litellm which requires SSL=True
 
-import sys, os
+import os
+import sys
 import time
 import traceback
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 import pytest
+
 import litellm
-from litellm import embedding, completion, Router
+from litellm import Router, completion, embedding
 from litellm.caching.caching import Cache
 
 messages = [{"role": "user", "content": f"who is ishaan {time.time()}"}]
@@ -95,30 +98,3 @@ def test_caching_router():
 
 
 # test_caching_router()
-@pytest.mark.skip(reason="redis cloud auth errors - need to re-enable")
-@pytest.mark.asyncio
-async def test_redis_with_ssl():
-    """
-    Test connecting to redis connection pool when ssl=None
-
-
-    Relevant issue:
-        User was seeing this error: `TypeError: AbstractConnection.__init__() got an unexpected keyword argument 'ssl'`
-    """
-    from litellm._redis import get_redis_connection_pool, get_redis_async_client
-
-    # Get the connection pool with SSL
-    # REDIS_HOST_WITH_SSL is just a redis cloud instance with Transport layer security (TLS) enabled
-    pool = get_redis_connection_pool(
-        host=os.environ.get("REDIS_HOST_WITH_SSL"),
-        port=os.environ.get("REDIS_PORT_WITH_SSL"),
-        password=os.environ.get("REDIS_PASSWORD_WITH_SSL"),
-        ssl=None,
-    )
-
-    # Create Redis client with the pool
-    redis_client = get_redis_async_client(connection_pool=pool)
-
-    print("pinging redis")
-    print(await redis_client.ping())
-    print("pinged redis")

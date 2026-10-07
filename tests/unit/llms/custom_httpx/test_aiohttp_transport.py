@@ -1,4 +1,4 @@
-import asyncio
+import aiohttp as aiohttp_aiohttp_handler, asyncio, importlib, litellm
 import concurrent.futures
 import socket
 import sys
@@ -17,6 +17,9 @@ from litellm.llms.custom_httpx.aiohttp_transport import (
     AiohttpTransport,
     LiteLLMAiohttpTransport,
 )
+from aiohttp import ClientSession
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 @pytest.mark.asyncio
@@ -1196,3 +1199,77 @@ async def test_genuine_request_cancellation_still_propagates():
         if sys.version_info >= (3, 11):
             current.uncancel()
         await transport.aclose()
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="function")
+def setup_and_teardown():
+    """
+    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
+    """
+    importlib.reload(litellm)
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    asyncio.set_event_loop(loop)
+    yield
+    loop.close()
+    asyncio.set_event_loop(None)
+
+def _closed_local_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+async def test_client_session_helper() -> None:
+    transport: Final = AsyncHTTPHandler._create_aiohttp_transport()
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    session1: Final = transport._get_valid_client_session()
+    assert isinstance(session1, ClientSession)
+    assert session1.closed is False
+    assert getattr(session1, "_loop") is asyncio.get_running_loop()
+    session2: Final = transport._get_valid_client_session()
+    assert session2 is session1
+    await session1.close()
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+async def test_event_loop_robustness() -> None:
+    transport: Final = AsyncHTTPHandler._create_aiohttp_transport()
+    session: Final = transport._get_valid_client_session()
+    assert isinstance(session, ClientSession)
+    await session.close()
+    session_after_close: Final = transport._get_valid_client_session()
+    assert isinstance(session_after_close, ClientSession)
+    assert session_after_close is not session
+    assert session_after_close.closed is False
+    transport.client = lambda: ClientSession()
+    session_after_factory: Final = transport._get_valid_client_session()
+    assert isinstance(session_after_factory, ClientSession)
+    assert session_after_factory is not session_after_close
+    assert session_after_factory.closed is False
+    assert transport.client is session_after_factory
+    await session_after_close.close()
+    await session_after_factory.close()
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(("ssl_verify", "expected_ssl"), [(False, False), (None, True)])
+async def test_refused_connection_maps_to_httpx_connect_error(
+    ssl_verify: bool | None, expected_ssl: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    transport: Final = AsyncHTTPHandler._create_aiohttp_transport(ssl_verify=ssl_verify)
+    port: Final = _closed_local_port()
+    request: Final = httpx.Request("GET", f"https://127.0.0.1:{port}/")
+    try:
+        with pytest.raises(httpx.ConnectError) as raised:
+            await transport.handle_async_request(request)
+    finally:
+        await transport._get_valid_client_session().close()
+    cause: Final = raised.value.__cause__
+    assert isinstance(cause, aiohttp_aiohttp_handler.ClientConnectorError)
+    assert cause.ssl is expected_ssl
+    assert (cause.host, cause.port) == ("127.0.0.1", port)

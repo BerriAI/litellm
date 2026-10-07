@@ -4,17 +4,15 @@ import asyncio
 import inspect
 import os
 import traceback
-from litellm._uuid import uuid
 from datetime import datetime
+from typing import List, Literal, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
-from typing import List, Literal, Optional, Union
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import litellm
-from litellm import Cache, completion, embedding
+from litellm import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import LiteLLMCommonStrings
 from tests._wait_helpers import await_until, wait_until
@@ -564,173 +562,14 @@ async def test_async_chat_openai_stream_options():
 
 
 ## Test Sagemaker + Async
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.asyncio
-async def test_async_chat_sagemaker_stream():
-    try:
-        customHandler = CompletionCustomHandler()
-        litellm.callbacks = [customHandler]
-        response = await litellm.acompletion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm async sagemaker"}],
-        )
-        # test streaming
-        response = await litellm.acompletion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm async sagemaker"}],
-            stream=True,
-        )
-        print(f"response: {response}")
-        async for chunk in response:
-            print(f"chunk: {chunk}")
-            continue
-        ## test failure callback
-        try:
-            response = await litellm.acompletion(
-                model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
-                messages=[{"role": "user", "content": "Hi 👋 - i'm async sagemaker"}],
-                aws_region_name="my-bad-key",
-                stream=True,
-            )
-            async for chunk in response:
-                continue
-        except Exception:
-            pass
-        await await_until(
-            lambda: "async_failure" in customHandler.states,
-            message=f"no async_failure callback, states={customHandler.states}",
-        )
-        print(f"customHandler.errors: {customHandler.errors}")
-        assert len(customHandler.errors) == 0
-        litellm.callbacks = []
-    except Exception as e:
-        pytest.fail(f"An exception occurred: {str(e)}")
 
 
 ## Test Vertex AI + Async
 import json
-import tempfile
-
-
-def load_vertex_ai_credentials():
-    # Define the path to the vertex_key.json file
-    print("loading vertex ai credentials")
-    filepath = os.path.dirname(os.path.abspath(__file__))
-    vertex_key_path = filepath + "/vertex_key.json"
-
-    # Read the existing content of the file or create an empty dictionary
-    try:
-        with open(vertex_key_path, "r") as file:
-            # Read the file content
-            print("Read vertexai file path")
-            content = file.read()
-
-            # If the file is empty or not valid JSON, create an empty dictionary
-            if not content or not content.strip():
-                service_account_key_data = {}
-            else:
-                # Attempt to load the existing JSON content
-                file.seek(0)
-                service_account_key_data = json.load(file)
-    except FileNotFoundError:
-        # If the file doesn't exist, create an empty dictionary
-        service_account_key_data = {}
-
-    # Update the service_account_key_data with environment variables
-    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
-    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
-    private_key = private_key.replace("\\n", "\n")
-    service_account_key_data["private_key_id"] = private_key_id
-    service_account_key_data["private_key"] = private_key
-
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
-        # Write the updated content to the temporary file
-        json.dump(service_account_key_data, temp_file, indent=2)
-
-    # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
-
-
-@pytest.mark.skip(reason="Vertex AI Hanging")
-@pytest.mark.asyncio
-async def test_async_chat_vertex_ai_stream():
-    try:
-        load_vertex_ai_credentials()
-        customHandler = CompletionCustomHandler()
-        litellm.set_verbose = True
-        litellm.callbacks = [customHandler]
-        # test streaming
-        response = await litellm.acompletion(
-            model="gemini-pro",
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Hi 👋 - i'm async vertex_ai {uuid.uuid4()}",
-                }
-            ],
-            stream=True,
-        )
-        print(f"response: {response}")
-        async for chunk in response:
-            print(f"chunk: {chunk}")
-            continue
-        await asyncio.sleep(10)
-        print(f"customHandler.states: {customHandler.states}")
-        assert (
-            customHandler.states.count("async_success") == 1
-        )  # pre, post, success, pre, post, failure
-        assert len(customHandler.states) >= 3  # pre, post, success
-    except Exception as e:
-        pytest.fail(f"An exception occurred: {str(e)}")
-
 
 # Text Completion
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="temp-skip to see what else is failing")
-async def test_async_text_completion_bedrock():
-    try:
-        customHandler = CompletionCustomHandler()
-        litellm.callbacks = [customHandler]
-        response = await litellm.atext_completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            prompt=["Hi 👋 - i'm async text completion bedrock"],
-        )
-        # test streaming
-        response = await litellm.atext_completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            prompt=["Hi 👋 - i'm async text completion bedrock"],
-            stream=True,
-        )
-        async for chunk in response:
-            print(f"chunk: {chunk}")
-            continue
-
-        await asyncio.sleep(1)
-        ## test failure callback
-        try:
-            response = await litellm.atext_completion(
-                model="bedrock/",
-                prompt=["Hi 👋 - i'm async text completion bedrock"],
-                stream=True,
-                api_key="my-bad-key",
-            )
-            async for chunk in response:
-                continue
-
-        except Exception:
-            pass
-        await await_until(
-            lambda: "async_failure" in customHandler.states,
-            message=f"no async_failure callback, states={customHandler.states}",
-        )
-        print(f"customHandler.errors: {customHandler.errors}")
-        assert len(customHandler.errors) == 0
-        litellm.callbacks = []
-    except Exception as e:
-        pytest.fail(f"An exception occurred: {str(e)}")
 
 
 ## Test OpenAI text completion + Async
@@ -1246,49 +1085,6 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
                 assert response["text"] == "redacted-by-litellm"
 
 
-@pytest.mark.skip(reason="Works locally. Flaky on ci/cd")
-def test_aaastandard_logging_payload_cache_hit():
-    from litellm.types.utils import StandardLoggingPayload
-
-    # sync completion
-
-    litellm.cache = Cache()
-
-    _ = litellm.completion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        caching=True,
-    )
-
-    customHandler = CompletionCustomHandler()
-    litellm.callbacks = [customHandler]
-    litellm.success_callback = []
-
-    with patch.object(
-        customHandler, "log_success_event", new=MagicMock()
-    ) as mock_client:
-        _ = litellm.completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-            caching=True,
-        )
-
-        wait_until(lambda: mock_client.called, message="log_success_event never fired")
-        mock_client.assert_called_once()
-
-        assert "standard_logging_object" in mock_client.call_args.kwargs["kwargs"]
-        assert (
-            mock_client.call_args.kwargs["kwargs"]["standard_logging_object"]
-            is not None
-        )
-
-        standard_logging_object: StandardLoggingPayload = mock_client.call_args.kwargs[
-            "kwargs"
-        ]["standard_logging_object"]
-
-        assert standard_logging_object["cache_hit"] is True
-        assert standard_logging_object["response_cost"] == 0
-        assert standard_logging_object["saved_cache_cost"] > 0
 
 
 @pytest.mark.parametrize(
@@ -1463,8 +1259,8 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
     """
     Even if stream_options is not provided, correct usage should be logged
     """
-    from litellm.types.utils import StandardLoggingPayload
     from litellm.main import stream_chunk_builder
+    from litellm.types.utils import StandardLoggingPayload
 
     stream = True
     try:
@@ -1526,7 +1322,6 @@ def test_standard_logging_retries():
     """
     know if a request was retried.
     """
-    from litellm.types.utils import StandardLoggingPayload
     from litellm.router import Router
 
     customHandler = CompletionCustomHandler()

@@ -1,4 +1,4 @@
-import os
+import asyncio, httpx, importlib, json, os
 import sys
 from typing import Final
 
@@ -13,7 +13,15 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from litellm.utils import get_optional_params
+from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params
+from datetime import datetime
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.router import Router
+from openai.types.chat import ChatCompletionMessage
+from openai.types.chat.chat_completion import ChatCompletion, Choice
+from respx import MockRouter
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from unittest.mock import AsyncMock
 
 _MAPPED_PARAMS: Final = TypeAdapter(dict[str, object])
 _SUPPORTED_PARAMS: Final = TypeAdapter(list[str])
@@ -490,3 +498,190 @@ def test_transform_request_strips_litellm_format_from_managed_file_id():
     file_part = request["messages"][0]["content"][1]["file"]
     assert "format" not in file_part
     assert file_part["file_id"] == "assistant-xyz"
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    _invalidate_model_cost_lowercase_map()
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception:
+            pass
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+@pytest.fixture
+def _pr4_azure_openai_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "pr4-test-azure-openai-key")
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://azure-openai.example.invalid")
+    monkeypatch.setenv("AZURE_TENANT_ID", "pr4-test-tenant-id")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "pr4-test-client-id")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "pr4-test-client-secret")
+
+@pytest.mark.usefixtures(
+    "_pr4_azure_openai_env",
+    "_vcr_outcome_gate",
+    "isolate_litellm_state",
+    "setup_and_teardown",
+)
+@pytest.mark.asyncio()
+@pytest.mark.respx()
+async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
+    """
+
+    Tests when we set  tenant_id, client_id, client_secret they don't get sent with the request
+
+    PROD Test
+    """
+    litellm.disable_aiohttp_transport = True  # since this uses respx, we need to set use_aiohttp_transport to False
+
+    # Clear the HTTP client cache to ensure respx mocking works
+    # This is critical because respx only intercepts clients created AFTER mocking is active
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/gpt-4.1-mini",
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
+                    "tenant_id": os.getenv("AZURE_TENANT_ID"),
+                    "client_id": os.getenv("AZURE_CLIENT_ID"),
+                    "client_secret": os.getenv("AZURE_CLIENT_SECRET"),
+                },
+            },
+        ],
+    )
+
+    mock_response = AsyncMock()
+    obj = ChatCompletion(
+        id="foo",
+        model="gpt-4",
+        object="chat.completion",
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(
+                    content="Hello world!",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=int(datetime.now().timestamp()),
+    )
+    litellm.set_verbose = True
+
+    mock_request = respx_mock.post(url__regex=r".*/chat/completions.*").mock(
+        return_value=httpx.Response(200, json=obj.model_dump(mode="json"))
+    )
+
+    await router.acompletion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world!"}])
+
+    # Ensure all mocks were called
+    respx_mock.assert_all_called()
+
+    for call in mock_request.calls:
+        print(call)
+        print(call.request.content)
+
+        json_body = json.loads(call.request.content)
+        print(json_body)
+
+        assert json_body == {
+            "messages": [{"role": "user", "content": "Hello world!"}],
+            "model": "gpt-4.1-mini",
+            "stream": False,
+        }

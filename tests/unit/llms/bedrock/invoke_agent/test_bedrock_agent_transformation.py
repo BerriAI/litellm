@@ -1,4 +1,4 @@
-import base64
+import asyncio, base64, importlib, litellm, litellm.types
 from unittest.mock import patch
 
 import pytest
@@ -8,6 +8,7 @@ from litellm.llms.bedrock.chat.invoke_agent.transformation import (
     AmazonInvokeAgentConfig,
 )
 from litellm.types.utils import ModelResponse
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 class TestAmazonInvokeAgentConfig:
@@ -282,3 +283,98 @@ class TestAmazonInvokeAgentConfig:
         )
 
         assert "sessions/..%2F..%2Fsessions%2Fother%3Fx%3D1%23frag/text" in result
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="session")
+def event_loop():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+@pytest.fixture(scope="function")
+def setup_and_teardown(event_loop):
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    importlib.reload(litellm)
+    asyncio.set_event_loop(event_loop)
+    yield
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    pending = asyncio.all_tasks(event_loop)
+    for task in pending:
+        task.cancel()
+    if pending:
+        event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+    "cohere_key": getattr(litellm, "cohere_key", None),
+}
+
+@pytest.fixture
+def _pr4_bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "pr4-test-aws-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "pr4-test-aws-secret-key")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+
+@pytest.mark.usefixtures("_pr4_bedrock_env", "_vcr_outcome_gate", "setup_and_teardown")
+def test_bedrock_agents_with_custom_params():
+    litellm.turn_on_debug()
+    from unittest.mock import MagicMock
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        try:
+            response = litellm.completion(
+                model="bedrock/agent/L1RT58GYRW/MFPSBCXYTW",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Hi who is ishaan cto of litellm, tell me 10 things about him",
+                    }
+                ],
+                invocationId="my-test-invocation-id",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_post.assert_called_once()
+        print(f"mock_post.call_args.kwargs: {mock_post.call_args.kwargs}")

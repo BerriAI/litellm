@@ -1,4 +1,4 @@
-import asyncio
+import asyncio, importlib, os
 import json
 import re
 from copy import deepcopy
@@ -20,7 +20,12 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 )
 from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
-from litellm.utils import CustomStreamWrapper
+from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.vertex_ai.gemini.transformation import(
+    _gemini_convert_messages_with_history,
+)
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 def test_top_logprobs():
@@ -6356,3 +6361,241 @@ def test_gemini_multi_candidate_messages_do_not_share_state():
     assert resp.choices[1].message.tool_calls is None
     assert getattr(resp.choices[1].message, "reasoning_content", None) is None
     assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    _invalidate_model_cost_lowercase_map()
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception as e:
+            print(f"Error reloading litellm.proxy.proxy_server: {e}")
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_thought_true_creates_thinking_block():
+    """
+    Test that a part with thought=True and non-empty text creates a thinking block.
+    Per Google's docs, parts must have thought=True to be thinking content.
+    """
+    parts = [{"text": "Some thinking", "thought": True, "thoughtSignature": "sig-1"}]
+    config = VertexGeminiConfig()
+    thinking_blocks = config._extract_thinking_blocks_from_parts(parts)
+    assert len(thinking_blocks) == 1
+    block = thinking_blocks[0]
+    assert block["thinking"] == "Some thinking"
+    assert block["signature"] == "sig-1"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_thought_true_with_empty_text_creates_block():
+    """
+    Test that a part with thought=True but empty text still creates a thinking block.
+    """
+    parts = [{"text": "", "thought": True, "thoughtSignature": "sig-2"}]
+    config = VertexGeminiConfig()
+    thinking_blocks = config._extract_thinking_blocks_from_parts(parts)
+    assert len(thinking_blocks) == 1
+    assert thinking_blocks[0]["thinking"] == ""
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_thought_signature_without_thought_does_not_create_block():
+    """
+    Test that a part with thoughtSignature but without thought=True does NOT create
+    a thinking block. Per Google's docs, thoughtSignature is for multi-turn context
+    preservation and does not indicate that the content is thinking.
+    """
+    parts = [{"text": "Some text", "thoughtSignature": "sig-3"}]
+    config = VertexGeminiConfig()
+    thinking_blocks = config._extract_thinking_blocks_from_parts(parts)
+    assert thinking_blocks == []
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_extract_thought_signatures_from_regular_parts():
+    """
+    Test that thoughtSignatures are extracted from regular text parts (without thought=True).
+    This is the key feature for Gemini 3 multi-turn context preservation.
+    """
+    parts = [{"text": "I am Gemini", "thoughtSignature": "sig-regular-123"}]
+    config = VertexGeminiConfig()
+
+    # Should NOT create thinking block
+    thinking_blocks = config._extract_thinking_blocks_from_parts(parts)
+    assert thinking_blocks == []
+
+    # Should extract thought signature
+    signatures = config._extract_thought_signatures_from_parts(parts)
+    assert signatures is not None
+    assert len(signatures) == 1
+    assert signatures[0] == "sig-regular-123"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_extract_multiple_thought_signatures():
+    """
+    Test extraction of multiple thoughtSignatures from different parts.
+    """
+    parts = [
+        {"text": "Part 1", "thoughtSignature": "sig-1"},
+        {"text": "Part 2", "thoughtSignature": "sig-2"},
+        {"text": "Part 3"},  # No signature
+    ]
+    config = VertexGeminiConfig()
+    signatures = config._extract_thought_signatures_from_parts(parts)
+
+    assert signatures is not None
+    assert len(signatures) == 2
+    assert signatures[0] == "sig-1"
+    assert signatures[1] == "sig-2"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_round_trip_thought_signature_in_conversation():
+    """
+    Test that thoughtSignatures are properly round-tripped through conversation history.
+    This ensures multi-turn context preservation works correctly.
+    """
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": "Hi there",
+            "provider_specific_fields": {"thought_signatures": ["sig-round-trip-abc"]},
+        },
+        {"role": "user", "content": "How are you?"},
+    ]
+
+    gemini_contents = _gemini_convert_messages_with_history(messages)
+
+    # Find the assistant (model) message
+    model_message = None
+    for content in gemini_contents:
+        if content.get("role") == "model":
+            model_message = content
+            break
+
+    assert model_message is not None
+    assert len(model_message["parts"]) >= 1
+
+    # Check that the text part has the thoughtSignature
+    text_part = model_message["parts"][0]
+    assert text_part["text"] == "Hi there"
+    assert "thoughtSignature" in text_part
+    assert text_part["thoughtSignature"] == "sig-round-trip-abc"
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_round_trip_without_thought_signature_still_works():
+    """
+    Test that messages without thoughtSignatures continue to work normally.
+    This ensures backward compatibility.
+    """
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there"},
+        {"role": "user", "content": "How are you?"},
+    ]
+
+    gemini_contents = _gemini_convert_messages_with_history(messages)
+
+    # Find the assistant (model) message
+    model_message = None
+    for content in gemini_contents:
+        if content.get("role") == "model":
+            model_message = content
+            break
+
+    assert model_message is not None
+    assert len(model_message["parts"]) >= 1
+
+    # Check that the text part works without thoughtSignature
+    text_part = model_message["parts"][0]
+    assert text_part["text"] == "Hi there"
+    assert "thoughtSignature" not in text_part

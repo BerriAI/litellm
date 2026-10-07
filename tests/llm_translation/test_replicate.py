@@ -2,17 +2,16 @@
 Unit tests for Replicate provider, particularly testing DeepSeek models
 """
 
-import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-
 import litellm
-from litellm import completion
 from litellm.llms.replicate.chat.handler import (
     async_completion,
+)
+from litellm.llms.replicate.chat.handler import (
     completion as replicate_completion,
 )
 
@@ -265,22 +264,3 @@ class TestReplicateOutputFormats:
 
 
 # Integration test (requires actual API key - skip in CI)
-@pytest.mark.skip(reason="Requires REPLICATE_API_KEY environment variable")
-def test_replicate_deepseek_integration():
-    """Integration test with actual DeepSeek model on Replicate"""
-    try:
-        response = completion(
-            model="replicate/deepseek-ai/deepseek-v3",
-            messages=[
-                {"role": "user", "content": "Say 'Hello World' and nothing else"}
-            ],
-            max_tokens=20,
-        )
-
-        assert response is not None
-        assert response.choices[0].message.content is not None
-        assert len(response.choices[0].message.content) > 0
-        print(f"Response: {response.choices[0].message.content}")
-
-    except Exception as e:
-        pytest.fail(f"Integration test failed: {e}")
