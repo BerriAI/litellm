@@ -355,6 +355,18 @@ describe("MetadataKeyValueFields with a declared schema", () => {
 
     expect(keyInput).toHaveValue("cost_center");
     expect(keyInput).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
+    expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+      "cost_center",
+      "",
+    ]);
+    await user.click(screen.getAllByLabelText("Remove key-value pair")[1]);
+
+    expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+      "cost_center",
+    ]);
+    expect(screen.getAllByLabelText("Remove key-value pair")).toHaveLength(1);
     expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual([
       "Cost",
       "Cost Center",

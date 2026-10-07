@@ -1,5 +1,5 @@
 import { CircleMinus, Plus } from "lucide-react";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   useFieldArray,
   type Control,
@@ -79,6 +79,69 @@ interface MetadataKeyValueFieldsProps<TFieldValues extends FieldValues> {
   schemaLoading?: boolean;
 }
 
+interface MetadataRowProps<TFieldValues extends FieldValues> {
+  control: Control<TFieldValues>;
+  name: FieldArrayPath<TFieldValues>;
+  index: number;
+  rowId: string;
+  pairKey: string | undefined;
+  schemaLabelsByKey: ReadonlyMap<string, string>;
+  onRemove: () => void;
+}
+
+const MetadataRow = <TFieldValues extends FieldValues>({
+  control,
+  name,
+  index,
+  rowId,
+  pairKey,
+  schemaLabelsByKey,
+  onRemove,
+}: MetadataRowProps<TFieldValues>) => {
+  const [keyAtMount] = useState(pairKey);
+  const schemaLabel = keyAtMount === undefined ? undefined : schemaLabelsByKey.get(keyAtMount);
+
+  return (
+    <div className="mb-2 flex items-start gap-2">
+      {schemaLabel === undefined ? (
+        <FormField control={control} name={`${name}.${index}.key` as FieldPath<TFieldValues>}>
+          {({ ref, value, ...rest }) => <Input {...rest} ref={ref} value={(value as string) ?? ""} placeholder="Key" />}
+        </FormField>
+      ) : (
+        <Label
+          htmlFor={`${rowId}-value`}
+          data-testid="metadata-schema-label"
+          className="h-9 w-full items-center truncate px-3 font-medium"
+        >
+          {schemaLabel}
+        </Label>
+      )}
+      <FormField control={control} name={`${name}.${index}.value` as FieldPath<TFieldValues>}>
+        {({ ref, value, id, ...rest }) => (
+          <Input
+            {...rest}
+            id={schemaLabel === undefined ? id : `${rowId}-value`}
+            ref={ref}
+            value={(value as string) ?? ""}
+            placeholder="Value"
+          />
+        )}
+      </FormField>
+      {schemaLabel === undefined && (
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Remove key-value pair"
+          className="mt-1 text-destructive"
+          onClick={onRemove}
+        >
+          <CircleMinus className="size-4" />
+        </Button>
+      )}
+    </div>
+  );
+};
+
 const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
   control,
   getValues,
@@ -116,51 +179,18 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
 
   return (
     <>
-      {fields.map((field, index) => {
-        const schemaLabel =
-          "key" in field && typeof field.key === "string" ? schemaLabelsByKey.get(field.key) : undefined;
-        return (
-          <div key={field.id} className="mb-2 flex items-start gap-2">
-            {schemaLabel === undefined ? (
-              <FormField control={control} name={`${name}.${index}.key` as FieldPath<TFieldValues>}>
-                {({ ref, value, ...rest }) => (
-                  <Input {...rest} ref={ref} value={(value as string) ?? ""} placeholder="Key" />
-                )}
-              </FormField>
-            ) : (
-              <Label
-                htmlFor={`${field.id}-value`}
-                data-testid="metadata-schema-label"
-                className="h-9 w-full items-center truncate px-3 font-medium"
-              >
-                {schemaLabel}
-              </Label>
-            )}
-            <FormField control={control} name={`${name}.${index}.value` as FieldPath<TFieldValues>}>
-              {({ ref, value, id, ...rest }) => (
-                <Input
-                  {...rest}
-                  id={schemaLabel === undefined ? id : `${field.id}-value`}
-                  ref={ref}
-                  value={(value as string) ?? ""}
-                  placeholder="Value"
-                />
-              )}
-            </FormField>
-            {schemaLabel === undefined && (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Remove key-value pair"
-                className="mt-1 text-destructive"
-                onClick={() => remove(index)}
-              >
-                <CircleMinus className="size-4" />
-              </Button>
-            )}
-          </div>
-        );
-      })}
+      {fields.map((field, index) => (
+        <MetadataRow
+          key={field.id}
+          control={control}
+          name={name}
+          index={index}
+          rowId={field.id}
+          pairKey={"key" in field && typeof field.key === "string" ? field.key : undefined}
+          schemaLabelsByKey={schemaLabelsByKey}
+          onRemove={() => remove(index)}
+        />
+      ))}
       <Button
         variant="outline"
         className="w-full border-dashed"
