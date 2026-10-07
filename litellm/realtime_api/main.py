@@ -403,6 +403,7 @@ async def _arealtime(
         provider_config = ProviderConfigManager.get_provider_realtime_config(
             model=model,
             provider=LlmProviders(_custom_llm_provider),
+            litellm_params=kwargs,
         )
     if provider_config is not None:
         await base_llm_http_handler.async_realtime(

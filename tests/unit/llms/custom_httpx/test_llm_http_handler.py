@@ -4376,6 +4376,160 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     assert [bytes(request.audio) for request in speech_client.requests[1:]] == [b"\x00\x01" * 800, b"\x00\x01" * 800]
 
 
+class _FakeSonioxSocket:
+    def __init__(self) -> None:
+        self.sent: Final[list[str | bytes]] = []
+        self._responses: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def __aenter__(self) -> "_FakeSonioxSocket":
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        return None
+
+    async def send(self, message: str | bytes) -> None:
+        self.sent.append(message)
+        if message == '{"type":"finalize"}':
+            tokens = [{"text": "Hello", "is_final": True}, {"text": "<fin>", "is_final": True}]
+            await self._responses.put(json.dumps({"tokens": tokens, "total_audio_proc_ms": 1200}))
+
+    async def recv(self, decode: bool | None = None) -> str:
+        return await self._responses.get()
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_bridges_a_soniox_transcription_through_the_wrapped_websocket():
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    from litellm.llms.soniox.realtime.transformation import SonioxRealtimeBackend, SonioxRealtimeConfig
+
+    upstream = _FakeSonioxSocket()
+    wrapped: list[object] = []
+    provider_config = SonioxRealtimeConfig(
+        wrap=lambda backend: wrapped.append(backend) or SonioxRealtimeBackend(backend)
+    )
+    audio = b"\x00\x01" * 800
+    client_ws = _ScriptedClientWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "transcription",
+                        "audio": {
+                            "input": {
+                                "format": {"type": "audio/pcm", "rate": 16000},
+                                "transcription": {"model": "stt-rt-v5", "language": "en"},
+                                "turn_detection": None,
+                            }
+                        },
+                    },
+                }
+            ),
+            json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio).decode()}),
+            json.dumps({"type": "input_audio_buffer.commit"}),
+        ],
+        last_event_type="conversation.item.input_audio_transcription.completed",
+    )
+    logging_obj = Mock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=upstream)) as dial:
+        await handler.async_realtime(
+            model="stt-rt-v5",
+            websocket=client_ws,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            headers={},
+            api_key="soniox-key",
+            query_params={"model": "stt-rt-v5", "intent": "transcription"},
+        )
+
+    assert dial.await_args.args[1:3] == (
+        "wss://stt-rt.soniox.com/transcribe-websocket",
+        {"Authorization": "Bearer soniox-key"},
+    )
+    assert wrapped == [upstream]
+    assert json.loads(upstream.sent[0]) == {
+        "model": "stt-rt-v5",
+        "audio_format": "pcm_s16le",
+        "sample_rate": 16000,
+        "num_channels": 1,
+        "enable_endpoint_detection": False,
+        "language_hints": ["en"],
+    }
+    assert upstream.sent[1:] == [audio, '{"type":"finalize"}']
+    events = client_ws.sent_events()
+    assert [event["type"] for event in events] == [
+        "session.created",
+        "session.updated",
+        "input_audio_buffer.speech_started",
+        "conversation.item.input_audio_transcription.delta",
+        "conversation.item.input_audio_transcription.completed",
+    ]
+    assert events[-1]["transcript"] == "Hello"
+    assert events[-1]["usage"] == {"type": "duration", "seconds": 1.2}
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_soniox_rejects_a_bad_session_update_and_still_transcribes_audio_sent_without_one():
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
+
+    upstream = _FakeSonioxSocket()
+    audio = b"\x00\x01" * 800
+    client_ws = _ScriptedClientWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "transcription", "audio": {"input": {"format": {"type": "audio/pcmu"}}}},
+                }
+            ),
+            json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio).decode()}),
+            json.dumps({"type": "input_audio_buffer.commit"}),
+        ],
+        last_event_type="conversation.item.input_audio_transcription.completed",
+    )
+    logging_obj = Mock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+    handler = BaseLLMHTTPHandler()
+
+    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(return_value=upstream)):
+        await handler.async_realtime(
+            model="stt-rt-v5",
+            websocket=client_ws,
+            logging_obj=logging_obj,
+            provider_config=SonioxRealtimeConfig(),
+            headers={},
+            api_key="soniox-key",
+            query_params={"model": "stt-rt-v5", "intent": "transcription"},
+        )
+
+    assert json.loads(upstream.sent[0])["sample_rate"] == 24_000
+    assert upstream.sent[1:] == [audio, '{"type":"finalize"}']
+    events = client_ws.sent_events()
+    errors = [event for event in events if event["type"] == "error"]
+    assert errors == [
+        {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": "Soniox realtime requires pcm16 input audio"},
+        }
+    ]
+    assert events[-1]["transcript"] == "Hello"
+
+
 @pytest.mark.asyncio
 async def test_responses_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
     """A plan whose kwargs repeat a request param must not crash the Responses follow-up with a duplicate keyword"""

@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
 from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
@@ -1566,7 +1567,11 @@ class RealTimeStreaming:
                 # would permanently disable the injection if ``_send_to_backend``
                 # raised — neither this loop nor
                 # ``_maybe_send_guardrail_turn_detection_update`` would retry.
-                sent = await self._send_to_backend(message)
+                try:
+                    sent = await self._send_to_backend(message)
+                except RealtimeTranscriptionProtocolError as e:
+                    await self.websocket.send_text(realtime_error_event(str(e), error_type="invalid_request_error"))
+                    continue
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
 
