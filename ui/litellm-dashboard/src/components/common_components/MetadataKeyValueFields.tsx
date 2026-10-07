@@ -79,13 +79,16 @@ interface MetadataKeyValueFieldsProps<TFieldValues extends FieldValues> {
   schemaLoading?: boolean;
 }
 
+function pairKeyOf(field: object): string | undefined {
+  return "key" in field && typeof field.key === "string" ? field.key : undefined;
+}
+
 interface MetadataRowProps<TFieldValues extends FieldValues> {
   control: Control<TFieldValues>;
   name: FieldArrayPath<TFieldValues>;
   index: number;
   rowId: string;
-  pairKey: string | undefined;
-  schemaLabelsByKey: ReadonlyMap<string, string>;
+  schemaLabel: string | undefined;
   onRemove: () => void;
 }
 
@@ -94,13 +97,9 @@ const MetadataRow = <TFieldValues extends FieldValues>({
   name,
   index,
   rowId,
-  pairKey,
-  schemaLabelsByKey,
+  schemaLabel,
   onRemove,
 }: MetadataRowProps<TFieldValues>) => {
-  const [keyAtMount] = useState(pairKey);
-  const schemaLabel = keyAtMount === undefined ? undefined : schemaLabelsByKey.get(keyAtMount);
-
   return (
     <div className="mb-2 flex items-start gap-2">
       {schemaLabel === undefined ? (
@@ -152,6 +151,18 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
   const { fields, append, remove } = useFieldArray({ control, name });
   const seededRef = useRef(false);
   const schemaLabelsByKey = new Map(schemaFields.map((field) => [field.key, field.label || field.key]));
+  const [keysAtMount, setKeysAtMount] = useState<ReadonlyMap<string, string | undefined>>(() => new Map());
+  const unseenFields = fields.filter((field) => !keysAtMount.has(field.id));
+  if (unseenFields.length > 0) {
+    setKeysAtMount(new Map([...keysAtMount, ...unseenFields.map((field) => [field.id, pairKeyOf(field)] as const)]));
+  }
+  const rowKeysAtMount = fields.map((field) =>
+    keysAtMount.has(field.id) ? keysAtMount.get(field.id) : pairKeyOf(field),
+  );
+  const schemaLabelAt = (index: number): string | undefined => {
+    const key = rowKeysAtMount[index];
+    return key === undefined || rowKeysAtMount.indexOf(key) !== index ? undefined : schemaLabelsByKey.get(key);
+  };
 
   useEffect(() => {
     if (seededRef.current || schemaLoading || schemaFields.length === 0) return;
@@ -186,8 +197,7 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
           name={name}
           index={index}
           rowId={field.id}
-          pairKey={"key" in field && typeof field.key === "string" ? field.key : undefined}
-          schemaLabelsByKey={schemaLabelsByKey}
+          schemaLabel={schemaLabelAt(index)}
           onRemove={() => remove(index)}
         />
       ))}

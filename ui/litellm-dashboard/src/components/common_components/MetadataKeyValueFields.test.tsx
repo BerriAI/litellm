@@ -95,21 +95,24 @@ interface HarnessProps {
   initialMetadata?: MetadataPair[];
   schemaFields?: TeamMetadataField[];
   schemaLoading?: boolean;
+  fieldsHidden?: boolean;
 }
 
 const harnessSchema = z.object({ metadata: metadataPairsSchema });
 
-const Harness: React.FC<HarnessProps> = ({ onFinish, initialMetadata, schemaFields, schemaLoading }) => {
+const Harness: React.FC<HarnessProps> = ({ onFinish, initialMetadata, schemaFields, schemaLoading, fieldsHidden }) => {
   const form = useZodForm(harnessSchema, { defaultValues: { metadata: initialMetadata ?? [] } });
   return (
     <form onSubmit={form.handleSubmit((values) => onFinish(values))}>
-      <MetadataKeyValueFields
-        control={form.control}
-        getValues={form.getValues}
-        name="metadata"
-        schemaFields={schemaFields}
-        schemaLoading={schemaLoading}
-      />
+      {!fieldsHidden && (
+        <MetadataKeyValueFields
+          control={form.control}
+          getValues={form.getValues}
+          name="metadata"
+          schemaFields={schemaFields}
+          schemaLoading={schemaLoading}
+        />
+      )}
       <button type="submit">Save</button>
     </form>
   );
@@ -374,9 +377,33 @@ describe("MetadataKeyValueFields with a declared schema", () => {
 
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("Duplicate key")).toBeInTheDocument();
-    });
+    expect(await screen.findByText("Duplicate key")).toBeInTheDocument();
+    expect(onFinish).not.toHaveBeenCalled();
+  });
+
+  it("should keep one editable row per duplicated declared key when the editor remounts", async () => {
+    const user = userEvent.setup();
+    const onFinish = vi.fn();
+    const schemaFields = [{ key: "cost_center", label: "Cost Center" }];
+    const initialMetadata = [{ key: "region", value: "us" }];
+    const { rerender } = render(
+      <Harness onFinish={onFinish} initialMetadata={initialMetadata} schemaFields={schemaFields} />,
+    );
+    expect(await screen.findByTestId("metadata-schema-label")).toHaveTextContent("Cost Center");
+    fireEvent.change(screen.getByPlaceholderText("Key"), { target: { value: "cost_center" } });
+
+    rerender(
+      <Harness onFinish={onFinish} initialMetadata={initialMetadata} schemaFields={schemaFields} fieldsHidden />,
+    );
+    rerender(<Harness onFinish={onFinish} initialMetadata={initialMetadata} schemaFields={schemaFields} />);
+
+    expect(screen.getAllByTestId("metadata-schema-label")).toHaveLength(1);
+    expect(screen.getByPlaceholderText("Key")).toHaveValue("cost_center");
+    expect(screen.getAllByLabelText("Remove key-value pair")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText("Duplicate key")).toBeInTheDocument();
     expect(onFinish).not.toHaveBeenCalled();
   });
 
