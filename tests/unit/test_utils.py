@@ -63,7 +63,7 @@ from litellm.types.utils import (
     bedrock_batch_litellm_params,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import(
+from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     CustomStreamWrapper,
     filter_out_litellm_params,
@@ -790,6 +790,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_creation_input_token_cost_ultrafast": {"type": "number"},
+                "cache_storage_cost_per_token_per_hour": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
@@ -3164,9 +3165,7 @@ class TestExtraBodyCannotOverrideModel:
                 }
             ]
 
-        untouched = litellm.get_optional_params(
-            model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools()
-        )
+        untouched = litellm.get_optional_params(model="my-vllm-model", custom_llm_provider="hosted_vllm", tools=tools())
         assert untouched["tools"][0]["function"]["custom_marker"] == "LEAK", untouched
 
         result = litellm.get_optional_params(
@@ -4157,7 +4156,9 @@ def test_is_prompt_caching_valid_prompt_stops_counting_once_the_minimum_is_reach
     assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=1024) is True
     assert sum(counted_messages) < len(long_prompt), sum(counted_messages)
 
-    full_count = litellm.token_counter(model="claude-opus-4-8", messages=long_prompt, use_default_image_token_count=True)
+    full_count = litellm.token_counter(
+        model="claude-opus-4-8", messages=long_prompt, use_default_image_token_count=True
+    )
     assert (
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=full_count)
         is True
@@ -4620,7 +4621,13 @@ _SUCCESS_RESPONSES_BY_CALL_TYPE: Final = (
     pytest.param(EmbeddingResponse(model="text-embedding-3-small"), CallTypes.aembedding, id="embedding"),
     pytest.param(
         ResponsesAPIResponse(
-            id="resp_abc", created_at=1, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[], model="gpt-5.6"
+            id="resp_abc",
+            created_at=1,
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            model="gpt-5.6",
         ),
         CallTypes.aresponses,
         id="responses",
@@ -4648,7 +4655,9 @@ async def test_success_deployment_hook_raising_keeps_response_and_runs_later_hoo
 
     assert result is response
     assert second_hook.seen_responses == (response,)
-    failure_logs: Final = tuple(r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message)
+    failure_logs: Final = tuple(
+        r for r in caplog.records if "async_post_call_success_deployment_hook error" in r.message
+    )
     assert len(failure_logs) == 1
     assert "_ChatShapedSuccessDeploymentHook" in failure_logs[0].message
     assert str(call_type) in failure_logs[0].message
@@ -4785,17 +4794,13 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
         ({"metadata": None}, True, False),
     ],
 )
-def test_is_litellm_router_call_is_async_aware(
-    kwargs: Mapping[str, object], is_async: bool, expected: bool
-) -> None:
+def test_is_litellm_router_call_is_async_aware(kwargs: Mapping[str, object], is_async: bool, expected: bool) -> None:
     assert _is_litellm_router_call(kwargs, is_async=is_async) is expected
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
-async def test_router_aresponses_does_not_run_sdk_retries(
-    monkeypatch: pytest.MonkeyPatch, stream: bool
-) -> None:
+async def test_router_aresponses_does_not_run_sdk_retries(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     model_list: Final = [
@@ -4809,9 +4814,7 @@ async def test_router_aresponses_does_not_run_sdk_retries(
             },
         }
     ]
-    router: Final = litellm.Router(
-        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
-    )
+    router: Final = litellm.Router(model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True)
 
     try:
         with respx.mock(assert_all_called=True) as respx_mock:
@@ -4847,9 +4850,7 @@ def test_router_responses_keeps_sdk_retries_for_sync_router_call(
             },
         }
     ]
-    router: Final = litellm.Router(
-        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
-    )
+    router: Final = litellm.Router(model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True)
 
     try:
         with respx.mock(assert_all_called=True) as respx_mock:
@@ -6693,7 +6694,9 @@ def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summa
 
 
 @pytest.mark.parametrize("original_function", ("atext_completion", "text_completion"))
-def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(original_function: str) -> None:
+def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(
+    original_function: str,
+) -> None:
     assert _logged_request_messages(original_function, model="gpt-4o") is None
 
 
@@ -6735,6 +6738,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -6748,13 +6752,16 @@ def setup_and_teardown():
     loop.close()
     asyncio.set_event_loop(None)
 
+
 MODEL: Final = "anthropic/claude-haiku-4-5"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_none():
     """Test that None is returned as-is."""
     result = validate_chat_completion_tool_choice(None, model=MODEL)
     assert result is None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_string():
@@ -6763,6 +6770,7 @@ def test_validate_tool_choice_string():
     assert validate_chat_completion_tool_choice("none", model=MODEL) == "none"
     assert validate_chat_completion_tool_choice("required", model=MODEL) == "required"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_standard_dict():
     """Test standard OpenAI format with function."""
@@ -6770,12 +6778,14 @@ def test_validate_tool_choice_standard_dict():
     result = validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert result == tool_choice
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_cursor_format():
     """Cursor IDE format {"type": "auto"} is unwrapped to the bare string."""
     assert validate_chat_completion_tool_choice({"type": "auto"}, model=MODEL) == "auto"
     assert validate_chat_completion_tool_choice({"type": "none"}, model=MODEL) == "none"
     assert validate_chat_completion_tool_choice({"type": "required"}, model=MODEL) == "required"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize(
@@ -6798,6 +6808,7 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == MODEL
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("tool_choice", [123, []])
 def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
@@ -6808,6 +6819,7 @@ def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
         validate_chat_completion_tool_choice(tool_choice, model=MODEL)
     assert exc_info.value.status_code == 400
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_without_model_is_still_a_400():
     """Callers that predate the model argument keep getting a 400, with an empty model on the error."""
@@ -6816,11 +6828,13 @@ def test_validate_tool_choice_without_model_is_still_a_400():
     assert exc_info.value.status_code == 400
     assert exc_info.value.model == ""
 
+
 @pytest.fixture()
 def _vcr_outcome_gate_local_testing(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -6874,6 +6888,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -6893,6 +6908,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown_local_testing():
@@ -6915,6 +6931,7 @@ def setup_and_teardown_local_testing():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -6941,6 +6958,7 @@ def test_vertex_projects():
     assert "vertex_ai_project" in optional_params
     assert "vertex_ai_location" in optional_params
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -6955,6 +6973,7 @@ def test_bedrock_embed_v2_regular():
     )
     print(f"received optional_params: {optional_params}")
     assert optional_params == {"dimensions": 512}
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -6973,6 +6992,7 @@ def test_bedrock_embed_v2_with_drop_params():
     )
     print(f"received optional_params: {optional_params}")
     assert optional_params == {"dimensions": 512, "embeddingTypes": ["binary"]}
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -6994,6 +7014,7 @@ def test_openai_non_text_embedding_3_with_allowed_openai_params():
     )
     print(f"received optional_params: {optional_params}")
     assert optional_params.get("dimensions") == 1024
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -7020,6 +7041,7 @@ def test_openai_non_text_embedding_3_without_allowed_openai_params_raises():
             )
     finally:
         litellm.drop_params = prev_drop_params
+
 
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
@@ -7049,6 +7071,7 @@ def test_openai_non_text_embedding_3_drop_params_per_call():
     finally:
         litellm.drop_params = prev_drop_params
 
+
 @pytest.mark.usefixtures(
     "_vcr_outcome_gate_local_testing",
     "isolate_litellm_state",
@@ -7076,11 +7099,13 @@ def test_openai_non_text_embedding_3_drop_params_global():
     finally:
         litellm.drop_params = prev_drop_params
 
+
 @pytest.fixture()
 def _vcr_outcome_gate_search_tests(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_search_tests")
 def test_search_tool_name_in_all_litellm_params():
@@ -7090,6 +7115,7 @@ def test_search_tool_name_in_all_litellm_params():
     If missing, it gets passed to provider APIs causing errors.
     """
     assert "search_tool_name" in all_litellm_params
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_search_tests")
 def test_filter_out_search_tool_name():
@@ -7116,6 +7142,7 @@ def test_filter_out_search_tool_name():
     assert "scrapeOptions" in filtered
     assert filtered["query"] == "latest ai developments"
     assert filtered["max_results"] == 5
+
 
 @pytest.mark.asyncio
 async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -7179,3 +7206,22 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
 
     assert len(counting_logger.logged_results) == 1, counting_logger.logged_results
     assert counting_logger.logged_results[0] is inner_result
+
+
+def test_get_model_info_surfaces_context_cache_storage_rate(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    priced: Final = {
+        name: entry["cache_storage_cost_per_token_per_hour"]
+        for name, entry in litellm.model_cost.items()
+        if isinstance(entry, dict) and "cache_storage_cost_per_token_per_hour" in entry
+    }
+
+    surfaced: Final = {
+        name: litellm.get_model_info(name).get("cache_storage_cost_per_token_per_hour") for name in priced
+    }
+    litellm.get_model_info.cache_clear()
+
+    assert priced
+    assert surfaced == priced

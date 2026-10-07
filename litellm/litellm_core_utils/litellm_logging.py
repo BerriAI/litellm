@@ -575,6 +575,10 @@ class Logging(LiteLLMLoggingBaseClass):
     classifier_input: Mapping[str, JsonValue] | None = None
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
+    context_cache_storage_token_hours: float = 0.0
+
+    def record_context_cache_storage(self, token_hours: float) -> None:
+        self.context_cache_storage_token_hours = token_hours
 
     @property
     def _defer_async_logging(self) -> bool:

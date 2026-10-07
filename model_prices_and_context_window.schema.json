@@ -256,6 +256,11 @@
           "type": "number",
           "minimum": 0
         },
+        "cache_storage_cost_per_token_per_hour": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD per token per hour an explicitly created context cache (e.g. Vertex AI cachedContents) is stored."
+        },
         "citation_cost_per_token": {
           "type": "number",
           "minimum": 0

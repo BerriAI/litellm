@@ -220,6 +220,9 @@ COST_DESCRIPTIONS: dict[str, str] = {
     ),
     "cache_creation_input_token_cost": "USD per token written to the provider's prompt cache.",
     "cache_read_input_token_cost": "USD per prompt token served from the provider's prompt cache.",
+    "cache_storage_cost_per_token_per_hour": (
+        "USD per token per hour an explicitly created context cache (e.g. Vertex AI cachedContents) is stored."
+    ),
     "input_cost_per_token_batches": "USD per prompt token via the provider's batch API.",
     "output_cost_per_token_batches": "USD per generated token via the provider's batch API.",
 }

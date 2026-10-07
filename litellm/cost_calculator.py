@@ -299,6 +299,31 @@ def _get_additional_costs(
     return None
 
 
+def _context_cache_storage_cost(
+    litellm_logging_obj: LitellmLoggingObject | None,
+    model: str,
+    custom_llm_provider: str | None,
+    custom_pricing: bool | None,
+    router_model_id: str | None,
+) -> float:
+    token_hours: Final = litellm_logging_obj.context_cache_storage_token_hours if litellm_logging_obj else 0.0
+    if not isinstance(token_hours, int | float) or token_hours <= 0:
+        return 0.0
+    rate: Final = next(
+        (
+            price
+            for source in (
+                _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+                _cost_map_model_info(model, custom_llm_provider),
+            )
+            if source is not None
+            and isinstance(price := source.get("cache_storage_cost_per_token_per_hour"), int | float)
+        ),
+        0.0,
+    )
+    return token_hours * rate
+
+
 def _transcription_usage_has_token_details(
     usage_block: Usage | None,
 ) -> bool:
@@ -1847,6 +1872,11 @@ def completion_cost(
                     )
                 else:
                     additional_costs = None
+                cache_storage_cost: Final = _context_cache_storage_cost(
+                    litellm_logging_obj, model, custom_llm_provider, custom_pricing, router_model_id
+                )
+                if cache_storage_cost > 0:
+                    additional_costs = {**(additional_costs or {}), "cache_storage_cost": cache_storage_cost}
 
                 _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 cost_for_built_in_tools = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(

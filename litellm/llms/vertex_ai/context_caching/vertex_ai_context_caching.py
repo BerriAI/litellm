@@ -21,6 +21,7 @@ from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
+from .storage_cost import context_cache_storage_token_hours
 from .transformation import (
     cached_messages_end_on_supported_turn,
     separate_cached_messages,
@@ -425,6 +426,9 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = response.json()
+        logging_obj.record_context_cache_storage(
+            context_cache_storage_token_hours(raw_response_cached, cached_content_request_body.get("ttl"))
+        )
         cached_content_response_obj: Final = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
@@ -581,6 +585,9 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = response.json()
+        logging_obj.record_context_cache_storage(
+            context_cache_storage_token_hours(raw_response_cached, cached_content_request_body.get("ttl"))
+        )
         cached_content_response_obj: Final = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
