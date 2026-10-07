@@ -2918,7 +2918,11 @@ class Router:
             request_priority: Final = resolve_request_priority(
                 requested=kwargs.get("priority"),
                 default_priority=self.default_priority,
-                drop_params=request_drops_params(kwargs, self.default_litellm_params),
+                drop_params=request_drops_params(
+                    kwargs,
+                    self.default_litellm_params,
+                    tuple(deployment["litellm_params"] for deployment in self.get_model_list(model_name=model) or ()),
+                ),
             )
             if isinstance(request_priority, InvalidPriority):
                 raise litellm.BadRequestError(

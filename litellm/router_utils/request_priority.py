@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -27,11 +27,20 @@ def resolve_request_priority(
     return InvalidPriority(value=requested)
 
 
-def request_drops_params(kwargs: Mapping[str, object], router_defaults: Mapping[str, object]) -> bool:
-    requested: Final = normalize_drop_params(kwargs.get("drop_params"))
-    if requested is not None:
-        return requested
-    router_default: Final = normalize_drop_params(router_defaults.get("drop_params"))
-    if router_default is not None:
-        return router_default
+def request_drops_params(
+    kwargs: Mapping[str, object],
+    router_defaults: Mapping[str, object],
+    deployment_params: Iterable[Mapping[str, object]],
+) -> bool:
+    for scope in (kwargs, router_defaults):
+        flag: Final = normalize_drop_params(scope.get("drop_params"))
+        if flag is not None:
+            return flag
+    deployment_flags: Final = tuple(
+        flag
+        for flag in (normalize_drop_params(params.get("drop_params")) for params in deployment_params)
+        if flag is not None
+    )
+    if deployment_flags:
+        return any(deployment_flags)
     return litellm.drop_params is True

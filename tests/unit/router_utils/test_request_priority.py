@@ -34,17 +34,23 @@ def test_a_non_integer_priority_is_rejected_unless_params_are_dropped(requested:
     assert resolve_request_priority(requested, None, drop_params=True) is None
 
 
-def test_the_request_drop_params_flag_wins_over_the_router_default_and_the_global_one(
+def test_drop_params_is_read_from_the_request_then_the_router_defaults_then_the_deployments_then_the_global_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    assert request_drops_params({}, {}) is False
-    assert request_drops_params({"drop_params": True}, {}) is True
-    assert request_drops_params({"drop_params": "true"}, {}) is True
-    assert request_drops_params({}, {"drop_params": True}) is True
-    assert request_drops_params({"drop_params": False}, {"drop_params": True}) is False
+    assert request_drops_params({}, {}, ()) is False
+    assert request_drops_params({"drop_params": True}, {}, ()) is True
+    assert request_drops_params({"drop_params": "true"}, {}, ()) is True
+    assert request_drops_params({}, {"drop_params": True}, ()) is True
+    assert request_drops_params({"drop_params": False}, {"drop_params": True}, ()) is False
+    assert request_drops_params({}, {}, ({"drop_params": True},)) is True
+    assert request_drops_params({}, {}, ({"drop_params": True}, {"model": "openai/gpt-5.4-nano"})) is True
+    assert request_drops_params({}, {}, ({"drop_params": False}, {"model": "openai/gpt-5.4-nano"})) is False
+    assert request_drops_params({}, {"drop_params": False}, ({"drop_params": True},)) is False
     monkeypatch.setattr(litellm, "drop_params", True)
-    assert request_drops_params({}, {}) is True
-    assert request_drops_params({"drop_params": False}, {}) is False
-    assert request_drops_params({}, {"drop_params": False}) is False
-    assert request_drops_params({"drop_params": "not-a-flag"}, {}) is True
+    assert request_drops_params({}, {}, ()) is True
+    assert request_drops_params({}, {}, ({"model": "openai/gpt-5.4-nano"},)) is True
+    assert request_drops_params({"drop_params": False}, {}, ()) is False
+    assert request_drops_params({}, {"drop_params": False}, ()) is False
+    assert request_drops_params({}, {}, ({"drop_params": False},)) is False
+    assert request_drops_params({"drop_params": "not-a-flag"}, {}, ()) is True
