@@ -306,6 +306,23 @@ async def test_intervened_with_a_texts_rewrite_of_the_wrong_length_is_treated_as
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("structured_messages", [[], [{"role": "user", "content": "[Redacted]"}]])
+async def test_intervened_rewrite_for_a_field_that_was_not_sent_is_treated_as_a_block(
+    structured_messages: list[object],
+) -> None:
+    """post_call sends only `texts`. A `structured_messages` rewrite then has nothing to replace, and an
+    empty one must not count as "applied" while the `texts` that carried the content pass through."""
+    guardrail = _make_guardrail_with_response(
+        {"action": "GUARDRAIL_INTERVENED", "structured_messages": structured_messages}
+    )
+
+    with pytest.raises(GuardrailRaisedException) as excinfo:
+        await guardrail.apply_guardrail(inputs=_inputs(texts=["secret"]), request_data={}, input_type="response")
+
+    assert excinfo.value.blocked_content is True
+
+
+@pytest.mark.asyncio
 async def test_intervened_returns_a_copy_and_leaves_the_caller_object_untouched() -> None:
     guardrail = _make_guardrail_with_response({"action": "GUARDRAIL_INTERVENED", "texts": ["redacted"]})
     inputs = _inputs(texts=["original"])
