@@ -20,6 +20,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.router import RouterModelGroupAliasItem
 
 
 class _Gate(CustomLogger):
@@ -70,8 +71,12 @@ def _deployment(model_name: str, model: str = "openai/gpt-4o", **model_info):
     }
 
 
-def _install_router(monkeypatch, *deployments, **router_kwargs) -> Router:
-    router = Router(model_list=list(deployments), **router_kwargs)
+def _install_router(
+    monkeypatch,
+    *deployments,
+    model_group_alias: dict[str, str | RouterModelGroupAliasItem] | None = None,
+) -> Router:
+    router = Router(model_list=list(deployments), model_group_alias=model_group_alias)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
     monkeypatch.setattr(proxy_server, "prisma_client", None)

@@ -7064,7 +7064,7 @@ class ProxyConfig:
                         "Key '%s' is not a valid argument for Router.__init__(). Ignoring this key.", k
                     )
         router = litellm.Router(
-            **router_params,
+            **router_params,  # pyright: ignore[reportUnknownArgumentType]  # router settings are filtered at runtime
             assistants_config=assistants_config,
             search_tools=search_tools,
             router_general_settings=RouterGeneralSettings(

@@ -13,6 +13,7 @@ KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS: Final = float(
 KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS: Final = float(
     os.getenv("KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS", "300")
 )
+KUBERNETES_POD_ROUTING_KEY: Final = "kubernetes_pod_routing"
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
 ROUTER_MAX_FALLBACKS: Final = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
@@ -49,6 +50,7 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "fallback_access_check",
         "fallback_budget_check",
         "auto_router_capability_limit",
+        "kubernetes_pod_discovery",
     }
 )
 DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))

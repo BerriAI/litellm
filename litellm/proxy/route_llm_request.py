@@ -45,9 +45,13 @@ def _route_user_config_request(data: dict, route_type: str):
     # Filter router_config to only include valid Router.__init__ arguments
     # This prevents TypeError when invalid parameters are stored in the database
     valid_args: Final = litellm.Router.get_valid_args()
-    filtered_config: Final = {k: v for k, v in router_config.items() if k in valid_args}
+    filtered_config: Final = {
+        k: v for k, v in router_config.items() if k in valid_args and k != "kubernetes_pod_discovery"
+    }
 
-    user_router: Final = litellm.Router(**filtered_config)
+    user_router: Final = litellm.Router(
+        **filtered_config,  # pyright: ignore[reportUnknownArgumentType]  # config is filtered by get_valid_args
+    )
     ret_val: Final = getattr(user_router, f"{route_type}")(**data)
     user_router.discard()
     return ret_val
