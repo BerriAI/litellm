@@ -135,6 +135,55 @@ describe("ViewSwitcher", () => {
     expect(assignSpy).toHaveBeenCalledWith("/ui/");
   });
 
+  it("shows the Moyai entry with its description regardless of enable_chat_ui", async () => {
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    expect(await screen.findByText("Moyai")).toBeInTheDocument();
+    expect(screen.getByText("Cloud Coding Agent")).toBeInTheDocument();
+  });
+
+  it("navigates to the moyai route when the Moyai entry is picked", async () => {
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByText("Moyai"));
+    });
+    expect(assignSpy).toHaveBeenCalledWith("/ui/moyai");
+    expect(state.setMode).not.toHaveBeenCalled();
+  });
+
+  it("labels the button Moyai on the moyai route and its subpaths", async () => {
+    state.pathname = "/ui/moyai";
+    const { unmount } = render(<ViewSwitcher />);
+    expect(screen.getByRole("button")).toHaveTextContent("Moyai");
+    unmount();
+
+    state.pathname = "/ui/moyai/anything";
+    render(<ViewSwitcher />);
+    expect(screen.getByRole("button")).toHaveTextContent("Moyai");
+  });
+
+  it("navigates back to the dashboard when AI Gateway is picked from the moyai route", async () => {
+    state.pathname = "/ui/moyai";
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    expect(await screen.findByText("AI Gateway")).toBeInTheDocument();
+    act(() => {
+      fireEvent.click(screen.getByText("AI Gateway"));
+    });
+    expect(state.setMode).toHaveBeenCalledWith("ai-gateway");
+    expect(assignSpy).toHaveBeenCalledWith("/ui/");
+  });
+
   it("shows Chat as a disabled, non-navigating entry with an admin hint when disabled", async () => {
     state.enableChatUI = false;
     state.plugins = [{ name: "obs", display_name: "Observability", url: "http://localhost:9000" }];
