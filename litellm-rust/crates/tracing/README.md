@@ -23,35 +23,38 @@ The Python bridge scopes native execution to a sink that uses LiteLLM's existing
 
 Python consumers continue using `litellm._logging` and its existing loggers, filters, formatters, and context setters. Catalog dispatch selects the processing backend for both Python and native diagnostics. The pure `Processor` takes explicit settings and never emits events
 
-A future Node bridge can implement the same sink with runtime-specific delivery and expose the same processor through N-API. Node callback scheduling, queue limits, and shutdown belong in that bridge; this crate has no interpreter handles or output queue
+A future Node bridge can implement the same sink with runtime-specific delivery and expose the same processor through N-API. Node callback scheduling, queue limits, and shutdown belong in that bridge; this crate has no interpreter handles
 
 This is diagnostic logging. Request lifecycle hooks and `CustomLogger` dispatch remain separate
 
 ## Configured diagnostic export
 
-`DiagnosticsConfig` describes export intent, service identity, a default diagnostic policy, and named destination wiring. `Diagnostics` constructs the official SDK adapters and owns reconfiguration, flush, and shutdown. These types have no Python dependency and are usable directly by Rust hosts
+`DiagnosticsConfig` describes export intent, service identity, a default diagnostic policy, and named destination wiring. `Diagnostics` constructs the official SDK adapters and owns reconfiguration, flush, and shutdown. These types have no Python dependency and are usable directly by Rust SDK hosts
 
-```rust
-use litellm_tracing::{Diagnostics, DiagnosticsConfig};
+The Python SDK exposes the same contract through `litellm.diagnostics`. Configuration does not enable Rust inference routes or change Python logging levels and handlers
 
-let configuration = DiagnosticsConfig::from_sources(None, |name| std::env::var(name).ok())?;
-let diagnostics = Diagnostics::default();
-diagnostics.configure(configuration)?;
-diagnostics.force_flush()?;
-diagnostics.shutdown()?;
+```python
+from litellm import diagnostics
+
+configuration = diagnostics.DiagnosticsConfig.from_sources()
+diagnostics.configure(configuration)
 ```
 
-`from_sources` accepts an optional settings object and a caller-supplied environment lookup. `LITELLM_DIAGNOSTICS` accepts a JSON diagnostics object and replaces the complete settings object. Endpoint, project key, service name, and header values support `os.environ/NAME` references. Load and resolve configuration before passing it to the runtime; `configure` validates resolved values without reading process environment
+`DiagnosticsConfig.from_sources` accepts a settings mapping and an optional environment mapping. `LITELLM_DIAGNOSTICS` accepts a JSON diagnostics object and replaces the complete settings object. Endpoint, project key, and header values support `os.environ/NAME` references, resolved at the native boundary before exporter startup
 
-Policy has `minimum_level` (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`), `target_prefixes`, and finite `sample_rate` between zero and one. A destination may provide a complete policy override. Errors bypass sampling while retaining severity and target admission. Correlated routine logs use a stable trace-ID decision, and uncorrelated records use random per-record sampling. Export admission leaves the compatibility sink's own filter authoritative
+Policy has `minimum_level` (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`), `target_prefixes`, and finite `sample_rate` between zero and one. A destination may provide a complete policy override. Errors bypass sampling while retaining severity and target admission. Correlated routine logs use a stable trace-ID decision, and uncorrelated records use random per-record sampling. Export sampling leaves existing Python output unchanged
 
-Calling `configure` replaces the complete destination set. Disabled configuration and `shutdown` remove all destinations. Shutdown is idempotent. Validation happens before replacement, and SDK work runs outside destination locks
+Calling `configure` replaces the complete destination set. Disabled configuration and `shutdown` remove all destinations, making both Python forwarding and native export inactive. The Python SDK returns `False` if the native binding is missing; invalid configuration or an unavailable transport raises an error. Configure exporters in workers after forking. SDK hosts call `diagnostics.shutdown()` explicitly
 
-The `posthog` Cargo feature compiles SDK support by default but starts no worker or network traffic by itself. PostHog captures personless `litellm diagnostic` events; OTLP sends HTTP/protobuf logs to a full logs endpoint. Official SDKs own batching, queues, retries, and HTTP transport
+`LoggerRule(Rollout.RUST_OPT_IN)` remains an internal migration gate for the existing diagnostic processing backend. Export intent comes from diagnostics configuration, independently of that rule. Our owned PyO3 adapter lives in `python-bridge/src/logger/python.rs`; it owns integer severity mapping, context capture, Python callbacks, and process ownership, with JSON argument decoding delegated to `litellm-host-python`. The additive Python handler owns snapshot conversion and native-origin checks. There is no `pyo3-pylogger` dependency or `log` crate hop. Generic `source.target` and `source.timestamp` fields let exporters consume normalized records without Python-specific interpretation
 
-The subscriber remains the upstream `tracing_subscriber::Registry` with composable layers and filters. `Sink` is the existing normalized-record adapter used by those layers. Rust hosts may compose `sink_layer(diagnostics.clone())` with standard `fmt` or other layers
+The `posthog` Cargo feature compiles SDK support by default but starts no worker or network traffic by itself. PostHog captures personless `litellm diagnostic` events; OTLP sends HTTP/protobuf logs to a full logs endpoint. Destination transport names and credentials are integration wiring, while SDK users configure one diagnostics policy API
 
-Normalized `source.target` and `source.timestamp` fields let exporters consume records without interpreting host-specific attributes. Both adapters redact before enqueueing. Delivery is best effort; flush completion does not prove remote receipt. Queue limits bound records rather than bytes, and per-destination drop counters and distributed span export are not implemented
+The subscriber remains the upstream `tracing_subscriber::Registry` with composable layers and filters. `Sink` is the existing normalized-record adapter used by those layers, not a separate subscriber or transport framework. Rust hosts may compose `sink_layer(diagnostics.clone())` with standard `fmt` or other layers. SDKs own batching, queues, retries, and HTTP transport
+
+Both adapters redact before enqueueing. Delivery is best effort; flush completion does not prove remote receipt. Queue limits bound records rather than bytes, and per-destination drop counters and distributed span export are not implemented
+
+Read [the shared pipeline notes](../../.agents/skills/rust-tracing/references/unified-python-logging.md) for normalization, compatibility, and process ownership
 
 Payload shape extraction
 

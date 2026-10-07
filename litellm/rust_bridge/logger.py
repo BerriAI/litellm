@@ -14,6 +14,7 @@ from litellm._logging import (
     trace_id_var,
     verbose_logger,
 )
+from litellm.rust_bridge.forwarding import NATIVE_ORIGIN
 
 _REDACTION: Final = DiagnosticProcessingFilter()
 _CORRELATION: Final = CorrelationContextFilter()
@@ -51,6 +52,7 @@ def emit(
             None,
             func=target,
             extra={
+                "_litellm_native_origin": NATIVE_ORIGIN,
                 "rust_target": target,
                 "rust_fields": dict(fields),
             },
