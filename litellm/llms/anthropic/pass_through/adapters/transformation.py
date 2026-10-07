@@ -525,9 +525,12 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
-                            tool_result_content = self._tool_result_content(content.get("content"))
-                            if content.get("is_error"):
-                                tool_result_content = self._mark_tool_result_as_error(tool_result_content)
+                            raw_tool_result_content: Final = self._tool_result_content(content.get("content"))
+                            tool_result_content: Final = (
+                                self._mark_tool_result_as_error(raw_tool_result_content)
+                                if content.get("is_error")
+                                else raw_tool_result_content
+                            )
                             tool_result = ChatCompletionToolMessage(
                                 role="tool",
                                 tool_call_id=content.get("tool_use_id", ""),
