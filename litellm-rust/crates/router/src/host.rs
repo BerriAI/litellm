@@ -92,8 +92,12 @@ pub struct Attempt<E> {
     pub target: Target,
     /// The hop's `kwargs["model"]`.
     pub model_group: String,
+    /// The group the request was for, which a stream's later fallback looks its chain up by.
+    pub original_group: String,
     pub bucket: u32,
     pub fallback_depth: u32,
+    /// The groups the fallback chain has tried so far, which a stream's later fallback skips.
+    pub attempted_targets: Vec<String>,
     pub retry: RetryStamp,
     pub ops: Vec<Op<E>>,
 }

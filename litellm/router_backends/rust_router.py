@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final, Literal, Protocol, TypeAlias, cast
+from typing import Final, Protocol, TypeAlias, cast
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict
@@ -11,7 +11,15 @@ from pydantic import BaseModel, ConfigDict
 import litellm
 from litellm import constants
 from litellm.router_backends.python_router import PythonRouter
-from litellm.router_backends.rust_call import AttemptRouter, Kwargs, RoutedCall, as_mapping, as_sequence
+from litellm.router_backends.rust_call import (
+    AttemptRouter,
+    Kwargs,
+    Operation,
+    RoutedCall,
+    as_mapping,
+    as_sequence,
+    metadata_key_for,
+)
 from litellm.router_backends.rust_support import unsupported_reason
 from litellm.router_utils import clientside_credential_handler
 from litellm.router_utils.cooldown_handlers import (
@@ -90,7 +98,9 @@ class NormalizerView(AttemptRouter, Protocol):
 
     def discard(self) -> None: ...
 
-    def _update_kwargs_before_fallbacks(self, model: str, kwargs: Kwargs) -> None: ...
+    def _update_kwargs_before_fallbacks(
+        self, model: str, kwargs: Kwargs, metadata_variable_name: str = "metadata"
+    ) -> None: ...
 
 
 _IS_CLIENTSIDE_CREDENTIAL: Final = cast(  # cast-ok: the helper's dict parameter is unparameterized
@@ -247,10 +257,8 @@ class RustRouter:
         messages: Sequence[Mapping[str, object]],
         **kwargs: object,  # kwargs-ok: forwards litellm.acompletion's kwargs
     ) -> object:
-        call: Final = self._call("acompletion", model, messages, kwargs)
-        native_route: Final = self._native.route(call.spec, call.driver, True)
-        routed: Final = cast(Awaitable[object], native_route)  # cast-ok: an asynchronous route is a coroutine
-        return await routed
+        call: Final = self._call("completion", model, {**kwargs, "messages": messages})
+        return await self._route(call, True)
 
     def completion(
         self,
@@ -258,16 +266,37 @@ class RustRouter:
         messages: Sequence[Mapping[str, object]],
         **kwargs: object,  # kwargs-ok: forwards litellm.completion's kwargs
     ) -> object:
-        call: Final = self._call("completion", model, messages, kwargs)
+        call: Final = self._call("completion", model, {**kwargs, "messages": messages})
         return self._native.route(call.spec, call.driver, False)
 
-    def _call(
+    async def aresponses(
         self,
-        operation: Literal["acompletion", "completion"],
-        model: str,
-        messages: Sequence[Mapping[str, object]],
-        kwargs: Kwargs,
-    ) -> _Call:
+        custom_llm_provider: str | None = None,
+        client: object = None,
+        **kwargs: object,  # kwargs-ok: forwards litellm.aresponses' kwargs
+    ) -> object:
+        """`factory_function`'s wrapper drops its own `custom_llm_provider` and `client`."""
+        del custom_llm_provider, client
+        return await self._route(self._call("responses", _model(kwargs), kwargs), True)
+
+    async def aanthropic_messages(
+        self,
+        custom_llm_provider: str | None = None,
+        client: object = None,
+        **kwargs: object,  # kwargs-ok: forwards litellm.anthropic_messages' kwargs
+    ) -> object:
+        """`factory_function`'s wrapper drops its own `custom_llm_provider` and `client`."""
+        del custom_llm_provider, client
+        if kwargs.get("stream") is True:
+            raise NotImplementedError("the Rust router backend does not stream Anthropic messages yet")
+        return await self._route(self._call("anthropic_messages", _model(kwargs), kwargs), True)
+
+    async def _route(self, call: _Call, asynchronous: bool) -> object:
+        native_route: Final = self._native.route(call.spec, call.driver, asynchronous)
+        routed: Final = cast(Awaitable[object], native_route)  # cast-ok: an asynchronous route is a coroutine
+        return await routed
+
+    def _call(self, operation: Operation, model: str, kwargs: Kwargs) -> _Call:
         unsupported: Final = [name for name in _UNSUPPORTED_REQUEST_KWARGS if name in kwargs]
         if unsupported:
             raise NotImplementedError(f"the Rust router backend does not support request option {unsupported[0]!r} yet")
@@ -275,22 +304,17 @@ class RustRouter:
         if clientside:
             raise NotImplementedError("the Rust router backend does not support client-side credentials yet")
         kwargs["model"] = model  # rebind-ok: PythonRouter stamps the caller's kwargs the same way
-        kwargs["messages"] = messages  # rebind-ok: as above
-        kwargs.setdefault("stream", False)
-        self._normalizer._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)  # pyright: ignore[reportPrivateUsage]  # PythonRouter's entry stamps
+        if operation == "completion":
+            kwargs.setdefault("stream", False)
+        self._normalizer._update_kwargs_before_fallbacks(  # pyright: ignore[reportPrivateUsage]  # PythonRouter's entry stamps
+            model=model, kwargs=kwargs, metadata_variable_name=metadata_key_for(operation)
+        )
         overrides: Final = {
             name: kwargs[name]
             for name in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
             if name in kwargs
         }
         mock: Final = next((failure for flag, failure in _MOCK_FAILURES if _flag(kwargs.get(flag))), None)
-        driver: Final = RoutedCall(
-            self._normalizer,
-            kwargs,
-            "metadata",
-            lambda name: overrides.get(name, _attribute(self._normalizer, name)),
-        )
-        driver.start(model)
         tools: Final = (as_mapping(tool) for tool in as_sequence(kwargs.get("tools")))
         spec: Final = {
             "operation": operation,
@@ -302,13 +326,42 @@ class RustRouter:
             "web_search": any(tool.get("type") in _WEB_SEARCH_TOOLS for tool in tools),
             "mock": mock,
         }
+        driver: Final = self._driver(operation, kwargs, overrides, spec)
+        driver.start(model)
         return _Call(spec, driver)
+
+    def _driver(
+        self, operation: Operation, kwargs: Kwargs, overrides: Mapping[str, object], spec: Mapping[str, object]
+    ) -> RoutedCall:
+        async def resume(point: Mapping[str, object], hop_kwargs: Kwargs) -> object:
+            """A stream that failed after its content reached the caller falls back as its own call."""
+            model: Final = str(point["model_group"])
+            self._normalizer._update_kwargs_before_fallbacks(  # pyright: ignore[reportPrivateUsage]  # as the stream wrapper re-enters the chain
+                model=model, kwargs=hop_kwargs, metadata_variable_name=metadata_key_for(operation)
+            )
+            driver: Final = self._driver(operation, hop_kwargs, overrides, spec)
+            return await self._route(_Call({**spec, "model": model, "mock": None, "resume": point}, driver), True)
+
+        return RoutedCall(
+            self._normalizer,
+            kwargs,
+            operation,
+            lambda name: overrides.get(name, _attribute(self._normalizer, name)),
+            resume,
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class _Call:
     spec: Mapping[str, object]
     driver: RoutedCall
+
+
+def _model(kwargs: Kwargs) -> str:
+    model: Final = kwargs.pop("model", None)
+    if not isinstance(model, str):
+        raise TypeError("the router needs a model group to route to")
+    return model
 
 
 def _attribute(owner: object, name: str) -> object:

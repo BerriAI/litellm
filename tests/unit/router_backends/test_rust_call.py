@@ -28,7 +28,7 @@ def _call(normalizer: PythonRouter, metadata: dict[str, object]) -> RoutedCall: 
     call: Final = RoutedCall(
         normalizer,  # pyright: ignore[reportArgumentType]  # PythonRouter provides the AttemptRouter members
         {"model": "g", "messages": [], "metadata": metadata, "num_retries": 3, "fallbacks": []},
-        "metadata",
+        "completion",
         lambda name: getattr(normalizer, name),
     )
     call.start("g")
@@ -195,8 +195,10 @@ def call_attempt(bucket: int) -> Attempt:
     return Attempt(
         deployment_id="a",
         model_group="g",
+        original_model_group="g",
         bucket=bucket,
         fallback_depth=0,
+        attempted_targets=(),
         model_group_size=1,
         attempted_retries=1,
         max_retries=2,

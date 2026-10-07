@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use litellm_host_python::from_py;
 use litellm_router::{
-    engine::{Outcome, Override, RouterCall},
+    engine::{Outcome, Override, Resume, RouterCall},
     failure::{Classified, Raised, Rejection},
     host::{Attempt, Invoked, MockFailure, Op, Target, TypedFallback},
     operation::Operation,
@@ -18,9 +18,40 @@ use pyo3::{
     types::{PyDict, PyList, PyTuple},
 };
 
-use super::PyObj;
+use super::{PyObj, RouterRequest};
 
-pub(super) fn router_call(arguments: &Bound<'_, PyDict>) -> PyResult<RouterCall> {
+pub(super) fn router_request(arguments: &Bound<'_, PyDict>) -> PyResult<RouterRequest> {
+    let resume = match arguments.get_item("resume")? {
+        Some(resume) if !resume.is_none() => Some(self::resume(resume.cast::<PyDict>()?)?),
+        _ => None,
+    };
+    Ok(RouterRequest {
+        call: router_call(arguments)?,
+        resume,
+    })
+}
+
+/// `{model_group, fallback_depth, original_model_group, attempted_targets, error, classified,
+/// deployment_id}` for the stream that failed.
+fn resume(resume: &Bound<'_, PyDict>) -> PyResult<Resume<PyObj>> {
+    let error = resume
+        .get_item("error")?
+        .ok_or_else(|| PyValueError::new_err("router resume is missing \"error\""))?;
+    let classified = resume
+        .get_item("classified")?
+        .ok_or_else(|| PyValueError::new_err("router resume is missing \"classified\""))?;
+    Ok(Resume {
+        group: required(resume, "model_group")?,
+        depth: required(resume, "fallback_depth")?,
+        original_group: required(resume, "original_model_group")?,
+        attempted_targets: optional(resume, "attempted_targets")?.unwrap_or_default(),
+        error: Arc::new(error.unbind()),
+        classified: from_py::<Classified>(&classified)?,
+        deployment_id: optional(resume, "deployment_id")?,
+    })
+}
+
+fn router_call(arguments: &Bound<'_, PyDict>) -> PyResult<RouterCall> {
     let operation: String = required(arguments, "operation")?;
     let model: String = required(arguments, "model")?;
     let mut call = RouterCall::new(Operation::from_name(&operation), model);
@@ -105,8 +136,10 @@ pub(super) fn attempt<'py>(py: Python<'py>, attempt: &Attempt<PyObj>) -> PyResul
         )?,
     }
     dict.set_item("model_group", &attempt.model_group)?;
+    dict.set_item("original_model_group", &attempt.original_group)?;
     dict.set_item("bucket", attempt.bucket)?;
     dict.set_item("fallback_depth", attempt.fallback_depth)?;
+    dict.set_item("attempted_targets", &attempt.attempted_targets)?;
     dict.set_item("model_group_size", attempt.retry.model_group_size)?;
     dict.set_item("attempted_retries", attempt.retry.attempted_retries)?;
     dict.set_item("max_retries", attempt.retry.max_retries)?;

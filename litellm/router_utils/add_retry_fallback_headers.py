@@ -209,6 +209,15 @@ def get_hidden_params_dict(
     return hidden_params
 
 
+def prepare_fallback_hidden_params(fallback_response: object) -> tuple[dict[str, object], dict[str, object]]:
+    """A fallback response's hidden params and its additional headers, which a stream wrapper adopts."""
+    fallback_hidden_params: Final = get_hidden_params_dict(fallback_response)
+    fallback_headers: Final = fallback_hidden_params.get("additional_headers")
+    if not isinstance(fallback_headers, dict):
+        return fallback_hidden_params, {}
+    return fallback_hidden_params, cast("dict[str, object]", fallback_headers)
+
+
 def _write_hidden_params(response: object, hidden_params: dict[str, object]) -> None:
     if isinstance(response, dict):
         response["_hidden_params"] = hidden_params

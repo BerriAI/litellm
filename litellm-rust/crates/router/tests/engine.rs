@@ -4,7 +4,7 @@ use std::{
 };
 
 use litellm_router::{
-    engine::{Engine, Override, RouteError, RouterCall},
+    engine::{Engine, Override, Resume, RouteError, RouterCall},
     failure::{Classified, ExceptionClass, Raised, StreamFailure},
     host::{Attempt, Invoked, Op, RouterHost, Target},
     operation::Operation,
@@ -518,6 +518,45 @@ async fn a_fallback_hop_stream_falls_back_on_its_own_chain_and_reports_its_depth
     let routed = engine.route(&host, call("g")).await.ok().unwrap();
 
     assert_eq!(host.attempts(), ["a", "c", "d"]);
+    assert_eq!(
+        (
+            routed.outcome.model_group.as_str(),
+            routed.outcome.attempted_fallbacks
+        ),
+        ("i", 2)
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_resumed_stream_falls_back_on_its_hops_chain_skipping_attempted_groups() {
+    let mut settings = settings();
+    settings.fallbacks = Some(vec![chain("g", &["h", "i"])]);
+    let engine = engine(
+        vec![
+            deployment("a", "g"),
+            deployment("c", "h"),
+            deployment("d", "i"),
+        ],
+        settings,
+    );
+    let host = ScriptedHost::default();
+    let resume = Resume {
+        group: "h".into(),
+        depth: 1,
+        original_group: "g".into(),
+        attempted_targets: vec!["g".into(), "h".into()],
+        error: "c#1".into(),
+        classified: Classified {
+            stream_failure: Some(StreamFailure::BeforeContent),
+            ..classified(503, ExceptionClass::ServiceUnavailable)
+        },
+        deployment_id: Some("c".into()),
+    };
+
+    let routed = engine.resume(&host, call("g"), resume).await.ok().unwrap();
+
+    assert_eq!(host.attempts(), ["d"]);
     assert_eq!(
         (
             routed.outcome.model_group.as_str(),

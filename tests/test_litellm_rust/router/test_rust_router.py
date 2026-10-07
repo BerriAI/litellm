@@ -11,8 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
-from litellm.router_backends.python_router import PythonRouter
-from litellm.router_backends.rust_router import NATIVE_ROUTER, RustRouter
+from litellm.router_backends.rust_router import RustRouter
 from litellm.router_backends.selection import select_backend
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
@@ -20,20 +19,17 @@ from litellm.types.router import RouterRateLimitError
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import ModelResponse, ModelResponseStream
+from tests.test_litellm_rust.support.router_backends import (
+    BACKENDS,
+    Backend,
+    python_backend,
+    router_headers,
+    rust_backend,
+)
 
 pytestmark = pytest.mark.requires_rust_extension
 
 MESSAGES: Final = ({"role": "user", "content": "hi"},)
-
-
-class Backend(Protocol):
-    async def acompletion(
-        self, model: str, messages: Sequence[Mapping[str, object]], **kwargs: object
-    ) -> object: ...  # kwargs-ok: Router.acompletion's surface
-
-    def completion(
-        self, model: str, messages: Sequence[Mapping[str, object]], **kwargs: object
-    ) -> object: ...  # kwargs-ok: Router.completion's surface
 
 
 def _deployment(
@@ -46,34 +42,14 @@ def _deployment(
     }
 
 
-def _python(arguments: Mapping[str, object], seed: int) -> Backend:
-    random.seed(seed)
-    router: Final = PythonRouter(
-        **{key: list(value) if isinstance(value, tuple) else value for key, value in arguments.items()}
-    )
-    return router  # pyright: ignore[reportReturnType]  # PythonRouter.acompletion's untyped signature
-
-
-def _rust(arguments: Mapping[str, object], seed: int) -> Backend:
-    native: Final = NATIVE_ROUTER.load()
-    assert native is not None
-    return RustRouter(
-        {key: list(value) if isinstance(value, tuple) else value for key, value in arguments.items()}, native, seed
-    )
-
-
-BACKENDS: Final[tuple[Callable[[Mapping[str, object], int], Backend], ...]] = (_python, _rust)
+_python: Final = python_backend
+_rust: Final = rust_backend
+_headers: Final = router_headers
 
 
 def _content(response: object) -> str:
     assert isinstance(response, ModelResponse)
     return str(response.choices[0].message.content)  # pyright: ignore[reportAttributeAccessIssue]  # non-streaming choice
-
-
-def _headers(response: object) -> Mapping[str, object]:
-    hidden: Final = getattr(response, "_hidden_params", {})
-    headers: Final = hidden.get("additional_headers", {}) if isinstance(hidden, Mapping) else {}
-    return {key: value for key, value in headers.items() if key.startswith("x-litellm-")}
 
 
 async def _picks(backend: Backend, count: int) -> list[str]:

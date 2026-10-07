@@ -19,6 +19,7 @@ proxy hook can walk it.
 """
 
 import asyncio
+import functools
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -75,7 +76,7 @@ def _make_wrapper_class():
             response=source,  # type: ignore[arg-type]
             initial_kwargs={},
         )
-        captured["wrapper_cls"] = type(wrapped)
+        captured["wrapper_cls"] = functools.partial(type(wrapped), source_iterator=source)
         captured["instance"] = wrapped
 
     asyncio.run(_drive())

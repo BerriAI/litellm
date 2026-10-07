@@ -108,6 +108,18 @@ pub struct Failed<E> {
     pub ops: Vec<Op<E>>,
 }
 
+/// A stream that failed after its content reached the caller, which some operations still
+/// fall back from: the hop it was served by, as its attempt reported it, and its failure.
+pub struct Resume<E> {
+    pub group: String,
+    pub depth: u32,
+    pub original_group: String,
+    pub attempted_targets: Vec<String>,
+    pub error: E,
+    pub classified: Classified,
+    pub deployment_id: Option<String>,
+}
+
 pub struct Engine {
     registry: Registry,
     store: Store,
@@ -136,6 +148,27 @@ impl Engine {
         host: &H,
         call: RouterCall,
     ) -> Result<Routed<H::Response, H::Error>, RouteError<H::Error, H::Fault>> {
+        self.run(host, call, None).await
+    }
+
+    /// Falls back from a stream that failed after its content reached the caller, as the
+    /// stream's own wrapper does in Python: the chain of the hop that served it, with the
+    /// groups already attempted skipped. The host's bucket 0 is that hop's.
+    pub async fn resume<H: RouterHost>(
+        &self,
+        host: &H,
+        call: RouterCall,
+        resume: Resume<H::Error>,
+    ) -> Result<Routed<H::Response, H::Error>, RouteError<H::Error, H::Fault>> {
+        self.run(host, call, Some(resume)).await
+    }
+
+    async fn run<H: RouterHost>(
+        &self,
+        host: &H,
+        call: RouterCall,
+        resume: Option<Resume<H::Error>>,
+    ) -> Result<Routed<H::Response, H::Error>, RouteError<H::Error, H::Fault>> {
         let snapshot = self.registry.load();
         let mut run = Run {
             engine: self,
@@ -148,8 +181,13 @@ impl Engine {
             next_rejection: 0,
             ops: Vec::new(),
         };
-        let model = call.model.clone();
-        let result = run.hop(model.clone(), 0, 0, model).await;
+        let result = match resume {
+            None => {
+                let model = call.model.clone();
+                run.hop(model.clone(), 0, 0, model).await
+            }
+            Some(resume) => run.resume(resume).await,
+        };
         let ops = std::mem::take(&mut run.ops);
         match result {
             Ok(success) => Ok(Routed {
@@ -249,6 +287,39 @@ impl<'a, H: RouterHost> Run<'a, H> {
             .as_ref())
     }
 
+    async fn resume(
+        &mut self,
+        resume: Resume<H::Error>,
+    ) -> Attempted<H::Response, H::Error, H::Fault> {
+        self.attempted_targets.extend(resume.attempted_targets);
+        let failure = Failure {
+            raised: Raised::Host(resume.error),
+            classified: resume.classified,
+            deployment_id: resume.deployment_id,
+        };
+        if let Some(deployment) = failure
+            .deployment_id
+            .as_deref()
+            .and_then(|id| self.snapshot.by_id(id))
+            && self.run_failure_callbacks(&failure.classified)
+        {
+            cooldown::record_failure(
+                self.snapshot,
+                &self.engine.store,
+                deployment,
+                &failure.classified,
+            )
+            .await;
+        }
+        let hop = Hop {
+            group: resume.group,
+            depth: resume.depth,
+            bucket: 0,
+            original_group: resume.original_group,
+        };
+        self.fallback(&hop, Box::new(failure)).await
+    }
+
     /// `async_function_with_fallbacks` for one hop.
     fn hop(
         &mut self,
@@ -285,8 +356,10 @@ impl<'a, H: RouterHost> Run<'a, H> {
         let attempt = Attempt {
             target: Target::Mock(mock),
             model_group: hop.group.clone(),
+            original_group: hop.original_group.clone(),
             bucket: hop.bucket,
             fallback_depth: hop.depth,
+            attempted_targets: self.attempted_targets(),
             retry: RetryStamp {
                 model_group_size: 0,
                 attempted_retries: 0,
@@ -522,8 +595,10 @@ impl<'a, H: RouterHost> Run<'a, H> {
         let attempt = Attempt {
             target: Target::Deployment(deployment.id.clone()),
             model_group: hop.group.clone(),
+            original_group: hop.original_group.clone(),
             bucket: hop.bucket,
             fallback_depth: hop.depth,
+            attempted_targets: self.attempted_targets(),
             retry,
             ops: std::mem::take(&mut self.ops),
         };
@@ -554,6 +629,12 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 ))))
             }
         }
+    }
+
+    fn attempted_targets(&self) -> Vec<String> {
+        let mut targets: Vec<String> = self.attempted_targets.iter().cloned().collect();
+        targets.sort();
+        targets
     }
 
     /// A failure runs litellm's failure callbacks when litellm raised it, and only once per

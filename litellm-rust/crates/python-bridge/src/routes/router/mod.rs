@@ -14,7 +14,7 @@ use litellm_host::{
 };
 use litellm_host_python::{HookChain, enter_native, from_py_argument};
 use litellm_router::{
-    engine::{Engine, Failed, RouteError, Routed, RouterCall},
+    engine::{Engine, Failed, Resume, RouteError, Routed, RouterCall},
     host::{Attempt, Invoked},
     random::PythonRandom,
     settings::Settings,
@@ -62,10 +62,16 @@ pub(crate) enum RouterHostCall {
     },
 }
 
+/// A call to route, or to resume from a stream that failed after its content reached the caller.
+pub(crate) struct RouterRequest {
+    call: RouterCall,
+    resume: Option<Resume<PyObj>>,
+}
+
 pub(crate) struct RouterProtocol;
 
 impl Protocol for RouterProtocol {
-    type Request = RouterCall;
+    type Request = RouterRequest;
     type Response = Routed<PyObj, PyObj>;
     type Error = BridgeError;
     type HostCall = RouterHostCall;
@@ -121,12 +127,17 @@ impl NativeRouter {
         let engine = Arc::clone(&self.engine);
         litellm_host_python::run_call(
             py,
-            move |_, _, request: RouterCall| {
+            move |_, _, request: RouterRequest| {
                 Ok(hosted_call::<RouterProtocol, _, _>(
                     request,
                     None,
                     move |request, services, _, _| async move {
-                        match engine.route(&BridgeHost(services), request).await {
+                        let host = BridgeHost(services);
+                        let routed = match request.resume {
+                            None => engine.route(&host, request.call).await,
+                            Some(resume) => engine.resume(&host, request.call, resume).await,
+                        };
+                        match routed {
                             Ok(routed) => Ok(CallOutput::Complete(routed)),
                             Err(RouteError::Failed(failed)) => {
                                 Err(BridgeError::Failed(Arc::from(failed)))

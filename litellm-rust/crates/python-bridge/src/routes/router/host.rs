@@ -3,7 +3,7 @@ use litellm_host_python::{
     InvokeError, PythonBinding, PythonHostCalls, PythonOwned, missing_state,
 };
 use litellm_router::{
-    engine::{Routed, RouterCall},
+    engine::Routed,
     host::{Attempt, Invoked, RouterHost},
 };
 use pyo3::{
@@ -13,7 +13,7 @@ use pyo3::{
     types::PyDict,
 };
 
-use super::{BridgeError, PyObj, RouterHostCall, RouterProtocol, python};
+use super::{BridgeError, PyObj, RouterHostCall, RouterProtocol, RouterRequest, python};
 use litellm_host::protocol::Reply;
 
 pub(super) struct BridgeHost(pub(super) HostServices<RouterProtocol>);
@@ -85,8 +85,8 @@ impl PythonBinding for RouterBinding {
         &mut self,
         _py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<RouterCall, InvokeError<BridgeError>> {
-        python::router_call(arguments).map_err(InvokeError::Python)
+    ) -> Result<RouterRequest, InvokeError<BridgeError>> {
+        python::router_request(arguments).map_err(InvokeError::Python)
     }
 
     fn encode_response(

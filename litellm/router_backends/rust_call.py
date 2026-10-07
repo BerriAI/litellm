@@ -10,8 +10,9 @@ readers look for them.
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
-from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from typing import Final, Literal, Protocol, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -25,11 +26,20 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.anthropic.pass_through.messages.utils import safeguard_refusal_error
+from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.router_backends.python_router import (
-    FallbackAwareStreamWrapper,
-    _stream_chunks_have_generated_content,  # pyright: ignore[reportPrivateUsage]  # the content rule Python's stream wrapper applies
+    PythonRouter,
+    _with_router_resolved_session_model,  # pyright: ignore[reportPrivateUsage]  # the session rewrite the generic helper applies
 )
-from litellm.router_strategy.complexity_router.context_compaction import compact_to_fit
+from litellm.router_backends.rust_streams import (
+    StreamFailed,
+    chat_until_content,
+    chat_until_content_sync,
+    responses_until_output,
+    unwrapped,
+)
+from litellm.router_strategy.complexity_router.context_compaction import compact_to_fit, surface_for_call
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
@@ -37,6 +47,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.common_utils import (
     format_fallback_outcome_message,
     format_no_fallback_group_message,
+    provider_for_generic_call,
     truncate_fallback_error_detail,
 )
 from litellm.router_utils.cooldown_handlers import (
@@ -44,14 +55,17 @@ from litellm.router_utils.cooldown_handlers import (
     is_background_response_cost_poll_not_found,
     is_caller_timeout_408,
 )
+from litellm.types.llms.openai import ResponseAPIUsage
 from litellm.types.router import RouterErrors, RouterRateLimitError
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import ModelResponse
 from litellm.utils import (
     _get_retry_after_from_exception_header,  # pyright: ignore[reportPrivateUsage]  # the Retry-After parser retries and cooldowns use
 )
 
 Bucket: TypeAlias = MutableMapping[str, object]
 Kwargs: TypeAlias = dict[str, object]
+Operation: TypeAlias = Literal["completion", "responses", "anthropic_messages"]
+ResumeRoute: TypeAlias = Callable[[Mapping[str, object], Kwargs], Awaitable[object]]
 
 
 class AttemptRouter(Protocol):
@@ -84,13 +98,19 @@ class AttemptRouter(Protocol):
         self, deployment_params: Mapping[str, object], kwargs: Mapping[str, object]
     ) -> Kwargs: ...
 
-    def _update_kwargs_with_deployment(self, deployment: Kwargs, kwargs: Kwargs) -> None: ...
+    def _update_kwargs_with_deployment(
+        self, deployment: Kwargs, kwargs: Kwargs, function_name: str | None = None
+    ) -> None: ...
 
     def _get_async_openai_model_client(self, deployment: Kwargs, kwargs: Kwargs) -> object: ...
 
     def _get_client(self, deployment: Kwargs, kwargs: Kwargs) -> object: ...
 
     def _should_raise_content_policy_error(self, model: str, response: ModelResponse, kwargs: Kwargs) -> bool: ...
+
+    def _should_raise_anthropic_refusal_error(
+        self, model: str, original_generic_function: Callable[..., object], response: object, kwargs: Kwargs
+    ) -> bool: ...
 
     def _set_deployment_num_retries_on_exception(self, exception: Exception, deployment: Kwargs) -> None: ...
 
@@ -112,6 +132,16 @@ _ROUTER_ONLY_KWARGS: Final = (
     "mock_testing_content_policy_fallbacks",
     "mock_testing_rate_limit_error",
 )
+
+_UNWRAPPED_FALLBACK_TRIGGERS: Final[Mapping[Operation, tuple[type[Exception], ...]]] = {
+    "completion": (),
+    "responses": (litellm.ContentPolicyViolationError,),
+    "anthropic_messages": (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError),
+}
+_GENERIC_HANDLERS: Final[Mapping[Operation, str]] = {
+    "responses": "aresponses",
+    "anthropic_messages": "anthropic_messages",
+}
 
 _EXCEPTION_CLASSES: Final[tuple[tuple[type[BaseException], str], ...]] = (
     (litellm.ContextWindowExceededError, "ContextWindowExceeded"),
@@ -135,8 +165,10 @@ class Attempt(BaseModel):
     deployment_id: str | None = None
     mock: Literal["fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "rate_limit"] | None = None
     model_group: str
+    original_model_group: str
     bucket: int
     fallback_depth: int
+    attempted_targets: tuple[str, ...]
     model_group_size: int
     attempted_retries: int
     max_retries: int
@@ -206,104 +238,10 @@ def classify(error: BaseException, kwargs: Mapping[str, object], callbacks_ran: 
     }
 
 
-class _StreamFailed(Exception):
-    """A stream that failed before its first content chunk."""
-
-    def __init__(self, error: BaseException, kind: Literal["before_content", "terminal"]) -> None:
-        super().__init__(str(error))
-        self.error: Final = error
-        self.kind: Final = kind
-
-
-class ReplayStream(FallbackAwareStreamWrapper):
-    """The attempt's stream, replaying the chunks read while waiting for its first content.
-
-    After content has reached the caller the stream cannot fall back, so a mid-stream
-    fallback error surfaces as the error that caused it, as the Python router's wrapper does.
-    """
-
-    def __init__(self, inner: CustomStreamWrapper, buffered: Sequence[ModelResponseStream]) -> None:
-        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # CustomStreamWrapper's untyped constructor
-            completion_stream=cast(object, inner.completion_stream),  # cast-ok: untyped attribute
-            model=cast(object, inner.model),  # cast-ok: untyped attribute
-            custom_llm_provider=inner.custom_llm_provider,
-            logging_obj=inner.logging_obj,
-            _response_headers=getattr(inner, "_response_headers", None),
-        )
-        self._inner: Final = inner
-        self._replay: Final = iter(tuple(buffered))
-        self.chunks = cast(list[ModelResponseStream], inner.chunks)  # cast-ok: untyped attribute
-        self._hidden_params = dict(cast(Mapping[str, object], inner._hidden_params))  # pyright: ignore[reportPrivateUsage]  # cast-ok: the stream's own untyped metadata
-
-    def __aiter__(self) -> ReplayStream:
-        return self
-
-    async def __anext__(self) -> ModelResponseStream:
-        buffered: Final = next(self._replay, None)
-        if buffered is not None:
-            return buffered
-        try:
-            return await self._inner.__anext__()
-        except MidStreamFallbackError as error:
-            raise _unwrapped(error) from error
-
-    def __iter__(self) -> Iterator[ModelResponseStream]:
-        return self
-
-    def __next__(self) -> ModelResponseStream:
-        buffered: Final = next(self._replay, None)
-        if buffered is not None:
-            return buffered
-        try:
-            return self._inner.__next__()
-        except MidStreamFallbackError as error:
-            raise _unwrapped(error) from error
-
-    async def aclose(self) -> None:
-        await self._inner.aclose()
-
-
-def _unwrapped(error: BaseException) -> BaseException:
-    """The provider error behind a mid-stream fallback error, which Python's stream wrappers raise in its place."""
-    if isinstance(error, MidStreamFallbackError) and error.original_exception is not None:
-        return error.original_exception
-    return error
-
-
 def _not_fetched(stream: CustomStreamWrapper) -> bool:
-    return (
-        cast(object, stream.completion_stream) is None and cast(object, stream.make_call) is not None
-    )  # cast-ok: untyped attributes
-
-
-async def _replay_from_first_content(stream: CustomStreamWrapper) -> ReplayStream:
-    """Reads `stream` until a chunk carries content, so a failure before then can still go to
-    another deployment; the chunks read so far replay ahead of the rest."""
-    buffered: Final[list[ModelResponseStream]] = []  # mutable-ok: chunks read before the first content
-    try:
-        async for chunk in stream:
-            buffered.append(chunk)
-            if _stream_chunks_have_generated_content([chunk]):
-                break
-    except MidStreamFallbackError as error:
-        raise _StreamFailed(error, "before_content") from error
-    except Exception as error:
-        raise _StreamFailed(error, "terminal") from error
-    return ReplayStream(stream, buffered)
-
-
-def _replay_from_first_content_sync(stream: CustomStreamWrapper) -> ReplayStream:
-    buffered: Final[list[ModelResponseStream]] = []  # mutable-ok: chunks read before the first content
-    try:
-        for chunk in stream:
-            buffered.append(chunk)
-            if _stream_chunks_have_generated_content([chunk]):
-                break
-    except MidStreamFallbackError as error:
-        raise _StreamFailed(error, "before_content") from error
-    except Exception as error:
-        raise _StreamFailed(error, "terminal") from error
-    return ReplayStream(stream, buffered)
+    completion_stream: Final = cast(object, stream.completion_stream)  # cast-ok: untyped attribute
+    make_call: Final = cast(object, stream.make_call)  # cast-ok: untyped attribute
+    return completion_stream is None and make_call is not None
 
 
 class _AttemptFailed(Exception):
@@ -321,13 +259,18 @@ class RoutedCall:
         self,
         normalizer: AttemptRouter,
         kwargs: Kwargs,
-        metadata_key: Literal["metadata", "litellm_metadata"],
+        operation: Operation,
         fallbacks: Callable[[str], object],
+        resume: ResumeRoute | None = None,
     ) -> None:
         self._normalizer: Final = normalizer
         self._kwargs: Final = {key: value for key, value in kwargs.items() if key not in _ROUTER_ONLY_KWARGS}
+        self._operation: Final = operation
+        metadata_key: Final = metadata_key_for(operation)
         self._metadata_key: Final = metadata_key
         self._fallbacks: Final = fallbacks
+        self._resume: Final = resume
+        self._partial_usage: Final[list[ResponseAPIUsage]] = []  # mutable-ok: what failed Responses streams used
         root: Final = kwargs.setdefault(metadata_key, {})
         bucket: Final[Bucket] = _bucket(root)
         self._buckets: Final[dict[int, Bucket]] = {0: bucket}  # mutable-ok: grows as fallback hops open buckets
@@ -349,13 +292,13 @@ class RoutedCall:
         if parsed.mock is not None:
             return self._mock(parsed, kwargs)
         try:
-            response: Final = await self._acompletion(parsed, kwargs)
-        except _StreamFailed as failed:
-            return (
-                "error",
-                failed.error,
-                {**classify(failed.error, kwargs, callbacks_ran=True), "stream_failure": failed.kind},
+            response: Final = (
+                await self._acompletion(parsed, kwargs)
+                if self._operation == "completion"
+                else await self._ageneric(parsed, kwargs)
             )
+        except StreamFailed as failed:
+            return self._stream_failed(failed, kwargs)
         except _AttemptFailed as failed:
             return ("error", failed.error, classify(failed.error, kwargs, callbacks_ran=False))
         except Exception as error:
@@ -369,12 +312,8 @@ class RoutedCall:
             return self._mock(parsed, kwargs)
         try:
             response: Final = self._completion(parsed, kwargs)
-        except _StreamFailed as failed:
-            return (
-                "error",
-                failed.error,
-                {**classify(failed.error, kwargs, callbacks_ran=True), "stream_failure": failed.kind},
-            )
+        except StreamFailed as failed:
+            return self._stream_failed(failed, kwargs)
         except _AttemptFailed as failed:
             return ("error", failed.error, classify(failed.error, kwargs, callbacks_ran=False))
         except Exception as error:
@@ -397,7 +336,21 @@ class RoutedCall:
 
     def failure(self, error: object, ops: Sequence[Mapping[str, object]]) -> BaseException:
         self._apply(ops)
-        return _unwrapped(self._exception(error))
+        return unwrapped(self._exception(error))
+
+    def _stream_failed(self, failed: StreamFailed, kwargs: Mapping[str, object]) -> Invoked:
+        if failed.partial_usage is not None:
+            self._partial_usage.append(failed.partial_usage)
+        trigger: Final = self._fallback_trigger(failed.error)
+        return ("error", failed.error, {**classify(trigger, kwargs, callbacks_ran=True), "stream_failure": failed.kind})
+
+    def _fallback_trigger(self, error: BaseException) -> BaseException:
+        """The error a stream's fallback is judged and annotated by: the mid-stream fallback error,
+        or the provider error inside it for the classes this operation's wrapper unwraps."""
+        if not isinstance(error, MidStreamFallbackError):
+            return error
+        original: Final = error.original_exception
+        return original if isinstance(original, _UNWRAPPED_FALLBACK_TRIGGERS[self._operation]) else error
 
     def _prepare(self, attempt: Attempt) -> Kwargs:
         self._apply(attempt.ops)
@@ -407,8 +360,9 @@ class RoutedCall:
         bucket["attempted_retries"] = attempt.attempted_retries
         bucket["max_retries"] = attempt.max_retries
         first_hop_only: Final = () if attempt.bucket == 0 else ("mock_timeout",)
+        passed_explicitly: Final = ("model", "messages") if self._operation == "completion" else ("model",)
         return {
-            **{key: value for key, value in self._kwargs.items() if key not in ("model", "messages", *first_hop_only)},
+            **{key: value for key, value in self._kwargs.items() if key not in (*passed_explicitly, *first_hop_only)},
             **self._hop_kwargs[attempt.bucket],
             self._metadata_key: bucket,
         }
@@ -504,9 +458,9 @@ class RoutedCall:
                 await response.fetch_stream()
             normalizer.success_calls[model_name] += 1
             if isinstance(response, CustomStreamWrapper):
-                return await _replay_from_first_content(response)
+                return await chat_until_content(response)
             return response
-        except _StreamFailed:
+        except StreamFailed:
             raise
         except _AttemptFailed as failed:
             self._stamp(failed.error, deployment, kwargs, model_name)
@@ -520,6 +474,97 @@ class RoutedCall:
                 )
             self._stamp(error, deployment, kwargs, model_name)
             raise
+
+    async def _ageneric(self, attempt: Attempt, kwargs: Kwargs) -> object:
+        """`_ageneric_api_call_with_fallbacks_helper` after selection, with the Responses API's and
+        Anthropic messages' own handling of the stream it returns."""
+        normalizer: Final = self._normalizer
+        deployment: Final = self._deployment(attempt)
+        handler: Final = _handler(self._operation)
+        hop_kwargs: Final = {**kwargs, self._metadata_key: copy.deepcopy(kwargs[self._metadata_key])}
+        try:
+            normalizer._update_kwargs_with_deployment(  # pyright: ignore[reportPrivateUsage]  # the attempt body PythonRouter runs
+                deployment=deployment, kwargs=kwargs, function_name="_ageneric_api_call_with_fallbacks"
+            )
+            data: Final = dict(as_mapping(deployment.get("litellm_params")))
+            model_name: Final = str(data["model"])
+            normalizer.total_calls[model_name] += 1
+            provider: Final = provider_for_generic_call(data)
+            response_kwargs: Final = {
+                **data,
+                "caching": normalizer.cache_responses,
+                **kwargs,
+                "model": model_name,
+                **_with_router_resolved_session_model(kwargs.get("session"), model_name),
+                **({"custom_llm_provider": provider} if provider is not None else {}),
+            }
+            compacted: Final = await compact_to_fit(
+                normalizer,  # pyright: ignore[reportArgumentType]  # PythonRouter
+                deployment,  # pyright: ignore[reportArgumentType]  # router deployment dict
+                response_kwargs,
+                surface_for_call(getattr(handler, "__name__", "")),
+            )
+            response: Final = await handler(**compacted)
+            if normalizer._should_raise_anthropic_refusal_error(  # pyright: ignore[reportPrivateUsage]  # as above
+                model=attempt.model_group, original_generic_function=handler, response=response, kwargs=kwargs
+            ):
+                refusal: Final = cast(Mapping[str, object], response)  # cast-ok: the refusal gate checked its shape
+                stop_details: Final = cast(dict[str, object], refusal["stop_details"])  # cast-ok: as above
+                raise _AttemptFailed(safeguard_refusal_error(model=attempt.model_group, stop_details=stop_details))
+            normalizer.success_calls[model_name] += 1
+        except _AttemptFailed as failed:
+            self._stamp_generic(failed.error, deployment, kwargs, attempt.model_group)
+            raise
+        except Exception as error:
+            self._stamp_generic(error, deployment, kwargs, attempt.model_group)
+            raise
+        if kwargs.get("stream") and isinstance(response, BaseResponsesAPIStreamingIterator):
+            return await responses_until_output(
+                response, self._responses_fallback(attempt, hop_kwargs), tuple(self._partial_usage)
+            )
+        return response
+
+    def _responses_fallback(
+        self, attempt: Attempt, hop_kwargs: Kwargs
+    ) -> Callable[[MidStreamFallbackError], Awaitable[object]]:
+        """`_aresponses_fallback_attempt`: the chain of the hop `attempt` ran in, continuing from the
+        text the failed stream generated."""
+
+        async def fall_back(error: MidStreamFallbackError) -> object:
+            if self._resume is None:
+                raise error
+            request_input: Final = cast(str, hop_kwargs.get("input"))  # cast-ok: the request's own input
+            continued: Final = (
+                {
+                    "input": PythonRouter._build_responses_continuation_input(  # pyright: ignore[reportPrivateUsage]  # Python's continuation input
+                        request_input, error.generated_content
+                    )
+                }
+                if error.generated_content and not error.is_pre_first_chunk
+                else {}
+            )
+            trigger: Final = self._fallback_trigger(error)
+            return await self._resume(
+                {
+                    "model_group": attempt.model_group,
+                    "fallback_depth": attempt.fallback_depth,
+                    "original_model_group": attempt.original_model_group,
+                    "attempted_targets": attempt.attempted_targets,
+                    "error": error,
+                    "classified": classify(trigger, hop_kwargs, callbacks_ran=True),
+                    "deployment_id": attempt.deployment_id,
+                },
+                {**hop_kwargs, **continued},
+            )
+
+        return fall_back
+
+    def _stamp_generic(
+        self, error: BaseException, deployment: Mapping[str, object], kwargs: Mapping[str, object], model_group: str
+    ) -> None:
+        """The generic helper counts failures by model group, not by provider model."""
+        self._normalizer.fail_calls[model_group] += 1
+        self._stamp(error, deployment, kwargs, None)
 
     def _completion(self, attempt: Attempt, kwargs: Kwargs) -> object:
         normalizer: Final = self._normalizer
@@ -566,9 +611,9 @@ class RoutedCall:
             if isinstance(response, CustomStreamWrapper) and _not_fetched(response):
                 response.fetch_sync_stream()
             if isinstance(response, CustomStreamWrapper):
-                return _replay_from_first_content_sync(response)
+                return chat_until_content_sync(response)
             return response
-        except _StreamFailed:
+        except StreamFailed:
             raise
         except _AttemptFailed as failed:
             self._stamp(failed.error, deployment, kwargs, None)
@@ -645,7 +690,7 @@ class RoutedCall:
             )
 
     def _as_exception(self, raised: object) -> Exception:
-        error: Final = self._exception(raised)
+        error: Final = self._fallback_trigger(self._exception(raised))
         return error if isinstance(error, Exception) else Exception(str(error))
 
     def _open_bucket(self, op: Mapping[str, object]) -> None:
@@ -676,11 +721,21 @@ class RoutedCall:
         self._append_message(op.get("error"), f"\n{message}", require_message=False)
 
     def _append_message(self, raised: object, text: str, require_message: bool = True) -> None:
-        error: Final = self._exception(raised)
+        error: Final = self._fallback_trigger(self._exception(raised))
         message: Final[object] = getattr(error, "message", None)
         if not litellm.expose_router_debug_in_errors or (require_message and not hasattr(error, "message")):
             return
         error.message = f"{message}{text}"  # pyright: ignore[reportAttributeAccessIssue]  # litellm exceptions carry a message
+
+
+def _handler(operation: Operation) -> Callable[..., Awaitable[object]]:
+    """Read at call time, so a patched handler is the one called."""
+    name: Final = _GENERIC_HANDLERS[operation]
+    return cast(Callable[..., Awaitable[object]], getattr(litellm, name))  # cast-ok: litellm's async handler
+
+
+def metadata_key_for(operation: Operation) -> Literal["metadata", "litellm_metadata"]:
+    return "metadata" if operation == "completion" else "litellm_metadata"
 
 
 def _rejection(raised: Mapping[str, object]) -> BaseException:
