@@ -775,16 +775,12 @@ def test_complexity_router_with_deployment_affinity_registers_affinity_callback(
 
 @pytest.mark.asyncio
 async def test_stale_session_pin_is_dropped_and_reclaimed():
-    """
-    Regression test for https://github.com/BerriAI/litellm/issues/45145.
+    """A session pin naming a deployment that went on cooldown is dropped and re-claimed.
 
-    A session pin naming a deployment that has since gone on cooldown must not
-    survive: the filter drops the stale pin, the post-call hook re-pins to the
-    deployment actually chosen, and subsequent calls stick to it instead of
-    re-shuffling on every request.
+    Regression test for https://github.com/BerriAI/litellm/issues/45145.
     """
-    cache = DualCache()
-    callback = DeploymentAffinityCheck(
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
         cache=cache,
         ttl_seconds=600,
         enable_user_key_affinity=False,
@@ -792,7 +788,7 @@ async def test_stale_session_pin_is_dropped_and_reclaimed():
         enable_session_id_affinity=True,
     )
 
-    deployments = [
+    deployments: Final = (
         {
             "model_name": "group",
             "litellm_params": {"model": "openai/model-a"},
@@ -808,25 +804,26 @@ async def test_stale_session_pin_is_dropped_and_reclaimed():
             "litellm_params": {"model": "openai/model-c"},
             "model_info": {"id": "dep-c"},
         },
-    ]
-    session_kwargs = {"metadata": {"session_id": "s1"}}
-    session_cache_key = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    )
+    healthy_without_dep_a: Final = [deployments[1], deployments[2]]
+    session_kwargs: Final = {"metadata": {"session_id": "s1"}}
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
 
-    # dep-a was pinned, then went on cooldown and left the healthy set.
     await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
 
-    filtered = await callback.async_filter_deployments(
+    filtered_before_repin: Final = await callback.async_filter_deployments(
         model="group",
-        healthy_deployments=deployments[1:],
+        healthy_deployments=healthy_without_dep_a,
         messages=[],
         request_kwargs=session_kwargs,
     )
-    assert [d["model_info"]["id"] for d in filtered] == ["dep-b", "dep-c"]
+    assert [d["model_info"]["id"] for d in filtered_before_repin] == ["dep-b", "dep-c"], (
+        "with dep-a on cooldown the filter must fall through instead of narrowing to the stale pin"
+    )
+    assert await cache.async_get_cache(session_cache_key) is None, (
+        "the stale pin must be dropped so the post-call hook can claim a fresh one"
+    )
 
-    # The stale pin is gone, so the post-call hook can claim a fresh one.
-    assert await cache.async_get_cache(session_cache_key) is None
-
-    # The router chose dep-b; the hook records the winner.
     await callback.async_pre_call_deployment_hook(
         kwargs={
             "model_info": {"id": "dep-b"},
@@ -834,13 +831,86 @@ async def test_stale_session_pin_is_dropped_and_reclaimed():
         },
         call_type=None,
     )
-    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-b"}
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-b"}, (
+        "the hook must re-pin the session to the deployment actually chosen"
+    )
 
-    # Later calls stick to dep-b instead of re-shuffling.
-    filtered = await callback.async_filter_deployments(
+    filtered_after_repin: Final = await callback.async_filter_deployments(
         model="group",
-        healthy_deployments=deployments[1:],
+        healthy_deployments=healthy_without_dep_a,
         messages=[],
         request_kwargs=session_kwargs,
     )
-    assert [d["model_info"]["id"] for d in filtered] == ["dep-b"]
+    assert [d["model_info"]["id"] for d in filtered_after_repin] == ["dep-b"], (
+        "later calls must stick to the re-pinned deployment instead of re-shuffling"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_pin_drop_backs_off_when_sibling_worker_already_repinned():
+    """Dropping a stale pin must not erase a fresh pin written by a sibling worker."""
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-b"})
+    await callback._drop_stale_pin(cache_key=session_cache_key, stale_model_id="dep-a")
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-b"}, (
+        "the drop must compare the stored value first and leave a re-pinned session alone"
+    )
+
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
+    await callback._drop_stale_pin(cache_key=session_cache_key, stale_model_id="dep-a")
+    assert await cache.async_get_cache(session_cache_key) is None, (
+        "the drop must still remove the pin when it names the stale deployment"
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_scoped_exclusion_preserves_session_pin():
+    """A web-search turn that excludes the pinned deployment must not migrate the session."""
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    deployments: Final = [
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-a"},
+            "model_info": {"id": "dep-a"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-b"},
+            "model_info": {"id": "dep-b"},
+        },
+    ]
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
+
+    web_search_kwargs: Final = {
+        "metadata": {"session_id": "s1"},
+        "tools": [{"type": "web_search"}],
+    }
+    filtered: Final = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=[deployments[1]],
+        messages=[],
+        request_kwargs=web_search_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered] == ["dep-b"], (
+        "the web-search turn still routes to a supporting deployment"
+    )
+    assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-a"}, (
+        "a request-only exclusion must not drop the pin, so ordinary turns keep the warm deployment"
+    )
