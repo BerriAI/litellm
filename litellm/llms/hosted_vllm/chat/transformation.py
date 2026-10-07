@@ -7,9 +7,9 @@ from collections.abc import Coroutine
 from typing import Final, Literal, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _get_image_mime_type_from_url,
+    get_image_mime_type_from_url,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import _parse_mime_type
+from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
@@ -23,7 +23,7 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoUrlObject,
 )
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
+from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
@@ -88,8 +88,8 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     ) -> dict:
         _tools = non_default_params.pop("tools", None)
         if _tools is not None:
-            _tools = _remove_additional_properties(_tools)
-            _tools = _remove_strict_from_schema(_tools)
+            _tools = remove_additional_properties(_tools)
+            _tools = remove_strict_from_schema(_tools)
             if isinstance(_tools, list):
                 _tools = self._convert_custom_tools_to_function_tools(_tools)
         if _tools is not None:
@@ -122,11 +122,11 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         if format and format.startswith("video/"):
             return True
         elif file_data:
-            mime_type = _parse_mime_type(file_data)
+            mime_type = parse_mime_type(file_data)
             if mime_type and mime_type.startswith("video/"):
                 return True
         elif file_id:
-            mime_type = _get_image_mime_type_from_url(file_id)
+            mime_type = get_image_mime_type_from_url(file_id)
             if mime_type and mime_type.startswith("video/"):
                 return True
         return False
@@ -161,13 +161,14 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         """
         Support translating:
         - video files from file_id or file_data to video_url
-        - thinking_blocks and reasoning_content on assistant messages are removed,
-          and content lists are converted to strings for vLLM compatibility
+        - thinking_blocks and non-string reasoning_content on assistant messages
+          are removed, and content lists are converted to strings for vLLM compatibility
         """
         for message in messages:
             if message["role"] == "assistant":
                 message.pop("thinking_blocks", None)
-                message.pop("reasoning_content", None)
+                if not isinstance(message.get("reasoning_content"), str):
+                    message.pop("reasoning_content", None)
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []

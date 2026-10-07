@@ -1,6 +1,6 @@
 mod host;
 
-use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_inference_responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
@@ -81,7 +81,7 @@ fn run_public(
         py,
         arguments,
         move |py, arguments, request| {
-            let route = litellm_core::responses::ResponsesRoute::new(
+            let route = litellm_inference_responses::ResponsesRoute::new(
                 crate::http::provider_client(py, arguments, asynchronous)?
                     .map_err(crate::http::client_error)?,
                 crate::http::resources().auth.clone(),
@@ -142,7 +142,7 @@ impl ResponsesWebSocketConnection {
     ) -> PyResult<Bound<'py, PyAny>> {
         let headers = marshal_headers(headers)?;
         let timeout = optional_timeout(timeout_seconds);
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
                 .map_err(route_error_to_pyerr)?;
@@ -152,21 +152,21 @@ impl ResponsesWebSocketConnection {
 
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.send_text(text).await.map_err(route_error_to_pyerr)
         })
     }
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.recv_text().await.map_err(route_error_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.close().await.map_err(route_error_to_pyerr)
         })
     }

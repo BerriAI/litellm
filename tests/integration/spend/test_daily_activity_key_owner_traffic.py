@@ -12,7 +12,7 @@ from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import Gateway, Scenario, eventually
+from integration._support.client import Gateway, Scenario, eventually, string_value
 from integration._support.daily_activity import (
     AGGREGATED_USER_ACTIVITY,
     DAY,
@@ -25,6 +25,7 @@ from integration._support.daily_activity import (
     daily_rows,
     key_metadata,
     key_no_key_table_holds,
+    purge_key_from_the_key_tables,
     seeded_metrics,
     seeded_row,
     user_row,
@@ -41,6 +42,10 @@ from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 REQUESTS_OF_KEY: Final = (
     'SELECT COALESCE(SUM(api_requests), 0)::int AS requests FROM "LiteLLM_DailyUserSpend" '
     "WHERE api_key=%s AND user_id=%s"
+)
+NAMED_SPEND_LOGS_OF_KEY: Final = (
+    'SELECT COUNT(*)::int AS named FROM "LiteLLM_SpendLogs" '
+    "WHERE api_key=%s AND NULLIF(metadata->>'user_api_key_alias', '') IS NOT NULL"
 )
 UNIFIED_ENDPOINTS: Final = ("/v1/chat/completions", "/v1/messages", "/v1/responses")
 REQUESTS_OF_A_BURST: Final = 21
@@ -210,6 +215,14 @@ def _wait_for_requests(api_key: str, user: str, requests: int) -> None:
     )
 
 
+def _wait_for_named_spend_logs(api_key: str, requests: int) -> None:
+    eventually(
+        lambda: read_rows(NAMED_SPEND_LOGS_OF_KEY, (api_key,)),
+        lambda rows: rows[0]["named"] == requests,
+        seconds=70,
+    )
+
+
 def _cli_session_token(user: str, team: str) -> str:
     cli_user: Final = LiteLLM_UserTable(user_id=user, user_role="internal_user", teams=[team], models=[])
     return ExperimentalUIJWTToken.get_cli_jwt_auth_token(user_info=cli_user, team_id=team, team_alias="cli-team")
@@ -240,6 +253,39 @@ def test_key_used_on_every_unified_endpoint_is_reported_with_its_own_alias_and_u
             _activity_around_today(gateway, stored),
             stored,
             key_metadata(alias=alias, user=owner, email=email, exists=True),
+            _totals_of_requests(3),
+        )
+
+
+def test_key_purged_from_the_key_tables_is_reported_with_the_alias_its_spend_logs_name(gateway: Gateway) -> None:
+    prompts: Final = (_prompt(), _prompt(), _prompt())
+    with wire_server(_provider) as wire, gateway.scenario() as scenario:
+        model: Final = _priced_model(scenario, wire.url)
+        owner, email = user_with_an_email(scenario)
+        alias: Final = f"integration-alias-{uuid.uuid4().hex}"
+        generated: Final = gateway.post("/key/generate", {"user_id": owner, "key_alias": alias, "models": [model]})
+        key: Final = string_value(generated["key"])
+        stored: Final = sha256(key.encode()).hexdigest()
+        try:
+            answers: Final = tuple(
+                gateway.request("POST", endpoint, _request_body(endpoint, model, prompt), key=key)
+                for endpoint, prompt in zip(UNIFIED_ENDPOINTS, prompts, strict=True)
+            )
+            assert [answer.status_code for answer in answers] == [200, 200, 200], [answer.text for answer in answers]
+            received: Final = _sent_for_callers(wire.drain())
+            assert [request.target for request in received] == [
+                "/v1/chat/completions",
+                "/v1/responses",
+                "/v1/responses",
+            ]
+            _wait_for_requests(stored, owner, 3)
+            _wait_for_named_spend_logs(stored, 3)
+        finally:
+            purge_key_from_the_key_tables(stored)
+        assert_key_owner_and_totals(
+            _activity_around_today(gateway, stored),
+            stored,
+            key_metadata(alias=alias, user=owner, email=email, exists=False),
             _totals_of_requests(3),
         )
 

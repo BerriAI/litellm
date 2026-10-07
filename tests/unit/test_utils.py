@@ -68,7 +68,8 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
-    _get_potential_model_names,
+    get_potential_model_names,
+    _is_litellm_router_call,
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
@@ -82,6 +83,13 @@ from litellm.utils import (
     is_cached_message,
     is_prompt_caching_valid_prompt,
 )
+
+
+def test_get_base_model_from_metadata_returns_unvalidated_root_value():
+    from litellm.utils import get_base_model_from_metadata
+
+    assert get_base_model_from_metadata({"litellm_params": {"base_model": 42}}) == 42
+
 
 # Adds the parent directory to the system path
 
@@ -181,13 +189,13 @@ def test_potential_model_names_keeps_provider_prefixed_candidate():
     Agent API serves `perplexity/glm-5.2`, mapped as `perplexity/perplexity/glm-5.2`)
     needs the un-stripped `<provider>/<model>` candidate. Every other candidate reads
     the leading `perplexity/` as the litellm prefix and strips it away."""
-    already_prefixed = _get_potential_model_names(model="perplexity/glm-5.2", custom_llm_provider="perplexity")
+    already_prefixed = get_potential_model_names(model="perplexity/glm-5.2", custom_llm_provider="perplexity")
     assert already_prefixed["provider_prefixed_model_name"] == "perplexity/perplexity/glm-5.2"
     assert already_prefixed["split_model"] == "glm-5.2"
     assert already_prefixed["combined_model_name"] == "perplexity/glm-5.2"
     assert already_prefixed["combined_stripped_model_name"] == "perplexity/glm-5.2"
 
-    bare = _get_potential_model_names(model="glm-5.2", custom_llm_provider="perplexity")
+    bare = get_potential_model_names(model="glm-5.2", custom_llm_provider="perplexity")
     assert bare["provider_prefixed_model_name"] == bare["combined_model_name"] == "perplexity/glm-5.2"
 
 
@@ -241,9 +249,9 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
 
 
 def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
-    with patch("litellm.utils._get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
+    with patch("litellm.utils.get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
         with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:
-            litellm.utils._get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
+            litellm.utils.get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
     assert not isinstance(exc_info.value, litellm.ModelNotMappedError)
 
 
@@ -664,6 +672,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
+        "output_cost_per_image_token_batches",
         "input_cost_per_video_token",
         "output_cost_per_video_token",
         "input_cost_per_audio_per_second",
@@ -768,12 +777,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_priority": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_batches": {"type": "number"},
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
+                "cache_creation_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
@@ -782,7 +793,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_batches": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
@@ -809,11 +822,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost_balanced": {"type": "number"},
+                "cache_read_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_flex": {"type": "number"},
                 "input_cost_per_token_priority": {"type": "number"},
                 "input_cost_per_token_balanced": {"type": "number"},
+                "input_cost_per_token_ultrafast": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
@@ -822,8 +837,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_balanced": {"type": "number"},
+                "output_cost_per_token_ultrafast": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
                 "regional_endpoint_uplift_multiplier": {"type": "number"},
@@ -894,6 +911,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_image_2K": {"type": "number"},
                 "output_cost_per_image_4K": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
+                "output_cost_per_image_token_batches": {"type": "number"},
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
@@ -946,6 +964,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_video_input": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
@@ -988,6 +1008,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "enum": ["low", "medium", "high", "max", "xhigh"],
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
+                "supports_regex_lookaround": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
                     "type": "array",
@@ -1012,6 +1033,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/videos",
                             "/vertex_ai/live",
                             "/v1/listen",
+                            "/v1/systemone",
                             "/v1beta/interactions",
                         ],
                     },
@@ -2206,7 +2228,7 @@ def test_block_key_hashing_logic():
 
     # Test cases: (input_key, should_be_hashed, expected_output)
     test_cases = [
-        ("sk-1234567890abcdef", True, hash_token("sk-1234567890abcdef")),
+        ("sk-9876567890abcdef", True, hash_token("sk-9876567890abcdef")),
         ("sk-test-key", True, hash_token("sk-test-key")),
         ("abc123", False, "abc123"),  # Should not be hashed
         ("hashed_key_123", False, "hashed_key_123"),  # Should not be hashed
@@ -4106,6 +4128,46 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
     )
 
 
+def test_is_prompt_caching_valid_prompt_stops_counting_once_the_minimum_is_reached(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the router's prompt-cache deployment check tokenized the whole 400k to 700k token
+    Claude Code conversation on every request only to compare it with a 1024-token minimum, which
+    sat on the request's wall clock between auth and the LLM call. The check must decide after the
+    first few messages and still agree with the full count on both sides of the minimum."""
+    import litellm.litellm_core_utils.token_counter as token_counter_module
+
+    long_prompt = PROMPT_CACHE_MESSAGES * 50
+    counted_messages: list[int] = []  # mutable-ok: recorder for the _count_messages double
+    real_count_messages = token_counter_module._count_messages
+
+    def counting(params, batch, use_default_image_token_count, default_token_count):
+        counted_messages.append(len(batch))
+        return real_count_messages(params, batch, use_default_image_token_count, default_token_count)
+
+    monkeypatch.setattr(token_counter_module, "_count_messages", counting)
+
+    assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=1024) is True
+    assert sum(counted_messages) < len(long_prompt), sum(counted_messages)
+
+    full_count = litellm.token_counter(model="claude-opus-4-8", messages=long_prompt, use_default_image_token_count=True)
+    assert (
+        is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=full_count)
+        is True
+    )
+    assert (
+        is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=full_count + 1)
+        is False
+    )
+
+
+def test_is_prompt_caching_valid_prompt_without_messages_is_not_cacheable(local_model_cost_map: None) -> None:
+    """A tools-only call has no cacheable prefix, matching the pre-existing result for messages=None."""
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}]
+    assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=None, tools=tools) is False
+    assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=None) is False
+
+
 def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression LIT-4392: the success/failure existence guards used isinstance, so a user
     subclass of a built-in logger already promoted into the callback lists made the guard
@@ -4139,6 +4201,40 @@ def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.Monk
     assert _custom_logger_class_exists_in_failure_callbacks(builtin_instance) is True
 
 
+def test_custom_logger_guards_distinguish_callback_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression LIT-9070: every OTel v2 preset (otel, arize, ...) is one OpenTelemetryV2 class,
+    so a class-only guard reported a UI-added arize as already registered whenever otel was
+    active and silently skipped it. The guard has to match on class and callback_name together:
+    the same preset twice is still a duplicate, a sibling preset or a subclass is not."""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.utils import (
+        _custom_logger_class_exists_in_failure_callbacks,
+        _custom_logger_class_exists_in_success_callbacks,
+    )
+
+    class PresetLogger(CustomLogger):
+        def __init__(self, callback_name: str) -> None:
+            super().__init__()
+            self.callback_name: Final = callback_name
+
+    class UserSubclassLogger(PresetLogger):
+        pass
+
+    monkeypatch.setattr(litellm, "success_callback", [PresetLogger("otel"), UserSubclassLogger("arize")])
+    monkeypatch.setattr(litellm, "failure_callback", [PresetLogger("otel"), UserSubclassLogger("arize")])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+
+    assert _custom_logger_class_exists_in_success_callbacks(PresetLogger("otel")) is True
+    assert _custom_logger_class_exists_in_failure_callbacks(PresetLogger("otel")) is True
+    assert _custom_logger_class_exists_in_success_callbacks(PresetLogger("arize")) is False
+    assert _custom_logger_class_exists_in_failure_callbacks(PresetLogger("arize")) is False
+    assert _custom_logger_class_exists_in_success_callbacks(UserSubclassLogger("otel")) is False
+    assert _custom_logger_class_exists_in_failure_callbacks(UserSubclassLogger("otel")) is False
+    assert _custom_logger_class_exists_in_success_callbacks(UserSubclassLogger("arize")) is True
+    assert _custom_logger_class_exists_in_failure_callbacks(UserSubclassLogger("arize")) is True
+
+
 @pytest.mark.asyncio
 async def test_s3_v2_success_callback_registers_alongside_user_subclass(
     monkeypatch: pytest.MonkeyPatch,
@@ -4147,7 +4243,7 @@ async def test_s3_v2_success_callback_registers_alongside_user_subclass(
     and success_callback ["s3_v2"], the built-in s3_v2 logger was never added and S3 logs were
     silently dropped while requests kept returning 200."""
     from litellm.integrations.s3_v2 import S3Logger
-    from litellm.utils import _add_custom_logger_callback_to_specific_event
+    from litellm.utils import add_custom_logger_callback_to_specific_event
 
     class UserS3Logger(S3Logger):
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -4159,7 +4255,7 @@ async def test_s3_v2_success_callback_registers_alongside_user_subclass(
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
 
-    _add_custom_logger_callback_to_specific_event("s3_v2", "success")
+    add_custom_logger_callback_to_specific_event("s3_v2", "success")
 
     assert any(type(cb) is S3Logger for cb in litellm.success_callback)
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
@@ -4667,6 +4763,158 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
     assert standard_logging_object["response_cost"] > 0
     assert standard_logging_object["stream"] is True
     assert success_kwargs["stream"] is True
+
+
+@pytest.mark.parametrize(
+    "kwargs, is_async, expected",
+    [
+        ({"metadata": {"model_group": "g"}}, False, True),
+        ({"metadata": {"model_group": "g"}}, True, True),
+        ({"litellm_metadata": {"model_group": "g"}}, False, False),
+        ({"litellm_metadata": {"model_group": "g"}}, True, True),
+        ({}, False, False),
+        ({}, True, False),
+        ({"metadata": None}, False, False),
+        ({"metadata": None}, True, False),
+    ],
+)
+def test_is_litellm_router_call_is_async_aware(
+    kwargs: Mapping[str, object], is_async: bool, expected: bool
+) -> None:
+    assert _is_litellm_router_call(kwargs, is_async=is_async) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+async def test_router_aresponses_does_not_run_sdk_retries(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    model_list: Final = [
+        {
+            "model_name": "responses-retry",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-test",
+                "api_base": "https://responses-retry.local/v1",
+                "num_retries": 2,
+            },
+        }
+    ]
+    router: Final = litellm.Router(
+        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-retry.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                await router.aresponses(model="responses-retry", input="hi", stream=stream)
+
+        assert upstream.call_count == 3
+    finally:
+        router.discard()
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def test_router_responses_keeps_sdk_retries_for_sync_router_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    model_list: Final = [
+        {
+            "model_name": "responses-retry",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-test",
+                "api_base": "https://responses-retry.local/v1",
+                "num_retries": 2,
+            },
+        }
+    ]
+    router: Final = litellm.Router(
+        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-retry.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                router.responses(model="responses-retry", input="hi")
+
+        assert upstream.call_count == 3
+    finally:
+        router.discard()
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+async def test_aresponses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-direct.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                await litellm.aresponses(
+                    model="openai/gpt-4o-mini",
+                    input="hi",
+                    api_base="https://responses-direct.local/v1",
+                    api_key="k",
+                    num_retries=2,
+                )
+
+        assert upstream.call_count == 3
+    finally:
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def test_responses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-sync.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                litellm.responses(
+                    model="openai/gpt-4o-mini",
+                    input="hi",
+                    api_base="https://responses-sync.local/v1",
+                    api_key="k",
+                    num_retries=2,
+                )
+
+        assert upstream.call_count == 3
+    finally:
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 @pytest.mark.asyncio
@@ -5771,16 +6019,16 @@ class TestDefaultReasoningEffortHydration:
         [("gpt-5.1", "openai"), ("gpt-5.4", "openai"), ("azure/gpt-5.1", "azure")],
     )
     def test_the_declared_default_survives_model_info_hydration(self, local_model_cost_map, model, provider):
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=provider))
+        model_info = dict(get_model_info_helper(model=model, custom_llm_provider=provider))
         assert model_info["default_reasoning_effort"] == "none"
 
     def test_a_model_that_declares_nothing_hydrates_to_none(self, local_model_cost_map):
         """Absent means "the map does not say", which the gate reads as reasoning being active."""
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model="gpt-5.6-terra", custom_llm_provider="openai"))
+        model_info = dict(get_model_info_helper(model="gpt-5.6-terra", custom_llm_provider="openai"))
         assert model_info.get("default_reasoning_effort") is None
 
 
@@ -6437,6 +6685,11 @@ def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summa
     assert _logged_request_messages(original_function, *args, **kwargs) == [{"role": "user", "content": expected}]
 
 
+@pytest.mark.parametrize("original_function", ("atext_completion", "text_completion"))
+def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(original_function: str) -> None:
+    assert _logged_request_messages(original_function, model="gpt-4o") is None
+
+
 def test_search_with_a_mixed_type_query_list_still_reaches_its_own_validation_error() -> None:
     mixed_query: Final = cast(list[str], ["Eiffel Tower", 7])  # cast-ok: the invalid list is the point of the test
 
@@ -6467,3 +6720,67 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+@pytest.mark.asyncio
+async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chat over the Responses bridge exits two @client wrappers with one logging object. Issue
+    #44500: both exits enqueued a success handler, and on a large prompt the first one yielded to
+    the worker-thread base64 offload before it marked ``has_logged_async_success``, so the second
+    passed the check too and the request was logged and billed twice. The schedule step claims the
+    log for the object synchronously, so only the inner provider-shaped result is ever logged."""
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.utils import _dispatch_success_logging
+
+    class CountingLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.logged_results: list[object] = []
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            if kwargs["litellm_call_id"] == "bridge-call-id":
+                self.logged_results.append(response_obj)
+
+    counting_logger: Final = CountingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [counting_logger])
+    real_truncate: Final = litellm_logging.truncate_base64_in_messages_async
+
+    async def yielding_truncate(messages):
+        await asyncio.sleep(0)
+        return await real_truncate(messages)
+
+    monkeypatch.setattr(litellm_logging, "truncate_base64_in_messages_async", yielding_truncate)
+
+    messages: Final = [{"role": "user", "content": "hello"}]
+    logging_obj: Final = Logging(
+        model="gpt-5.6-luna",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp(),
+        litellm_call_id="bridge-call-id",
+        function_id="bridge-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="gpt-5.6-luna", custom_llm_provider="openai", input=messages
+    )
+    inner_result: Final = ModelResponse(id="inner")
+    outer_result: Final = ModelResponse(id="outer")
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    for result in (inner_result, outer_result):
+        _dispatch_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=now,
+            end_time=now,
+            is_completion_with_fallbacks=False,
+            is_litellm_internal_call=False,
+        )
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert len(counting_logger.logged_results) == 1, counting_logger.logged_results
+    assert counting_logger.logged_results[0] is inner_result

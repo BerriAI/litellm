@@ -1,0 +1,19 @@
+name: Set up the Rust bridge
+description: Select the shared Rust bridge artifact or the Cargo cache
+inputs:
+  artifact:
+    description: Rust bridge artifact name
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Restore the Cargo build cache
+      if: inputs.artifact == ''
+      uses: ./.github/actions/cache-cargo-build
+    - name: Download the Rust bridge artifact
+      if: inputs.artifact != ''
+      uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+      with:
+        name: ${{ inputs.artifact }}
+        path: rust-bridge-dist

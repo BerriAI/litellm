@@ -3,13 +3,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StrictInt, field_validator
+from pydantic import ConfigDict, Field, PrivateAttr, StrictInt, field_validator
 from typing_extensions import ReadOnly, Required, TypedDict
 
-from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
 from litellm.types.proxy.agent_identity import (
     AgentExecutionMode,
     AgentIdentityBinding,
+    EntraIdentityConfig,
 )
 
 if TYPE_CHECKING:
@@ -183,14 +184,14 @@ class AgentObjectPermission(TypedDict, total=False):
     agents: list[str] | None
 
 
-class AgentKillSwitchBearerAuth(BaseModel):
+class AgentKillSwitchBearerAuth(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["bearer"]
     token: str
 
 
-class AgentKillSwitchApiKeyAuth(BaseModel):
+class AgentKillSwitchApiKeyAuth(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["api_key"]
@@ -198,7 +199,7 @@ class AgentKillSwitchApiKeyAuth(BaseModel):
     api_key: str
 
 
-class AgentKillSwitchBasicAuth(BaseModel):
+class AgentKillSwitchBasicAuth(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["basic"]
@@ -214,7 +215,7 @@ AgentKillSwitchAuth: TypeAlias = Annotated[
 AgentKillSwitchMethod: TypeAlias = Literal["POST", "PUT", "PATCH", "DELETE", "GET"]
 
 
-class AgentKillSwitchConfig(BaseModel):
+class AgentKillSwitchConfig(LiteLLMBaseModel):
     """Webhook an admin fires to shut an agent down out of band. LiteLLM only
     makes the call; whatever the endpoint does with it is the agent's business."""
 
@@ -236,7 +237,7 @@ class AgentKillSwitchConfig(BaseModel):
         return value
 
 
-class AgentKillSwitchResult(BaseModel):
+class AgentKillSwitchResult(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_id: str
@@ -252,8 +253,11 @@ class AgentKillSwitchResult(BaseModel):
 
 
 class AgentConfig(TypedDict, total=False):
+    identity: ReadOnly[EntraIdentityConfig | None]
+    enabled: ReadOnly[bool]
+    execution_mode: ReadOnly[AgentExecutionMode]
     agent_name: Required[str]
-    agent_card_params: Required[AgentCard]
+    agent_card_params: ReadOnly[AgentCard]
     litellm_params: dict[str, object]  # allow for any future litellm params
     object_permission: AgentObjectPermission
     tpm_limit: int | None
@@ -267,6 +271,9 @@ class AgentConfig(TypedDict, total=False):
 
 
 class PatchAgentRequest(TypedDict, total=False):
+    identity: ReadOnly[EntraIdentityConfig | None]
+    enabled: ReadOnly[bool]
+    execution_mode: ReadOnly[AgentExecutionMode]
     agent_name: str
     agent_card_params: AgentCard
     litellm_params: dict[str, object]
@@ -285,7 +292,7 @@ AGENT_CALLER_USER_ID_HEADER: Final = "x-litellm-user-id"
 AGENT_CALLER_TEAM_ID_HEADER: Final = "x-litellm-team-id"
 
 
-class AgentCaller(BaseModel):
+class AgentCaller(LiteLLMBaseModel):
     """The user and team that invoked an agent, echoed back by the agent on its own proxy calls.
     Only ever narrows what the agent's key may do."""
 
@@ -298,13 +305,13 @@ class AgentCaller(BaseModel):
 # Request/Response models for CRUD endpoints
 
 
-class AgentKeySummary(BaseModel):
+class AgentKeySummary(LiteLLMBaseModel):
     token: str
     key_alias: str | None = None
     key_name: str | None = None
 
 
-class AgentResponse(BaseModel):
+class AgentResponse(LiteLLMBaseModel):
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
     enabled: bool = True
@@ -332,7 +339,7 @@ class AgentResponse(BaseModel):
     updated_by: str | None = None
 
 
-class ListAgentsResponse(BaseModel):
+class ListAgentsResponse(LiteLLMBaseModel):
     agents: list[AgentResponse]
 
 
@@ -396,17 +403,17 @@ class AgentVersionsResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
 
-class AgentMakePublicResponse(BaseModel):
+class AgentMakePublicResponse(LiteLLMBaseModel):
     message: str
     public_agent_groups: list[str]
     updated_by: str
 
 
-class MakeAgentsPublicRequest(BaseModel):
+class MakeAgentsPublicRequest(LiteLLMBaseModel):
     agent_ids: list[str]
 
 
-def _normalize_a2a_jsonrpc_response(
+def normalize_a2a_jsonrpc_response(
     response_dict: Mapping[str, object],
     request_id: object | None = None,
 ) -> dict[str, object]:
@@ -434,6 +441,9 @@ def _normalize_a2a_jsonrpc_response(
             request_id if isinstance(request_id, (str, int)) and not isinstance(request_id, bool) else str(request_id)
         )
     return normalized
+
+
+_normalize_a2a_jsonrpc_response = normalize_a2a_jsonrpc_response
 
 
 class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
@@ -474,7 +484,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        response_dict: Final = _normalize_a2a_jsonrpc_response(
+        response_dict: Final = normalize_a2a_jsonrpc_response(
             response.model_dump(mode="json", exclude_none=True), request_id=request_id
         )
         return cls.model_validate(response_dict)
@@ -495,4 +505,4 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls.model_validate(_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))
+        return cls.model_validate(normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

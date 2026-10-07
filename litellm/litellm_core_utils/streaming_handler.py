@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -164,7 +165,7 @@ class _VertexChunkLike(Protocol):
     candidates: Sequence[_VertexCandidateLike]
 
 
-class _ParsedChunkHiddenParams(BaseModel):
+class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
 
 
@@ -189,9 +190,7 @@ def _provider_hidden_params(
     hidden: Final[object] = getattr(chunk, "_hidden_params", None)
     parsed: Final = _parsed_provider_hidden_params(hidden)
     provider_specific_fields: Final[object | None] = (
-        dict(parsed.provider_specific_fields)  # mutable-ok: stream assembly merges provider metadata into this dict
-        if parsed is not None and parsed.provider_specific_fields
-        else None
+        dict(parsed.provider_specific_fields) if parsed is not None and parsed.provider_specific_fields else None
     )
     params: Final[Mapping[str, object]] = MappingProxyType(
         {
@@ -699,7 +698,7 @@ class CustomStreamWrapper:
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
                 if "text_output" in chunk:
-                    response = CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+                    response = CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
                     response = response.strip()
                     parsed_response = json.loads(response)
                 else:
@@ -1106,7 +1105,7 @@ class CustomStreamWrapper:
         self,
         chunk: Any,
         model_response: ModelResponseStream,
-        completion_obj: dict[str, Any],
+        completion_obj: dict[str, object],
     ) -> _ProviderChunkResult:
         response_obj: dict[str, Any] = {}
         if (
@@ -1677,15 +1676,15 @@ class CustomStreamWrapper:
         """
         Caches the streaming response
         """
-        if not cache_hit and self.logging_obj._llm_caching_handler is not None:
-            self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(processed_chunk)
+        if not cache_hit and self.logging_obj.llm_caching_handler is not None:
+            self.logging_obj.llm_caching_handler.sync_add_streaming_response_to_cache(processed_chunk)
 
     async def async_cache_streaming_response(self, processed_chunk, cache_hit: bool):
         """
         Caches the streaming response
         """
-        if not cache_hit and self.logging_obj._llm_caching_handler is not None:
-            await self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(processed_chunk)
+        if not cache_hit and self.logging_obj.llm_caching_handler is not None:
+            await self.logging_obj.llm_caching_handler.add_streaming_response_to_cache(processed_chunk)
 
     def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
         """
@@ -1711,7 +1710,7 @@ class CustomStreamWrapper:
             asyncio.run(self.logging_obj.async_success_handler(processed_chunk, None, None, cache_hit))
         ## SYNC LOGGING — only for sync SDK entrypoints; async proxy paths export via async_success_handler
         litellm_params: Final = self.logging_obj.model_call_details.get("litellm_params", {})
-        if self.logging_obj._is_sync_litellm_request(litellm_params):
+        if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
     def finish_reason_handler(self):
@@ -1795,7 +1794,7 @@ class CustomStreamWrapper:
                     if response is None:
                         continue
                     if self.logging_obj.completion_start_time is None:
-                        self.logging_obj._update_completion_start_time(completion_start_time=datetime.datetime.now())
+                        self.logging_obj.update_completion_start_time(completion_start_time=datetime.datetime.now())
                     ## LOGGING
                     if not litellm.disable_streaming_logging:
                         executor.submit(
@@ -1932,6 +1931,10 @@ class CustomStreamWrapper:
             else:
                 self.sent_last_chunk = True
                 processed_chunk: Final = self.finish_reason_handler()
+                # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
+                # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
+                if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
+                    self.chunks.append(processed_chunk)
                 if self.stream_options is None:  # add usage as hidden param
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk._hidden_params["usage"] = usage
@@ -2002,7 +2005,7 @@ class CustomStreamWrapper:
                         continue
 
                     if self.logging_obj.completion_start_time is None:
-                        self.logging_obj._update_completion_start_time(completion_start_time=datetime.datetime.now())
+                        self.logging_obj.update_completion_start_time(completion_start_time=datetime.datetime.now())
 
                     if processed_chunk.choices:
                         choice = processed_chunk.choices[0]
@@ -2196,6 +2199,10 @@ class CustomStreamWrapper:
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
+            # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
+            # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
+            if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
+                self.chunks.append(processed_chunk)
             if self.stream_options is None:
                 usage: Final = calculate_total_usage(chunks=self.chunks)
                 processed_chunk._hidden_params["usage"] = usage  # pyright: ignore[reportPrivateUsage]  # sync parity
@@ -2245,7 +2252,7 @@ class CustomStreamWrapper:
             backfill_missing_cache_usage_fields(usage)
             self.logging_obj.model_call_details["combined_usage_object"] = usage
             self.logging_obj.model_call_details["response_cost"] = (
-                self.logging_obj._response_cost_calculator(result=partial_response) or 0.0
+                self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
             )
         except Exception as recover_error:
             verbose_logger.debug(
@@ -2327,7 +2334,7 @@ class CustomStreamWrapper:
         )
 
     @staticmethod
-    def _strip_sse_data_from_chunk(chunk: str | None) -> str | None:
+    def strip_sse_data_from_chunk(chunk: str | None) -> str | None:
         """
         Strips the 'data: ' prefix from Server-Sent Events (SSE) chunks.
 
@@ -2361,6 +2368,8 @@ class CustomStreamWrapper:
                 return chunk[_length_of_sse_data_prefix:]
 
         return chunk
+
+    _strip_sse_data_from_chunk = strip_sse_data_from_chunk
 
 
 def _cache_token_count(details: PromptTokensDetailsWrapper | None, keys: tuple[str, ...]) -> int:

@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,6 +30,8 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+
+_RESPONSE_BODY: Final = TypeAdapter(dict[object, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _usage_restated_from_xai_ticks(usage: Usage | None) -> Usage | None:
@@ -227,9 +230,7 @@ class XAIChatConfig(OpenAIGPTConfig):
                 "Dropping 'web_search_options'. Use the Responses API for XAI web search."
             )
 
-        chat_params: Final = {  # mutable-ok: base transform_request takes a plain dict of optional params
-            key: value for key, value in optional_params.items() if key != "web_search_options"
-        }
+        chat_params: Final = {key: value for key, value in optional_params.items() if key != "web_search_options"}
         return super().transform_request(
             model, strip_name_from_messages(messages), chat_params, litellm_params, headers
         )
@@ -291,7 +292,7 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         # Handle X.AI web search usage tracking
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _RESPONSE_BODY.validate_python(raw_response.json())
             self._enhance_usage_with_xai_web_search_fields(response, raw_response_json)
         except Exception as e:
             verbose_logger.debug("Error extracting X.AI web search usage: %s", e)

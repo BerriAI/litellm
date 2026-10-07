@@ -28,7 +28,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 from urllib.parse import urlsplit
 
-from litellm._logging import _redact_string
+from litellm._logging import redact_string
 from litellm._uuid import uuid
 
 if TYPE_CHECKING:
@@ -37,13 +37,14 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import assert_never, overload
 
 import litellm
 
 # client must be imported from litellm as it's a decorator used at function definition time
 from litellm import client
+from litellm.types.llms.base import LiteLLMBaseModel
 
 # Other utils are imported directly to avoid circular imports
 from litellm.utils import (
@@ -92,8 +93,8 @@ from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
 from litellm.litellm_core_utils.health_check_utils import (
-    _create_health_check_response,
     _filter_model_params,
+    create_health_check_response,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import (
@@ -116,7 +117,12 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
+    bedrock_route_for_request,
+    without_bedrock_route_prefix,
+)
+from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -125,10 +131,10 @@ from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
 )
-from litellm.realtime_api.main import _realtime_health_check
+from litellm.realtime_api.main import realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
-    _CompletionDispatchContext,
+    CompletionDispatchContext,
     _CompletionDispatchResult,
 )
 from litellm.types.litellm_params import ControlOptions, RetryStrategy
@@ -139,6 +145,7 @@ from litellm.types.utils import (
     RawRequestTypedDict,
     StreamingChoices,
 )
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import (
     Choices,
     CustomStreamWrapper,
@@ -151,7 +158,6 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     TranscriptionResponse,
     Usage,
-    _get_model_info_helper,
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
@@ -159,6 +165,7 @@ from litellm.utils import (
     create_tokenizer,
     get_llm_provider,
     get_model_info,
+    get_model_info_helper,
     get_non_default_completion_params,
     get_non_default_transcription_params,
     get_optional_params_embeddings,
@@ -856,11 +863,11 @@ async def _sleep_for_timeout_async(timeout: float | str | httpx.Timeout):
         await asyncio.sleep(timeout.connect)
 
 
-class _AdmissionReservation(BaseModel):
+class _AdmissionReservation(LiteLLMBaseModel):
     input_tokens: int | None = None
 
 
-class _AdmissionMetadata(BaseModel):
+class _AdmissionMetadata(LiteLLMBaseModel):
     user_api_key_budget_reservation: _AdmissionReservation | None = None
 
 
@@ -1097,7 +1104,7 @@ def responses_api_bridge_check(
     try:
         model_info = cast(
             dict,
-            _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
+            get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
         )
         if model_info.get("mode") is None and model.startswith("responses/"):
             model = model.replace("responses/", "")
@@ -1313,25 +1320,25 @@ def _register_custom_pricing_for_request(
     )
 
 
-def _dispatch_metadata(ctx: _CompletionDispatchContext) -> Mapping[str, object] | None:
+def _dispatch_metadata(ctx: CompletionDispatchContext) -> Mapping[str, object] | None:
     return ctx.metadata
 
 
-def _dispatch_client_http(ctx: _CompletionDispatchContext) -> HTTPHandler | AsyncHTTPHandler | None:
+def _dispatch_client_http(ctx: CompletionDispatchContext) -> HTTPHandler | AsyncHTTPHandler | None:
     return ctx.client
 
 
 def _dispatch_client_azure(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> openai.AzureOpenAI | openai.AsyncAzureOpenAI | HTTPHandler | AsyncHTTPHandler | None:
     return ctx.client
 
 
-def _dispatch_client_openai(ctx: _CompletionDispatchContext) -> openai.OpenAI | openai.AsyncOpenAI | None:
+def _dispatch_client_openai(ctx: CompletionDispatchContext) -> openai.OpenAI | openai.AsyncOpenAI | None:
     return ctx.client
 
 
-def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     _azure_detection_model: Final = ctx._azure_detection_model
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -1465,7 +1472,7 @@ def _complete_azure(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
     return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
-def _complete_azure_text(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_azure_text(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -1559,7 +1566,7 @@ def _complete_azure_text(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
-def _complete_deepseek(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_deepseek(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -1610,7 +1617,7 @@ def _complete_deepseek(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     return response
 
 
-def _complete_azure_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_azure_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -1765,7 +1772,7 @@ def _complete_azure_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
 
 
 def _complete_text_completion_openai(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -1847,7 +1854,7 @@ def _complete_text_completion_openai(
 
 
 def _complete_fireworks_ai(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -1903,7 +1910,7 @@ def _complete_fireworks_ai(
     return response
 
 
-def _complete_together_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_together_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -1953,7 +1960,7 @@ def _complete_together_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     return response
 
 
-def _complete_heroku(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_heroku(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -2003,7 +2010,7 @@ def _complete_heroku(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     return response
 
 
-def _complete_ragflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_ragflow(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -2053,7 +2060,7 @@ def _complete_ragflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     return response
 
 
-def _complete_xai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_xai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -2104,7 +2111,7 @@ def _complete_xai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     return response
 
 
-def _complete_groq(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_groq(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -2167,7 +2174,7 @@ def _complete_groq(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult
 
 
 def _complete_bedrock_mantle(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -2188,7 +2195,7 @@ def _complete_bedrock_mantle(
     api_base = api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")
     api_key = api_key or litellm.api_key or get_secret("BEDROCK_MANTLE_API_KEY")
     headers = headers or litellm.headers
-    config: Final = litellm.BedrockMantleChatConfig.get_config()
+    config: Final = bedrock_mantle_chat_config(model).get_config()
     for k, v in _provider_config_items(config):
         if k not in optional_params:
             optional_params[k] = v
@@ -2212,7 +2219,7 @@ def _complete_bedrock_mantle(
     )
 
 
-def _complete_a2a(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_a2a(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -2275,7 +2282,7 @@ def _complete_a2a(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     )
 
 
-def _complete_gigachat(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_gigachat(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key = ctx.api_key
@@ -2337,7 +2344,7 @@ def _complete_gigachat(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     return response
 
 
-def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_sap(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -2384,7 +2391,7 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
 
 
 def _complete_aiohttp_openai(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     if http2_enabled():
         verbose_logger.warning(
@@ -2444,7 +2451,7 @@ def _complete_aiohttp_openai(
     )
 
 
-def _complete_cometapi(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_cometapi(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -2493,7 +2500,7 @@ def _complete_cometapi(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     return response
 
 
-def _complete_minimax(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_minimax(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -2539,7 +2546,7 @@ def _complete_minimax(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     return response
 
 
-def _complete_hosted_vllm(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
@@ -2584,7 +2591,7 @@ def _complete_hosted_vllm(ctx: _CompletionDispatchContext) -> _CompletionDispatc
 
 
 def _complete_custom_openai(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -2724,7 +2731,7 @@ def _complete_custom_openai(
     return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
-def _complete_mistral(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_mistral(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -2766,7 +2773,7 @@ def _complete_mistral(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     )
 
 
-def _complete_replicate(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_replicate(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
@@ -2821,7 +2828,7 @@ def _complete_replicate(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
 
 
 def _complete_anthropic_text(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -2875,7 +2882,7 @@ def _complete_anthropic_text(
     )
 
 
-def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_anthropic(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -2941,7 +2948,7 @@ def _complete_anthropic(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     return response
 
 
-def _complete_nlp_cloud(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_nlp_cloud(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
@@ -2991,7 +2998,7 @@ def _complete_nlp_cloud(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
-def _complete_aleph_alpha(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_aleph_alpha(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
     litellm_params: Final = ctx.litellm_params
@@ -3040,7 +3047,7 @@ def _complete_aleph_alpha(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     return model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
-def _complete_cohere_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_cohere_chat(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
@@ -3105,7 +3112,7 @@ def _complete_cohere_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     )
 
 
-def _complete_maritalk(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_maritalk(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
     custom_prompt_dict: Final = ctx.custom_prompt_dict
@@ -3138,7 +3145,7 @@ def _complete_maritalk(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     )
 
 
-def _complete_amazon_nova(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_amazon_nova(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     api_base = ctx.api_base
     api_key = ctx.api_key
     custom_llm_provider: Final = ctx.custom_llm_provider
@@ -3174,7 +3181,7 @@ def _complete_amazon_nova(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     )
 
 
-def _complete_huggingface(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_huggingface(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -3217,7 +3224,7 @@ def _complete_huggingface(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     )
 
 
-def _complete_oci(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_oci(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -3252,7 +3259,7 @@ def _complete_oci(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     )
 
 
-def _complete_compactifai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_compactifai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -3294,7 +3301,7 @@ def _complete_compactifai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     )
 
 
-def _complete_oobabooga(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_oobabooga(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     api_base: Final = ctx.api_base
     litellm_params: Final = ctx.litellm_params
     logger_fn: Final = ctx.logger_fn
@@ -3328,7 +3335,7 @@ def _complete_oobabooga(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     return model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
-def _complete_databricks(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_databricks(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -3400,7 +3407,7 @@ def _complete_databricks(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
-def _complete_datarobot(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_datarobot(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -3437,7 +3444,7 @@ def _complete_datarobot(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     )
 
 
-def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -3514,7 +3521,7 @@ def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
-def _complete_nadir(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_nadir(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     api_base: Final = ctx.api_base or litellm.api_base or get_secret_str("NADIR_API_BASE") or NADIR_DEFAULT_API_BASE
     api_key: Final = ctx.api_key
 
@@ -3542,7 +3549,7 @@ def _complete_nadir(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
 
 
 def _complete_vercel_ai_gateway(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -3619,7 +3626,7 @@ def _complete_vercel_ai_gateway(
     return response
 
 
-def _complete_edenai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_edenai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     api_base: Final = litellm.EdenAIChatConfig.get_api_base(ctx.api_base)
     api_key: Final = litellm.EdenAIChatConfig.get_api_key(ctx.api_key or litellm.api_key)
     response: Final = base_llm_http_handler.completion(
@@ -3645,7 +3652,7 @@ def _complete_edenai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     return response
 
 
-def _complete_fal_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_fal_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     if ctx.stream:
         raise litellm.FalAIError(
             status_code=400,
@@ -3677,7 +3684,7 @@ def _complete_fal_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
 
 
 def _complete_vertex_ai_beta(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -3744,7 +3751,7 @@ def _complete_vertex_ai_beta(
     )
 
 
-def _complete_vertex_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_vertex_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     client: Final = _dispatch_client_http(ctx)
@@ -3929,7 +3936,7 @@ def _complete_vertex_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     return model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
-def _complete_predibase(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_predibase(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -3989,7 +3996,7 @@ def _complete_predibase(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
 
 
 def _complete_text_completion_codestral(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -4039,7 +4046,7 @@ def _complete_text_completion_codestral(
 
 
 def _complete_text_completion_inception(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -4103,7 +4110,7 @@ def _complete_text_completion_inception(
 
 
 def _complete_sagemaker_chat(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -4139,7 +4146,7 @@ def _complete_sagemaker_chat(
     )
 
 
-def _complete_sagemaker(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     custom_prompt_dict: Final = ctx.custom_prompt_dict
     hf_model_name: Final = ctx.hf_model_name
@@ -4167,7 +4174,11 @@ def _complete_sagemaker(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     )
 
 
-def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+_ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
+_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -4205,7 +4216,12 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
         if "aws_region_name" not in optional_params or optional_params["aws_region_name"] is None:
             optional_params["aws_region_name"] = aws_bedrock_client.meta.region_name
 
-    bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
+    additional_drop_params: Final = (
+        _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(ctx.kwargs["additional_drop_params"])
+        if ctx.kwargs.get("additional_drop_params") is not None
+        else None
+    )
+    bedrock_route: Final = bedrock_route_for_request(model, ctx.request_params, additional_drop_params)
     if bedrock_route == "claude_platform":
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model,
@@ -4232,7 +4248,7 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
             provider_config=provider_config,
         )
     elif bedrock_route == "converse":
-        model = model.replace("converse/", "")
+        model = without_bedrock_route_prefix(model)
         response = bedrock_converse_chat_completion.completion(
             model=model,
             messages=messages,
@@ -4291,7 +4307,7 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
     return response
 
 
-def _complete_watsonx(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_watsonx(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -4329,7 +4345,7 @@ def _complete_watsonx(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
 
 
 def _complete_watsonx_text(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -4405,7 +4421,7 @@ def _complete_watsonx_text(
     )
 
 
-def _complete_vllm(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     custom_prompt_dict = ctx.custom_prompt_dict
     litellm_params: Final = ctx.litellm_params
     logger_fn: Final = ctx.logger_fn
@@ -4442,7 +4458,7 @@ def _complete_vllm(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult
     return model_response
 
 
-def _complete_ollama(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_ollama(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
@@ -4482,7 +4498,7 @@ def _complete_ollama(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     )
 
 
-def _complete_ollama_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_ollama_chat(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -4524,7 +4540,7 @@ def _complete_ollama_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     )
 
 
-def _complete_triton(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_triton(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
@@ -4560,7 +4576,7 @@ def _complete_triton(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     )
 
 
-def _complete_cloudflare(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_cloudflare(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -4599,7 +4615,7 @@ def _complete_cloudflare(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     )
 
 
-def _complete_petals(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_petals(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     api_base = ctx.api_base
     client: Final = _dispatch_client_http(ctx)
     litellm_params: Final = ctx.litellm_params
@@ -4639,7 +4655,7 @@ def _complete_petals(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
     return model_response
 
 
-def _complete_snowflake(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_snowflake(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
@@ -4692,7 +4708,7 @@ def _complete_snowflake(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     return response
 
 
-def _complete_gradient_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_gradient_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key: Final = ctx.api_key
@@ -4727,7 +4743,7 @@ def _complete_gradient_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     )
 
 
-def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_gdc(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -4766,7 +4782,7 @@ def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     )
 
 
-def _complete_bytez(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_bytez(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key = ctx.api_key
@@ -4806,7 +4822,7 @@ def _complete_bytez(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
     return response
 
 
-def _complete_lemonade(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_lemonade(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key = ctx.api_key
@@ -4846,7 +4862,7 @@ def _complete_lemonade(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
     return response
 
 
-def _complete_ovhcloud(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_ovhcloud(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -4897,7 +4913,7 @@ def _custom_api_first_output(resp: httpx.Response | None) -> str:
     return resp.json()["data"][0]["output"][0]
 
 
-def _complete_custom(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_custom(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     api_base: Final = ctx.api_base
     headers: Final = ctx.headers
     kwargs: Final = ctx.kwargs
@@ -4967,7 +4983,7 @@ def _complete_custom(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
 
 
 def _complete_custom_providers(
-    ctx: _CompletionDispatchContext,
+    ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -5029,7 +5045,7 @@ def _complete_custom_providers(
     return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
-def _complete_langgraph(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_langgraph(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -5078,7 +5094,7 @@ def _complete_langgraph(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     )
 
 
-def _complete_langflow(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -5261,7 +5277,7 @@ def completion(
         # Check if MCP tools are present (following responses pattern)
         # Cast tools to Optional[Iterable[ToolParam]] for type checking
         tools_for_mcp: Final = cast(Iterable[ToolParam] | None, tools)
-        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools_for_mcp):
+        if LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools_for_mcp):
             return acompletion_with_mcp(  # pyright: ignore[reportReturnType]  # MCP path returns a coroutine that acompletion() awaits; completion()'s sync return type omits it
                 model=model,
                 messages=messages,
@@ -5475,7 +5491,9 @@ def completion(
             api_base=api_base,
             api_key=api_key,
             litellm_params=(
-                GenericLiteLLMParams(**_supplemental_provider_params) if _supplemental_provider_params else None
+                GenericLiteLLMParams.model_validate(_supplemental_provider_params)
+                if _supplemental_provider_params
+                else None
             ),
         )
 
@@ -5641,7 +5659,9 @@ def completion(
         if litellm.add_function_to_prompt and optional_params.get(
             "functions_unsupported_model", None
         ):  # if user opts to add it to prompt, when API doesn't support function calling
-            functions_unsupported_model: Final = optional_params.pop("functions_unsupported_model")
+            functions_unsupported_model: Final[list[object]] = TypeAdapter(list[object]).validate_python(
+                optional_params.pop("functions_unsupported_model")
+            )
             messages = function_call_prompt(messages=messages, functions=functions_unsupported_model)
 
         # For logging - save the values of the litellm-specific params passed in
@@ -5702,7 +5722,12 @@ def completion(
             gigachat_access_token=kwargs.get("gigachat_access_token"),
             **{
                 key: kwargs[key]
-                for key in (*AWS_CREDENTIAL_KWARGS_KEYS, PROVIDER_AFFINITY_HEADER_KWARG_KEY)
+                for key in (
+                    *AWS_CREDENTIAL_KWARGS_KEYS,
+                    *ANTHROPIC_WIF_KWARGS_KEYS,
+                    *OPENAI_WIF_KWARGS_KEYS,
+                    PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+                )
                 if key in kwargs
             },
         )
@@ -5725,7 +5750,7 @@ def completion(
                 raise litellm.BadRequestError(
                     message=str(affinity_error), model=model, llm_provider=custom_llm_provider
                 ) from affinity_error
-        cast(LiteLLMLoggingObj, logging).update_environment_variables(
+        logging.update_environment_variables(
             model=model,
             user=user,
             optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
@@ -5809,6 +5834,7 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 encoding=_get_encoding(),
                 stream=stream,
+                cache=kwargs.get("cache"),
             )
         elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
             custom_llm_provider == "azure"
@@ -5816,7 +5842,7 @@ def completion(
         ):
             optional_params, _ = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
-        _dispatch_ctx: Final = _CompletionDispatchContext(
+        _dispatch_ctx: Final = CompletionDispatchContext(
             _azure_detection_model=_azure_detection_model,
             acompletion=acompletion,
             api_base=api_base,
@@ -5841,6 +5867,9 @@ def completion(
             optional_params=optional_params,
             organization=organization,
             provider_config=provider_config,
+            request_params=MappingProxyType(
+                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **non_default_params})
+            ),
             shared_session=shared_session,
             stream=stream,
             temperature=temperature,
@@ -6536,6 +6565,7 @@ def embedding(
                 aembedding=aembedding,
                 max_retries=max_retries,
                 shared_session=shared_session,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
@@ -7785,7 +7815,7 @@ async def amoderation(
 
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-    optional_params: Final = GenericLiteLLMParams(**kwargs)
+    optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
     _dynamic_api_base = None
     try:
@@ -7828,11 +7858,11 @@ async def amoderation(
             },
             custom_llm_provider=custom_llm_provider,
         )
-        moderation_request: Final = {"input": input, "model": model}  # mutable-ok: logged as the raw request body
+        moderation_request: Final = {"input": input, "model": model}
         litellm_logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": moderation_request,
                 "api_base": str(_openai_client.base_url),
             },
@@ -7931,6 +7961,7 @@ def transcription(
     api_version: str | None = None,
     max_retries: int | None = None,
     custom_llm_provider=None,
+    base_url: str | None = None,
     **kwargs,
 ) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
     """
@@ -7964,7 +7995,7 @@ def transcription(
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
+        api_base=api_base or base_url,
         api_key=api_key,
     )
 
@@ -8237,6 +8268,7 @@ def speech(
     headers: dict | None = None,
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
+    base_url: str | None = None,
     **kwargs,
 ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
     user: Final = kwargs.get("user", None)
@@ -8246,7 +8278,7 @@ def speech(
     model_info: Final = kwargs.get("model_info", None)
     shared_session: Final = kwargs.get("shared_session", None)
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base or base_url
     )
     kwargs.pop("tags", [])
 
@@ -8500,7 +8532,7 @@ def speech(
             VertexAITextToSpeechConfig,
         )
 
-        generic_optional_params: Final = GenericLiteLLMParams(**kwargs)
+        generic_optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Handle Gemini models separately (they use speech_to_completion_bridge)
         if "gemini" in model:
@@ -8550,7 +8582,7 @@ def speech(
             extra_headers=headers,
             base_llm_http_handler=base_llm_http_handler,
             aspeech=aspeech or False,
-            api_base=generic_optional_params.api_base,
+            api_base=api_base,
             api_key=None,  # Vertex AI uses OAuth, not API key
             **kwargs,
         )
@@ -8706,7 +8738,7 @@ def speech(
 
 async def ahealth_check(
     model_params: dict,
-    mode: str | None = "chat",
+    mode: str | None = None,
     prompt: str | None = None,
     input: list | None = None,
 ):
@@ -8721,7 +8753,8 @@ async def ahealth_check(
         }
     """
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
-    from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+    from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
+    from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging: Final = get_litellm_logging_class()
@@ -8741,33 +8774,30 @@ async def ahealth_check(
         log_raw_request_response=True,
     )
     model_params["litellm_logging_obj"] = litellm_logging_obj
-    model_params = HealthCheckHelpers._update_model_params_with_health_check_tracking_information(
+    model_params = HealthCheckHelpers.update_model_params_with_health_check_tracking_information(
         model_params=model_params
     )
     #########################################################
     try:
-        model: str | None = model_params.get("model", None)
-        if model is None:
+        requested_model: Final = OPTIONAL_STR.validate_python(model_params.get("model", None))
+        if requested_model is None:
             raise Exception("model not set")
-
-        if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model].get("mode")
 
         custom_llm_provider_from_params: Final = model_params.get("custom_llm_provider", None)
         api_base_from_params: Final = model_params.get("api_base", None)
         api_key_from_params: Final = model_params.get("api_key", None)
 
         model, custom_llm_provider, _, _ = get_llm_provider(
-            model=model,
+            model=requested_model,
             custom_llm_provider=custom_llm_provider_from_params,
             api_base=api_base_from_params,
             api_key=api_key_from_params,
         )
-        if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model].get("mode")
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls
-        mode = mode or "chat"
+        mode = mode or default_health_check_mode(
+            requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
+        )
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
@@ -8788,19 +8818,13 @@ async def ahealth_check(
             _response: Final = await mode_handlers[mode]()
             # Only process headers for chat mode
             _response_headers: Final[dict] = getattr(_response, "_hidden_params", {}).get("headers", {}) or {}
-            return _create_health_check_response(_response_headers)
+            return create_health_check_response(_response_headers)
         else:
             raise Exception(f"Mode {mode} not supported. See modes here: https://docs.litellm.ai/docs/proxy/health")
     except Exception as e:
-        stack_trace = _redact_string(traceback.format_exc())
+        stack_trace = redact_string(traceback.format_exc())
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
-
-        if mode is None:
-            return {
-                "error": f"error:{e}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
-                "exception": e,
-            }
 
         error_to_return: Final = str(e) + "\nstack trace: " + stack_trace
 
@@ -8916,8 +8940,8 @@ def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional
 
 def _joined_streamed_citations(streamed_citations: "tuple[object, ...]") -> "list[object]":
     if all(isinstance(citation, list) for citation in streamed_citations):
-        return list(streamed_citations)  # mutable-ok: JSON list field
-    return [list(streamed_citations)]  # mutable-ok: JSON list field
+        return list(streamed_citations)
+    return [list(streamed_citations)]
 
 
 def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
@@ -8945,7 +8969,7 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
         return
     if isinstance(getattr(usage, "cost", None), (int, float)):
         return
-    computed_cost: Final = logging_obj._response_cost_calculator(result=response)
+    computed_cost: Final = logging_obj.response_cost_calculator(result=response)
     if isinstance(computed_cost, (int, float)) and computed_cost > 0:
         setattr(usage, "cost", computed_cost)
 
@@ -9076,7 +9100,7 @@ def stream_chunk_builder(
 
         if len(tool_call_chunks) > 0:
             tool_calls_list: Final = processor.get_combined_tool_content(tool_call_chunks)
-            _choice = cast(Choices, response.choices[0])
+            _choice = response.choices[0]
             _choice.message.content = None
             _choice.message.tool_calls = tool_calls_list
 
@@ -9089,7 +9113,7 @@ def stream_chunk_builder(
         ]
 
         if len(function_call_chunks) > 0:
-            _choice = cast(Choices, response.choices[0])
+            _choice = response.choices[0]
             _choice.message.content = None
             _choice.message.function_call = processor.get_combined_function_call_content(function_call_chunks)
 
@@ -9156,7 +9180,7 @@ def stream_chunk_builder(
         ]
 
         if len(audio_chunks) > 0:
-            _choice = cast(Choices, response.choices[0])
+            _choice = response.choices[0]
             _choice.message.audio = processor.get_combined_audio_content(audio_chunks)
 
         # Handle image chunks from models like gemini-2.5-flash-image
@@ -9197,11 +9221,9 @@ def stream_chunk_builder(
                 fields["citation"] for fields in provider_field_dicts if fields.get("citation") is not None
             )
             citation_fields: Final = (
-                {"citations": _joined_streamed_citations(streamed_citations)}  # mutable-ok: JSON dict field
-                if streamed_citations
-                else {}  # mutable-ok: JSON dict field
+                {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
             )
-            combined_provider_fields: Final = {  # mutable-ok: Message.provider_specific_fields is a plain dict field
+            combined_provider_fields: Final = {
                 key: value
                 for fields in (citation_fields, *provider_field_dicts)
                 for key, value in fields.items()
@@ -9209,7 +9231,7 @@ def stream_chunk_builder(
             }
 
             if combined_provider_fields:
-                _choice = cast(Choices, response.choices[0])
+                _choice = response.choices[0]
                 _choice.message.provider_specific_fields = combined_provider_fields
 
         completion_output = get_content_from_model_response(response)
@@ -9376,9 +9398,9 @@ def _get_encoding() -> Tokenizer:
 
 
 def _load_default_encoding() -> Tokenizer:
-    from litellm._lazy_imports import _get_default_encoding
+    from litellm._lazy_imports import get_default_encoding
 
-    return _get_default_encoding()
+    return get_default_encoding()
 
 
 def __getattr__(name: str) -> Tokenizer:

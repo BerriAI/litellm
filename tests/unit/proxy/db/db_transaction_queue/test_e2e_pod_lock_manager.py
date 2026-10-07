@@ -19,12 +19,10 @@ import fakeredis
 # this file is to test litellm/proxy
 
 import asyncio
-import logging
 
 import pytest
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     new_user,
     user_info,
@@ -66,7 +64,6 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
-verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
@@ -88,6 +85,7 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from tests._master_key import MASTER_KEY
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -126,7 +124,7 @@ def prisma_client():
 
 async def setup_db_connection(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
 

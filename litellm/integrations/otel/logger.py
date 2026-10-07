@@ -1,8 +1,9 @@
 """``CustomLogger`` adapter on the OpenTelemetry span engine."""
 
+import sys
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime
 from types import MappingProxyType
@@ -30,7 +31,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.model.baggage import promoted_baggage
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config, excluded_db_systems_from
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
@@ -52,10 +53,14 @@ from litellm.integrations.otel.model.semconv import Error
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
+    active_phase,
+    active_phase_span,
     is_recordable_span,
     mcp_message_transport_span,
+    post_response_root,
     request_root_http_route,
     request_root_span,
+    resolve_internal_call_span_context,
     resolve_mcp_span_context,
     resolve_request_span_context,
     resolve_service_span_context,
@@ -173,6 +178,12 @@ class _LLMCallSpan:
         self.span = span
         self.start_time_ns = start_time_ns
         self.provider = provider
+
+
+def _llm_call_parent_context(call: LLMCallEvent) -> Context:
+    """A call litellm makes on the request's behalf (a classifier, a judge) parents under the
+    phase that made it; the provider attempt parents under the request root."""
+    return resolve_internal_call_span_context() if call.purpose is not None else resolve_request_span_context()
 
 
 class OpenTelemetryV2(CustomLogger):
@@ -310,7 +321,7 @@ class OpenTelemetryV2(CustomLogger):
         # callback (the thread-pool case, where the anchor isn't visible here).
         # Do not route on the deferred path: creating or LRU-touching a tenant
         # provider here would evict idle ones even though close re-routes.
-        parent_context: Final = resolve_request_span_context()
+        parent_context: Final = _llm_call_parent_context(call)
         if not is_recordable_span(get_current_span(parent_context)):
             self._store_open_call(call_id, _LLMCallSpan(span=None, start_time_ns=start_time_ns))
             return
@@ -561,6 +572,7 @@ class OpenTelemetryV2(CustomLogger):
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             request_route=request_root_http_route(),
+            request_purpose=call.purpose,
             trace=call.trace,
             session_id=call.session_id,
         )
@@ -579,16 +591,22 @@ class OpenTelemetryV2(CustomLogger):
         # root span — parent to it (ambient fallback on the SDK path). Seed identity
         # Baggage so the span — and the SDK path, which has none — is labeled
         # consistently. A detached route roots its own trace instead, linked back.
+        # With no carrier the span starts at the provider handoff, so a destination
+        # logger's copy bounds the provider attempt like the operator's does.
         route: Final = self._tenant_tracers.route_for(self.tracer, call.dynamic_params, call.auth_metadata)
         try:
             parent_ctx: Final = self._seed_identity_baggage(
-                data.identity, data.request_model, resolve_request_span_context()
+                data.identity, data.request_model, _llm_call_parent_context(call)
             )
             return self._emitter.emit(
                 SpanRole.LLM_CALL,
                 data,
                 parent_context=(set_span_in_context(INVALID_SPAN, parent_ctx) if route.detached else parent_ctx),
-                start_time_ns=(carrier.start_time_ns if carrier is not None else to_ns(start_time)),
+                start_time_ns=(
+                    carrier.start_time_ns
+                    if carrier is not None
+                    else to_ns(call.upstream_start_seconds) or to_ns(start_time)
+                ),
                 end_time_ns=end_time_ns,
                 tracer=route.tracer,
                 links=_request_trace_links(parent_ctx) if route.detached else None,
@@ -735,14 +753,36 @@ class OpenTelemetryV2(CustomLogger):
 
     @contextmanager
     def start_phase_span(self, name: str) -> "Iterator[Span]":
-        span: Final = self._emitter.start_span(SpanRole.SERVICE, name)
-        with use_span(span, end_on_exit=True):
+        """A live INTERNAL span the service calls inside the block nest under.
+
+        Parents like a service span: ambient first, and from the post-response phase
+        it becomes a linked root that then adopts the calls made inside it, so the
+        response-cache write is one small trace rather than a scatter of roots.
+        """
+        parent_context, links = resolve_service_span_context()
+        span: Final = self._emitter.start_span(SpanRole.SERVICE, name, parent_context=parent_context, links=links)
+        with (
+            use_span(span, end_on_exit=True),
+            active_phase(span),
+            post_response_root(span) if links else nullcontext(),
+        ):
             try:
                 yield span
             except Exception as exc:
                 if is_recordable_span(span):
                     stamp_error(span, _span_error_from_exception(exc), record_event=False, set_status=False)
                 raise
+
+    def add_phase_event(self, name: str, attributes: Mapping[str, str | int] | None = None) -> None:
+        """Mark a point in the request on its root span, or on the ambient span before the root is anchored."""
+        span: Final = request_root_span() or get_current_span()
+        if is_recordable_span(span):
+            span.add_event(name, attributes)
+
+    def set_phase_attributes(self, attributes: Mapping[str, str | int | float | bool]) -> None:
+        span: Final = active_phase_span()
+        if span is not None and is_recordable_span(span):
+            span.set_attributes(attributes)
 
     async def async_pre_call_hook(
         self,
@@ -898,10 +938,28 @@ def publish_global_otel_v2_provider(
     """
     global _published_v2_provider
     logger: Final = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
-    attach_tenant_fan_out(logger.tracer_provider, *_v2_configs(in_memory_loggers, logger))
+    attach_tenant_fan_out(
+        logger.tracer_provider,
+        *_v2_configs(in_memory_loggers, logger),
+        excluded_db_systems=_excluded_db_systems(logger),
+    )
     set_global_provider(logger.tracer_provider)
     _published_v2_provider = logger.tracer_provider  # rebind-ok: startup records the one provider carrying the fan-out
     return logger
+
+
+def _excluded_db_systems(logger: "OpenTelemetryV2") -> frozenset[str]:
+    """The datastore services withheld from tenant destinations.
+
+    ``callback_settings.otel.excluded_services`` wins over the env var whichever
+    logger got published: with ``callbacks: [langfuse_otel, otel]`` the ``otel``
+    callback folds into the preset, whose config is env-only.
+    """
+    otel_settings: Final = (litellm.callback_settings or {}).get("otel")
+    configured: Final = otel_settings.get("excluded_services") if isinstance(otel_settings, dict) else None
+    if configured is None:
+        return logger.config.excluded_services
+    return excluded_db_systems_from(configured)
 
 
 def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") -> tuple[OpenTelemetryV2Config, ...]:
@@ -915,10 +973,12 @@ def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") 
 
 
 def _registered_v2_logger() -> "OpenTelemetryV2 | None":
-    try:
-        from litellm.proxy import proxy_server
-    except Exception:
-        return None
+    """The proxy's registered V2 logger, read without importing the proxy.
+
+    Request paths call this (the router's ``route`` phase among them), so importing
+    ``proxy_server`` here would load the whole proxy on an SDK caller's event loop.
+    """
+    proxy_server: Final = sys.modules.get("litellm.proxy.proxy_server")
     logger: Final = getattr(proxy_server, "open_telemetry_logger", None)
     return logger if isinstance(logger, OpenTelemetryV2) else None
 
@@ -963,7 +1023,11 @@ def fan_out_provider() -> ApiTracerProvider:
         return published
     logger: Final = _registered_v2_logger()
     if logger is not None:
-        attach_tenant_fan_out(logger.tracer_provider, logger.config)
+        attach_tenant_fan_out(
+            logger.tracer_provider,
+            logger.config,
+            excluded_db_systems=_excluded_db_systems(logger),
+        )
         return logger.tracer_provider
     return get_tracer_provider()
 
@@ -976,6 +1040,18 @@ def phase_span(name: str) -> "Iterator[Span | None]":
         return
     with logger.start_phase_span(name) as span:
         yield span
+
+
+def phase_event(name: str, attributes: Mapping[str, str | int] | None = None) -> None:
+    logger: Final = _registered_v2_logger()
+    if logger is not None:
+        logger.add_phase_event(name, attributes)
+
+
+def phase_attributes(attributes: Mapping[str, str | int | float | bool]) -> None:
+    logger: Final = _registered_v2_logger()
+    if logger is not None:
+        logger.set_phase_attributes(attributes)
 
 
 def build_otel_v2_logger(

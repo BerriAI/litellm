@@ -3,7 +3,7 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.prompt_cache_prediction import (
     TokenCounter,
@@ -23,6 +23,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # use the configured proxy limiter's shared capacity owner
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.prompt_cache_prediction import (
     CachePredictionArm,
     CachePredictionRequest,
@@ -33,7 +34,7 @@ router: Final = APIRouter()
 _REQUEST_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
-class _CallerSettings(BaseModel):
+class _CallerSettings(LiteLLMBaseModel):
     config: Mapping[str, object] | None = None
 
 
@@ -55,7 +56,7 @@ def _capacity_request_data(
 ) -> Mapping[str, object]:
     # The parsed-body cache retains only original top-level keys. Replay the
     # shared idempotent tag merges on limiter-only data when auth added metadata.
-    data: Final = dict(request_data)  # mutable-ok: the existing tag merge owners accept a dictionary out-param
+    data: Final = dict(request_data)
     LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(http_request, data, caller)  # pyright: ignore[reportUnknownMemberType]  # legacy tag owner takes the validated capacity dictionary
     LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(data, caller)  # pyright: ignore[reportUnknownMemberType]  # legacy tag owner merges trusted key tags into capacity metadata
     return MappingProxyType(data)
@@ -63,7 +64,7 @@ def _capacity_request_data(
 
 @router.post(
     "/cost/predict-cache",
-    tags=["Cost Tracking"],  # mutable-ok: FastAPI requires a list for OpenAPI tags
+    tags=["Cost Tracking"],
     response_model=CachePredictionResponse,
 )
 async def predict_cache_cost(

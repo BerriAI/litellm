@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, is_anthropic_oauth_key
@@ -20,6 +20,7 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import ModelResponse
 from litellm.utils import supports_thinking_cache_preservation
@@ -65,7 +66,7 @@ _DEPLOYMENT_OPTIONS: Final = frozenset(
 )
 
 
-class _StrictModel(BaseModel):
+class _StrictModel(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
@@ -455,37 +456,37 @@ def cache_scope(
     return _digest((caller_key_hash, deployment_id, provider_key, model, anthropic_version))
 
 
-class _TTLUsage(BaseModel):
+class _TTLUsage(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     ephemeral_5m_input_tokens: int = Field(default=0, ge=0)
     ephemeral_1h_input_tokens: int = Field(default=0, ge=0)
 
 
-class _CacheUsage(BaseModel):
+class _CacheUsage(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     cached_tokens: int = Field(default=0, ge=0)
     cache_creation_tokens: int = Field(default=0, ge=0)
     cache_creation_token_details: _TTLUsage | None = None
 
 
-class _Usage(BaseModel):
+class _Usage(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     prompt_tokens: int = Field(ge=0)
     prompt_tokens_details: _CacheUsage
 
 
-class _Choice(BaseModel):
+class _Choice(LiteLLMBaseModel):
     finish_reason: str = Field(min_length=1)
 
 
-class _Response(BaseModel):
+class _Response(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     model: str
     usage: _Usage
     choices: tuple[_Choice, ...] = Field(min_length=1, strict=False)
 
 
-class _CountBody(BaseModel):
+class _CountBody(LiteLLMBaseModel):
     messages: Sequence[Mapping[str, JsonValue]]
     tools: Sequence[Mapping[str, JsonValue]] | None = None
     system: str | Sequence[Mapping[str, JsonValue]] | None = None
@@ -494,7 +495,7 @@ class _CountBody(BaseModel):
     output_config: Mapping[str, JsonValue] | None = None
 
 
-class _CountResult(BaseModel):
+class _CountResult(LiteLLMBaseModel):
     input_tokens: Annotated[StrictInt, Field(ge=0)]
 
 
@@ -505,7 +506,7 @@ class TokenCounter(Protocol):
 def _count_objects(
     values: Sequence[Mapping[str, JsonValue]],
 ) -> list[dict[str, JsonValue]]:  # mutable-ok: the existing provider count API requires JSON lists/dicts
-    return [dict(value) for value in values]  # mutable-ok: serialize read-only inputs at the provider API boundary
+    return [dict(value) for value in values]
 
 
 def _messages_url(model: str, api_key: str, api_base: str | None) -> str:
@@ -524,17 +525,19 @@ async def count_prompt_tokens(
     body: Mapping[str, JsonValue],
     api_base: str | None = None,
 ) -> int | None:
+    auth_header: Final = AnthropicModelInfo.get_auth_header(api_key=api_key, api_base=api_base)
+    if auth_header is None:
+        return None
     try:
         native: Final = _CountBody.model_validate(body)
-        count_url: Final = _messages_url(model, api_key, api_base) + "/count_tokens"
         result: Final = _CountResult.model_validate(
             await _counter.handle_count_tokens_request(
                 model=model,
                 messages=_count_objects(native.messages),
                 tools=_count_objects(native.tools) if native.tools is not None else None,
                 system=_JSON_OBJECT.validate_python(MappingProxyType({"system": native.system}))["system"],
-                api_key=api_key,
-                api_base=count_url,
+                auth_header=auth_header,
+                api_base=api_base,
                 optional_params=_JSON_OBJECT.validate_python(
                     MappingProxyType({key: body[key] for key in COUNT_TOKEN_OPTION_NAMES if key in body})
                 ),

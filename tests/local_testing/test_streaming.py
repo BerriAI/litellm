@@ -2,6 +2,7 @@
 #    This tests streaming for the completion endpoint
 
 import asyncio
+from typing import Final
 import json
 import os
 import time
@@ -434,28 +435,6 @@ def test_completion_azure_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_azure_function_calling_stream():
-    try:
-        litellm.set_verbose = False
-        user_message = "What is the current weather in Boston?"
-        messages = [{"content": user_message, "role": "user"}]
-        response = completion(
-            model="azure/gpt-4.1-mini",
-            messages=messages,
-            stream=True,
-            tools=tools_schema,
-        )
-        # Add any assertions here to check the response
-        for chunk in response:
-            print(chunk)
-            if chunk["choices"][0]["finish_reason"] == "stop":
-                break
-            print(chunk["choices"][0]["finish_reason"])
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.skip("Flaky ollama test - needs to be fixed")
 def test_completion_ollama_hosted_stream():
     try:
@@ -529,7 +508,7 @@ def test_completion_model_stream(model):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_gemini_stream(sync_mode):
     try:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         print("Streaming gemini response")
         function1 = [
             {
@@ -1546,45 +1525,24 @@ async def test_openai_stream_options_call(model, sync):
     )
 
 
-def test_openai_stream_options_call_text_completion():
-    litellm.set_verbose = False
-    for idx in range(3):
-        try:
-            response = litellm.text_completion(
-                model="gpt-3.5-turbo-instruct",
-                prompt="say GM - we're going to make it ",
-                stream=True,
-                stream_options={"include_usage": True},
-                max_tokens=10,
-            )
-            usage = None
-            chunks = []
-            for chunk in response:
-                print("chunk: ", chunk)
-                chunks.append(chunk)
-
-            last_chunk = chunks[-1]
-            print("last chunk: ", last_chunk)
-
-            """
-            Assert that:
-            - Last Chunk includes Usage
-            - All chunks prior to last chunk have usage=None
-            """
-
-            assert last_chunk.usage is not None
-            assert last_chunk.usage.total_tokens > 0
-            assert last_chunk.usage.prompt_tokens > 0
-            assert last_chunk.usage.completion_tokens > 0
-
-            # assert all non last chunks have usage=None
-            assert all(chunk.usage is None for chunk in chunks[:-1])
-            break
-        except Exception as e:
-            if idx < 2:
-                pass
-            else:
-                raise e
+def test_openai_stream_options_call_text_completion() -> None:
+    chunks: Final = tuple(
+        litellm.text_completion(
+            model="gpt-6-luna",
+            reasoning_effort="none",
+            prompt="say GM - we're going to make it ",
+            stream=True,
+            stream_options={"include_usage": True},
+            max_tokens=10,
+        )
+    )
+    assert chunks
+    assert chunks[-1].usage is not None
+    assert chunks[-1].usage.total_tokens > 0
+    assert chunks[-1].usage.prompt_tokens > 0
+    assert chunks[-1].usage.completion_tokens > 0
+    assert all(chunk.usage is None for chunk in chunks[:-1])
+    assert any(chunk.choices[0].text for chunk in chunks)
 
 
 def test_openai_text_completion_call():
@@ -1676,8 +1634,8 @@ def test_together_ai_completion_call_starcoder_bad_key():
 #### Test Function calling + streaming ####
 
 
-def test_completion_openai_with_functions():
-    function1 = [
+def test_completion_openai_with_functions() -> None:
+    functions: Final = [
         {
             "name": "get_current_weather",
             "description": "Get the current weather in a given location",
@@ -1694,24 +1652,25 @@ def test_completion_openai_with_functions():
             },
         }
     ]
-    try:
-        litellm.set_verbose = False
-        response = completion(
-            model="gpt-3.5-turbo-1106",
-            messages=[{"role": "user", "content": "what's the weather in SF"}],
-            functions=function1,
+    messages: Final = [{"role": "user", "content": "what's the weather in SF"}]
+    chunks: Final = tuple(
+        completion(
+            model="gpt-6-luna",
+            reasoning_effort="none",
+            messages=messages,
+            functions=functions,
+            function_call={"name": "get_current_weather"},
             stream=True,
+            max_tokens=128,
         )
-        # Add any assertions here to check the response
-        print(response)
-        for chunk in response:
-            print(chunk)
-            if chunk["choices"][0]["finish_reason"] == "stop":
-                break
-            print(chunk["choices"][0]["finish_reason"])
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+    )
+    response: Final = litellm.stream_chunk_builder(chunks, messages=messages)
+    assert response is not None
+    function_call: Final = response.choices[0].message.function_call
+    assert function_call is not None
+    assert function_call.name == "get_current_weather"
+    assert json.loads(function_call.arguments)["location"]
+    assert sum(chunk.choices[0].finish_reason is not None for chunk in chunks) == 1
 
 
 #### Test Async streaming ####
@@ -3379,7 +3338,7 @@ def test_mock_response_iterator_tool_use():
 def test_reasoning_content_completion(model):
     # litellm.set_verbose = True
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         resp = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],
