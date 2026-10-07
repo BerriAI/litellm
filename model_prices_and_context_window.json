@@ -81367,10 +81367,10 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "supports_forced_tool_use": false,
-        "thinking_always_on": true,
+        "supports_forced_tool_use": true,
+        "thinking_always_on": false,
         "prompt_cache_min_tokens": 512,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "vertex_ai/claude-haiku-5-5@default": {
         "regional_endpoint_uplift_multiplier": 1.1,
@@ -81407,9 +81407,9 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "supports_forced_tool_use": false,
-        "thinking_always_on": true,
+        "supports_forced_tool_use": true,
+        "thinking_always_on": false,
         "prompt_cache_min_tokens": 512,
-        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     }
 }
