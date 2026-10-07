@@ -59,6 +59,7 @@ from litellm._lazy_imports import (
     get_messages_reach_token_count,
     get_token_counter_new,
 )
+from litellm._logging import redact_secrets
 from litellm._uuid import uuid
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
@@ -454,7 +455,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.secret_managers.main import get_secret
 
-from ._logging import is_debugging_on, redact_secrets, verbose_logger
+from ._logging import is_debugging_on, verbose_logger
 from .caching.caching import (
     AzureBlobCache,
     Cache,
