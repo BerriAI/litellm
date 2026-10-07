@@ -223,5 +223,10 @@
     "base_url": "https://api.reka.ai/v1",
     "api_key_env": "REKA_API_KEY",
     "api_base_env": "REKA_API_BASE"
+  },
+  "synap": {
+    "base_url": "https://pool.linkrra.com/v1",
+    "api_key_env": "SYNAP_API_KEY",
+    "api_base_env": "SYNAP_API_BASE"
   }
 }
