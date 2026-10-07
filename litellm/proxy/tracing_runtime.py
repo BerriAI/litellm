@@ -39,7 +39,7 @@ async def manage_tracing(
     enabled: bool,
     receiver_factory: Callable[[], TraceReceiver] | None = None,
     settings: Mapping[str, object] | None = None,
-    client_factory: Callable[[LensConnection], httpx.AsyncClient] = LensConnection.client,
+    client_factory: Callable[[LensConnection], httpx.AsyncClient] = LensConnection.lifespan_client,
 ) -> AsyncGenerator[TraceReceiver | None, None]:
     if not enabled:
         yield None

@@ -1031,6 +1031,7 @@ async def test_internal_service_authentication_is_separate_from_gateway_keys(
         (200, b"x" * 17000, False),
     ),
 )
+@pytest.mark.usefixtures("httpx_transport")
 async def test_service_status_uses_internal_auth_and_only_advertises_the_public_url(
     monkeypatch: pytest.MonkeyPatch, status: int, content: bytes, connected: bool
 ) -> None:
@@ -1078,6 +1079,7 @@ async def test_credential_snapshot_excludes_expired_keys_and_disables_caching(mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("accepted", (True, False))
+@pytest.mark.usefixtures("httpx_transport")
 async def test_created_ingestion_keys_report_activation_only_after_the_service_acknowledges(
     monkeypatch: pytest.MonkeyPatch, accepted: bool
 ) -> None:

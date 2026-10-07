@@ -287,6 +287,7 @@ async fn configured_private_dns_names_are_reachable_without_following_redirects(
     assert_eq!(redirected.status(), 302);
 }
 
+#[rstest]
 #[tokio::test]
 async fn oversized_combined_tool_replies_remain_readable_after_a_checkpoint() {
     use litellm_lens::{

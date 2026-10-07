@@ -10,6 +10,7 @@ import httpx
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName, TraceScope
 
@@ -39,10 +40,23 @@ class LensConnection:
             raise ValueError("Set LITELLM_LENS_SERVICE_TOKEN to the same secret on LiteLLM and Lens")
         return cls(url, token)
 
-    def client(self) -> httpx.AsyncClient:
+    def control_client(self) -> httpx.AsyncClient:
+        return get_async_httpx_client(
+            "lens-control",
+            params={"timeout": httpx.Timeout(35, connect=3), "follow_redirects": False},
+        ).client
+
+    def endpoint(self, path: str) -> str:
+        return self.url + path
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        return {"Authorization": f"Bearer {self.token}"}
+
+    def lifespan_client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             base_url=self.url,
-            headers={"Authorization": f"Bearer {self.token}"},
+            headers=self.headers,
             timeout=httpx.Timeout(35, connect=3),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=10),
             follow_redirects=False,

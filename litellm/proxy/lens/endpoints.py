@@ -194,10 +194,10 @@ async def service_connection(auth: Auth) -> ServiceConnection:
     public_url: Final = os.environ.get("LITELLM_LENS_PUBLIC_URL", "").rstrip("/")
     try:
         connection: Final = LensConnection.from_env()
-        async with (
-            connection.client() as client,
-            client.stream("GET", "/internal/status", timeout=2) as response,
-        ):
+        client: Final = connection.control_client()
+        async with client.stream(
+            "GET", connection.endpoint("/internal/status"), headers=connection.headers, timeout=2
+        ) as response:
             if response.status_code == 200:
                 status: Final = ServiceStatus.model_validate_json(await bounded_response(response, 16 * 1024))
                 return ServiceConnection(url=public_url, connected=True, status=status)
@@ -225,11 +225,13 @@ async def publish_credentials() -> bool:
     try:
         connection: Final = LensConnection.from_env()
         snapshot: Final = await credential_snapshot()
-        async with connection.client() as client:
-            response: Final = await client.post(
-                "/internal/credentials", json=snapshot.model_dump(mode="json"), timeout=2
-            )
-            return response.status_code == 204
+        response: Final = await connection.control_client().post(
+            connection.endpoint("/internal/credentials"),
+            headers=connection.headers,
+            json=snapshot.model_dump(mode="json"),
+            timeout=2,
+        )
+        return response.status_code == 204
     except (ValueError, httpx.HTTPError):
         return False
 
