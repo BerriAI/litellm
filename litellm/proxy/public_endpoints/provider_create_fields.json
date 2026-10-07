@@ -2024,6 +2024,24 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "LLM_BROKER",
+    "provider_display_name": "LLM Broker",
+    "litellm_provider": "llm_broker",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "llm_broker/taylor"
+  },
+  {
     "provider": "LM_STUDIO",
     "provider_display_name": "Lm Studio",
     "litellm_provider": "lm_studio",

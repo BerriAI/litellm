@@ -1908,6 +1908,23 @@
         "a2a": false
       }
     },
+    "llm_broker": {
+      "display_name": "LLM Broker (`llm_broker`)",
+      "url": "https://llm-broker.net/quickstart",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "publicai": {
       "display_name": "PublicAI (`publicai`)",
       "url": "https://docs.litellm.ai/docs/providers/publicai",
