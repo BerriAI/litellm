@@ -3427,6 +3427,46 @@ class TestCLIKeyRegenerationFlow:
             )
 
     @pytest.mark.asyncio
+    async def test_cli_sso_callback_defaults_a_role_less_db_user_to_view_only(self):
+        from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.scope = {}
+        mock_request.base_url = "http://internal-proxy.local/"
+        created_without_a_role = LiteLLM_UserTable(
+            user_id="created-without-a-role", user_role=None, teams=[], models=[]
+        )
+        mock_cache = MagicMock(redis_cache=None)
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": "poll-secret-hash",
+            "user_code_hash": "user-code-hash",
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+        }
+        with (
+            patch.dict(os.environ, {"PROXY_BASE_URL": "https://test.example.com", "SERVER_ROOT_PATH": ""}),
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+                return_value=created_without_a_role,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+        ):
+            response = await cli_sso_callback(
+                request=mock_request,
+                key="cli-session-no-role",
+                result={"user_email": "created-without-a-role@example.com", "user_id": "created-without-a-role"},
+            )
+
+        assert response.status_code == 200
+        stored_session = mock_cache.set_cache.call_args.kwargs["value"]["session_data"]
+        assert stored_session["user_id"] == "created-without-a-role"
+        assert stored_session["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+
+    @pytest.mark.asyncio
     async def test_cli_poll_key_returns_teams_for_selection(self):
         """Test CLI poll endpoint returns teams for user selection when multiple teams exist"""
         from litellm.proxy.management_endpoints.ui_sso import (
