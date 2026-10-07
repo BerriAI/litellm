@@ -5,6 +5,7 @@ from typing import Final, Protocol, TypeVar, runtime_checkable
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_ATTRIBUTE_VALUE_BYTES
+from litellm.proxy.lens.feedback_store import FeedbackStore
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.trace.generated.models import (
     ActivityAvailability,
@@ -173,9 +174,11 @@ class ClickHouseStorage:
             config.max_attribute_value_bytes,
         )
         self._native: Final = native.NativeTraceStorage(validated)
+        self.feedback: Final = FeedbackStore(config)
 
     async def ensure_schema(self) -> None:
         await self._native.ensure_schema()
+        await self.feedback.ensure_schema()
 
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         await self._native.insert_rows(table, rows)

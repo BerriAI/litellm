@@ -10,6 +10,7 @@ import { ToolArguments } from "./ToolContent";
 import { payloadView, toolInput } from "./payload";
 import { Section } from "./Section";
 import { ErrorBlock, StoredDiagnostic } from "./SpanError";
+import { UsefulnessFeedback } from "./UsefulnessFeedback";
 
 const STATUS_TEXT = "px-4 py-2 text-sm text-muted-foreground";
 const COLLAPSE_INPUT_ABOVE = 8;
@@ -103,6 +104,15 @@ export function ContentTab({ accessToken, traceId, traceRef, span }: ContentTabP
       ) : null}
       {empty && span.status !== "error" && (
         <div className="py-12 text-center text-sm text-muted-foreground">No content recorded for this span.</div>
+      )}
+      {detail?.output && (
+        <UsefulnessFeedback
+          key={`${traceId}:${traceRef}:${span.span_id}`}
+          accessToken={accessToken}
+          traceId={traceId}
+          traceRef={traceRef}
+          spanId={span.span_id}
+        />
       )}
     </div>
   );
