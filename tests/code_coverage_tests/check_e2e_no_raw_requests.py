@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import sys
+from itertools import chain
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parents[1]
@@ -64,11 +65,12 @@ def _violations_in(path: Path) -> tuple[str, ...]:
 
 
 def _scanned_files() -> tuple[Path, ...]:
-    return tuple(path for scanned in SCANNED_DIRS for path in sorted((TESTS_DIR / scanned).rglob("*.py")))
+    trees = (sorted((TESTS_DIR / scanned).rglob("*.py")) for scanned in SCANNED_DIRS)
+    return tuple(chain.from_iterable(trees))
 
 
 def main() -> int:
-    violations = tuple(violation for path in _scanned_files() for violation in _violations_in(path))
+    violations = tuple(chain.from_iterable(_violations_in(path) for path in _scanned_files()))
     for violation in violations:
         print(violation)
     if violations:
