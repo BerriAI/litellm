@@ -47,6 +47,14 @@ fn settle<T, E>(result: Result<T, Arc<Miss<E>>>) -> Result<Option<T>, ReadError<
     }
 }
 
+pub struct TraceListQuery<'a> {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub cursor: Option<&'a str>,
+    pub limit: u32,
+    pub agent: &'a str,
+}
+
 pub struct TraceReader {
     snapshots: SnapshotCache,
     pub(super) lists: ListCache,
@@ -66,10 +74,13 @@ impl TraceReader {
         &self,
         store: &S,
         access: &ReadAccessParams,
-        start_ms: i64,
-        end_ms: i64,
-        cursor: Option<&str>,
-        limit: u32,
+        TraceListQuery {
+            start_ms,
+            end_ms,
+            cursor,
+            limit,
+            agent,
+        }: TraceListQuery<'_>,
     ) -> Result<TracePage, ReadError<S::Error>> {
         if limit == 0 {
             return Err(ReadError::InvalidParameters);
@@ -84,6 +95,7 @@ impl TraceReader {
             cursor_ms,
             cursor_trace_id,
             limit: limit.min(500).min(accepted),
+            agent: agent.to_owned(),
         };
         let page = loop {
             match store.list_runs(&params).await {
