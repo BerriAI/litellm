@@ -29,7 +29,7 @@ Native compatibility sink
 
 ## Surface configuration and Python boundary
 
-The Python SDK accepts `DiagnosticsConfig` or a validated mapping through `litellm.diagnostics.configure`. The SDK configuration loader accepts a settings mapping and a complete overriding JSON object in `LITELLM_DIAGNOSTICS`. `os.environ/NAME` references are resolved for endpoints, headers, and project keys. There is no implicit exporter startup on package import
+The Python SDK accepts `DiagnosticsConfig` or a validated mapping through `litellm.diagnostics.configure`. Python and Rust gateways accept `general_settings.diagnostics` in YAML and a complete overriding JSON object in `LITELLM_DIAGNOSTICS`. `os.environ/NAME` references are resolved for endpoints, headers, and project keys. There is no implicit exporter startup on package import
 
 Rust SDK hosts use `DiagnosticsConfig` and `Diagnostics` directly, or compose `sink_layer(diagnostics.clone())` into an upstream subscriber. The generic tracing crate contains neither PyO3 nor Python callbacks. The explicit `python-bridge/src/logger/python.rs` adapter owns Python severity mapping, context capture, callbacks, process admission, and exception mapping
 
@@ -81,7 +81,7 @@ Rust tests exercise typed OTLP HTTP payloads and authentication, official PostHo
 
 Python tests cover original handler output and object identity, custom levels, exception/extra projection, disabled export and unavailable native handling, native errors, repeated setup, propagation boundaries, reentrant serialization, and the redaction-safe native origin guard
 
-A shared configuration golden fixture checks Python and Rust wire schemas. The installed-extension recording-server tests send both a Python diagnostic and an actual native OCR route summary through one PostHog sink, then verify named destinations sample independently. They use local recording services and require no production keys
+A shared configuration golden fixture checks Python and Rust wire schemas. The installed-extension recording-server tests send both a Python diagnostic and an actual native OCR route summary through one PostHog sink, then verify named destinations sample independently. Gateway lifecycle coverage verifies environment precedence, reference resolution, and cleanup even when the lifespan body raises. They use local recording services and require no production keys
 
 Future work can add explicit delivery/drop metrics, payload-size limits, additional backend authentication/configuration surfaces, and separately scoped OpenTelemetry trace export. Do not claim those are implemented
 

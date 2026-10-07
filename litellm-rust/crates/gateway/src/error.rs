@@ -1,6 +1,8 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
+    Diagnostics(#[from] litellm_tracing::Error),
+    #[error(transparent)]
     Http(#[from] litellm_http::Error),
     #[error("environment_variables values must be strings, numbers or booleans")]
     Environment,

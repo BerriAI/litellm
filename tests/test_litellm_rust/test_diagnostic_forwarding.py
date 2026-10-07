@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Mapping
 from io import StringIO
@@ -145,3 +146,54 @@ def test_named_destinations_apply_independent_sampling_without_changing_python_o
         assert tuple(_BODY.validate_python(event["properties"])["message"] for event in error_events) == ("failure",)
     assert output.getvalue() == "routine\nfailure\n"
     assert diagnostics.shutdown()
+
+
+def test_gateway_environment_configuration_flushes_and_stops_on_lifespan_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    logger: Final = logging.getLogger("LiteLLM Proxy.diagnostic-lifecycle")
+    output: Final = StringIO()
+    handler: Final = logging.StreamHandler(output)
+    old_level: Final = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    try:
+        with recording_service() as collector:
+            collector.default_response = ResponseSpec(body={"status": 1})
+            configuration: Final = diagnostics.DiagnosticsConfig.model_validate(
+                {
+                    "enabled": True,
+                    "policy": {"target_prefixes": [logger.name]},
+                    "destinations": [
+                        {
+                            "transport": "posthog",
+                            "name": "events",
+                            "api_key": "os.environ/LOCAL_EVENTS_KEY",
+                            "endpoint": collector.base_url,
+                        }
+                    ],
+                }
+            )
+            monkeypatch.setenv("LOCAL_EVENTS_KEY", "phc_test")
+            monkeypatch.setenv("LITELLM_DIAGNOSTICS", configuration.model_dump_json())
+
+            async def run_gateway() -> None:
+                async with diagnostics.gateway_lifecycle({"enabled": False}):
+                    logger.warning("gateway visible")
+                    raise RuntimeError("lifespan body failure")
+
+            with pytest.raises(RuntimeError, match="lifespan body failure"):
+                asyncio.run(run_gateway())
+            assert not _native.NativeDiagnosticLogger().active()
+            body: Final = _BODY.validate_json(collector.requests[0].raw_body)
+            events: Final = TypeAdapter(tuple[dict[str, JsonValue], ...]).validate_python(body["batch"])
+            assert len(events) == 1
+            assert _BODY.validate_python(events[0]["properties"])["message"] == "gateway visible"
+            assert b"_litellm_native_origin" not in collector.requests[0].raw_body
+            logger.error("after lifespan")
+            assert len(collector.requests) == 1
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)
+    assert output.getvalue() == "gateway visible\nafter lifespan\n"
