@@ -13,9 +13,13 @@ import urllib
 import urllib.parse
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.db_url_settings import add_missing_query_params, token_refresh_params_from_url
+from litellm.proxy.db.log_db_metrics import db_io_claimed, record_db_io
+from litellm.proxy.db.prisma_query_span import parse_prisma_query
 from litellm.proxy.db.token_auth import (
     DEFAULT_POSTGRES_PORT,
     DatabaseTokenAuth,
@@ -26,6 +30,9 @@ from litellm.proxy.db.token_auth import (
     parse_iam_endpoint_from_url,
 )
 from litellm.secret_managers.main import str_to_bool
+
+if TYPE_CHECKING:
+    from prisma import Prisma
 
 __all__ = (
     "IAMEndpoint",
@@ -104,11 +111,18 @@ class _TrackedPrismaEngine:
     async def query(self, content: str, *, tx_id: str | None) -> object:
         self.tracker.begin_operation()
         try:
-            return await self._engine.query(content, tx_id=tx_id)
+            if db_io_claimed():
+                record_db_io()
+                return await self._engine.query(content, tx_id=tx_id)
+            query: Final = parse_prisma_query(content)
+            async with db_span(query.call_type, query.table, query.operation):
+                record_db_io()
+                return await self._engine.query(content, tx_id=tx_id)
         finally:
             self.tracker.end_operation()
 
     async def start_transaction(self, *, content: str) -> str:
+        record_db_io()
         self.tracker.begin_operation()
         try:
             transaction_id: Final = await self._engine.start_transaction(content=content)
@@ -119,6 +133,7 @@ class _TrackedPrismaEngine:
         return transaction_id
 
     async def commit_transaction(self, tx_id: str) -> None:
+        record_db_io()
         self.tracker.begin_operation()
         try:
             await self._engine.commit_transaction(tx_id)
@@ -127,6 +142,7 @@ class _TrackedPrismaEngine:
             self.tracker.transaction_finished(tx_id)
 
     async def rollback_transaction(self, tx_id: str) -> None:
+        record_db_io()
         self.tracker.begin_operation()
         try:
             await self._engine.rollback_transaction(tx_id)
@@ -242,7 +258,7 @@ class PrismaWrapper:
     def _write_engine(prisma_client: _PrismaClient, engine: _PrismaEngine) -> None:
         prisma_client._Prisma__engine = engine
 
-    def _instrument_prisma_client(self, prisma_client: _PrismaClient) -> _PrismaDrainTracker | None:
+    def _instrument_prisma_client(self, prisma_client: "Prisma | _PrismaClient") -> _PrismaDrainTracker | None:
         from prisma.errors import ClientNotConnectedError
 
         try:
@@ -255,7 +271,7 @@ class PrismaWrapper:
         self._write_engine(prisma_client, _TrackedPrismaEngine(engine, tracker))
         return tracker
 
-    def _get_engine_pid(self, prisma_client: _PrismaClient | None = None) -> int:
+    def _get_engine_pid(self, prisma_client: "Prisma | _PrismaClient | None" = None) -> int:
         """Get the PID of the current Prisma engine subprocess, or 0 if unavailable.
 
         Must never raise: it runs inside the reconnect path, where the client
@@ -438,7 +454,10 @@ class PrismaWrapper:
             return None
 
         endpoint: Final = self._iam_endpoint if self._iam_endpoint is not None else self._endpoint_from_env()
-        db_url: Final = endpoint.build_url(mint_database_token(auth, endpoint))
+        db_url: Final = add_missing_query_params(
+            endpoint.build_url(mint_database_token(auth, endpoint)),
+            token_refresh_params_from_url(os.environ.get(self._db_url_env_var, "")),
+        )
         os.environ[self._db_url_env_var] = db_url
         return db_url
 
@@ -937,9 +956,20 @@ class PrismaManager:
                         use_v2_resolver=use_v2_resolver,
                     )
                 else:
+                    try:
+                        from litellm_proxy_extras.prisma_toolchain import (
+                            prisma_command_timeout,
+                            run_prisma,
+                        )
+                    except ImportError as e:
+                        verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
+                        return False
+
+                    from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+                    ProxyExtrasDBManager.raise_if_lens_rename_pending()
                     PrismaManager._raise_if_partitioned_spend_logs()
-                    # Use prisma db push with increased timeout
-                    subprocess.run(
+                    run_prisma(
                         [
                             "prisma",
                             "db",
@@ -947,13 +977,15 @@ class PrismaManager:
                             "--accept-data-loss",
                             "--skip-generate",
                         ],
-                        timeout=60,
-                        check=True,
+                        timeout=prisma_command_timeout(),
+                        env=os.environ.copy(),
+                        stdout=None,
+                        stderr=None,
                     )
                     PrismaManager._apply_replica_identity_full_if_requested()
                     return True
-            except subprocess.TimeoutExpired:
-                verbose_proxy_logger.warning("Attempt %s timed out", attempt + 1)
+            except subprocess.TimeoutExpired as e:
+                verbose_proxy_logger.warning("Attempt %s timed out after %.0fs", attempt + 1, e.timeout)
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt
@@ -963,6 +995,30 @@ class PrismaManager:
             finally:
                 os.chdir(original_dir)
         return False
+
+    @staticmethod
+    def build_request_log_indexes() -> bool:
+        """Build the request-log indexes the migrations leave out and wait for them, for the
+        migration job (`--skip_server_startup`) after `setup_database` succeeds. False when
+        an index could not be built, so the job exits non-zero and is rerun."""
+        try:
+            from litellm_proxy_extras.utils import ProxyExtrasDBManager
+        except ImportError as e:
+            verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
+            return False
+        return ProxyExtrasDBManager.build_request_log_indexes()
+
+    @staticmethod
+    def start_request_log_index_build() -> None:
+        """Build the request-log indexes on a daemon thread, for a serving proxy that ran the
+        migrations itself (`DISABLE_SCHEMA_UPDATE` unset), so a long build never delays
+        readiness. A build that could not finish is logged and retried on the next boot."""
+        try:
+            from litellm_proxy_extras.utils import ProxyExtrasDBManager
+        except ImportError as e:
+            verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
+            return
+        ProxyExtrasDBManager.start_request_log_index_build()
 
 
 def should_update_prisma_schema(

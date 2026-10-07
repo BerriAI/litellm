@@ -1,6 +1,6 @@
 import sys
 from datetime import datetime
-from typing import List, Optional
+from typing import Final, List, Optional
 import pytest
 from litellm._uuid import uuid
 import os
@@ -34,7 +34,7 @@ from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     does_mcp_server_exist,
 )
 
-TEST_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-1234")
+TEST_MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
 
 
 def generate_mcpserver_record(
@@ -134,7 +134,7 @@ async def test_create_mcp_server_direct():
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
         ) as mock_get_prisma,
         mock.patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server_if_identifier_free",
             new_callable=mock.AsyncMock,
         ) as mock_create,
         mock.patch(
@@ -157,6 +157,7 @@ async def test_create_mcp_server_direct():
         # Mock server manager
         mock_manager.add_server = mock.AsyncMock()
         mock_manager.reload_servers_from_database = mock.AsyncMock()
+        mock_manager.get_mcp_server_by_id.return_value = None
 
         # Set up test data
         server_id = str(uuid.uuid4())
@@ -345,7 +346,7 @@ async def test_create_mcp_server_invalid_alias():
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server"
         ) as mock_get_server,
         mock.patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server"
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server_if_identifier_free"
         ) as mock_create,
     ):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -390,6 +391,7 @@ async def test_create_mcp_server_invalid_alias():
 @_SKIP_NO_MCP
 @pytest.mark.asyncio
 async def test_edit_mcp_server_redacts_credentials():
+    mock_get_server: Final = mock.AsyncMock()
     with (
         mock.patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
@@ -398,6 +400,10 @@ async def test_edit_mcp_server_redacts_credentials():
         mock.patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
         ) as mock_get_prisma,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            new=mock_get_server,
+        ),
         mock.patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
             new_callable=mock.AsyncMock,
@@ -421,6 +427,18 @@ async def test_edit_mcp_server_redacts_credentials():
         mock_manager.reload_servers_from_database = mock.AsyncMock()
 
         server_id = str(uuid.uuid4())
+        stored_server: Final = LiteLLM_MCPServerTable(
+            server_id=server_id,
+            alias="Updated Server",
+            url="https://updated.example.com/mcp",
+            transport=MCPTransport.http,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            credentials={"auth_value": "secret"},
+            teams=[],
+        )
+        mock_get_server.return_value = stored_server
+
         updated_server = LiteLLM_MCPServerTable(
             server_id=server_id,
             alias="Updated Server",
@@ -457,6 +475,7 @@ async def test_edit_mcp_server_redacts_credentials():
         mock_update.assert_awaited_once()
         mock_manager.update_server.assert_called_once_with(updated_server)
         mock_manager.reload_servers_from_database.assert_awaited_once()
+        mock_get_server.assert_awaited_once_with(mock_prisma, server_id)
 
 
 def test_validate_mcp_server_name_direct():

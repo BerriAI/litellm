@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
@@ -54,7 +54,7 @@ const mockCloudZeroSettings: CloudZeroSettings = {
 
 describe("useCloudZeroSettings", () => {
   let queryClient: QueryClient;
-  let fetchSpy: ReturnType<typeof vi.fn>;
+  let fetchSpy: Mock;
 
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -69,6 +69,7 @@ describe("useCloudZeroSettings", () => {
     });
 
     vi.clearAllMocks();
+    mockGetProxyBaseUrl.mockReset();
 
     fetchSpy = vi.fn();
     global.fetch = fetchSpy;
@@ -240,7 +241,7 @@ describe("useCloudZeroSettings", () => {
 
 describe("useCloudZeroUpdateSettings", () => {
   let queryClient: QueryClient;
-  let fetchSpy: ReturnType<typeof vi.fn>;
+  let fetchSpy: Mock;
 
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -255,6 +256,7 @@ describe("useCloudZeroUpdateSettings", () => {
     });
 
     vi.clearAllMocks();
+    mockGetProxyBaseUrl.mockReset();
 
     fetchSpy = vi.fn();
     global.fetch = fetchSpy;
@@ -481,7 +483,7 @@ describe("useCloudZeroUpdateSettings", () => {
 
 describe("useCloudZeroDeleteSettings", () => {
   let queryClient: QueryClient;
-  let fetchSpy: ReturnType<typeof vi.fn>;
+  let fetchSpy: Mock;
 
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -496,6 +498,7 @@ describe("useCloudZeroDeleteSettings", () => {
     });
 
     vi.clearAllMocks();
+    mockGetProxyBaseUrl.mockReset();
 
     fetchSpy = vi.fn();
     global.fetch = fetchSpy;

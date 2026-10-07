@@ -6,19 +6,18 @@ import json
 import os
 import time
 import traceback
-from litellm._uuid import uuid
-from typing import Tuple
+from typing import Final, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
-from litellm.utils import ModelResponseListIterator
+from litellm._uuid import uuid
 from litellm.types.utils import ModelResponseStream
-
-from dotenv import load_dotenv
+from litellm.utils import ModelResponseListIterator
 
 load_dotenv()
 import random
@@ -202,38 +201,6 @@ tools_schema = [
         },
     }
 ]
-
-# def test_completion_cohere_stream():
-# # this is a flaky test due to the cohere API endpoint being unstable
-#     try:
-#         messages = [
-#             {"role": "system", "content": "You are a helpful assistant."},
-#             {
-#                 "role": "user",
-#                 "content": "how does a court case get to the Supreme Court?",
-#             },
-#         ]
-#         response = completion(
-#             model="command-nightly", messages=messages, stream=True, max_tokens=50,
-#         )
-#         complete_response = ""
-#         # Add any assertions here to check the response
-#         has_finish_reason = False
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if has_finish_reason is False:
-#             raise Exception("Finish reason not in final chunk")
-#         if complete_response.strip() == "":
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_cohere_stream()
 
 
 def test_completion_azure_stream_special_char():
@@ -466,66 +433,6 @@ def test_completion_azure_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_azure_stream()
-
-
-def test_completion_azure_function_calling_stream():
-    try:
-        litellm.set_verbose = False
-        user_message = "What is the current weather in Boston?"
-        messages = [{"content": user_message, "role": "user"}]
-        response = completion(
-            model="azure/gpt-4.1-mini",
-            messages=messages,
-            stream=True,
-            tools=tools_schema,
-        )
-        # Add any assertions here to check the response
-        for chunk in response:
-            print(chunk)
-            if chunk["choices"][0]["finish_reason"] == "stop":
-                break
-            print(chunk["choices"][0]["finish_reason"])
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_azure_function_calling_stream()
-
-
-@pytest.mark.skip("Flaky ollama test - needs to be fixed")
-def test_completion_ollama_hosted_stream():
-    try:
-        # litellm.set_verbose = True
-        response = completion(
-            model="ollama/phi",
-            messages=messages,
-            max_tokens=100,
-            num_retries=3,
-            timeout=20,
-            # api_base="https://test-ollama-endpoint.onrender.com",
-            stream=True,
-        )
-        # Add any assertions here to check the response
-        complete_response = ""
-        # Add any assertions here to check the response
-        for idx, init_chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, init_chunk)
-            complete_response += chunk
-            if finished:
-                assert isinstance(init_chunk.choices[0], litellm.utils.StreamingChoices)
-                break
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"complete_response: {complete_response}")
-    except Exception as e:
-        if "try pulling it first" in str(e):
-            return
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_ollama_hosted_stream()
 
 
 @pytest.mark.parametrize(
@@ -570,7 +477,7 @@ def test_completion_model_stream(model):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_gemini_stream(sync_mode):
     try:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         print("Streaming gemini response")
         function1 = [
             {
@@ -658,7 +565,6 @@ async def test_completion_gemini_stream(sync_mode):
         pytest.fail(f"Error occurred: {e}")
 
 
-# asyncio.run(test_acompletion_gemini_stream())
 def gemini_mock_post_streaming(url, **kwargs):
     # This generator simulates the streaming response with partial JSON content
     def stream_response():
@@ -856,43 +762,6 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_mistral_api_stream()
-
-
-@pytest.mark.skip()
-def test_completion_nlp_cloud_stream():
-    try:
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": "how does a court case get to the Supreme Court?",
-            },
-        ]
-        print("testing nlp cloud streaming")
-        response = completion(
-            model="nlp_cloud/finetuned-llama-2-70b",
-            messages=messages,
-            stream=True,
-            max_tokens=20,
-        )
-
-        complete_response = ""
-        # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            complete_response += chunk
-            if finished:
-                break
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except Exception as e:
-        print(f"Error occurred: {e}")
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_nlp_cloud_stream()
 
 
 def test_completion_claude_stream_bad_key():
@@ -933,10 +802,6 @@ def test_completion_claude_stream_bad_key():
         print("Auth Error raised")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_claude_stream_bad_key()
-# test_completion_replicate_stream()
 
 
 @pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # ""
@@ -997,170 +862,6 @@ def test_vertex_ai_stream(provider):
             pytest.fail(f"Error occurred: {e}")
 
 
-# def test_completion_vertexai_stream():
-#     try:
-#         import os
-#         os.environ["VERTEXAI_PROJECT"] = "pathrise-convert-1606954137718"
-#         os.environ["VERTEXAI_LOCATION"] = "us-central1"
-#         messages = [
-#             {"role": "system", "content": "You are a helpful assistant."},
-#             {
-#                 "role": "user",
-#                 "content": "how does a court case get to the Supreme Court?",
-#             },
-#         ]
-#         response = completion(
-#             model="vertex_ai/chat-bison", messages=messages, stream=True, max_tokens=50
-#         )
-#         complete_response = ""
-#         has_finish_reason = False
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if has_finish_reason is False:
-#             raise Exception("finish reason not set for last chunk")
-#         if complete_response.strip() == "":
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except InvalidRequestError as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_vertexai_stream()
-
-
-# def test_completion_vertexai_stream_bad_key():
-#     try:
-#         import os
-#         messages = [
-#             {"role": "system", "content": "You are a helpful assistant."},
-#             {
-#                 "role": "user",
-#                 "content": "how does a court case get to the Supreme Court?",
-#             },
-#         ]
-#         response = completion(
-#             model="vertex_ai/chat-bison", messages=messages, stream=True, max_tokens=50
-#         )
-#         complete_response = ""
-#         has_finish_reason = False
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if has_finish_reason is False:
-#             raise Exception("finish reason not set for last chunk")
-#         if complete_response.strip() == "":
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except InvalidRequestError as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_vertexai_stream_bad_key()
-
-
-@pytest.mark.skip(reason="Replicate extremely flaky.")
-@pytest.mark.parametrize("sync_mode", [False, True])
-@pytest.mark.asyncio
-async def test_completion_replicate_llama3_streaming(sync_mode):
-    litellm.set_verbose = True
-    model_name = "replicate/meta/meta-llama-3-8b-instruct"
-    try:
-        if sync_mode:
-            final_chunk: Optional[litellm.ModelResponse] = None
-            response: litellm.CustomStreamWrapper = completion(  # type: ignore
-                model=model_name,
-                messages=messages,
-                max_tokens=10,  # type: ignore
-                stream=True,
-                num_retries=3,
-            )
-            complete_response = ""
-            # Add any assertions here to check the response
-            has_finish_reason = False
-            for idx, chunk in enumerate(response):
-                final_chunk = chunk
-                chunk, finished = streaming_format_tests(idx, chunk)
-                if finished:
-                    has_finish_reason = True
-                    break
-                complete_response += chunk
-            if has_finish_reason == False:
-                raise Exception("finish reason not set")
-            if complete_response.strip() == "":
-                raise Exception("Empty response received")
-        else:
-            response: litellm.CustomStreamWrapper = await litellm.acompletion(  # type: ignore
-                model=model_name,
-                messages=messages,
-                max_tokens=100,  # type: ignore
-                stream=True,
-                num_retries=3,
-            )
-            complete_response = ""
-            # Add any assertions here to check the response
-            has_finish_reason = False
-            idx = 0
-            final_chunk: Optional[litellm.ModelResponse] = None
-            async for chunk in response:
-                final_chunk = chunk
-                chunk, finished = streaming_format_tests(idx, chunk)
-                if finished:
-                    has_finish_reason = True
-                    break
-                complete_response += chunk
-                idx += 1
-            if has_finish_reason == False:
-                raise Exception("finish reason not set")
-            if complete_response.strip() == "":
-                raise Exception("Empty response received")
-    except litellm.UnprocessableEntityError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# TEMP Commented out - replicate throwing an auth error
-#     try:
-#         litellm.set_verbose = True
-#         messages = [
-#             {"role": "system", "content": "You are a helpful assistant."},
-#             {
-#                 "role": "user",
-#                 "content": "how does a court case get to the Supreme Court?",
-#             },
-#         ]
-#         response = completion(
-#             model="replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3", messages=messages, stream=True, max_tokens=50
-#         )
-#         complete_response = ""
-#         has_finish_reason = False
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if has_finish_reason is False:
-#             raise Exception("finish reason not set for last chunk")
-#         if complete_response.strip() == "":
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except InvalidRequestError as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])  #
@@ -1358,85 +1059,8 @@ async def test_parallel_streaming_requests(sync_mode, model):
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="Replicate changed exceptions")
-def test_completion_replicate_stream_bad_key():
-    try:
-        api_key = "bad-key"
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": "how does a court case get to the Supreme Court?",
-            },
-        ]
-        response = completion(
-            model="replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3",
-            messages=messages,
-            stream=True,
-            max_tokens=50,
-            api_key=api_key,
-        )
-        complete_response = ""
-        # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            complete_response += chunk
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except AuthenticationError as e:
-        # this is an auth error with a bad key
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_replicate_stream_bad_key()
-
-# test_completion_bedrock_claude_stream()
-
-
-@pytest.mark.skip(reason="model end of life")
-def test_completion_bedrock_ai21_stream():
-    try:
-        litellm.set_verbose = False
-        response = completion(
-            model="bedrock/ai21.j2-mid-v1",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?",
-                }
-            ],
-            temperature=1,
-            max_tokens=20,
-            stream=True,
-        )
-        print(response)
-        complete_response = ""
-        has_finish_reason = False
-        # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            # print
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            complete_response += chunk
-            if finished:
-                break
-        if has_finish_reason is False:
-            raise Exception("finish reason not set for last chunk")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_bedrock_ai21_stream()
 
 
 def test_completion_bedrock_mistral_stream():
@@ -1476,211 +1100,10 @@ def test_completion_bedrock_mistral_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="stopped using TokenIterator")
-def test_sagemaker_weird_response():
-    """
-    When the stream ends, flush any remaining holding chunks.
-    """
-    try:
-        import json
-
-        from litellm.llms.sagemaker.completion.handler import TokenIterator
-
-        chunk = """<s>[INST] Hey, how's it going? [/INST],
-        I'm doing well, thanks for asking! How about you? Is there anything you'd like to chat about or ask? I'm here to help with any questions you might have."""
-
-        data = "\n".join(
-            map(
-                lambda x: f"data: {json.dumps({'token': {'text': x.strip()}})}",
-                chunk.strip().split(","),
-            )
-        )
-        stream = bytes(data, encoding="utf8")
-
-        # Modify the array to be a dictionary with "PayloadPart" and "Bytes" keys.
-        stream_iterator = iter([{"PayloadPart": {"Bytes": stream}}])
-
-        token_iter = TokenIterator(stream_iterator)
-
-        # for token in token_iter:
-        #     print(token)
-        litellm.set_verbose = True
-
-        logging_obj = litellm.Logging(
-            model="berri-benchmarking-Llama-2-70b-chat-hf-4",
-            messages=messages,
-            stream=True,
-            litellm_call_id="1234",
-            function_id="function_id",
-            call_type="acompletion",
-            start_time=time.time(),
-        )
-        response = litellm.CustomStreamWrapper(
-            completion_stream=token_iter,
-            model="berri-benchmarking-Llama-2-70b-chat-hf-4",
-            custom_llm_provider="sagemaker",
-            logging_obj=logging_obj,
-        )
-        complete_response = ""
-        for idx, chunk in enumerate(response):
-            # print
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            complete_response += chunk
-            if finished:
-                break
-        assert len(complete_response) > 0
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
 
 
-# test_sagemaker_weird_response()
 
 
-# asyncio.run(test_sagemaker_streaming_async())
-
-
-@pytest.mark.skip(reason="Account deleted by IBM.")
-@pytest.mark.asyncio
-async def test_completion_watsonx_stream():
-    litellm.set_verbose = True
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    try:
-        response = await acompletion(
-            model="watsonx/meta-llama/llama-3-1-8b-instruct",
-            messages=messages,
-            temperature=0.5,
-            max_tokens=20,
-            stream=True,
-            # client=client
-        )
-        complete_response = ""
-        has_finish_reason = False
-        # Add any assertions here to check the response
-        idx = 0
-        async for chunk in response:
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            if finished:
-                break
-            complete_response += chunk
-            idx += 1
-        if has_finish_reason is False:
-            raise Exception("finish reason not set for last chunk")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_sagemaker_stream()
-
-
-# def test_maritalk_streaming():
-#     messages = [{"role": "user", "content": "Hey"}]
-#     try:
-#         response = completion("maritalk", messages=messages, stream=True)
-#         complete_response = ""
-#         start_time = time.time()
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             complete_response += chunk
-#             if finished:
-#                 break
-#         if complete_response.strip() == "":
-#             raise Exception("Empty response received")
-#     except Exception:
-#         pytest.fail(f"error occurred: {traceback.format_exc()}")
-
-
-# ai21_completion_call()
-
-
-# ai21_completion_call_bad_key()
-
-
-@pytest.mark.skip(reason="flaky test")
-@pytest.mark.asyncio
-async def test_hf_completion_tgi_stream():
-    try:
-        response = await acompletion(
-            model="huggingface/HuggingFaceH4/zephyr-7b-beta",
-            messages=[{"content": "Hello, how are you?", "role": "user"}],
-            stream=True,
-        )
-        # Add any assertions here to check the response
-        print(f"response: {response}")
-        complete_response = ""
-        start_time = time.time()
-        idx = 0
-        async for chunk in response:
-            chunk, finished = streaming_format_tests(idx, chunk)
-            complete_response += chunk
-            if finished:
-                break
-            idx += 1
-        print(f"completion_response: {complete_response}")
-    except litellm.ServiceUnavailableError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# hf_test_completion_tgi_stream()
-
-# def test_completion_aleph_alpha():
-#     try:
-#         response = completion(
-#             model="luminous-base", messages=messages, stream=True
-#         )
-#         # Add any assertions here to check the response
-#         has_finished = False
-#         complete_response = ""
-#         start_time = time.time()
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finished = finished
-#             complete_response += chunk
-#             if finished:
-#                 break
-#         if has_finished is False:
-#             raise Exception("finished reason missing from final chunk")
-#         if complete_response.strip() == "":
-#             raise Exception("Empty response received")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# # test_completion_aleph_alpha()
-
-# def test_completion_aleph_alpha_bad_key():
-#     try:
-#         api_key = "bad-key"
-#         response = completion(
-#             model="luminous-base", messages=messages, stream=True, api_key=api_key
-#         )
-#         # Add any assertions here to check the response
-#         has_finished = False
-#         complete_response = ""
-#         start_time = time.time()
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finished = finished
-#             complete_response += chunk
-#             if finished:
-#                 break
-#         if has_finished is False:
-#             raise Exception("finished reason missing from final chunk")
-#         if complete_response.strip() == "":
-#             raise Exception("Empty response received")
-#     except InvalidRequestError as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_aleph_alpha_bad_key()
 
 
 # test on openai completion call
@@ -1710,9 +1133,6 @@ def test_openai_chat_completion_call():
     print(f"complete response: {complete_response}")
 
 
-# test_openai_chat_completion_call()
-
-
 def test_openai_chat_completion_complete_response_call():
     try:
         complete_response = completion(
@@ -1727,7 +1147,6 @@ def test_openai_chat_completion_complete_response_call():
         pass
 
 
-# test_openai_chat_completion_complete_response_call()
 @pytest.mark.parametrize(
     "model",
     [
@@ -1801,45 +1220,24 @@ async def test_openai_stream_options_call(model, sync):
     )
 
 
-def test_openai_stream_options_call_text_completion():
-    litellm.set_verbose = False
-    for idx in range(3):
-        try:
-            response = litellm.text_completion(
-                model="gpt-3.5-turbo-instruct",
-                prompt="say GM - we're going to make it ",
-                stream=True,
-                stream_options={"include_usage": True},
-                max_tokens=10,
-            )
-            usage = None
-            chunks = []
-            for chunk in response:
-                print("chunk: ", chunk)
-                chunks.append(chunk)
-
-            last_chunk = chunks[-1]
-            print("last chunk: ", last_chunk)
-
-            """
-            Assert that:
-            - Last Chunk includes Usage
-            - All chunks prior to last chunk have usage=None
-            """
-
-            assert last_chunk.usage is not None
-            assert last_chunk.usage.total_tokens > 0
-            assert last_chunk.usage.prompt_tokens > 0
-            assert last_chunk.usage.completion_tokens > 0
-
-            # assert all non last chunks have usage=None
-            assert all(chunk.usage is None for chunk in chunks[:-1])
-            break
-        except Exception as e:
-            if idx < 2:
-                pass
-            else:
-                raise e
+def test_openai_stream_options_call_text_completion() -> None:
+    chunks: Final = tuple(
+        litellm.text_completion(
+            model="gpt-6-luna",
+            reasoning_effort="none",
+            prompt="say GM - we're going to make it ",
+            stream=True,
+            stream_options={"include_usage": True},
+            max_tokens=10,
+        )
+    )
+    assert chunks
+    assert chunks[-1].usage is not None
+    assert chunks[-1].usage.total_tokens > 0
+    assert chunks[-1].usage.prompt_tokens > 0
+    assert chunks[-1].usage.completion_tokens > 0
+    assert all(chunk.usage is None for chunk in chunks[:-1])
+    assert any(chunk.choices[0].text for chunk in chunks)
 
 
 def test_openai_text_completion_call():
@@ -1863,9 +1261,6 @@ def test_openai_text_completion_call():
     except Exception:
         print(f"error occurred: {traceback.format_exc()}")
         pass
-
-
-# test_openai_text_completion_call()
 
 
 # # test on together ai completion call - starcoder
@@ -1931,12 +1326,11 @@ def test_together_ai_completion_call_starcoder_bad_key():
         pass
 
 
-# test_together_ai_completion_call_starcoder_bad_key()
 #### Test Function calling + streaming ####
 
 
-def test_completion_openai_with_functions():
-    function1 = [
+def test_completion_openai_with_functions() -> None:
+    functions: Final = [
         {
             "name": "get_current_weather",
             "description": "Get the current weather in a given location",
@@ -1953,27 +1347,27 @@ def test_completion_openai_with_functions():
             },
         }
     ]
-    try:
-        litellm.set_verbose = False
-        response = completion(
-            model="gpt-3.5-turbo-1106",
-            messages=[{"role": "user", "content": "what's the weather in SF"}],
-            functions=function1,
+    messages: Final = [{"role": "user", "content": "what's the weather in SF"}]
+    chunks: Final = tuple(
+        completion(
+            model="gpt-6-luna",
+            reasoning_effort="none",
+            messages=messages,
+            functions=functions,
+            function_call={"name": "get_current_weather"},
             stream=True,
+            max_tokens=128,
         )
-        # Add any assertions here to check the response
-        print(response)
-        for chunk in response:
-            print(chunk)
-            if chunk["choices"][0]["finish_reason"] == "stop":
-                break
-            print(chunk["choices"][0]["finish_reason"])
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+    )
+    response: Final = litellm.stream_chunk_builder(chunks, messages=messages)
+    assert response is not None
+    function_call: Final = response.choices[0].message.function_call
+    assert function_call is not None
+    assert function_call.name == "get_current_weather"
+    assert json.loads(function_call.arguments)["location"]
+    assert sum(chunk.choices[0].finish_reason is not None for chunk in chunks) == 1
 
 
-# test_completion_openai_with_functions()
 #### Test Async streaming ####
 
 
@@ -2004,8 +1398,6 @@ async def completion_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-
-# asyncio.run(completion_call())
 
 #### Test Function Calling + Streaming ####
 
@@ -2310,9 +1702,6 @@ def test_streaming_and_function_calling(model):
         raise e
 
 
-# test_azure_streaming_and_function_calling()
-
-
 def test_success_callback_streaming():
     def success_callback(kwargs, completion_response, start_time, end_time):
         print(
@@ -2340,8 +1729,6 @@ def test_success_callback_streaming():
     for chunk in response:
         print(chunk["choices"][0])
 
-
-# test_success_callback_streaming()
 
 from typing import List, Optional
 
@@ -3576,12 +2963,12 @@ def test_mock_response_iterator_tool_use():
     from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
     from litellm.types.utils import (
         ChatCompletionMessageToolCall,
+        Choices,
+        CompletionTokensDetailsWrapper,
         Function,
         Message,
-        Usage,
-        CompletionTokensDetailsWrapper,
         PromptTokensDetailsWrapper,
-        Choices,
+        Usage,
     )
 
     litellm.set_verbose = False
@@ -3646,7 +3033,7 @@ def test_mock_response_iterator_tool_use():
 def test_reasoning_content_completion(model):
     # litellm.set_verbose = True
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         resp = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],
@@ -3694,8 +3081,9 @@ def test_is_delta_empty():
 
 
 def test_streaming_with_cost_calculation():
-    from litellm.types.utils import Usage
     from typing import Optional
+
+    from litellm.types.utils import Usage
 
     litellm.include_cost_in_streaming_usage = True
 

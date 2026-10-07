@@ -29,7 +29,7 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
         random_seed: int | None = None,
         stop: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[dict[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -83,7 +83,7 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
         finish_reason = None
         logprobs = None
 
-        chunk_data = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk_data) or ""
+        chunk_data = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(chunk_data) or ""
         chunk_data = chunk_data.strip()
         if len(chunk_data) == 0 or chunk_data == "[DONE]":
             return {

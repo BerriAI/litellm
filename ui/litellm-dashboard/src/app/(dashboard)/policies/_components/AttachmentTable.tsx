@@ -50,6 +50,7 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
   return (
     <DataTable
       data={attachments}
+      paginationMode="client"
       columns={columns}
       getRowId={(row) => row.attachment_id}
       sortingMode="client"

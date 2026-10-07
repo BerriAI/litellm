@@ -4,7 +4,6 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,6 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ImageResponse
 
 from ..base_aws_llm import BaseAWSLLM, bedrock_bearer_token
@@ -38,7 +38,7 @@ else:
     AWSPreparedRequest = Any
 
 
-class BedrockImagePreparedRequest(BaseModel):
+class BedrockImagePreparedRequest(LiteLLMBaseModel):
     """
     Internal/Helper class for preparing the request for bedrock image generation
     """
@@ -119,7 +119,12 @@ class BedrockImageGeneration(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
         ### FORMAT RESPONSE TO OPENAI FORMAT ###
@@ -162,7 +167,12 @@ class BedrockImageGeneration(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
