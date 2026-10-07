@@ -3832,6 +3832,11 @@ def test_azure_gpt_5_6_alias_matches_sol_pricing(_local_model_cost_map, region_p
         assert alias[field] == sol[field], field
 
 
+# Per-token rates read 2026-10-07 from https://platform.claude.com/docs/en/about-claude/pricing (direct and
+# azure_ai, which Microsoft bills at Anthropic's rates per
+# https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/claude-models-billing) and from the
+# AmazonBedrockFoundationModels price list at
+# https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json (Bedrock)
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider", "prompt_tokens", "input_rate", "cache_read_rate", "output_rate"),
     [
@@ -3850,24 +3855,62 @@ def test_azure_gpt_5_6_alias_matches_sol_pricing(_local_model_cost_map, region_p
     ],
 )
 def test_generic_cost_per_token_claude_haiku_5_5_prompt_length_tiers(
-    _local_model_cost_map, model, custom_llm_provider, prompt_tokens, input_rate, cache_read_rate, output_rate
-):
+    _local_model_cost_map: None,
+    model: str,
+    custom_llm_provider: str,
+    prompt_tokens: int,
+    input_rate: float,
+    cache_read_rate: float,
+    output_rate: float,
+) -> None:
     """Claude Haiku 5.5 bills every token at 5x the base rates once the prompt is over 100,000 tokens."""
-    cached_tokens = 10_000
-    completion_tokens = 1_000
-    usage = Usage(
+    cached_tokens: Final = 10_000
+    completion_tokens: Final = 1_000
+    usage: Final = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
         prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
     )
+
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
     )
-    expected_prompt = (prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate
-    assert prompt_cost == pytest.approx(expected_prompt)
+
+    assert prompt_cost == pytest.approx((prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate)
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
+# Batch rates read 2026-10-07 from the Batch processing table at
+# https://platform.claude.com/docs/en/about-claude/pricing: $0.05 / $0.25 per MTok input and $0.25 / $1.25 output,
+# up to and over 100,000 prompt tokens
+@pytest.mark.parametrize(
+    ("prompt_tokens", "input_rate", "output_rate"),
+    [(100_000, 5e-08, 2.5e-07), (100_001, 2.5e-07, 1.25e-06)],
+)
+def test_batch_cost_calculator_claude_haiku_5_5_prompt_length_tiers(
+    _local_model_cost_map: None,
+    prompt_tokens: int,
+    input_rate: float,
+    output_rate: float,
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    completion_tokens: Final = 1_000
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+        model="claude-haiku-5-5",
+        custom_llm_provider="anthropic",
+    )
+
+    assert prompt_cost == pytest.approx(prompt_tokens * input_rate)
     assert completion_cost == pytest.approx(completion_tokens * output_rate)
 
 
@@ -3878,11 +3921,16 @@ def test_generic_cost_per_token_claude_haiku_5_5_prompt_length_tiers(
         (100_001, (2.5e-07, 1.25e-06, 2.5e-08, 3.125e-07)),
     ],
 )
-def test_get_batch_cost_rates_claude_haiku_5_5_prompt_length_tiers(_local_model_cost_map, prompt_tokens, expected):
+def test_get_batch_cost_rates_claude_haiku_5_5_prompt_length_tiers(
+    _local_model_cost_map: None,
+    prompt_tokens: int,
+    expected: tuple[float, float, float, float],
+) -> None:
+    """Cache write and cache read batch rates are 50% of the standard rates; Anthropic's batch table omits them."""
     from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
 
-    rates = get_batch_cost_rates(
-        litellm.model_cost["claude-haiku-5-5"],
+    rates: Final = get_batch_cost_rates(
+        litellm.get_model_info(model="claude-haiku-5-5", custom_llm_provider="anthropic"),
         Usage(prompt_tokens=prompt_tokens, completion_tokens=1, total_tokens=prompt_tokens + 1),
         "anthropic",
     )
