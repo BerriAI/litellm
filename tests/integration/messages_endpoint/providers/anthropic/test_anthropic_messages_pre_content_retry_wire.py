@@ -1,7 +1,8 @@
 import json
 import os
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
@@ -466,7 +467,7 @@ def test_retried_stream_spend_row_records_the_attempt_count(gateway: Gateway) ->
         assert rows == [{"attempted": "1", "budget": "1"}], rows
 
 
-def _proxy_with_callback_sink(gateway: Gateway, tmp_path: Path, sink: Wire) -> Iterator[Gateway]:
+def _proxy_with_callback_sink(gateway: Gateway, tmp_path: Path, sink: Wire) -> AbstractContextManager[Gateway]:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"].update({"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1})
     path: Final = tmp_path / "callbacks.yaml"
@@ -479,12 +480,16 @@ def _proxy_with_callback_sink(gateway: Gateway, tmp_path: Path, sink: Wire) -> I
     )
 
 
+def _sink_events(batches: Sequence[Request]) -> Iterator[dict[str, JsonValue]]:
+    for batch in batches:
+        yield from json.loads(batch.body)
+
+
 def _delivered_usage(sink: Wire, batches: list[Request], model: str) -> tuple[tuple[str, int, int], ...]:
     batches.extend(sink.drain())
-    events: Final = tuple(event for batch in batches for event in json.loads(batch.body))
     return tuple(
         (str(event["status"]), int(event["prompt_tokens"]), int(event["completion_tokens"]))
-        for event in events
+        for event in _sink_events(batches)
         if event.get("model_group") == model
     )
 
