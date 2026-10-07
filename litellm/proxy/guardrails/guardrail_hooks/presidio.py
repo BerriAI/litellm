@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
 
 import aiohttp
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly
 
 import litellm
@@ -68,13 +69,20 @@ from litellm.utils import (
 )
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _PresidioAnonymizeItem(TypedDict, total=False):
     entity_type: ReadOnly[str | None]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _PresidioAnonymizeResponse(TypedDict):
     text: ReadOnly[str]
     items: ReadOnly[NotRequired[list[_PresidioAnonymizeItem]]]
+
+
+_PRESIDIO_ANONYMIZE_ADAPTER: Final[TypeAdapter[_PresidioAnonymizeResponse | None]] = TypeAdapter(
+    _PresidioAnonymizeResponse | None
+)
 
 
 class _JsonResponse(Protocol):
@@ -769,7 +777,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     raise Exception(
                         f"Presidio anonymizer returned non-JSON Content-Type '{content_type}'; body: '{error_body[:200]}'"
                     )
-                return await response.json()
+                return _PRESIDIO_ANONYMIZE_ADAPTER.validate_python(await response.json())
 
     def _finalize_presidio_anonymize_simple(
         self,

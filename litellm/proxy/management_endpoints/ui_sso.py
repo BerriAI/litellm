@@ -22,7 +22,6 @@ from html import escape
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     Literal,
     NoReturn,
@@ -37,6 +36,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 if TYPE_CHECKING:
     import httpx
+    from fastapi_sso.sso.base import SSOBase
 
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
@@ -3073,7 +3073,7 @@ class SSOAuthenticationHandler:
     @staticmethod
     @with_service_target(SSO_SESSIONS_TARGET)
     async def get_generic_sso_redirect_response(
-        generic_sso: Any,
+        generic_sso: "SSOBase",
         state: str | None = None,
         generic_authorization_endpoint: str | None = None,
         request: Request | None = None,
