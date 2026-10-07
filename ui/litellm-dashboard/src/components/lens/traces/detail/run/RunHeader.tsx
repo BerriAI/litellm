@@ -16,7 +16,8 @@ import { traceRefOf, traceShareUrl } from "../../routing";
 import { IdChip } from "../../ui/IdChip";
 import { SpanIcon } from "../../ui/SpanIcon";
 import { FrameworkLogo, traceFramework } from "../../ui/TraceFramework";
-import type { Trace } from "../../types";
+import type { SignalFlag, Trace } from "../../types";
+import { SignalPills } from "../../ui/SignalPills";
 import { fmtMs, fmtTok, traceAgentNames, traceDisplayName } from "../../utils";
 
 interface CopyButtonProps {
@@ -90,6 +91,7 @@ interface RunHeaderProps {
   live: boolean;
   canLive: boolean;
   onLiveChange: () => void;
+  signals?: readonly SignalFlag[];
 }
 
 /** Run identity, view switch and totals in two tight rows. */
@@ -103,6 +105,7 @@ export function RunHeader({
   live,
   canLive,
   onLiveChange,
+  signals = [],
 }: RunHeaderProps) {
   const { summary } = trace;
   const failed = summary.status === "error";
@@ -162,6 +165,7 @@ export function RunHeader({
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
         <StatusPill failed={failed} />
+        {signals.length > 0 && <SignalPills flags={signals} showScore className="flex-wrap" />}
         <Stat label="Duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="Steps" value={summary.span_count.toLocaleString()} />
         <Stat label="Tokens" value={fmtTok(summary.input_tokens + summary.output_tokens)} />

@@ -1756,6 +1756,8 @@ model LiteLLM_AutoRouterDailySpend {
   router_name                    String
   router_type                    String
   turns                          Int      @default(0)
+  total_tokens                   BigInt   @default(0)
+  token_recorded_turns            Int      @default(0)
   spend                          Float    @default(0)
   saved_spend                    Float    @default(0)
   savings_estimated_turns        Int      @default(0)
@@ -1976,4 +1978,21 @@ model LiteLLM_LensDataset {
   data       Json
 
   @@id([id, revision])
+}
+
+model LiteLLM_LensSignalConfig {
+  id   String @id
+  data Json
+}
+
+model LiteLLM_LensTraceSignal {
+  trace_id      String
+  trace_ref     String @default("")
+  config_key    String
+  span_count    Int
+  claimed_until DateTime?
+  classified_at DateTime?
+  data          Json
+
+  @@id([trace_id, trace_ref])
 }

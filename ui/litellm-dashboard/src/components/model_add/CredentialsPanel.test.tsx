@@ -39,7 +39,7 @@ vi.mock("./CredentialModal", () => ({
   }: {
     mode: "add" | "edit";
     open: boolean;
-    onSubmit: (values: Record<string, unknown>) => void;
+    onSubmit: (values: Record<string, unknown>, valuesToDelete?: readonly string[]) => void;
   }) {
     if (!open) {
       return null;
@@ -54,9 +54,19 @@ vi.mock("./CredentialModal", () => ({
           }
         : { credential_name: "new-cred", custom_llm_provider: "openai" };
     return (
-      <button data-testid={`credential-modal-${mode}-submit`} onClick={() => onSubmit(values)}>
-        submit {mode}
-      </button>
+      <>
+        <button data-testid={`credential-modal-${mode}-submit`} onClick={() => onSubmit(values)}>
+          submit {mode}
+        </button>
+        <button
+          data-testid={`credential-modal-${mode}-switch-to-federation`}
+          onClick={() =>
+            onSubmit({ ...values, api_key: undefined, anthropic_federation_rule_id: "fdrl_new" }, ["api_key"])
+          }
+        >
+          switch {mode} to federation
+        </button>
+      </>
     );
   },
 }));
@@ -196,6 +206,37 @@ describe("CredentialsPanel", () => {
     const [, updatedName, payload] = vi.mocked(credentialUpdateCall).mock.calls[0];
     expect(updatedName).toBe("openai-key");
     expect(payload.credential_values).toEqual({ api_base: "https://proxy.e2e.example.com/v1" });
+  });
+
+  it("sends the values to delete with the update and omits the field when there are none", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({ data: { credentials }, isLoading: false, refetch: vi.fn() });
+    vi.mocked(credentialUpdateCall).mockResolvedValue(undefined as never);
+
+    renderPanel();
+
+    await user.click(screen.getByTestId("credential-actions-openai-key"));
+    await user.click(await screen.findByTestId("credential-action-edit"));
+    await user.click(screen.getByTestId("credential-modal-edit-switch-to-federation"));
+    await waitFor(() => {
+      expect(credentialUpdateCall).toHaveBeenCalledTimes(1);
+    });
+    const [, , federatedPayload] = vi.mocked(credentialUpdateCall).mock.calls[0];
+    expect(federatedPayload.credential_values).toEqual({
+      api_base: "https://proxy.e2e.example.com/v1",
+      anthropic_federation_rule_id: "fdrl_new",
+    });
+    expect(federatedPayload.credential_values_to_delete).toEqual(["api_key"]);
+
+    await user.click(screen.getByTestId("credential-actions-openai-key"));
+    await user.click(await screen.findByTestId("credential-action-edit"));
+    await user.click(screen.getByTestId("credential-modal-edit-submit"));
+    await waitFor(() => {
+      expect(credentialUpdateCall).toHaveBeenCalledTimes(2);
+    });
+    const [, , plainPayload] = vi.mocked(credentialUpdateCall).mock.calls[1];
+    expect(plainPayload).not.toHaveProperty("credential_values_to_delete");
   });
 
   describe("Admin Viewer write-action gating", () => {
