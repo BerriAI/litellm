@@ -15,7 +15,7 @@ kwargs lack the flag and these tests fail.
 import json
 from collections.abc import Mapping
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -223,3 +223,83 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
     )
     assert isinstance(response, ResponsesAPIResponse)
     assert [item.type for item in response.output] == ["message"]
+
+
+def _deferred_stream(make_call) -> litellm.CustomStreamWrapper:
+    """A stream whose HTTP request is only sent on first use, the way Vertex AI and Gemini return one."""
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {"litellm_params": {}}
+    return litellm.CustomStreamWrapper(
+        completion_stream=None,
+        model="vertex_ai/gemini-2.5-flash",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=make_call,
+    )
+
+
+def _service_unavailable() -> litellm.ServiceUnavailableError:
+    return litellm.ServiceUnavailableError(
+        message="The service is currently unavailable.",
+        llm_provider="vertex_ai_beta",
+        model="gemini-2.5-flash",
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_bridge_raises_a_deferred_stream_opening_error_before_returning():
+    handler: Final = LiteLLMCompletionTransformationHandler()
+
+    async def failing_make_call(**kwargs):
+        raise _service_unavailable()
+
+    async def fake_acompletion(**kwargs):
+        return _deferred_stream(failing_make_call)
+
+    with patch("litellm.acompletion", fake_acompletion):  # test-quality-ok: no DI seam; file stubs this boundary
+        with pytest.raises(litellm.ServiceUnavailableError):
+            await handler.response_api_handler(
+                model="vertex_ai/gemini-2.5-flash",
+                input="hello",
+                responses_api_request={"stream": True},
+                custom_llm_provider="vertex_ai",
+                stream=True,
+                _is_async=True,
+            )
+
+
+@pytest.mark.asyncio
+async def test_router_retries_a_bridged_stream_that_fails_before_its_first_chunk():
+    real_acompletion: Final = litellm.acompletion
+    attempts: list[str] = []
+
+    async def failing_make_call(**kwargs):
+        raise _service_unavailable()
+
+    async def flaky_acompletion(**kwargs):
+        attempts.append(kwargs["model"])
+        if len(attempts) == 1:
+            return _deferred_stream(failing_make_call)
+        return await real_acompletion(**{**kwargs, "mock_response": "recovered"})
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                },
+            }
+        ],
+        num_retries=1,
+        retry_after=0,
+    )
+
+    with patch("litellm.acompletion", flaky_acompletion):  # test-quality-ok: no DI seam; file stubs this boundary
+        stream = await router.aresponses(model="gemini", input="hello", stream=True)
+        text: Final = "".join([event.delta async for event in stream if event.type == "response.output_text.delta"])
+
+    assert len(attempts) == 2, f"the 503 before the first chunk was not retried: {attempts}"
+    assert text == "recovered"
