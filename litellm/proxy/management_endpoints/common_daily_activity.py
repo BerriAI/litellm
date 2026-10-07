@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, Protocol
 
@@ -64,6 +64,33 @@ def raise_public(error: ScopeDenied | InvalidDateRange) -> NoReturn:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error.reason})
         case _:
             assert_never(error)
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalDateRange:
+    start: date
+    end: date
+
+
+def parse_canonical_date(value: str) -> date | None:
+    """The daily spend tables store ``date`` as text and compare it against the raw request
+    string, so only the exact ``YYYY-MM-DD`` spelling can match a row. Spellings the parser
+    would normalise (``2026-9-24``, ``20260924``, full-width digits) are rejected instead."""
+    try:
+        parsed: Final = date.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.isoformat() == value else None
+
+
+def parse_canonical_date_range(start_date: str | None, end_date: str | None) -> CanonicalDateRange | InvalidDateRange:
+    if start_date is None or end_date is None:
+        return InvalidDateRange(reason="Please provide start_date and end_date")
+    start: Final = parse_canonical_date(start_date)
+    end: Final = parse_canonical_date(end_date)
+    if start is None or end is None:
+        return InvalidDateRange(reason="start_date and end_date must be valid YYYY-MM-DD dates")
+    return CanonicalDateRange(start=start, end=end)
 
 
 class DailySpendRecord(Protocol):
@@ -877,10 +904,16 @@ async def get_daily_activity(
 ) -> SpendAnalyticsPaginatedResponse:
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
-    if start_date is None or end_date is None:
+    date_range: Final = parse_canonical_date_range(start_date, end_date)
+    if isinstance(date_range, InvalidDateRange):
+        raise_public(date_range)
+
+    if page < 1 or page_size < 1:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "Please provide start_date and end_date"}
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"page and page_size must be >= 1, got page={page}, page_size={page_size}",
         )
+
     try:
         scope: Final = daily_activity_scope(
             table_name,
@@ -888,8 +921,8 @@ async def get_daily_activity(
             entity_id,
             exclude_entity_ids,
             api_key,
-            start_date,
-            end_date,
+            date_range.start.isoformat(),
+            date_range.end.isoformat(),
             model,
             timezone_offset_minutes,
             include_current_utc_day,

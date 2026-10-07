@@ -5,7 +5,7 @@ import pytest
 
 
 from litellm.litellm_core_utils.dd_tracing import (
-    _should_use_dd_profiler,
+    should_use_dd_profiler,
     _should_use_dd_tracer,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer as dd_tracer
@@ -87,7 +87,7 @@ def test_should_use_dd_profiler():
         # Test when USE_DDPROFILER is True
 
         mock_get_secret.return_value = True
-        assert _should_use_dd_profiler() is True
+        assert should_use_dd_profiler() is True
         mock_get_secret.assert_called_once_with("USE_DDPROFILER", False)
 
         # Reset the mock for the next test
@@ -95,5 +95,5 @@ def test_should_use_dd_profiler():
 
         # Test when USE_DDPROFILER is False
         mock_get_secret.return_value = False
-        assert _should_use_dd_profiler() is False
+        assert should_use_dd_profiler() is False
         mock_get_secret.assert_called_once_with("USE_DDPROFILER", False)

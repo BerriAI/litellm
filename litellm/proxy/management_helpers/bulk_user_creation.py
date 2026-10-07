@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -29,12 +29,13 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
+from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
@@ -58,6 +59,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkNewUserItem,
     BulkNewUserMeta,
@@ -95,7 +97,7 @@ class _PendingUser:
     teams: tuple[NewUserRequestTeam, ...]
 
 
-class _UserRow(BaseModel):
+class _UserRow(LiteLLMBaseModel):
     """The `/user/new` body after defaults and object permission were applied."""
 
     model_config = ConfigDict(extra="ignore")
@@ -175,7 +177,7 @@ _ERROR_DETAIL: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
-class _KeyResponse(BaseModel):
+class _KeyResponse(LiteLLMBaseModel):
     token: str
 
 
@@ -213,6 +215,8 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
     try:
         validate_budget_duration(item.budget_duration)
         _check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
+        if item.auto_create_key:
+            enforce_batch_limits_are_admin_only(item, None, user_api_key_dict, "key")
     except Exception as exc:  # noqa: BLE001  # any validation failure is reported on this row only
         return _error_message(exc)
     return None

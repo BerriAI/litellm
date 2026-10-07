@@ -25,6 +25,7 @@ import base64
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from httpx._types import RequestFiles
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -165,7 +166,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, RequestFiles]:
         """
         Transform OpenAI-style request to Bedrock Stability request format.
 

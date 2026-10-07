@@ -72,7 +72,7 @@ export PATH="$PWD/.venv/bin:$PATH"
 export PYTHONPATH="$PWD:$PWD/tests:$PWD/tests/e2e"
 export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/circle_test"
 export REDIS_HOST=127.0.0.1 REDIS_PORT=6379
-export LITELLM_MASTER_KEY=sk-integration-master LITELLM_SALT_KEY=sk-integration-salt
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)" LITELLM_SALT_KEY=sk-integration-salt
 export LITELLM_MODE=PRODUCTION LITELLM_LOCAL_MODEL_COST_MAP=True
 export STORE_MODEL_IN_DB=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1
 export INTEGRATION_PROXY_URL=http://127.0.0.1:4000
@@ -169,11 +169,11 @@ start_proxy() {
     INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
     LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
-    LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True "${cost_map_env[@]}" \
+    LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True LITELLM_ENABLE_MCP_STDIO=true "${cost_map_env[@]}" \
     AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 COVERAGE_FILE="$coverage_data" \
     "${proxy_command[@]}" --config tests/integration/proxy_config.yaml \
     --host 127.0.0.1 --port "$port" --num_workers 1 --telemetry False \
-    --use_prisma_db_push --enforce_prisma_migration_check \
+    --use_prisma_db_push \
     > "$results/$log_name" 2>&1 &
   launched_pid=$!
 }

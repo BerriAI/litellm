@@ -40,7 +40,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
-from litellm.proxy.management.teams.access import TeamAccess
+from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_endpoints import (
     _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     GetTeamMemberPermissionsResponse,
@@ -53,6 +53,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _update_model_table,
     _validate_and_populate_member_user_info,
     _validate_team_member_reset_spend_value,
+    aggregated_date_range_error,
     delete_team,
     list_available_teams,
     reset_team_member_budget_fn,
@@ -79,6 +80,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMemberAddResult,
 )
 from litellm.types.utils import StandardAuditLogPayload
+from tests._master_key import MASTER_KEY
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
@@ -8415,6 +8417,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit(
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
         mock_updated_team.team_id = "org-team-update-bypass-123"
+        mock_updated_team.object_permission_id = None
         mock_updated_team.tpm_limit = 10000
         mock_updated_team.rpm_limit = 1000
         mock_updated_team.access_group_ids = None
@@ -8568,6 +8571,7 @@ async def test_update_team_guardrails_with_org_id(
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
         mock_updated_team.team_id = "team-guardrails-123"
+        mock_updated_team.object_permission_id = None
         mock_updated_team.organization_id = "test-org-guardrails"
         mock_updated_team.metadata = {
             "guardrails": ["aporia-pre-call", "aporia-post-call"]
@@ -11758,7 +11762,7 @@ async def test_clear_team_member_budget_duration_calls_update_budget():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11806,7 +11810,7 @@ async def test_clear_team_member_budget_clears_max_budget():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11852,7 +11856,7 @@ async def test_clear_team_member_rpm_tpm_limits():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11902,7 +11906,7 @@ async def test_clear_all_team_member_fields_at_once():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -11989,7 +11993,7 @@ async def test_clear_team_member_budget_fields_no_budget_row_skips_update():
 
     mock_user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="admin-user",
     )
 
@@ -13173,7 +13177,7 @@ def test_get_team_metadata_schema_route_requires_auth():
         parse_team_metadata_schema,
     )
 
-    with patch("litellm.proxy.proxy_server.master_key", "sk-1234"):
+    with patch("litellm.proxy.proxy_server.master_key", MASTER_KEY):
         response = client.get("/team/metadata_schema")
     assert response.status_code == 401
 
@@ -16819,3 +16823,22 @@ def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hi
 
     assert response.status_code == 503, response.text
     assert response.json() == _DB_OUTAGE_503_BODY
+
+
+@pytest.mark.parametrize(
+    ("start_date", "end_date"),
+    (
+        ("2026-9-24", "2026-09-26"),
+        ("２０２６-09-24", "2026-09-26"),
+        ("2026-09-01", "2026-09-4"),
+        ("2026-02-30", "2026-09-26"),
+    ),
+)
+def test_aggregated_date_range_error_rejects_non_canonical_dates(start_date: str, end_date: str) -> None:
+    assert aggregated_date_range_error(start_date, end_date) == "start_date and end_date must be valid YYYY-MM-DD dates"
+
+
+def test_aggregated_date_range_error_accepts_canonical_dates_and_keeps_range_checks() -> None:
+    assert aggregated_date_range_error("2026-09-24", "2026-09-26") is None
+    assert aggregated_date_range_error("2026-09-26", "2026-09-24") == "end_date must be on or after start_date"
+    assert aggregated_date_range_error("2020-01-01", "2026-12-31") == "Date range must be at most 400 days"

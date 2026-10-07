@@ -31,7 +31,7 @@ class BaseVectorStoreTest(ABC):
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_basic_search_vector_store(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
         base_request_args = self.get_base_request_args()
         default_query = base_request_args.pop("query", "Basic ping")
@@ -55,7 +55,7 @@ class BaseVectorStoreTest(ABC):
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
     async def test_basic_create_vector_store(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
         base_request_args = self.get_base_create_vector_store_args()
 

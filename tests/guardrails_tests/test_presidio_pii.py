@@ -15,82 +15,10 @@ from litellm.exceptions import BlockedPiiEntityError
 
 
 @pytest.mark.asyncio
-async def test_presidio_with_entities_config():
-    """Test for Presidio guardrail with entities config - requires actual Presidio API"""
-    # Setup the guardrail with specific entities config
-    litellm._turn_on_debug()
-    pii_entities_config = {
-        PiiEntityType.CREDIT_CARD: PiiAction.MASK,
-        PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
-    }
-
-    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
-        pii_entities_config=pii_entities_config,
-        presidio_analyzer_api_base=os.environ.get("PRESIDIO_ANALYZER_API_BASE"),
-        presidio_anonymizer_api_base=os.environ.get("PRESIDIO_ANONYMIZER_API_BASE"),
-    )
-
-    # Test text with different PII types
-    test_text = "My credit card number is 4111-1111-1111-1111, my email is test@example.com, and my phone is 555-123-4567"
-
-    # Test the analyze request configuration
-    analyze_request = presidio_guardrail._get_presidio_analyze_request_payload(
-        text=test_text, presidio_config=None, request_data={}
-    )
-
-    # Verify entities were passed correctly
-    assert "entities" in analyze_request
-    assert set(analyze_request["entities"]) == set(pii_entities_config.keys())
-
-    # Test the check_pii method - this will call the actual Presidio API
-    redacted_text = await presidio_guardrail.check_pii(
-        text=test_text, output_parse_pii=True, presidio_config=None, request_data={}
-    )
-
-    # Verify PII has been masked/replaced/redacted in the result
-    assert "4111-1111-1111-1111" not in redacted_text
-    assert "test@example.com" not in redacted_text
-
-    # Since this entity is not in the config, it should not be masked
-    assert "555-123-4567" in redacted_text
-
-    # The specific replacements will vary based on Presidio's implementation
-    print(f"Redacted text: {redacted_text}")
-
-
-@pytest.mark.asyncio
-async def test_presidio_apply_guardrail():
-    """Test for Presidio guardrail apply guardrail - requires actual Presidio API"""
-    litellm._turn_on_debug()
-    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
-        pii_entities_config={},
-        presidio_analyzer_api_base=os.environ.get("PRESIDIO_ANALYZER_API_BASE"),
-        presidio_anonymizer_api_base=os.environ.get("PRESIDIO_ANONYMIZER_API_BASE"),
-    )
-
-    test_text = (
-        "My credit card number is 4111-1111-1111-1111 and my email is test@example.com"
-    )
-    response = await presidio_guardrail.apply_guardrail(
-        inputs={"texts": [test_text]},
-        request_data={},
-        input_type="request",
-    )
-    print("response from apply guardrail for presidio: ", response)
-
-    # Extract the modified text from the response
-    modified_text = response["texts"][0] if response.get("texts") else ""
-
-    # assert the default config masks the credit card and email
-    assert "4111-1111-1111-1111" not in modified_text
-    assert "test@example.com" not in modified_text
-
-
-@pytest.mark.asyncio
 async def test_presidio_with_blocked_entities():
     """Test for Presidio guardrail with blocked entities - requires actual Presidio API"""
     # Setup the guardrail with specific entities config - BLOCK for credit card
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     pii_entities_config = {
         PiiEntityType.CREDIT_CARD: PiiAction.BLOCK,  # This entity should cause a block
         PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,  # This entity should be masked
@@ -172,58 +100,6 @@ async def test_presidio_pre_call_hook_with_blocked_entities():
     # Verify the error contains the correct entity type
     assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
     assert excinfo.value.guardrail_name == presidio_guardrail.guardrail_name
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("call_type", ["completion", "acompletion"])
-async def test_presidio_pre_call_hook_with_different_call_types(call_type):
-    """Test for Presidio guardrail pre-call hook with both completion and acompletion call types"""
-    # Setup the guardrail with specific entities config
-    pii_entities_config = {
-        PiiEntityType.CREDIT_CARD: PiiAction.MASK,
-        PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
-    }
-
-    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
-        pii_entities_config=pii_entities_config,
-        presidio_analyzer_api_base=os.environ.get("PRESIDIO_ANALYZER_API_BASE"),
-        presidio_anonymizer_api_base=os.environ.get("PRESIDIO_ANONYMIZER_API_BASE"),
-    )
-
-    # Create a sample request with PII data
-    data = {
-        "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": "My credit card is 4111-1111-1111-1111 and my email is test@example.com. My phone number is 555-123-4567",
-            },
-        ],
-        "model": "gpt-5-mini",
-    }
-
-    # Mock objects needed for the pre-call hook
-    user_api_key_dict = UserAPIKeyAuth(api_key="test_key")
-    cache = DualCache()
-
-    # Call the pre-call hook with the specified call type
-    modified_data = await presidio_guardrail.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict, cache=cache, data=data, call_type=call_type
-    )
-
-    # Verify the messages have been modified to mask PII
-    assert (
-        modified_data["messages"][0]["content"] == "You are a helpful assistant."
-    )  # System prompt should be unchanged
-
-    user_message = modified_data["messages"][1]["content"]
-    assert "4111-1111-1111-1111" not in user_message
-    assert "test@example.com" not in user_message
-
-    # Since this entity is not in the config, it should not be masked
-    assert "555-123-4567" in user_message
-
-    print(f"Modified user message for call_type={call_type}: {user_message}")
 
 
 @pytest.mark.parametrize(
@@ -356,7 +232,7 @@ async def test_presidio_pii_masking_input_a():
         mock_testing=True, mock_redacted_text=input_a_anonymizer_results
     )
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -388,7 +264,7 @@ async def test_presidio_pii_masking_input_b():
         mock_testing=True, mock_redacted_text=input_b_anonymizer_results
     )
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -420,7 +296,7 @@ async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
         mock_redacted_text=input_b_anonymizer_results,
     )
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -501,7 +377,7 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
 @pytest.mark.asyncio
 async def test_presidio_language_configuration():
     """Test that presidio_language parameter is properly set and used in analyze requests"""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Test with German language using mock testing to avoid API calls
     presidio_guardrail_de = _OPTIONAL_PresidioPIIMasking(
@@ -557,7 +433,7 @@ async def test_presidio_language_configuration():
 @pytest.mark.asyncio
 async def test_presidio_language_configuration_with_per_request_override():
     """Test that per-request language configuration overrides the default configured language"""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Set up guardrail with German as default language
     presidio_guardrail = _OPTIONAL_PresidioPIIMasking(

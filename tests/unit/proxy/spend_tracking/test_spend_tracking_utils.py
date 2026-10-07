@@ -2789,6 +2789,167 @@ def test_sanitize_response_redacts_credential_named_fields() -> None:
     }
 
 
+def test_sanitize_response_keeps_logprob_tokens() -> None:
+    response: Final = {
+        "system_fingerprint": "fp_x",
+        "choices": [
+            {
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "sort",
+                            "logprob": -0.1,
+                            "bytes": [115],
+                            "top_logprobs": [{"token": "sort", "logprob": -0.1}],
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {
+        "response": {
+            "system_fingerprint": REDACTED_BY_LITELM_STRING,
+            "choices": [
+                {
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "sort",
+                                "logprob": -0.1,
+                                "bytes": [115],
+                                "top_logprobs": [{"token": "sort", "logprob": -0.1}],
+                            }
+                        ]
+                    }
+                }
+            ],
+        }
+    }
+
+
+def test_sanitize_request_body_keeps_key_named_tool_payload_fields() -> None:
+    request_body: Final = {
+        "model": "anthropic/claude",
+        "aws_secret_access_key": "AKIAEXAMPLESECRET",
+        "prompt_cache_key": "tenant-42-cache",
+        "metadata": {"user_api_key_alias": "tenant-user"},
+        "secret_fields": {"raw_headers": {"authorization": "Bearer secret"}},
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "input": {"key": "order-123", "sort_key": "created_at"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_order",
+                            "arguments": {"key": "order-123", "sort_key": "created_at"},
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "content": {"token_type": "bearer", "partition_key": "tenant_42"}},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "content": [{"token_type": "bearer", "partition_key": "tenant_42"}],
+                    }
+                ],
+            },
+        ],
+        "input": [
+            {"type": "function_call", "arguments": {"key": "tenant-42", "access_level": "admin"}},
+            {
+                "type": "function_call_output",
+                "output": {"token_type": "bearer", "partition_key": "tenant_42"},
+            },
+        ],
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload(request_body) == {
+        "model": "anthropic/claude",
+        "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
+        "prompt_cache_key": REDACTED_BY_LITELM_STRING,
+        "metadata": {"user_api_key_alias": REDACTED_BY_LITELM_STRING},
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "input": {"key": "order-123", "sort_key": "created_at"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_order",
+                            "arguments": {"key": "order-123", "sort_key": "created_at"},
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "content": {"token_type": "bearer", "partition_key": "tenant_42"}},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "content": [{"token_type": "bearer", "partition_key": "tenant_42"}],
+                    }
+                ],
+            },
+        ],
+        "input": [
+            {"type": "function_call", "arguments": {"key": "tenant-42", "access_level": "admin"}},
+            {
+                "type": "function_call_output",
+                "output": {"token_type": "bearer", "partition_key": "tenant_42"},
+            },
+        ],
+    }
+
+
+def test_sanitize_request_body_masks_credentials_beside_tool_blocks() -> None:
+    request_body: Final = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "api_key": "sk-live", "input": {"key": "order-123"}},
+                    {"type": {"nested": 1}, "input": {"api_key": "x"}},
+                ],
+            }
+        ]
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload(request_body) == {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "api_key": REDACTED_BY_LITELM_STRING,
+                        "input": {"key": "order-123"},
+                    },
+                    {"type": {"nested": 1}, "input": {"api_key": REDACTED_BY_LITELM_STRING}},
+                ],
+            }
+        ]
+    }
+
+
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
     """
@@ -3241,7 +3402,7 @@ def test_redact_logged_api_key_empty_string_returns_none():
 
 
 def test_redact_logged_api_key_sk_key_is_hashed():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result = _redact_logged_api_key(raw)
     assert result == hash_token(raw)
     assert result is not None
@@ -3250,14 +3411,14 @@ def test_redact_logged_api_key_sk_key_is_hashed():
 
 
 def test_redact_logged_api_key_bearer_sk_equals_sk_hash():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result_plain = _redact_logged_api_key(raw)
     result_bearer = _redact_logged_api_key(f"Bearer {raw}")
     assert result_bearer == result_plain
 
 
 def test_redact_logged_api_key_bearer_case_insensitive():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result_lower = _redact_logged_api_key(f"bearer {raw}")
     result_upper = _redact_logged_api_key(f"BEARER {raw}")
     expected = hash_token(raw)
@@ -3370,6 +3531,24 @@ def test_get_spend_logs_metadata_keeps_user_agent():
 
 
 @pytest.mark.parametrize(
+    "metadata,expected",
+    (
+        (None, False),
+        ({}, False),
+        ({"tags": ["litellm-roi-estimator"]}, False),
+        ({"litellm_roi_estimator": None}, False),
+        ({"litellm_roi_estimator": "true"}, False),
+        ({"litellm_roi_estimator": False}, False),
+        ({"litellm_roi_estimator": True}, True),
+    ),
+)
+def test_new_spend_logs_always_have_an_explicit_roi_estimator_marker(
+    metadata: dict[str, object] | None, expected: bool
+) -> None:
+    assert _get_spend_logs_metadata(metadata)["litellm_roi_estimator"] is expected
+
+
+@pytest.mark.parametrize(
     "client_sent_oauth_token, custom_llm_provider, expected",
     [
         (True, "anthropic", True),
@@ -3439,7 +3618,7 @@ def test_redact_logged_api_key_bearer_only_returns_none():
 
 
 def test_get_spend_logs_metadata_sk_key_hashed():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     meta = _get_spend_logs_metadata({"user_api_key": raw})
     assert meta["user_api_key"] == hash_token(raw)
     assert meta["user_api_key"] is not None
@@ -3450,7 +3629,7 @@ def test_get_spend_logs_metadata_sk_key_hashed():
 
 
 def test_get_spend_logs_metadata_bearer_sk_key_hashed_same_as_plain():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     meta_plain = _get_spend_logs_metadata({"user_api_key": raw})
     meta_bearer = _get_spend_logs_metadata({"user_api_key": f"Bearer {raw}"})
     assert meta_bearer["user_api_key"] == meta_plain["user_api_key"]
@@ -3945,7 +4124,7 @@ async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeyp
         "max_tokens": 512,
         "litellm_call_id": "test-compression-call-id",
         "litellm_metadata": {
-            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key": "bc46df66218d24bc910f7c95ef9d861c706d22a191f9e7378f8a51f54146474f",
             "user_api_key_user_id": "u1",
             "user_api_key_team_id": "t1",
         },

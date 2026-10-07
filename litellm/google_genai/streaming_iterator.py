@@ -78,7 +78,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         self.endpoint_type: Final = (
             EndpointType.GEMINI if custom_llm_provider == litellm.LlmProviders.GEMINI.value else EndpointType.VERTEX_AI
         )
-        self._hidden_params: dict[str, Any] = hidden_params or {}
+        self._hidden_params: dict[str, object] = hidden_params or {}
 
     async def _handle_async_streaming_logging(
         self,

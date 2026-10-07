@@ -192,7 +192,7 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
 
 
 def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> bool:
-    per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
+    per: Final[object] = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
@@ -201,7 +201,7 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> b
 
 
 def effective_skip_tool_message_for_guardrail(guardrail_to_apply: object) -> bool:
-    per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
+    per: Final[object] = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm

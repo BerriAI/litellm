@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Optional, cast
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 from typing_extensions import override
 
 from litellm._logging import verbose_proxy_logger
@@ -27,6 +27,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import (
     CrowdStrikeAIDRGuardrailConfigModelOptionalParams,
@@ -42,18 +43,18 @@ class CrowdStrikeAIDRGuardrailMissingSecrets(Exception):
     """Custom exception for missing CrowdStrike AIDR secrets."""
 
 
-class _TextContentPart(BaseModel):
+class _TextContentPart(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["text"] = "text"
     text: str
 
 
-class _ImageUrl(BaseModel):
+class _ImageUrl(LiteLLMBaseModel):
     url: str
 
 
-class _ImageUrlContentPart(BaseModel):
+class _ImageUrlContentPart(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["image_url"] = "image_url"
@@ -63,17 +64,17 @@ class _ImageUrlContentPart(BaseModel):
 _ContentPart = Annotated[_TextContentPart | _ImageUrlContentPart, Field(discriminator="type")]
 
 
-class _Message(BaseModel):
+class _Message(LiteLLMBaseModel):
     role: str
     content: str | list[_ContentPart] | None = None
 
 
-class _GuardInput(BaseModel):
+class _GuardInput(LiteLLMBaseModel):
     messages: list[_Message]
     tools: Sequence[OpenAIChatCompletionToolParam] | None = None
 
 
-class _GuardChatCompletionsResult(BaseModel):
+class _GuardChatCompletionsResult(LiteLLMBaseModel):
     guard_output: _GuardInput | None = None
     """Updated structured prompt."""
     blocked: bool | None = None
@@ -84,7 +85,7 @@ class _GuardChatCompletionsResult(BaseModel):
     """Result of the policy analyzing and input prompt."""
 
 
-class _GuardChatCompletionsResponse(BaseModel):
+class _GuardChatCompletionsResponse(LiteLLMBaseModel):
     result: _GuardChatCompletionsResult | None = None
 
 
