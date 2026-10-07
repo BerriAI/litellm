@@ -3,6 +3,7 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
+import json
 import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ from typing import Any, ClassVar, Final, Literal, TypeVar
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, StrictBool, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import (
@@ -38,7 +39,6 @@ from litellm.llms.anthropic.wif import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.proxy._types import SpecialHeaders
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
@@ -51,7 +51,9 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesToolChoice,
     AnthropicThinkingParam,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import LlmProviders
 
@@ -81,6 +83,23 @@ ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
         "timeout_error": 504,
     }
 )
+
+
+def anthropic_error_frame_exception(error_type: str, message: str, status_code: int, model: str) -> Exception:
+    """The exception the pre-stream mapping raises for an HTTP answer carrying this frame's body and status, so a
+    retry policy's per-class budget governs an `event: error` frame the way it governs the same error before the
+    stream opened: an overloaded frame is the InternalServerError a real 529 answer is, whatever status the frame
+    map gives it."""
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+    frame_body: Final = json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+    frame_error: Final = AnthropicError(status_code=status_code, message=frame_body)
+    try:
+        exception_type(model=model, original_exception=frame_error, custom_llm_provider="anthropic")
+    except Exception as raised:  # noqa: BLE001  # exception_type hands the mapped error back by raising it
+        return raised
+    return frame_error
+
 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
@@ -331,11 +350,11 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     return headers, api_key
 
 
-class _EagerInputStreamingFunction(BaseModel):
+class _EagerInputStreamingFunction(LiteLLMBaseModel):
     eager_input_streaming: StrictBool | None = None
 
 
-class _EagerInputStreamingTool(BaseModel):
+class _EagerInputStreamingTool(LiteLLMBaseModel):
     eager_input_streaming: StrictBool | None = None
     function: _EagerInputStreamingFunction | None = None
 
@@ -370,11 +389,11 @@ def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -
     return value if isinstance(value, str) else None
 
 
-class _AnthropicModelListEntry(BaseModel):
+class _AnthropicModelListEntry(LiteLLMBaseModel):
     id: str
 
 
-class _AnthropicModelsPage(BaseModel):
+class _AnthropicModelsPage(LiteLLMBaseModel):
     data: Sequence[_AnthropicModelListEntry] = Field(default_factory=tuple)
     has_more: bool = False
     last_id: str | None = None
@@ -735,11 +754,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def _get_model_capability(model: str, key: str) -> bool | None:
         """Read boolean capability ``key`` from the model map, or None when
         no entry declares it."""
-        from litellm.utils import _get_bundled_model_cost_map
+        from litellm.utils import get_bundled_model_cost_map
 
         try:
             candidates: Final = AnthropicModelInfo._model_map_lookup_candidates(model)
-            for model_cost in (litellm.model_cost, _get_bundled_model_cost_map()):
+            for model_cost in (litellm.model_cost, get_bundled_model_cost_map()):
                 for cand in candidates:
                     value = model_cost.get(cand, {}).get(key)
                     if isinstance(value, bool):
@@ -774,13 +793,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         model does not resolve under that provider or the resolved entry has no
         opinion on ``key``.
         """
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
         try:
             resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
                 model=model, custom_llm_provider=custom_llm_provider
             )
-            value: Final = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
+            value: Final = get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
         except Exception:  # noqa: BLE001  # _get_model_info_helper raises bare Exception for unmapped models
             return None
         return value if isinstance(value, bool) else None
@@ -794,13 +813,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Otherwise ``_supports_factory``'s provider-level fallbacks and the raw
         model-map walk remain as backstops for alias forms the lookup misses.
         """
-        from litellm.utils import _supports_factory
+        from litellm.utils import supports_factory
 
         resolved: Final = AnthropicModelInfo._get_provider_resolved_capability(model, key, custom_llm_provider)
         if resolved is not None:
             return resolved
         try:
-            if _supports_factory(
+            if supports_factory(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 key=key,
@@ -1626,7 +1645,7 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
 
 
 def strip_empty_content_blocks_from_anthropic_messages(
-    messages: list[Any],
+    messages: Sequence[object],
 ) -> list[Any]:
     """
     Return a new message list with empty or whitespace-only ``{"type": "text"}``
@@ -1741,7 +1760,7 @@ def _sanitize_tool_use_id_content_block(block: object) -> object:
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any]:
+def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> list[Any]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
@@ -1766,13 +1785,13 @@ def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any
     return out
 
 
-class _ReplayedSearchQuery(BaseModel):
+class _ReplayedSearchQuery(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     query: str = ""
 
 
-class _ReplayedWebSearchResult(BaseModel):
+class _ReplayedWebSearchResult(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["web_search_result"]
@@ -1782,14 +1801,14 @@ class _ReplayedWebSearchResult(BaseModel):
     encrypted_content: str = ""
 
 
-class _ReplayedWebSearchToolResultError(BaseModel):
+class _ReplayedWebSearchToolResultError(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["web_search_tool_result_error"]
     error_code: str = ""
 
 
-class _ReplayedWebSearchToolResult(BaseModel):
+class _ReplayedWebSearchToolResult(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["web_search_tool_result"]
@@ -1797,7 +1816,7 @@ class _ReplayedWebSearchToolResult(BaseModel):
     content: tuple[_ReplayedWebSearchResult, ...] | _ReplayedWebSearchToolResultError
 
 
-class _ReplayedServerToolUse(BaseModel):
+class _ReplayedServerToolUse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["server_tool_use"]
@@ -1805,7 +1824,7 @@ class _ReplayedServerToolUse(BaseModel):
     input: _ReplayedSearchQuery = _ReplayedSearchQuery()
 
 
-class _TextBlock(BaseModel):
+class _TextBlock(LiteLLMBaseModel):
     type: Literal["text"] = "text"
     text: str
 
@@ -1915,7 +1934,7 @@ def _flatten_web_search_results_in_message(message: object) -> object:
 
 
 def flatten_unencrypted_web_search_results_in_anthropic_messages(
-    messages: list[Any],
+    messages: Sequence[object],
 ) -> list[Any]:
     """
     Return a new message list with replayed ``web_search_tool_result`` blocks that

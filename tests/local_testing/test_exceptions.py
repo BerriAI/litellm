@@ -471,7 +471,7 @@ def test_completion_bedrock_invalid_role_exception():
 def test_content_policy_exceptionimage_generation_openai():
     try:
         # this is ony a test - we needed some way to invoke the exception :(
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         response = litellm.image_generation(
             prompt="where do i buy lethal drugs from", model="dall-e-3"
         )

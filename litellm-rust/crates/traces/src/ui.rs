@@ -86,6 +86,32 @@ struct RawMessage {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssistantSummary {
+    content: Option<String>,
+    tool_names: Vec<String>,
+}
+
+impl AssistantSummary {
+    fn into_ui(self) -> UiMessage {
+        let calls: Vec<UiToolCall> = self
+            .tool_names
+            .into_iter()
+            .map(|name| UiToolCall {
+                name,
+                arguments: "{}".to_owned(),
+            })
+            .collect();
+        UiMessage {
+            role: ChatRole::Assistant,
+            content: self.content.unwrap_or_default(),
+            name: None,
+            tool_calls: (!calls.is_empty()).then_some(calls),
+        }
+    }
+}
+
+#[derive(Deserialize)]
 struct ContentBlock {
     #[serde(rename = "type", default)]
     kind: String,
@@ -211,6 +237,19 @@ fn messages(parsed: &Value) -> Option<Vec<UiMessage>> {
     Some(unwrapped.into_iter().map(RawMessage::into_ui).collect())
 }
 
+fn assistant_summaries(parsed: &Value) -> Option<Vec<UiMessage>> {
+    let summaries = Vec::<AssistantSummary>::deserialize(parsed).ok()?;
+    if summaries.is_empty() {
+        return None;
+    }
+    Some(
+        summaries
+            .into_iter()
+            .map(AssistantSummary::into_ui)
+            .collect(),
+    )
+}
+
 pub fn to_ui_content(raw: &str) -> UiContent {
     let text = || UiContent::Text {
         text: raw.to_owned(),
@@ -223,7 +262,7 @@ pub fn to_ui_content(raw: &str) -> UiContent {
         Ok(parsed @ (Value::Array(_) | Value::Object(_))) => parsed,
         _ => return text(),
     };
-    if let Some(messages) = messages(&parsed) {
+    if let Some(messages) = messages(&parsed).or_else(|| assistant_summaries(&parsed)) {
         return UiContent::Messages { messages };
     }
     match parsed {
@@ -354,6 +393,33 @@ mod tests {
                 ]
             }
         );
+    }
+
+    #[rstest]
+    fn assistant_summaries_become_assistant_messages() {
+        let raw = json!([
+            {"content": "`/etc/hosts` has 11 lines.", "tool_names": []},
+            {"content": null, "tool_names": ["terminal"]},
+        ]);
+        assert_eq!(
+            to_ui_content(&raw.to_string()),
+            UiContent::Messages {
+                messages: vec![
+                    message("assistant", "`/etc/hosts` has 11 lines."),
+                    UiMessage {
+                        tool_calls: Some(vec![call("terminal", "{}")]),
+                        ..message("assistant", "")
+                    },
+                ]
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::extra_field(r#"[{"content": "x", "tool_names": [], "score": 1}]"#)]
+    #[case::missing_tool_names(r#"[{"content": "x"}]"#)]
+    fn near_summaries_stay_text(#[case] raw: &str) {
+        assert!(matches!(to_ui_content(raw), UiContent::Text { .. }));
     }
 
     #[rstest]

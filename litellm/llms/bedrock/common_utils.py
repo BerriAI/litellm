@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -246,9 +246,9 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
 
 
 def _bedrock_model_supports(model: str, key: str) -> bool:
-    from litellm.utils import _supports_factory
+    from litellm.utils import supports_factory
 
-    return _supports_factory(model=model, custom_llm_provider="bedrock", key=key)
+    return supports_factory(model=model, custom_llm_provider="bedrock", key=key)
 
 
 def apply_bedrock_invoke_structured_output(
@@ -1691,6 +1691,9 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonInvokeConfig()
 
 
+_BOTOCORE_SERVICE_DESCRIPTION: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
 def _load_bedrock_response_stream_shape():
     """
     Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
@@ -1703,7 +1706,9 @@ def _load_bedrock_response_stream_shape():
         from botocore.model import ServiceModel
 
         loader: Final = Loader()
-        service_dict: Final = loader.load_service_model("bedrock-runtime", "service-2")
+        service_dict: Final = _BOTOCORE_SERVICE_DESCRIPTION.validate_python(
+            loader.load_service_model("bedrock-runtime", "service-2")
+        )
         return ServiceModel(service_dict).shape_for("ResponseStream")
     except Exception as e:
         verbose_logger.warning(
@@ -1856,9 +1861,12 @@ class BedrockEventStreamDecoderBase:
             return chunk.decode()
 
 
+_JSON_VALUE: Final = TypeAdapter(object)
+
+
 def _decoded_json_value(raw: str) -> object:
     """Decode a JSON document into an opaque value for isinstance narrowing."""
-    return json.loads(raw)
+    return _JSON_VALUE.validate_python(json.loads(raw))
 
 
 def get_anthropic_beta_from_headers(headers: dict) -> list[str]:

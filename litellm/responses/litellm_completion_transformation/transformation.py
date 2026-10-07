@@ -118,6 +118,44 @@ _INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_toke
 )
 
 
+class _EchoedResponsesRequestParams(TypedDict, total=False):
+    """Responses API request fields that the response object echoes back."""
+
+    instructions: ReadOnly[str]
+    metadata: ReadOnly[dict[str, object]]
+    parallel_tool_calls: ReadOnly[bool]
+    temperature: ReadOnly[float]
+    tools: ReadOnly[list[dict[str, object]]]
+    top_p: ReadOnly[float]
+    max_output_tokens: ReadOnly[int]
+    previous_response_id: ReadOnly[str]
+    reasoning: ReadOnly[dict[str, object]]
+    text: ReadOnly[dict[str, object]]
+    truncation: ReadOnly[Literal["auto", "disabled"]]
+    user: ReadOnly[str]
+    store: ReadOnly[bool]
+
+
+_ECHOED_PARAMS_ADAPTER: Final = TypeAdapter(_EchoedResponsesRequestParams)
+
+
+def _is_echoable(name: str, value: object) -> bool:
+    try:
+        _ = _ECHOED_PARAMS_ADAPTER.validate_python({name: value})
+    except ValidationError:
+        return False
+    return True
+
+
+def _echoable_request_params(request: Mapping[str, object]) -> _EchoedResponsesRequestParams:
+    echoable: Final = {
+        name: request[name]
+        for name in _EchoedResponsesRequestParams.__optional_keys__
+        if name in request and _is_echoable(name, request[name])
+    }
+    return _ECHOED_PARAMS_ADAPTER.validate_python(echoable)
+
+
 @dataclass(frozen=True, slots=True)
 class ResponsesToolChatForm:
     chat_tools: tuple[ChatToolParam, ...]
@@ -228,7 +266,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_tool_choice(
         tool_choice: Any,
-    ) -> str | dict[str, Any] | None:
+    ) -> str | dict[str, object] | None:
         """
         Transform tool_choice from various formats to OpenAI Chat Completion format.
 
@@ -288,13 +326,15 @@ class LiteLLMCompletionResponsesConfig:
         return tool_choice
 
     @staticmethod
-    def _transform_tool_choice_for_responses_api_response(tool_choice: object) -> ToolChoice:
+    def transform_tool_choice_for_responses_api_response(tool_choice: object) -> ToolChoice:
         if tool_choice is None:
             return "auto"
         try:
             return _RESPONSES_API_TOOL_CHOICE_ADAPTER.validate_python(tool_choice)
         except ValidationError:
             return LiteLLMCompletionResponsesConfig._chat_tool_choice_as_responses_api_tool_choice(tool_choice)
+
+    _transform_tool_choice_for_responses_api_response = transform_tool_choice_for_responses_api_response
 
     @staticmethod
     def _chat_tool_choice_as_responses_api_tool_choice(tool_choice: object) -> ToolChoice:
@@ -2258,7 +2298,7 @@ class LiteLLMCompletionResponsesConfig:
             The corresponding responses API status value (one of ResponsesAPIStatus)
         """
         if finish_reason is None:
-            return "completed"
+            return "incomplete"
 
         # Map finish reasons to status
         if finish_reason in ["stop", "tool_calls", "function_call"]:
@@ -2273,16 +2313,23 @@ class LiteLLMCompletionResponsesConfig:
     def _incomplete_details_for_finish_reason(
         finish_reason: str | None,
         existing: IncompleteDetails | None,
+        completion_tokens: int | None = None,
+        max_output_tokens: int | None = None,
     ) -> IncompleteDetails | None:
         if existing is not None:
             return existing
         if finish_reason is None:
-            return None
+            hit_cap: Final = (
+                completion_tokens is not None
+                and max_output_tokens is not None
+                and completion_tokens >= max_output_tokens
+            )
+            return IncompleteDetails(reason="max_output_tokens") if hit_cap else None
         reason: Final = _INCOMPLETE_REASON_BY_FINISH_REASON.get(finish_reason)
         return IncompleteDetails(reason=reason) if reason is not None else None
 
     @staticmethod
-    def _tool_call_id_from_responses_item(item_id: str | None, call_id: str | None) -> str:
+    def tool_call_id_from_responses_item(item_id: str | None, call_id: str | None) -> str:
         """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0``,
         ``call_1``, ... that resets every response) alongside a unique ``id``
         (``fc_...``). ``call_id`` is the canonical Responses API correlation key, so
@@ -2292,6 +2339,8 @@ class LiteLLMCompletionResponsesConfig:
         if call_id and re.fullmatch(r"call_\d+", call_id) is None:
             return call_id
         return item_id or call_id or ""
+
+    _tool_call_id_from_responses_item = tool_call_id_from_responses_item
 
     @staticmethod
     def convert_response_function_tool_call_to_chat_completion_tool_call(
@@ -2333,7 +2382,7 @@ class LiteLLMCompletionResponsesConfig:
             function_dict["provider_specific_fields"] = provider_specific_fields
 
         tool_call_dict: Final[dict[str, object]] = {
-            "id": LiteLLMCompletionResponsesConfig._tool_call_id_from_responses_item(
+            "id": LiteLLMCompletionResponsesConfig.tool_call_id_from_responses_item(
                 getattr(tool_call_item, "id", None),
                 getattr(tool_call_item, "call_id", None),
             ),
@@ -2397,9 +2446,13 @@ class LiteLLMCompletionResponsesConfig:
         if choices and len(choices) > 0:
             finish_reason = choices[0].finish_reason
 
+        echoed: Final = _echoable_request_params(responses_api_request)
+        chat_usage: Final = getattr(chat_completion_response, "usage", None)
         incomplete_details: Final = LiteLLMCompletionResponsesConfig._incomplete_details_for_finish_reason(
             finish_reason=finish_reason,
             existing=getattr(chat_completion_response, "incomplete_details", None),
+            completion_tokens=getattr(chat_usage, "completion_tokens", None),
+            max_output_tokens=echoed.get("max_output_tokens"),
         )
 
         responses_api_response: Final[ResponsesAPIResponse] = ResponsesAPIResponse(
@@ -2409,32 +2462,33 @@ class LiteLLMCompletionResponsesConfig:
             object="response",
             error=getattr(chat_completion_response, "error", None),
             incomplete_details=incomplete_details,
-            instructions=getattr(chat_completion_response, "instructions", None),
-            metadata=getattr(chat_completion_response, "metadata", {}),
+            instructions=echoed.get("instructions"),
+            metadata=echoed.get("metadata") or {},
             output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
                 chat_completion_response=chat_completion_response,
                 choices=getattr(chat_completion_response, "choices", []),
                 responses_api_request=responses_api_request,
             ),
-            parallel_tool_calls=getattr(chat_completion_response, "parallel_tool_calls", False),
-            temperature=getattr(chat_completion_response, "temperature", 0),
-            tool_choice=LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+            parallel_tool_calls=echoed.get("parallel_tool_calls", False),
+            temperature=echoed.get("temperature"),
+            tool_choice=LiteLLMCompletionResponsesConfig.transform_tool_choice_for_responses_api_response(
                 responses_api_request.get("tool_choice")
             ),
-            tools=getattr(chat_completion_response, "tools", []),
-            top_p=getattr(chat_completion_response, "top_p", None),
-            max_output_tokens=getattr(chat_completion_response, "max_output_tokens", None),
-            previous_response_id=getattr(chat_completion_response, "previous_response_id", None),
-            reasoning=None,
+            tools=echoed.get("tools") or [],
+            top_p=echoed.get("top_p"),
+            max_output_tokens=echoed.get("max_output_tokens"),
+            previous_response_id=echoed.get("previous_response_id"),
+            reasoning=echoed.get("reasoning"),
             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                 finish_reason
             ),
-            text={},
-            truncation=getattr(chat_completion_response, "truncation", None),
-            usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            text=echoed.get("text") or {},
+            truncation=echoed.get("truncation"),
+            usage=LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
                 chat_completion_response=chat_completion_response
             ),
-            user=getattr(chat_completion_response, "user", None),
+            user=echoed.get("user"),
+            store=echoed.get("store"),
         )
         responses_api_response._hidden_params = getattr(chat_completion_response, "_hidden_params", {})
 
@@ -2747,7 +2801,7 @@ class LiteLLMCompletionResponsesConfig:
     ) -> OutputText:
         annotations: Final = getattr(message, "annotations", None)
         transformed_annotations: Final = (
-            LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                 annotations=annotations
             )
         )
@@ -2759,7 +2813,7 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
-    def _transform_chat_completion_annotations_to_response_output_annotations(
+    def transform_chat_completion_annotations_to_response_output_annotations(
         annotations: list[ChatCompletionAnnotation] | None,
     ) -> list[GenericResponseOutputItemContentAnnotation]:
         response_output_annotations: Final[list[GenericResponseOutputItemContentAnnotation]] = []
@@ -2784,8 +2838,12 @@ class LiteLLMCompletionResponsesConfig:
 
         return response_output_annotations
 
+    _transform_chat_completion_annotations_to_response_output_annotations = (
+        transform_chat_completion_annotations_to_response_output_annotations
+    )
+
     @staticmethod
-    def _transform_chat_completion_usage_to_responses_usage(
+    def transform_chat_completion_usage_to_responses_usage(
         chat_completion_response: ModelResponse | Usage,
     ) -> ResponseAPIUsage:
         if isinstance(chat_completion_response, ModelResponse):
@@ -2869,6 +2927,8 @@ class LiteLLMCompletionResponsesConfig:
             )
 
         return response_usage
+
+    _transform_chat_completion_usage_to_responses_usage = transform_chat_completion_usage_to_responses_usage
 
     @staticmethod
     def _transform_text_format_to_response_format(

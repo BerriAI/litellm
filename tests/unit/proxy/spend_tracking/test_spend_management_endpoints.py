@@ -274,7 +274,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
-from litellm.proxy.management.teams import access as team_access
+from litellm.proxy.management.teams import authz as team_access
 from litellm.proxy.proxy_server import app
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.router import Router
@@ -3685,7 +3685,7 @@ class TestSpendLogsPayload:
     @pytest.mark.asyncio
     async def test_spend_logs_payload_e2e(self):
         litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
 
         with (
             patch.object(

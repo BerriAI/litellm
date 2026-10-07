@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final
 
 import pytest
@@ -10,15 +11,269 @@ from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens.endpoints import (
     list_agents,
+    read_reviews,
+    result,
     run_settings,
     run_window,
+    trace_findings,
     user_scope,
     validate_model,
     watchable,
     watching,
     worker_supports_model,
 )
-from litellm.proxy.lens.models import ActivitySelection, Lens, LensSettings, RunRequest, Scope
+from litellm.proxy.lens.models import (
+    ActivitySelection,
+    Coverage,
+    Lens,
+    LensSettings,
+    Result,
+    ReviewVersion,
+    RunAssessment,
+    RunRequest,
+    Sample,
+    Scope,
+    TraceFindingsRequest,
+    TraceIdentity,
+)
+from litellm.proxy.lens.repository import Row
+from litellm.proxy.lens.state import claim_job, queue_job, replace_job
+from tests.unit.proxy.lens.test_agent_workspace import execution
+from tests.unit.proxy.lens.test_state import NOW, lens, worker
+
+
+class ResultDatabase:
+    def __init__(self, stored: Lens) -> None:
+        self.stored = stored
+        self.completed: tuple[ReviewVersion, ...] = ()
+
+    async def query_raw(self, query: str, *args: object) -> tuple[Row, ...]:
+        if query.startswith("SELECT data FROM"):
+            return (Row(data=self.stored.model_dump(mode="json")),)
+        payload: Final = args[0]
+        assert isinstance(payload, str)
+        self.stored = Lens.model_validate_json(payload)
+        return (Row(data=1),)
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        from pydantic import TypeAdapter
+
+        payload: Final = args[2]
+        assert isinstance(payload, str)
+        self.completed = TypeAdapter(tuple[ReviewVersion, ...]).validate_json(payload)
+        return len(self.completed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "selected,check_id,quoted",
+    ((False, "retries", "run"), (True, "disabled", "run"), (True, "retries", "other")),
+)
+async def test_checkpoint_rejects_unselected_traces_disabled_checks_and_foreign_evidence(
+    monkeypatch: pytest.MonkeyPatch, selected: bool, check_id: str, quoted: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import progress
+    from litellm.proxy.lens.models import Evidence, Extraction, Observation, Progress, Review
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution("run"),), eligible=1) if selected else None,
+        }
+    )
+    stored: Final = replace_job(claimed, active)
+    db: Final = ResultDatabase(stored)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    review: Final = Review(
+        execution_id="run",
+        trace_id="run",
+        agent="agent",
+        name="run",
+        model="test",
+        duration_ms=1,
+        at=NOW,
+        content_version="v1",
+        extraction=Extraction(
+            observations=(
+                Observation(
+                    check_id=check_id,
+                    summary="Failure",
+                    evidence=(Evidence(execution_id=quoted, span_id="s", quote="failed"),),
+                ),
+            )
+        ),
+    )
+    with pytest.raises(HTTPException) as error:
+        await progress("lens", "job", Progress(review=review), worker())
+    assert error.value.status_code == 422
+    assert db.stored == stored
+    assert db.completed == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ("existing", "merged"))
+@pytest.mark.parametrize("foreign_kind", (False, True))
+async def test_findings_cannot_merge_missing_ids_or_positive_patterns_into_issues(
+    reference: str, foreign_kind: bool
+) -> None:
+    from litellm.proxy.lens.endpoints import validate_finding
+    from litellm.proxy.lens.state import merge_finding
+    from tests.unit.proxy.lens.test_state import finding
+
+    saved: Final = merge_finding(lens(), finding("old"), 1, NOW, "previous").model_copy(update={"kind": "pattern"})
+    identity: Final = saved.id if foreign_kind else "missing"
+    draft: Final = finding("new").model_copy(
+        update={
+            "existing_finding_id": identity if reference == "existing" else None,
+            "merged_finding_ids": (identity,) if reference == "merged" else (),
+        }
+    )
+    with pytest.raises(HTTPException) as error:
+        await validate_finding(
+            lens().model_copy(update={"findings": (saved,)}), Sample(executions=(), eligible=0), draft, None
+        )
+    assert error.value.status_code == 422
+    assert "finding must belong" in error.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", ("old-trace", "selected-without-quote"))
+async def test_unchanged_rerun_does_not_rediscover_old_or_quoteless_occurrences(
+    monkeypatch: pytest.MonkeyPatch, selected: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.state import merge_finding
+    from tests.unit.proxy.lens.test_state import finding
+
+    saved_finding: Final = merge_finding(lens(), finding("old-trace"), 1, NOW, "original-run").model_copy(
+        update={"occurrences": ("old-trace", "selected-without-quote")}
+    )
+    stored: Final = lens().model_copy(update={"findings": (saved_finding,)})
+    claimed: Final = claim_job(queue_job(stored, NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution(selected),), eligible=1),
+        }
+    )
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    body: Final = Result(coverage=Coverage(reused=1), assessments=(RunAssessment(execution_id=selected),))
+    completed: Final = await result("lens", "job", body, worker(), None)
+    assert completed.jobs[0].findings == ()
+    assert completed.findings == (saved_finding,)
+    assert Lens.model_validate_json(completed.model_dump_json()) == completed
+    assert await result("lens", "job", body, worker(), None) == completed
+
+
+@pytest.mark.asyncio
+async def test_completed_checkpoints_are_sealed_despite_an_unrelated_trace_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution("valid"), execution("failed")), eligible=2),
+        }
+    )
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    versions: Final = (ReviewVersion(execution_id="valid", content_version="v1"),)
+    body: Final = Result(
+        coverage=Coverage(failed_tasks=1),
+        assessments=(RunAssessment(execution_id="valid"), RunAssessment(execution_id="failed", cannot_assess=True)),
+        review_versions=versions,
+        error="Another trace failed",
+    )
+    completed: Final = await result("lens", "job", body, worker(), None)
+    assert completed.jobs[0].status == "completed"
+    assert db.completed == versions
+    assert await result("lens", "job", body, worker(), None) == completed
+    assert db.completed == versions
+
+
+@pytest.mark.parametrize(
+    "final_coverage,error,expected",
+    (
+        (
+            Coverage(eligible=2, selected=2, screened=2, partial=1, unassessable=1),
+            "Source unavailable during session review",
+            Coverage(eligible=2, selected=2, screened=2, partial=1, unassessable=1),
+        ),
+        (
+            Coverage(eligible=2, selected=2, screened=2, investigated=1, candidates=1, partial=1),
+            "Source unavailable during investigation",
+            Coverage(eligible=2, selected=2, screened=2, investigated=1, candidates=1, partial=1),
+        ),
+        (
+            Coverage(),
+            "Worker interrupted",
+            Coverage(eligible=2, selected=2, screened=1),
+        ),
+        (Coverage(), "", Coverage()),
+    ),
+    ids=("review-diagnostic", "investigation-diagnostic", "interrupted-worker", "empty-success"),
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("assessed", (False, True))
+async def test_result_persists_final_coverage_but_keeps_progress_when_worker_is_interrupted(
+    monkeypatch: pytest.MonkeyPatch, final_coverage: Coverage, error: str, expected: Coverage, assessed: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    assigned: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = assigned.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "coverage": Coverage(eligible=2, selected=2, screened=1),
+            "sample": Sample(executions=(execution("run"),), eligible=1),
+        }
+    )
+    db: Final = ResultDatabase(replace_job(assigned, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    assessments: Final = (RunAssessment(execution_id="run"),) if assessed else ()
+    saved: Final = await result(
+        "lens", "job", Result(coverage=final_coverage, error=error, assessments=assessments), worker(), None
+    )
+
+    assert saved == db.stored
+    assert saved.jobs[0].coverage == expected
+    assert saved.jobs[0].error == error
+    assert saved.jobs[0].status == ("failed" if error and not assessed else "completed")
+    assert saved.jobs[0].assessments == assessments
+    assert saved.last_scan_at == (None if error else active.end)
+
+
+@pytest.mark.asyncio
+async def test_result_rejects_checkpoints_for_traces_outside_frozen_sample(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    assigned: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = assigned.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution("selected"),), eligible=1),
+        }
+    )
+    db: Final = ResultDatabase(replace_job(assigned, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+
+    with pytest.raises(HTTPException) as raised:
+        await result(
+            "lens",
+            "job",
+            Result(coverage=Coverage(), review_versions=(ReviewVersion(execution_id="outside", content_version="v1"),)),
+            worker(),
+            None,
+        )
+
+    assert raised.value.status_code == 422
+    assert db.stored.jobs[0] == active
 
 
 @pytest.fixture
@@ -130,6 +385,15 @@ async def test_agent_discovery_without_trace_storage_still_requires_admin_access
     assert error.value.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_trace_finding_counts_require_investigation_read_access() -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    request: Final = TraceFindingsRequest(traces=(TraceIdentity(trace_id="trace"),))
+    with pytest.raises(HTTPException) as error:
+        await trace_findings(request, auth)
+    assert error.value.status_code == 403
+
+
 @pytest.mark.parametrize(
     "role",
     (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.TEAM),
@@ -172,6 +436,15 @@ async def test_incompatible_worker_is_rejected_before_claiming_work(
         await claim(worker(), protocol_version=protocol_version)
     assert error.value.status_code == 409
     assert "Upgrade" in error.value.detail
+
+
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.TEAM, None))
+@pytest.mark.asyncio
+async def test_regular_keys_cannot_poll_live_reviews(role: LitellmUserRoles | None) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=role, team_id="team", token="hashed-test-key")
+    with pytest.raises(HTTPException) as error:
+        await read_reviews("lens", "job", auth)
+    assert error.value.status_code == 403
 
 
 @pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.TEAM, None))

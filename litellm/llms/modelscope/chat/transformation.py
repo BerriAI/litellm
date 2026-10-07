@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to ModelScope's `/v1/chat/comple
 """
 
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, cast, overload
+from typing import Final, Literal, cast, overload
 
 from typing_extensions import override
 
@@ -27,7 +27,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -39,7 +39,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Flatten text-only content lists to strings for ModelScope.
 

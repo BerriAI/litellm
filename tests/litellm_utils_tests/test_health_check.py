@@ -88,7 +88,7 @@ async def test_azure_img_gen_health_check():
     Test Azure image generation health check with retry logic for transient errors.
     Azure sometimes returns internal server errors which are transient and not something we can control.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     max_retries = 3
     retry_delay = 1  # Start with 1 second delay
 
@@ -581,7 +581,7 @@ async def test_health_check_bad_model():
         {
             "model_name": "openai-gpt-4o",
             "litellm_params": {
-                "api_key": "sk-1234",
+                "api_key": "sk-9876",
                 "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
                 "model": "openai/my-fake-openai-endpoint",
                 "mock_timeout": True,
@@ -724,7 +724,7 @@ async def test_timeout_does_not_cancel_other_health_checks():
 
 @pytest.mark.asyncio
 async def test_ahealth_check_ocr():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.ahealth_check(
         model_params={
             "model": "mistral/mistral-ocr-latest",

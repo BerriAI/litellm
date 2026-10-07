@@ -669,9 +669,9 @@ def test_prepare_mcp_server_headers_m2m_skips_authorization_from_raw_extra_heade
         server=server,
         mcp_server_auth_headers=None,
         mcp_auth_header=None,
-        oauth2_headers={"Authorization": "Bearer sk-1234"},
+        oauth2_headers={"Authorization": "Bearer sk-9876"},
         raw_headers={
-            "authorization": "Bearer sk-1234",
+            "authorization": "Bearer sk-9876",
             "x-custom": "trace",
         },
     )
@@ -833,8 +833,8 @@ async def test_call_tool_m2m_skips_authorization_headers():
             tasks=[],
             mcp_auth_header=None,
             mcp_server_auth_headers=None,
-            oauth2_headers={"Authorization": "Bearer sk-1234"},
-            raw_headers={"authorization": "Bearer sk-1234", "x-custom": "trace"},
+            oauth2_headers={"Authorization": "Bearer sk-9876"},
+            raw_headers={"authorization": "Bearer sk-9876", "x-custom": "trace"},
             proxy_logging_obj=None,
         )
 
@@ -6696,7 +6696,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     except ImportError:
         pytest.skip("MCP server not available")
 
-    user_auth = UserAPIKeyAuth(api_key="sk-1234", user_id="test-user")
+    user_auth = UserAPIKeyAuth(api_key="sk-9876", user_id="test-user")
 
     # Simulate a legacy DB row: OAuth2 with M2M credentials but oauth2_flow=None
     legacy_server = MagicMock(name="legacy_m2m_server")
@@ -6769,7 +6769,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
             mcp_auth_header=None,
             mcp_servers=["legacy_m2m"],
             mcp_server_auth_headers=None,
-            oauth2_headers={"Authorization": "Bearer sk-1234"},  # Caller's token
+            oauth2_headers={"Authorization": "Bearer sk-9876"},  # Caller's token
         )
 
     # With P1 fix: _get_allowed_mcp_servers applies _resolve_oauth2_flow,
@@ -6815,7 +6815,7 @@ async def test_call_tool_empty_extra_headers_returns_none():
     )
 
     raw_headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": "Bearer sk-9876",
         "Content-Type": "application/json",
     }
 
@@ -8115,7 +8115,7 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_listed_entry_and_nothing
             patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
         ):
             never_listed_tool, never_listed_data = await call()
-            manager._record_listed_tools(
+            manager.record_listed_tools(
                 petstore,
                 [MCPTool(name="list_pets", description="ADMIN DESC", inputSchema=schema)],
                 ListedToolsCaller(user_api_key_auth=alice),
@@ -8156,7 +8156,7 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_guarded_catalog_entry_cl
     )
     manager = mcp_module.global_mcp_server_manager
     alice = UserAPIKeyAuth(api_key="sk-user", user_id="alice")
-    manager._record_listed_tools(
+    manager.record_listed_tools(
         petstore,
         [MCPTool(name="getpetbyid", description="Find a [MASKED] pet", inputSchema=pinned_schema)],
         ListedToolsCaller(user_api_key_auth=alice),
@@ -8206,12 +8206,12 @@ async def test_execute_mcp_tool_hands_openapi_hooks_each_callers_own_listed_entr
     manager = mcp_module.global_mcp_server_manager
     guarded = UserAPIKeyAuth(api_key="sk-guarded", user_id="alice")
     opted_out = UserAPIKeyAuth(api_key="sk-opted-out", user_id="bob")
-    manager._record_listed_tools(
+    manager.record_listed_tools(
         petstore,
         [MCPTool(name="getpetbyid", description="Find a [MASKED] pet", inputSchema=schema)],
         ListedToolsCaller(user_api_key_auth=guarded),
     )
-    manager._record_listed_tools(
+    manager.record_listed_tools(
         petstore,
         [MCPTool(name="getpetbyid", description="Find a SECRET pet", inputSchema=schema)],
         ListedToolsCaller(user_api_key_auth=opted_out),
@@ -8305,7 +8305,7 @@ async def test_execute_mcp_tool_hands_hooks_nothing_for_a_never_listed_operation
     )
     manager = mcp_module.global_mcp_server_manager
     alice = UserAPIKeyAuth(api_key="sk-user", user_id="alice")
-    manager._record_listed_tools(
+    manager.record_listed_tools(
         petstore,
         [MCPTool(name="get_pet", description="Fetches pet records. FLAGWORD", inputSchema={"type": "object"})],
         ListedToolsCaller(user_api_key_auth=alice),
@@ -9497,7 +9497,7 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
     except ImportError:
         pytest.skip("MCP server not available")
 
-    user_auth = UserAPIKeyAuth(api_key="sk-1234", user_id="test-user")
+    user_auth = UserAPIKeyAuth(api_key="sk-9876", user_id="test-user")
 
     legacy_server = MCPServer(
         server_id="legacy-m2m-id",

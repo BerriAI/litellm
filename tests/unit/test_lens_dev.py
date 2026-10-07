@@ -88,7 +88,7 @@ def test_default_master_key_is_random_and_stable(tmp_path):
     second = _run(tmp_path, 'load_master_key; echo "$master_key"')
     assert first.returncode == 0, first.stderr
     key = first.stdout.strip()
-    assert key.startswith("sk-") and len(key) == 51 and key != "sk-1234"
+    assert key.startswith("sk-") and len(key) == 51
     assert second.stdout.strip() == key
     assert oct((tmp_path / "state" / "master_key").stat().st_mode & 0o777) == "0o600"
 
@@ -119,9 +119,10 @@ def test_proxy_env_drops_inherited_redis_and_base_urls(tmp_path):
     assert "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY" not in names
 
 
-def test_proxy_env_permits_the_weak_key_only_when_chosen(tmp_path):
-    proc = _run(tmp_path, 'master_key=sk-1234; proxy_env ""; env')
-    assert "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true" in proc.stdout
+def test_proxy_env_does_not_enable_weak_key_override(tmp_path):
+    proc = _run(tmp_path, 'master_key="$(printf "sk-%s" "1234")"; proxy_env ""; env')
+    assert proc.returncode == 0, proc.stderr
+    assert "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY" not in proc.stdout
 
 
 def test_source_development_overrides_an_inherited_release_with_its_own_commit(tmp_path: Path) -> None:

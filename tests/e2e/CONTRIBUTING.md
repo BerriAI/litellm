@@ -13,10 +13,10 @@ The suites run against a live proxy, so bring one up first by running the litell
 
 ## Running the tests locally
 
-1. Create a `.env` file in this directory with the provider keys the example models use, plus the master key and the Postgres/Redis coordinates your config reads back:
+1. Generate a master key with `export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"`. Create a `.env` file in this directory with the provider keys the example models use and the Postgres/Redis coordinates your config reads back:
 
    ```bash
-   LITELLM_MASTER_KEY="sk-1234"
+   LITELLM_MASTER_KEY="sk-<your-master-key>"
    DATABASE_URL="postgresql://llmproxy:dbpassword9090@localhost:5432/litellm"
    REDIS_HOST="localhost"
    REDIS_PORT="6379"
@@ -73,7 +73,7 @@ The suites run against a live proxy, so bring one up first by running the litell
      uv run pytest tests/e2e/other/test_jwt_auth_e2e.py tests/e2e/management/test_jwt_management_e2e.py --reruns 0 -v
    ```
 
-   Buildkite runs this suite against a Keycloak deployed beside the ephemeral stack by project-releaser. It fetches the realm from the test-runner revision even when it reuses a gateway image from another commit. The GitHub Actions changed-test stack starts the same digest-pinned Keycloak through `.github/e2e-stack/start-idp.sh`, imports the checked-out realm, and exports the IdP URL and credentials in `stack.env`. Both runners configure issuer/audience validation and store the realm, keys and users in a separate schema in the stack's PostgreSQL, so replacing Keycloak preserves token validity. Both wait for realm discovery before running tests. Losing the whole ephemeral database invalidates the stack. Keycloak skips imports into an existing realm, so changes to the realm export require a fresh stack (or deliberately replacing the local data volume). A stack without it fails the JWT tests rather than skipping them
+   Buildkite runs this suite against a Keycloak deployed beside the ephemeral stack by project-releaser. It fetches the realm from the test-runner revision even when it reuses a gateway image from another commit. The runner configures issuer/audience validation and stores the realm, keys and users in a separate schema in the stack's PostgreSQL, so replacing Keycloak preserves token validity. It waits for realm discovery before running tests. Losing the whole ephemeral database invalidates the stack. Keycloak skips imports into an existing realm, so changes to the realm export require a fresh stack (or deliberately replacing the local data volume). A stack without it fails the JWT tests rather than skipping them
 
 4. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`). The suites' client dependencies (the provider SDKs, websockets) live in the `e2e-dev` dependency group; `make bootstrap` installs it, and naming the group on the run keeps the command working from any environment state:
 
@@ -103,20 +103,6 @@ Alternatively, start the proxy with `STORE_PROMPTS_IN_SPEND_LOGS=true litellm --
 
 A couple of logging destinations are configured on the proxy rather than by the test. The Weave tests scope their callback to the key they create, but litellm builds the `weave_otel` logger from `WANDB_API_KEY` and `WANDB_PROJECT_ID` before it applies the per-key vars, so the proxy needs both in its own environment or the key-scoped callback never initializes and nothing ships
 
-### The pull request check
-
-Every same-repository PR that adds, modifies, or renames a `tests/e2e/**/test_*.py` file runs those changed files three times. A change to the harness itself, meaning a root-level `tests/e2e/*.py` file or `pytest.ini`, `tests/e2e/gateway/`, `.github/e2e-stack/`, or the workflow, also runs the `access_control` suite and both JWT suites as canaries, because those files have no test of their own that exercises the stack. `.github/e2e-stack/select_tests.py` applies both rules. The stack config at `tests/e2e/gateway/stage_mirror_ci_config.yml` must declare every model the selected suites use; a missing one shows up as a failed test id in the public log. The suite's own single rerun for network errors and 5xx responses (see `pytest.ini`) applies on every pass, so a transport blip does not fail the check while a race inside a test still does. The stage-mirror stack has a control-plane backend, two gateways behind nginx, Postgres, Keycloak, Jaeger, and TLS cluster-mode Valkey. Realm-only edits also trigger these canaries. The stack exports every gateway address in `LITELLM_PROXY_REPLICA_URLS`, so model registration waits until each gateway lists the new model rather than whichever one the load balancer answered from. The Buildkite PR stack exports its two gateway pods the same way and, because those pods sit behind one router base that also fronts the backend, names that base in `LITELLM_CONTROL_PLANE_REPLICA_URLS` so management read-backs poll the plane that serves them instead of the gateway pods, which trim management routes at startup and answer them 404. Documentation, deleted-file, and application-only changes do not start the stack or request environment approval. The `ui/`, `claude_code/`, `load/`, and `secret_manager/` directories, `batches/test_managed_files_enforcement_e2e.py`, `llm_translation/realtime/test_realtime_pipecat_audio_e2e.py`, and `guardrails/test_presidio_masking_e2e.py` remain outside this check because they use separate tooling or need a differently configured stack: the pipecat audio suite skips itself at import time unless the NLTK `punkt_tab` data is installed, and the presidio suite fails without the analyzer and anonymizer services this stack does not start. `logging/test_otel_v2_langfuse_generation_output_e2e.py` is marked `otel_v2` and deselects itself unless `E2E_OTEL_V2` is set, because it needs a gateway booted with `LITELLM_OTEL_V2=true` and Langfuse credentials, neither of which this stack provides, so run it with `E2E_OTEL_V2=1` against a local OTel v2 proxy. The Redis chaos test under `load/` needs a proxy it can pause the Redis of on the same host (`gateway/redis_chaos_ci_config.yml`), which `.github/workflows/test-e2e-redis-chaos.yml` boots, and which the Buildkite `e2e-redis-chaos` step in project-releaser runs co-located with Postgres and Valkey in one pod; it is deselected unless `E2E_REDIS_CHAOS` is set. The `secret_manager/` lanes each need a proxy configured against their own secret manager (see Secret manager lanes below)
-
-Every selected file must execute at least one passing test in each pass, and any test failure, collection error, or entirely skipped or deselected file fails the check. A file whose tests are all marked skip therefore cannot pass this check, so unskip at least one of them, or add the file to `UNSUPPORTED` in `select_tests.py` with the reason, before changing one. A failed pass stops the run. The public log prints pytest's one-line summary for each pass, including the rerun count, and names each failed or errored test as `classname::name`, so a retried network error or a failing test is visible without the raw output. The final `e2e-changed-tests` job succeeds only when no supported test files changed or the approved run completed all three passes. Fork PRs with selected tests fail this gate until a maintainer brings the reviewed change onto a same-repository branch
-
-Repository admins must require the `e2e-changed-tests` status check for merging and configure the `e2e-changed` environment with required reviewers, self-review disabled, and admin bypass disabled. Each push cancels the previous run; a new run that selects tests needs a fresh approval. Reviewers must inspect the entire executable PR diff, including application code, dependencies, tests, and workflow helpers, before approving the exact revision. Approved code executes with provider credentials, so environment approval is a trust decision about that code
-
-Credentials come from the existing AWS Secrets Manager secrets in us-east-1, `litellm-e2e-changed-provider-keys` and `litellm-e2e-changed-license`. The OIDC role must trust only `repo:BerriAI/litellm:environment:e2e-changed` with audience `sts.amazonaws.com` and have read access only to these secrets. The short-lived reader credentials are scoped to the fetch step. Provider credentials must cover the selected suites, including Datadog credentials when logging or MCP tests need them; missing credentials fail the run. `up.sh` refuses to start without `DD_API_KEY`, because the stack's gateway config enables the Datadog callback for every run and a gateway booted without the key fails readiness. Keep provider credentials dedicated to this lane with only the permissions those tests need
-
-Fetched values of eight characters or more are masked before use, while shorter values such as flags stay unmasked because masking a one-character value would blank every matching digit in the log, and credential files and raw output are private to the runner. Public logs contain selected file names, counts, pytest's summary line, failed test ids, and pass status; raw pytest output, reports, and stack logs are not uploaded or printed. The workflow removes them and the credential files during cleanup. To diagnose a failed pass, reproduce the selected files locally with the appropriate credentials and inspect the local logs
-
-To reproduce the CI topology on a dedicated machine, `bash .github/e2e-stack/up.sh` reads `tests/e2e/.env`, writes `stack.env` under `${E2E_STACK_DIR:-/tmp/litellm-e2e-stack}`, and `bash .github/e2e-stack/down.sh` stops it. Keep this directory private and remove its credential files and logs after use
-
 ### Secret manager lanes
 
 `key_management_system` is global to the proxy, so the `secret_manager/` tests run once per backend, each against its own proxy. The backends are `hashicorp_vault` and `cyberark` (CyberArk Conjur). `E2E_SECRET_MANAGER` opts in and names the backend (a key of `secret_backends.BACKENDS`). The proxy boots from `gateway/secret_manager_<system>_ci_config.yml`, and the tests reach the same manager through that backend's `SecretStore`. The managers are enterprise features, so the proxy needs a license. `secret_manager/backend.sh` runs any backend in Docker and writes its env, so every lane runs the same way locally:
@@ -124,7 +110,7 @@ To reproduce the CI topology on a dedicated machine, `bash .github/e2e-stack/up.
 ```bash
 bash tests/e2e/secret_manager/backend.sh up cyberark
 (set -a; . ~/.cache/litellm-e2e-secret-manager/cyberark/proxy.env; set +a; env -u OPENAI_API_KEY LITELLM_LICENSE=... \
-  LITELLM_MASTER_KEY=sk-1234 DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_cyberark_ci_config.yml --port 4000)
+  LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_cyberark_ci_config.yml --port 4000)
 (set -a; . ~/.cache/litellm-e2e-secret-manager/cyberark/tests.env; set +a; OPENAI_API_KEY=... \
   uv run --group e2e-dev pytest tests/e2e/secret_manager/ -v)
 bash tests/e2e/secret_manager/backend.sh down cyberark
@@ -319,8 +305,7 @@ same-repository branch for their verification. The workflow's path-filtered
 check is not configured here as a globally required branch-protection check.
 Provision `E2E_LINEAR_STORAGE_STATE_B64` as a secret there and retain the existing E2E license/AWS role configuration. A missing or
 expired session fails the job; collection, deselection and skips are not passes.
-The generic changed-test job excludes this file because it requires an owned
-proxy and consent UI. No LLM call is needed
+No LLM call is needed
 
 Coverage remains limited to authorization-code OAuth over HTTP. M2M, OBO,
 PKCE passthrough, static/BYOK, ID-JAG, forwarding, SigV4 and stdio are outside this

@@ -33,7 +33,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm._logging import _redact_string, verbose_logger
+from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
@@ -411,12 +411,12 @@ def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> 
         return transformed_request
 
     from litellm.litellm_core_utils.litellm_logging import (
-        _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
+        get_masked_values,
     )
 
     return {
         **transformed_request,
-        "headers": _get_masked_values(request_headers),
+        "headers": get_masked_values(request_headers),
     }
 
 
@@ -2214,6 +2214,7 @@ class BaseLLMHTTPHandler:
 
         # used for logging + cost tracking
         logging_obj.model_call_details["httpx_response"] = response
+        logging_obj.model_call_details["response_headers"] = dict(response.headers)
 
         initial_response: AsyncIterator | AnthropicMessagesResponse
         if stream:
@@ -2507,6 +2508,7 @@ class BaseLLMHTTPHandler:
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
+        caller_requested_stream: Final = bool(stream or (extra_body or {}).get("stream"))
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -2585,8 +2587,20 @@ class BaseLLMHTTPHandler:
                     stream=stream,
                     **body_kwargs,
                 )
-                if fake_stream is True:
-                    return MockResponsesAPIStreamingIterator(
+                if caller_requested_stream:
+                    if fake_stream is True:
+                        return MockResponsesAPIStreamingIterator(
+                            response=response,
+                            model=model,
+                            logging_obj=logging_obj,
+                            responses_api_provider_config=responses_api_provider_config,
+                            litellm_metadata=litellm_metadata,
+                            custom_llm_provider=custom_llm_provider,
+                            request_data=request_context,
+                            call_type=CallTypes.responses.value,
+                        )
+
+                    return SyncResponsesAPIStreamingIterator(
                         response=response,
                         model=model,
                         logging_obj=logging_obj,
@@ -2596,17 +2610,7 @@ class BaseLLMHTTPHandler:
                         request_data=request_context,
                         call_type=CallTypes.responses.value,
                     )
-
-                return SyncResponsesAPIStreamingIterator(
-                    response=response,
-                    model=model,
-                    logging_obj=logging_obj,
-                    responses_api_provider_config=responses_api_provider_config,
-                    litellm_metadata=litellm_metadata,
-                    custom_llm_provider=custom_llm_provider,
-                    request_data=request_context,
-                    call_type=CallTypes.responses.value,
-                )
+                response.read()
             else:
                 response = sync_httpx_client.post(
                     url=api_base,
@@ -2699,6 +2703,7 @@ class BaseLLMHTTPHandler:
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
+        caller_requested_stream: Final = bool(stream or (extra_body or {}).get("stream"))
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -2778,8 +2783,20 @@ class BaseLLMHTTPHandler:
                     **body_kwargs,
                 )
 
-                if fake_stream is True:
-                    return MockResponsesAPIStreamingIterator(
+                if caller_requested_stream:
+                    if fake_stream is True:
+                        return MockResponsesAPIStreamingIterator(
+                            response=response,
+                            model=model,
+                            logging_obj=logging_obj,
+                            responses_api_provider_config=responses_api_provider_config,
+                            litellm_metadata=litellm_metadata,
+                            custom_llm_provider=custom_llm_provider,
+                            request_data=request_context,
+                            call_type=CallTypes.responses.value,
+                        )
+
+                    return ResponsesAPIStreamingIterator(
                         response=response,
                         model=model,
                         logging_obj=logging_obj,
@@ -2789,18 +2806,7 @@ class BaseLLMHTTPHandler:
                         request_data=request_context,
                         call_type=CallTypes.responses.value,
                     )
-
-                # Return the streaming iterator
-                return ResponsesAPIStreamingIterator(
-                    response=response,
-                    model=model,
-                    logging_obj=logging_obj,
-                    responses_api_provider_config=responses_api_provider_config,
-                    litellm_metadata=litellm_metadata,
-                    custom_llm_provider=custom_llm_provider,
-                    request_data=request_context,
-                    call_type=CallTypes.responses.value,
-                )
+                await response.aread()
             else:
                 response = await async_httpx_client.post(
                     url=api_base,
@@ -6336,7 +6342,7 @@ class BaseLLMHTTPHandler:
                 if provider_config.requires_session_configuration():
                     _session_config = provider_config.session_configuration_request(model)
                     if _session_config:
-                        _session_config = realtime_streaming._maybe_inject_guardrail_auto_response_disable(
+                        _session_config = realtime_streaming.maybe_inject_guardrail_auto_response_disable(
                             _session_config
                         )
                         await backend_ws.send(_session_config)
@@ -6358,7 +6364,7 @@ class BaseLLMHTTPHandler:
                         # success_handler / async_success_handler payloads.
                         realtime_streaming.store_message(synthetic_session_str)
                         await websocket.send_text(synthetic_session_str)
-                        realtime_streaming._session_created_sent_to_client = True
+                        realtime_streaming.session_created_sent_to_client = True
                         verbose_logger.debug("Sent synthetic session.created to client to unblock connection")
 
                 await realtime_streaming.bidirectional_forward()
@@ -6368,7 +6374,7 @@ class BaseLLMHTTPHandler:
             await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
         except Exception as e:
             verbose_logger.exception("Error connecting to backend: %s", e)
-            redacted_error: Final = _redact_string(str(e))
+            redacted_error: Final = redact_string(str(e))
             try:
                 await websocket.send_text(realtime_error_event(redacted_error, error_type="server_error"))
             except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
@@ -6377,7 +6383,7 @@ class BaseLLMHTTPHandler:
                 await websocket.close(
                     code=1011,
                     reason=websocket_close_reason(
-                        _redact_string(f"Internal server error: {e}"),
+                        redact_string(f"Internal server error: {e}"),
                         fallback="Internal server error",
                     ),
                 )
@@ -6784,7 +6790,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             verbose_logger.exception("Error in responses WS: %s", e)
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {e}"))
+                await websocket.close(code=1011, reason=redact_string(f"Internal server error: {e}"))
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     pass
