@@ -38,6 +38,21 @@ describe("fetchAvailableModels", () => {
     vi.clearAllMocks();
   });
 
+  it("preserves provider metadata for aliased and mixed-provider model groups", async () => {
+    modelHubCallMock.mockResolvedValue({
+      data: [
+        { model_group: "alias", providers: ["openrouter"] },
+        { model_group: "mixed", providers: ["openai", "openrouter"] },
+        { model_group: "unknown", providers: null },
+      ],
+    });
+    expect(await fetchAvailableModels("token")).toEqual([
+      { model_group: "alias", providers: ["openrouter"] },
+      { model_group: "mixed", providers: ["openai", "openrouter"] },
+      { model_group: "unknown" },
+    ]);
+  });
+
   it("carries the reasoning capabilities the model hub reports for each group", async () => {
     modelHubCallMock.mockResolvedValue({
       data: [

@@ -66,7 +66,7 @@ export default function ViewSwitcher() {
           <div className="flex max-w-[220px] flex-col py-0.5">
             <span className="font-medium">Chat</span>
             <span className="whitespace-normal text-xs leading-snug text-muted-foreground">
-              Admins can enable in Settings
+              Admins can enable in Settings &gt; Admin Settings &gt; UI Settings
             </span>
           </div>
         ),

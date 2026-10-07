@@ -4,6 +4,7 @@ import { useChatHistory } from "@/components/chat/useChatHistory";
 import ChatConversationPage from "./page";
 import { renderWithProviders } from "@/../tests/test-utils";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 
 const { mockMakeOpenAIResponsesRequest, shellState } = vi.hoisted(() => ({
   mockMakeOpenAIResponsesRequest: vi.fn(),
@@ -84,6 +85,73 @@ describe("/ui/chat request metrics", () => {
     localStorage.clear();
     mockMakeOpenAIResponsesRequest.mockReset();
     shellState.storageUnavailable = false;
+    vi.mocked(fetchAvailableModels).mockResolvedValue([{ model_group: "gpt-5.4-mini" }]);
+  });
+
+  it.each([
+    { providers: ["openrouter"], stateless: true },
+    { providers: ["openai", "openrouter"], stateless: true },
+    { providers: ["openai"], stateless: false },
+    { providers: undefined, stateless: false },
+  ])("continues a conversation correctly with providers=$providers", async ({ providers, stateless }) => {
+    vi.mocked(fetchAvailableModels).mockResolvedValue([{ model_group: "gpt-5.4-mini", providers }]);
+    mockMakeOpenAIResponsesRequest.mockImplementation(async (...args: unknown[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      (args[1] as (role: string, delta: string) => void)("assistant", "First answer");
+      (args[15] as (id: string) => void)("response-first");
+    });
+
+    await sendOneMessage();
+    expect(await screen.findByText("First answer")).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "Follow up" },
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const [first, second] = mockMakeOpenAIResponsesRequest.mock.calls;
+    expect(first[14]).toBeNull();
+    expect(second[14]).toBe(stateless ? null : "response-first");
+    expect(second[0]).toEqual(
+      stateless
+        ? [
+            { role: "user", content: "How much did this cost?" },
+            { role: "assistant", content: "First answer" },
+            { role: "user", content: "Follow up" },
+          ]
+        : [{ role: "user", content: "Follow up" }],
+    );
+  });
+
+  it("resends history instead of reusing another model's response ID after changing models", async () => {
+    vi.mocked(fetchAvailableModels).mockResolvedValue([
+      { model_group: "gpt-5.4-mini", providers: ["openai"] },
+      { model_group: "second-model", providers: ["openai"] },
+    ]);
+    mockMakeOpenAIResponsesRequest.mockImplementation(async (...args: unknown[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      (args[1] as (role: string, delta: string) => void)("assistant", "First answer");
+      (args[15] as (id: string) => void)("response-first");
+    });
+
+    await sendOneMessage();
+    expect(await screen.findByText("First answer")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /gpt-5\.4-mini/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "second-model" }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Follow up" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const second = mockMakeOpenAIResponsesRequest.mock.calls[1];
+    expect(second[2]).toBe("second-model");
+    expect(second[14]).toBeNull();
+    expect(second[0]).toEqual([
+      { role: "user", content: "How much did this cost?" },
+      { role: "assistant", content: "First answer" },
+      { role: "user", content: "Follow up" },
+    ]);
   });
 
   it("renders latency, TTFT, token counts and cost reported for the assistant turn", async () => {
