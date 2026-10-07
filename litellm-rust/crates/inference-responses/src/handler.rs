@@ -25,6 +25,10 @@ pub(super) async fn execute(
         model: request.context.model.clone(),
         provider: request.context.custom_llm_provider.clone(),
     };
+    litellm_tracing::payload::record(
+        litellm_tracing::payload::PayloadStage::RequestTransformed,
+        &request.body,
+    );
     let wire = interceptors
         .before_provider_request(
             WireRequest {
@@ -67,6 +71,10 @@ pub(super) async fn execute(
             let status = response.status().as_u16();
             if !response.status().is_success() {
                 let body = response.text().await.map_err(network)?;
+                litellm_tracing::payload::record_json(
+                    litellm_tracing::payload::PayloadStage::ResponseReceived,
+                    &body,
+                );
                 return Err(litellm_http::transport::Error::Http {
                     status,
                     body: litellm_http::request::truncate_error_body(&body),
@@ -85,6 +93,10 @@ pub(super) async fn execute(
                     .bytes_stream()
                     .map(|chunk| chunk.map_err(network))
                     .boxed();
+                let chunks = litellm_inference::payload::observe_sse(
+                    chunks,
+                    litellm_tracing::payload::PayloadStage::ResponseReceived,
+                );
                 return Ok(ResponsesOutput::Stream {
                     head: ResponsesStreamHead { headers },
                     chunks,
@@ -101,8 +113,17 @@ pub(super) async fn execute(
                 .after_provider_response(raw)
                 .await
                 .map_err(Error::post_call)?;
-            let value = serde_json::from_str(&body)
-                .map_err(|error| Error::InvalidResponse(error.to_string().into()))?;
+            let value = serde_json::from_str(&body).map_err(|error| {
+                litellm_tracing::payload::record_json(
+                    litellm_tracing::payload::PayloadStage::ResponseReceived,
+                    &body,
+                );
+                Error::InvalidResponse(error.to_string().into())
+            })?;
+            litellm_tracing::payload::record(
+                litellm_tracing::payload::PayloadStage::ResponseReceived,
+                &value,
+            );
             request
                 .config
                 .transform_response_api_response(value)

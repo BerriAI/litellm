@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 litellm-cache-response.workspace = true
+litellm-tracing.workspace = true
 axum = { workspace = true, features = ["json", "multipart", "original-uri"] }
 base64.workspace = true
 bytes.workspace = true

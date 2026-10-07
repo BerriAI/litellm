@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, TypeAlias, TypeVar, cast
@@ -139,6 +140,18 @@ def capture_result(value: _Response, capture_id: object) -> _Response:
     if isinstance(value, (Mapping, BaseModel)):
         record_shape("litellm.response.normalized", value, capture_id)
     return value
+
+
+def native_call_arguments(
+    function: Callable[..., object], args: tuple[object, ...], kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    if _native() is None:
+        return kwargs
+    existing: Final = kwargs.get("litellm_call_id")
+    capture_id: Final = existing if isinstance(existing, str) else str(uuid.uuid4())
+    arguments: Final = {**kwargs, "litellm_call_id": capture_id}
+    record_call_shape(function, args, arguments)
+    return arguments
 
 
 def _call_fields(function: Callable[..., object], bound: inspect.BoundArguments) -> Iterator[tuple[str, object]]:

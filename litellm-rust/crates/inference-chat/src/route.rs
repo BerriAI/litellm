@@ -59,7 +59,18 @@ impl ChatCompletionsRoute {
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
-        litellm_inference::diagnostic::unary(async {
+        let received = litellm_tracing::payload::capture_id().is_none();
+        litellm_tracing::payload::capture(litellm_inference::diagnostic::unary(async {
+            if received {
+                litellm_tracing::payload::record(
+                    litellm_tracing::payload::PayloadStage::RequestReceived,
+                    &litellm_inference::payload::JsonRequest {
+                        input_name: "messages",
+                        input: &call.messages,
+                        parameters: &call.optional_params,
+                    },
+                );
+            }
             let request = ChatCompletionsRequest {
                 model: &call.model,
                 messages: call.messages,
@@ -70,9 +81,17 @@ impl ChatCompletionsRoute {
                 extra_headers: call.extra_headers,
                 timeout: call.timeout,
             };
-            self.run(request, cache_options, interceptors, observers)
-                .await
-        })
+            let response = self
+                .run(request, cache_options, interceptors, observers)
+                .await?;
+            if !litellm_tracing::payload::host_normalizes_response() {
+                litellm_tracing::payload::record_serialized(
+                    litellm_tracing::payload::PayloadStage::ResponseNormalized,
+                    &response,
+                );
+            }
+            Ok(response)
+        }))
         .await
     }
 }

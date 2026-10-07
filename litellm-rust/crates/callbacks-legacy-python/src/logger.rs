@@ -10,11 +10,22 @@ use crate::python::{self, Wrapper};
 /// The `Logging` instance one call fans out through.
 pub struct PythonLogger {
     object: Py<PyAny>,
+    pub(crate) native_payload_shapes: bool,
 }
 
 impl PythonLogger {
     pub(crate) fn new(object: Py<PyAny>) -> Self {
-        Self { object }
+        Self {
+            object,
+            native_payload_shapes: false,
+        }
+    }
+
+    pub(crate) fn with_native_payload_shapes(self, enabled: bool) -> Self {
+        Self {
+            native_payload_shapes: enabled,
+            ..self
+        }
     }
 
     pub(crate) fn object<'py>(&self, py: Python<'py>) -> &Bound<'py, PyAny> {
@@ -24,6 +35,7 @@ impl PythonLogger {
     pub fn clone_ref(&self, py: Python<'_>) -> Self {
         Self {
             object: self.object.clone_ref(py),
+            native_payload_shapes: self.native_payload_shapes,
         }
     }
 

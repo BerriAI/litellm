@@ -13,6 +13,8 @@ pub(crate) async fn create(
     identity: AuthenticatedRequest,
     JsonObject(body): JsonObject,
 ) -> Result<Response, Error> {
+    litellm_tracing::payload::capture(async {
+    litellm_tracing::payload::record(litellm_tracing::payload::PayloadStage::RequestReceived, &body);
     let deployment = request::resolve_deployment(&gateway, &body)?;
     request::authorize_model(&identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(&identity, body)?;
@@ -49,4 +51,5 @@ pub(crate) async fn create(
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
     Ok(headers.apply(response))
+    }).await
 }
