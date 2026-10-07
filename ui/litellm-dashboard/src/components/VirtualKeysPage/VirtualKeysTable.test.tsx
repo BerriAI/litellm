@@ -1418,21 +1418,19 @@ describe("User ID filter role access", () => {
     renderWithProviders(<VirtualKeysTable />);
 
     openFilters();
-    expect(await myKeysSwitch()).not.toBeChecked();
-    fireEvent.click(await myKeysSwitch());
+    const switchControl = await screen.findByRole("switch", { name: "My Keys" });
+    expect(switchControl).not.toBeChecked();
+    fireEvent.click(switchControl);
     fireEvent.click(screen.getByTestId("filter-drawer-apply"));
 
+    const expectedOptions = {
+      userID: "self",
+      includeTeamKeys: false,
+      includeCreatedByKeys: false,
+      substringMatching: false,
+    };
     await waitFor(() => {
-      expect(mockUseKeys).toHaveBeenLastCalledWith(
-        1,
-        50,
-        expect.objectContaining({
-          userID: "self",
-          includeTeamKeys: false,
-          includeCreatedByKeys: false,
-          substringMatching: false,
-        }),
-      );
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining(expectedOptions));
     });
   });
 });
