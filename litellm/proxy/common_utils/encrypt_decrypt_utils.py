@@ -72,6 +72,33 @@ def _derive_key(signing_key: str) -> bytes:
     return hashlib.sha256(signing_key.encode()).digest()
 
 
+def encrypt_aes_gcm_with_key(value: str, key: bytes) -> str:
+    """Encrypt under AES-256-GCM with a caller-derived 32-byte key; returns the versioned ``v2:gcm:`` string."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    nonce: Final = os.urandom(12)
+    # AESGCM.encrypt returns ciphertext || tag(16); wire format is nonce || that.
+    blob: Final = AESGCM(key).encrypt(nonce, value.encode("utf-8"), None)
+    return _V2_GCM_PREFIX + base64.urlsafe_b64encode(nonce + blob).decode("utf-8")
+
+
+def decrypt_aes_gcm_with_key(value: str, key: bytes) -> str:
+    """Decrypt a ``v2:gcm:`` string produced by :func:`encrypt_aes_gcm_with_key` under the same key.
+
+    Raises ``ValueError`` when the prefix is missing and ``InvalidTag`` when the key or ciphertext is wrong.
+    """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    if not value.startswith(_V2_GCM_PREFIX):
+        raise ValueError("not a v2:gcm ciphertext")
+    raw: Final = base64.urlsafe_b64decode(value[len(_V2_GCM_PREFIX) :])
+    # An empty plaintext still serializes to nonce(12) || tag(16) = 28 bytes, so a
+    # short/empty buffer here is a corrupt value: let AESGCM.decrypt raise and be
+    # swallowed by decrypt_value_helper (returns None/original), same as legacy.
+    nonce, blob = raw[:12], raw[12:]
+    return AESGCM(key).decrypt(nonce, blob, None).decode("utf-8")
+
+
 def _seal_aes_gcm(value: str, signing_key: str, aad: bytes | None) -> bytes:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -91,14 +118,12 @@ def _open_aes_gcm(sealed: bytes, signing_key: str, aad: bytes | None) -> str:
 
 def _encrypt_aes_gcm(value: str, signing_key: str) -> str:
     """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string."""
-    sealed: Final = _seal_aes_gcm(value=value, signing_key=signing_key, aad=None)
-    return _V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode("utf-8")
+    return encrypt_aes_gcm_with_key(value, _derive_key(signing_key))
 
 
 def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
     """Decrypt a versioned ``v2:gcm:`` string produced by :func:`_encrypt_aes_gcm`."""
-    sealed: Final = base64.urlsafe_b64decode(value[len(_V2_GCM_PREFIX) :])
-    return _open_aes_gcm(sealed=sealed, signing_key=signing_key, aad=None)
+    return decrypt_aes_gcm_with_key(value, _derive_key(signing_key))
 
 
 def encrypt_bearer_token(value: str, prefix: str) -> str:

@@ -13,14 +13,13 @@ Config (in litellm config.yaml general_settings):
 
 Plugin iframe auth:
   The UI calls GET /api/plugins/auth-token to receive a short-lived identity
-  claim ({user_id, user_role, plugin, exp}) encrypted with a per-plugin key
-  derived as HMAC-SHA256(LITELLM_SALT_KEY, plugin_name).  The claim carries no
+  claim ({user_id, user_role, plugin, exp}) encrypted with AES-256-GCM under a
+  per-plugin key derived as HMAC-SHA256(LITELLM_SALT_KEY, plugin_name).  The claim carries no
   litellm bearer token, so a compromised plugin learns only the caller's
   identity, never their credential.  LITELLM_SALT_KEY itself is never shared
   with plugins — each plugin holds only its own derived key.
 """
 
-import base64
 import hashlib
 import hmac as _hmac
 import json
@@ -29,12 +28,14 @@ import time
 from collections.abc import Mapping
 from typing import Final
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.exceptions import InvalidTag
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import PluginConfig, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_aes_gcm_with_key, encrypt_aes_gcm_with_key
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 router: Final = APIRouter()
@@ -124,16 +125,15 @@ _plugin_registry: Final[dict[str, PluginConfig]] = {}
 # shared with plugins; each plugin only receives a key derived from
 # HMAC(LITELLM_SALT_KEY, plugin_name) which reveals nothing about the master.
 # ---------------------------------------------------------------------------
-def _plugin_fernet(plugin_name: str) -> Fernet:
-    """Return a Fernet cipher whose key is scoped to a specific plugin.
+def _plugin_key(plugin_name: str) -> bytes:
+    """Return the 32-byte AES-256-GCM key scoped to a specific plugin.
 
     Key material: HMAC-SHA256(LITELLM_SALT_KEY, plugin_name).
     A plugin possessing its own key cannot derive the master salt or
     forge claims intended for a different plugin.
     """
     salt: Final = os.getenv("LITELLM_SALT_KEY", "").encode()
-    derived: Final = _hmac.new(salt, plugin_name.encode(), hashlib.sha256).digest()
-    return Fernet(base64.urlsafe_b64encode(derived))
+    return _hmac.new(salt, plugin_name.encode(), hashlib.sha256).digest()
 
 
 _CLAIM_TTL_SECONDS: Final = 30  # identity claims expire after 30 s
@@ -152,24 +152,27 @@ def issue_plugin_session_claim(plugin_name: str, user_id: str | None, user_role:
         "user_role": user_role or "",
         "exp": int(time.time()) + _CLAIM_TTL_SECONDS,
     }
-    return _plugin_fernet(plugin_name).encrypt(json.dumps(claim).encode()).decode()
+    return encrypt_aes_gcm_with_key(json.dumps(claim), _plugin_key(plugin_name))
 
 
-def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> dict:
+_CLAIM_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> dict[str, JsonValue]:
     """Verify and decode a plugin session claim.
 
-    Raises ValueError if the HMAC is invalid, the audience is wrong, or
+    Raises ValueError if the GCM tag is invalid, the audience is wrong, or
     the claim is expired.  Returns the decoded claim dict on success.
     """
     try:
-        raw: Final = _plugin_fernet(plugin_name).decrypt(ciphertext.encode(), ttl=_CLAIM_TTL_SECONDS)
-        claim: Final = json.loads(raw)
-    except (InvalidToken, Exception) as exc:
+        claim: Final = _CLAIM_ADAPTER.validate_json(decrypt_aes_gcm_with_key(ciphertext, _plugin_key(plugin_name)))
+    except (ValueError, ValidationError, InvalidTag) as exc:
         raise ValueError("Invalid, tampered, or expired plugin session claim") from exc
 
     if claim.get("plugin") != plugin_name:
         raise ValueError("Plugin claim audience mismatch")
-    if int(claim.get("exp", 0)) < int(time.time()):
+    expiry: Final = claim.get("exp")
+    if not isinstance(expiry, int) or expiry < int(time.time()):
         raise ValueError("Plugin session claim expired")
     return claim
 
