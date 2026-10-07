@@ -306,8 +306,15 @@ test-rust-extension:
 	"$$temporary/venv/bin/python" -I -m mypy.stubtest \
 		--mypy-config-file tests/unit/rust_bridge/stubtest.ini \
 		litellm.rust_bridge._native && \
-	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
-	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
+	"$$temporary/venv/bin/python" -I -c "import litellm.rust_bridge._native" && \
+	purelib=$$("$$temporary/venv/bin/python" -I -c "import sysconfig; print(sysconfig.get_paths()['purelib'])") && \
+	echo "$(CURDIR)/tests" > "$$purelib/litellm_integration_tests.pth" && \
+	LITELLM_LOCAL_MODEL_COST_MAP=True \
+	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension \
+		tests/integration/sdk/native tests/integration/observability/test_trace_query_api.py \
+		tests/unit/rust_bridge/test_tokenizer.py tests/unit/rust_bridge/test_token_counter.py \
+		tests/unit/rust_bridge/trace/test_storage.py tests/unit/_v2/cache/test_cache.py \
+		tests/unit/llms/azure_ai/passthrough/test_azure_ai_passthrough_transformation.py
 
 rust-sqlx-prepare:
 	cd litellm-rust && cargo run -p litellm-db-testing --bin sqlx-prepare

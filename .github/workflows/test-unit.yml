@@ -245,7 +245,7 @@ jobs:
               tests/unit/secret_managers
               tests/unit/vector_stores
               tests/unit/videos
-              --ignore=tests/unit/rust_bridge/native_route_wheel_test.py
+              tests/unit/_v2
             workers: 4
             reruns: 0
             timeout-minutes: 20

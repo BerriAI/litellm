@@ -8,4 +8,4 @@ Keep storage implementation in the Rust storage crates and response-cache policy
 
 Preserve synchronous and asynchronous cache operations, including TTL forwarding and lifecycle methods. Validate Python values before passing them to typed native interfaces. Keep native extension imports lazy so importing the package does not require loading the extension
 
-Extend the existing v2 cache tests in `tests/test_litellm_rust/test_v2.py` for behavioral changes, following that directory's `AGENTS.md`. Test observable cache behavior rather than package layout or implementation structure
+Extend the existing v2 cache tests in `tests/unit/_v2/cache/test_cache.py` and `tests/integration/sdk/native/test_v2_cache_sdk.py` for behavioral changes. Test observable cache behavior rather than package layout or implementation structure
