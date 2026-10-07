@@ -2,13 +2,6 @@ name: Lens installation smoke
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - helm/**
-      - deploy/lens/**
-      - litellm-rust/crates/lens/**
-      - tests/e2e/migrations/lens_helm_smoke.sh
-      - .github/workflows/lens-install-smoke.yml
 
 permissions:
   contents: read
