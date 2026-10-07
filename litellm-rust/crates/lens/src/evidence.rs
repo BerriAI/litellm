@@ -18,7 +18,7 @@ pub struct Workspace {
     pub reviews: Vec<wire::ReviewRecord>,
     pub client: JobClient,
     partial: Arc<Mutex<BTreeSet<String>>>,
-    errors: Arc<Mutex<BTreeSet<String>>>,
+    errors: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
     previews: Arc<Mutex<BTreeMap<String, Vec<wire::ReviewSpan>>>>,
 }
 
@@ -52,8 +52,24 @@ impl Workspace {
     pub fn errors(&self) -> Vec<String> {
         self.errors
             .lock()
-            .map(|v| v.iter().cloned().collect())
+            .map(|errors| {
+                errors
+                    .iter()
+                    .flat_map(|(execution_id, errors)| {
+                        errors
+                            .iter()
+                            .map(move |error| format!("{error} (execution {execution_id})"))
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
+    }
+
+    pub fn read_failed(&self, execution_id: &str) -> bool {
+        self.errors
+            .lock()
+            .map(|errors| errors.contains_key(execution_id))
+            .unwrap_or(true)
     }
 
     pub fn previews(&self, execution_id: &str) -> Vec<wire::ReviewSpan> {
@@ -69,7 +85,10 @@ impl Workspace {
             partial.insert(execution.id.clone());
         }
         if let Ok(mut errors) = self.errors.lock() {
-            errors.insert(format!("{error} (execution {})", execution.id));
+            errors
+                .entry(execution.id.clone())
+                .or_default()
+                .insert(error.to_string());
         }
         error
     }

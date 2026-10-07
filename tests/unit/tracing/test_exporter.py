@@ -1,11 +1,12 @@
 import asyncio
 import json
+from itertools import chain
 from typing import Final
 
 import httpx
 import pytest
 
-from litellm.tracing.exporter import MAX_BUFFER_EVENTS, MAX_EVENT_BYTES, LensExporter, encode_record
+from litellm.tracing.exporter import MAX_BUFFER_EVENTS, MAX_EVENT_BYTES, ExportFailure, LensExporter, encode_record
 
 
 @pytest.mark.asyncio
@@ -81,12 +82,11 @@ async def test_inflight_records_count_toward_the_queue_limit() -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["a" * MAX_EVENT_BYTES, "界" * (MAX_EVENT_BYTES // 2)],
-    ids=("oversized-ascii", "oversized-unicode"),
+    ["a" * MAX_EVENT_BYTES, "界" * (MAX_EVENT_BYTES // 2), "\x01" * (MAX_EVENT_BYTES // 4)],
+    ids=("oversized-ascii", "oversized-unicode", "escaped-json-expansion"),
 )
 def test_oversized_event_is_rejected_before_queueing(value: str) -> None:
-    with pytest.raises(OverflowError):
-        encode_record({"messages": value})
+    assert encode_record({"messages": value}) is ExportFailure.TOO_LARGE
 
 
 @pytest.mark.asyncio
@@ -212,19 +212,30 @@ async def test_batches_stay_bounded_without_losing_or_reordering_records() -> No
     async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
         exporter: Final = LensExporter(client)
         for record in records:
+            assert isinstance(record, bytes)
             assert exporter.enqueue(record)
         exporter.start()
         await exporter.aclose()
     sent: Final = tuple(bodies.get_nowait() for _ in range(bodies.qsize()))
     assert len(sent) == 2
     assert all(len(body) <= MAX_BATCH_BYTES for body in sent)
-    assert [row["id"] for body in sent for row in json.loads(body)] == list(range(10))
+    assert [row["id"] for row in chain.from_iterable(json.loads(body) for body in sent)] == list(range(10))
     assert exporter.rows_written == 10
     assert exporter.rows_dropped == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("payload", (None, {"id": []}, {"id": "x", "messages": [{"content": "x" * MAX_EVENT_BYTES}]}))
+@pytest.mark.parametrize(
+    "payload",
+    (
+        None,
+        {"id": []},
+        {"id": "x", "messages": [{"content": "x" * MAX_EVENT_BYTES}]},
+        {"id": "x", "messages": [{"content": "\x01" * (MAX_EVENT_BYTES // 4)}]},
+        {"id": "x", "response_cost": float("nan")},
+    ),
+    ids=("missing", "invalid-id", "oversized-input", "escaped-row-expansion", "invalid-row-number"),
+)
 async def test_invalid_callback_data_never_interrupts_model_requests(payload: object) -> None:
     async with httpx.AsyncClient(base_url="http://lens") as client:
         exporter: Final = LensExporter(client)
@@ -235,10 +246,12 @@ async def test_invalid_callback_data_never_interrupts_model_requests(payload: ob
     assert exporter.rows_dropped == (0 if payload is None else 1)
 
 
-def test_serialization_rejects_recursive_and_non_finite_payloads() -> None:
+def test_serialization_rejects_recursive_payloads() -> None:
     cyclic: Final[dict[str, object]] = {}  # mutable-ok: deliberately constructs a cyclic callback payload
     cyclic["self"] = cyclic
-    with pytest.raises(OverflowError):
-        encode_record(cyclic)
-    with pytest.raises(ValueError, match="Out of range float values"):
-        encode_record({"cost": float("nan")})
+    assert encode_record(cyclic) is ExportFailure.TOO_LARGE
+
+
+@pytest.mark.parametrize("value", (float("nan"), object(), "\ud800"), ids=("nan", "unsupported", "surrogate"))
+def test_serialization_returns_a_failure_for_invalid_payloads(value: object) -> None:
+    assert encode_record({"value": value}) is ExportFailure.INVALID

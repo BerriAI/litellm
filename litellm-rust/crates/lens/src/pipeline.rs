@@ -117,6 +117,17 @@ async fn review(
         }
     };
     let tool_calls = tracker.finish().await?;
+    let (extraction, error) = if workspace.read_failed(&execution.id) {
+        (
+            wire::Extraction {
+                cannot_assess: true,
+                ..Default::default()
+            },
+            Error::EvidenceUnavailable.to_string(),
+        )
+    } else {
+        (extraction, error)
+    };
     let reasoning = if error.is_empty() {
         extraction.reasoning.to_string()
     } else {
@@ -254,7 +265,11 @@ pub async fn analyze(
         .collect();
     result.review_versions = outcomes
         .iter()
-        .filter(|o| o.error.is_empty() && !o.review.content_version.is_empty())
+        .filter(|o| {
+            o.error.is_empty()
+                && !o.review.content_version.is_empty()
+                && !workspace.read_failed(&o.review.execution_id)
+        })
         .map(|o| wire::ReviewVersion {
             execution_id: o.review.execution_id.clone(),
             content_version: o.review.content_version.clone(),
@@ -379,9 +394,9 @@ pub async fn analyze(
             errors.insert(format!("Finding consolidation is incomplete: {error}"));
         }
     }
-    result
-        .review_versions
-        .retain(|r| !unfinished.contains(&r.execution_id));
+    result.review_versions.retain(|r| {
+        !unfinished.contains(&r.execution_id) && !workspace.read_failed(&r.execution_id)
+    });
     result.coverage.partial = workspace
         .executions
         .iter()

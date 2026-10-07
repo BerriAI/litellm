@@ -1,14 +1,14 @@
 use litellm_lens::{
     config::http_client,
     control::{Control, JobClient},
-    model, wire,
+    model, pipeline, wire,
     worker::Worker,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use wiremock::{
     Mock, MockServer, Request, ResponseTemplate,
@@ -41,6 +41,115 @@ fn client(server: &MockServer) -> JobClient {
         2,
     )
     .unwrap()
+}
+
+#[rstest]
+#[case::healthy_reads(false, false)]
+#[case::review_read_fails(true, false)]
+#[case::candidate_read_fails(false, true)]
+#[tokio::test]
+async fn failed_reads_remain_retryable_after_storage_recovers(
+    #[case] fail_review: bool,
+    #[case] fail_candidate: bool,
+) {
+    let server = MockServer::start().await;
+    let mut claim: wire::Claim = serde_json::from_value(fixture()).unwrap();
+    let sample: wire::Sample = serde_json::from_str(include_str!("fixtures/sample.json")).unwrap();
+    let execution = sample.executions[0].clone();
+    let unavailable = Arc::new(AtomicBool::new(false));
+    let storage_unavailable = unavailable.clone();
+    Mock::given(method("GET"))
+        .and(path("/lens/worker/lens-test/job-test/content"))
+        .respond_with(move |_: &Request| {
+            if storage_unavailable.load(Ordering::SeqCst) {
+                return ResponseTemplate::new(503);
+            }
+            ResponseTemplate::new(200).set_body_json(json!({
+                "execution": execution,
+                "parts": [{"execution_id": "run-test", "span_id": "span-test", "name": "refund",
+                    "kind": "tool", "content": QUOTE, "truncated": false}],
+            }))
+        })
+        .mount(&server)
+        .await;
+    let reviews = Arc::new(Mutex::new(Vec::<wire::Review>::new()));
+    let recorded_reviews = reviews.clone();
+    Mock::given(method("POST"))
+        .and(path("/lens/worker/lens-test/job-test/progress"))
+        .respond_with(move |request: &Request| {
+            let progress: wire::Progress = request.body_json().unwrap();
+            if let Some(review) = progress.review {
+                recorded_reviews.lock().unwrap().push(review);
+            }
+            ResponseTemplate::new(200).set_body_json(json!({}))
+        })
+        .mount(&server)
+        .await;
+    let outage_enabled = Arc::new(AtomicBool::new(true));
+    let inject_outage = outage_enabled.clone();
+    let fail_content = unavailable.clone();
+    let extraction_calls = AtomicUsize::new(0);
+    let investigation_calls = AtomicUsize::new(0);
+    Mock::given(method("POST"))
+        .and(path("/lens/worker/lens-test/job-test/model"))
+        .respond_with(move |request: &Request| {
+            let model: wire::ModelRequest = request.body_json().unwrap();
+            let content = match model.purpose {
+                wire::ModelRequestPurpose::Extract if extraction_calls.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) => {
+                    fail_content.store(fail_review && inject_outage.load(Ordering::SeqCst), Ordering::SeqCst);
+                    json!({"tools": [{"action": "read", "execution_id": "run-test"}]})
+                }
+                wire::ModelRequestPurpose::Extract if fail_review && inject_outage.load(Ordering::SeqCst) => {
+                    json!({"result": {"observations": []}})
+                }
+                wire::ModelRequestPurpose::Extract => json!({"result": {"observations": [
+                    {"check_id": "refund", "summary": "False refund claim", "evidence": [quote()]},
+                ]}}),
+                wire::ModelRequestPurpose::Cluster => json!({"candidates": [
+                    {"check_id": "refund", "title": "False refund claim", "hypothesis": "Failure hidden", "execution_ids": ["p0"]},
+                ]}),
+                wire::ModelRequestPurpose::Investigate if investigation_calls.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) => {
+                    fail_content.store(fail_candidate && inject_outage.load(Ordering::SeqCst), Ordering::SeqCst);
+                    json!({"tools": [{"action": "read", "execution_id": "run-test"}]})
+                }
+                wire::ModelRequestPurpose::Investigate => json!({"result": {"findings": []}}),
+            };
+            ResponseTemplate::new(200).set_body_json(json!({"content": content.to_string(), "cost": 0}))
+        })
+        .mount(&server)
+        .await;
+    let result = pipeline::analyze(&claim, sample.clone(), client(&server))
+        .await
+        .unwrap();
+    assert!(result.findings.is_empty());
+    if fail_review || fail_candidate {
+        assert!(result.error.contains("run-test"));
+        assert!(result.review_versions.is_empty());
+    } else {
+        assert!(result.error.is_empty());
+        assert_eq!(result.review_versions.len(), 1);
+    }
+    let mut saved = reviews.lock().unwrap()[0].clone();
+    saved.consolidated = result
+        .review_versions
+        .iter()
+        .any(|r| r.execution_id == saved.execution_id);
+    if fail_review {
+        assert!(saved.extraction.is_none());
+        assert!(saved.cannot_assess);
+    }
+    claim.reviews = Some(vec![saved]);
+    unavailable.store(false, Ordering::SeqCst);
+    outage_enabled.store(false, Ordering::SeqCst);
+    let recovered = pipeline::analyze(&claim, sample, client(&server))
+        .await
+        .unwrap();
+    assert!(recovered.error.is_empty());
+    assert_eq!(recovered.review_versions.len(), 1);
+    assert_eq!(
+        recovered.coverage.investigated,
+        i64::from(fail_review || fail_candidate)
+    );
 }
 
 #[rstest]

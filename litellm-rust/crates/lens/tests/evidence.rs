@@ -91,12 +91,12 @@ async fn reads_search_citations_and_python_preserve_original_unicode_across_page
 }
 
 #[rstest]
-#[case(0)]
-#[case(3000)]
-#[case(7999)]
-#[case(8000)]
-#[case(12000)]
-#[case(19999)]
+#[case::first_character(0)]
+#[case::within_first_page(3000)]
+#[case::end_of_first_page(7999)]
+#[case::start_of_second_page(8000)]
+#[case::within_second_page(12000)]
+#[case::last_character(19999)]
 #[tokio::test]
 async fn equal_length_edits_on_every_page_invalidate_reuse(#[case] position: usize) {
     let text = Arc::new(Mutex::new("x".repeat(20000)));

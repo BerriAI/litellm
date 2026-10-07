@@ -3,6 +3,7 @@ import json
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
+from enum import Enum
 from io import BytesIO
 from typing import Final
 
@@ -23,6 +24,11 @@ SHUTDOWN_SECONDS: Final = 3.0
 _PAYLOAD: Final = TypeAdapter(SpendLogPayload)
 
 
+class ExportFailure(Enum):
+    TOO_LARGE = "record exceeds the export budget"
+    INVALID = "record cannot be serialized"
+
+
 def _is_mapping(
     value: object,
 ) -> TypeIs[Mapping[object, object]]:  # guard-ok: bounds arbitrary callback mappings before validation
@@ -35,13 +41,16 @@ def _is_sequence(
     return isinstance(value, (tuple, list))
 
 
-def _check_size(value: object, remaining: int, depth: int = 0) -> int:
+def _check_size(value: object, remaining: int, depth: int = 0) -> int | ExportFailure:
     if remaining <= 0 or depth > 32:
-        raise OverflowError("Trace record exceeds the export budget")
+        return ExportFailure.TOO_LARGE
     if isinstance(value, str):
         if len(value) > remaining:
-            raise OverflowError("Trace record exceeds the export budget")
-        return remaining - len(value.encode())
+            return ExportFailure.TOO_LARGE
+        try:
+            return remaining - len(value.encode())
+        except UnicodeError:
+            return ExportFailure.INVALID
     if _is_mapping(value):
         return _check_sequence(value.items(), remaining, depth)
     if _is_sequence(value):
@@ -49,26 +58,35 @@ def _check_size(value: object, remaining: int, depth: int = 0) -> int:
     return remaining - 32
 
 
-def _check_sequence(values: Iterable[object], remaining: int, depth: int) -> int:
+def _check_sequence(values: Iterable[object], remaining: int, depth: int) -> int | ExportFailure:
     budget = remaining  # rebind-ok: consumes a finite serialization budget
     for value in values:
-        budget = _check_size(value, budget - 8, depth + 1)
+        match _check_size(value, budget - 8, depth + 1):
+            case ExportFailure() as failure:
+                return failure
+            case int() as checked:
+                budget = checked
     if budget < 0:
-        raise OverflowError("Trace record exceeds the export budget")
+        return ExportFailure.TOO_LARGE
     return budget
 
 
-def encode_record(value: Mapping[str, object]) -> bytes:
-    _check_size(value, MAX_EVENT_BYTES)
-    with BytesIO() as output:
-        parts: Final = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":")).iterencode(
-            dict(value)
-        )
-        for encoded in (part.encode() for part in parts):
-            if output.tell() + len(encoded) > MAX_EVENT_BYTES:
-                raise OverflowError("Trace record exceeds the export budget")
-            output.write(encoded)
-        return output.getvalue()
+def encode_record(value: Mapping[str, object]) -> bytes | ExportFailure:
+    checked: Final = _check_size(value, MAX_EVENT_BYTES)
+    if isinstance(checked, ExportFailure):
+        return checked
+    try:
+        with BytesIO() as output:
+            parts: Final = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":")).iterencode(
+                dict(value)
+            )
+            for encoded in (part.encode() for part in parts):
+                if output.tell() + len(encoded) > MAX_EVENT_BYTES:
+                    return ExportFailure.TOO_LARGE
+                output.write(encoded)
+            return output.getvalue()
+    except (ValueError, TypeError, OverflowError, RecursionError):
+        return ExportFailure.INVALID
 
 
 class LensExporter(CustomLogger):
@@ -123,12 +141,21 @@ class LensExporter(CustomLogger):
             self.rows_dropped += 1
             return
         try:
-            _check_size(raw, MAX_EVENT_BYTES)
+            checked: Final = _check_size(raw, MAX_EVENT_BYTES)
+            if isinstance(checked, ExportFailure):
+                self.rows_dropped += 1
+                self._warn(checked.value)
+                return
             payload: Final = _PAYLOAD.validate_python(raw)
             if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
                 return
             row: Final = spend_log_row_from_payload(payload, kwargs)
-            self.enqueue(encode_record(row))
+            record: Final = encode_record(row)
+            if isinstance(record, ExportFailure):
+                self.rows_dropped += 1
+                self._warn(record.value)
+                return
+            self.enqueue(record)
         except ValidationError as error:
             self.rows_dropped += 1
             fields: Final = tuple(
