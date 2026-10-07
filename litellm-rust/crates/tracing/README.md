@@ -40,11 +40,32 @@ configuration = diagnostics.DiagnosticsConfig.from_sources()
 diagnostics.configure(configuration)
 ```
 
-`DiagnosticsConfig.from_sources` accepts a settings mapping and an optional environment mapping. `LITELLM_DIAGNOSTICS` accepts a JSON diagnostics object and replaces the complete settings object. Endpoint, project key, and header values support `os.environ/NAME` references, resolved at the native boundary before exporter startup
+Both gateways accept this block in `config.yaml`:
+
+```yaml
+general_settings:
+  diagnostics:
+    enabled: true
+    service_name: litellm-gateway
+    policy:
+      minimum_level: INFO
+      sample_rate: 0.1
+    destinations:
+      - name: events
+        transport: posthog
+        api_key: os.environ/POSTHOG_PROJECT_KEY
+      - name: logs
+        transport: otlp
+        endpoint: os.environ/OTLP_LOGS_ENDPOINT
+        headers:
+          Authorization: os.environ/OTLP_AUTHORIZATION
+```
+
+`LITELLM_DIAGNOSTICS` accepts a JSON diagnostics object and replaces the complete YAML block. Endpoint, project key, and header values support `os.environ/NAME` references. The Rust gateway resolves its YAML environment variables before process environment values, matching the Python gateway's loaded environment
 
 Policy has `minimum_level` (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`), `target_prefixes`, and finite `sample_rate` between zero and one. A destination may provide a complete policy override. Errors bypass sampling while retaining severity and target admission. Correlated routine logs use a stable trace-ID decision, and uncorrelated records use random per-record sampling. Export sampling leaves existing Python output unchanged
 
-Calling `configure` replaces the complete destination set. Disabled configuration and `shutdown` remove all destinations, making both Python forwarding and native export inactive. The Python SDK returns `False` if the native binding is missing; invalid configuration or an unavailable transport raises an error. Configure exporters in workers after forking. SDK hosts call `diagnostics.shutdown()` explicitly
+Calling `configure` replaces the complete destination set. Disabled configuration and `shutdown` remove all destinations, making both Python forwarding and native export inactive. The Python SDK returns `False` if the native binding is missing; invalid configuration or an unavailable transport raises an error. Gateways initialize in workers after forking and drain their exporters when their lifespan ends. SDK hosts call `diagnostics.shutdown()` explicitly
 
 `LoggerRule(Rollout.RUST_OPT_IN)` remains an internal migration gate for the existing diagnostic processing backend. Export intent comes from diagnostics configuration, independently of that rule. Our owned PyO3 adapter lives in `python-bridge/src/logger/python.rs`; it owns integer severity mapping, context capture, Python callbacks, and process ownership, with JSON argument decoding delegated to `litellm-host-python`. The additive Python handler owns snapshot conversion and native-origin checks. There is no `pyo3-pylogger` dependency or `log` crate hop. Generic `source.target` and `source.timestamp` fields let exporters consume normalized records without Python-specific interpretation
 

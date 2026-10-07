@@ -53,6 +53,7 @@ from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, Valida
 from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
+from litellm import analytics as builtin_analytics
 from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
@@ -992,6 +993,7 @@ except ImportError:
 ###################
 
 server_root_path: Final = get_server_root_path()
+builtin_analytics.prepare_gateway()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 premium_user_data: Optional["EnterpriseLicenseData"] = _license_check.airgapped_license_data
@@ -1295,6 +1297,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         shared_aiohttp_session
     import json
 
+    builtin_analytics.prepare_gateway()
     init_verbose_loggers()
 
     prometheus_multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
@@ -1638,10 +1641,21 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
     tracing_enabled: Final = is_clickhouse_tracing_enabled(tracing_settings)
-    async with manage_tracing(
-        enabled=tracing_enabled,
-        settings=tracing_settings,
-    ) as receiver:
+    from litellm.diagnostics import gateway_lifecycle
+
+    diagnostic_settings: Final = TypeAdapter(Mapping[str, object] | None).validate_python(
+        general_settings.get("diagnostics")
+    )
+    async with (
+        builtin_analytics.gateway_lifecycle(
+            _license_check.license_str is not None or "litellm_license" in general_settings
+        ),
+        gateway_lifecycle(diagnostic_settings),
+        manage_tracing(
+            enabled=tracing_enabled,
+            settings=tracing_settings,
+        ) as receiver,
+    ):
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
@@ -6272,6 +6286,8 @@ class ProxyConfig:
         ## ENVIRONMENT VARIABLES
         global premium_user
         environment_variables: Final = config.get("environment_variables", None)
+        if builtin_analytics.license_declared(config):
+            builtin_analytics.declare_license()
         if environment_variables:
             for key, value in environment_variables.items():
                 if key in self._BLOCKED_ENV_KEYS:
@@ -6985,6 +7001,7 @@ class ProxyConfig:
 
             # check if litellm_license in general_settings
             if "litellm_license" in general_settings:
+                builtin_analytics.declare_license()
                 _license_check.license_str = general_settings["litellm_license"]
                 premium_user = _license_check.is_premium()
 

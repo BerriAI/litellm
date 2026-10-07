@@ -26,6 +26,56 @@ use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
 
+pub fn diagnostics_configuration(
+    config: &Config,
+) -> Result<litellm_tracing::DiagnosticsConfig, Error> {
+    let environment = secrets::environment_values(&config.environment_variables)?;
+    let settings = config
+        .general_settings
+        .additional_fields
+        .get("diagnostics")
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(litellm_tracing::Error::from)?;
+    Ok(litellm_tracing::DiagnosticsConfig::from_sources(
+        settings,
+        |name| {
+            environment
+                .get(name)
+                .map(|value| value.expose().to_owned())
+                .or_else(|| std::env::var(name).ok())
+        },
+    )?)
+}
+
+pub fn analytics_inputs(
+    config: &Config,
+) -> Result<litellm_tracing::analytics::AnalyticsInputs, Error> {
+    analytics_inputs_with(config, |name| std::env::var(name).ok())
+}
+
+fn analytics_inputs_with(
+    config: &Config,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<litellm_tracing::analytics::AnalyticsInputs, Error> {
+    let environment = secrets::environment_values(&config.environment_variables)?;
+    Ok(litellm_tracing::analytics::AnalyticsInputs::from_sources(
+        |name| match environment.get(name) {
+            Some(value) => value
+                .expose()
+                .strip_prefix("os.environ/")
+                .map(|reference| lookup(reference).unwrap_or_else(|| "unresolved".into()))
+                .or_else(|| Some(value.expose().to_owned())),
+            None => lookup(name),
+        },
+        config.environment_variables.contains_key("LITELLM_LICENSE")
+            || config
+                .general_settings
+                .additional_fields
+                .contains_key("litellm_license"),
+    ))
+}
+
 pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let environment = secrets::environment_values(&config.environment_variables)?;
@@ -251,5 +301,54 @@ mod tests {
                 .iter()
                 .all(|record| &record["fields"]["request_id"] == request_id)
         );
+    }
+}
+
+#[cfg(test)]
+mod analytics_tests {
+    use super::{Config, analytics_inputs_with};
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::oss("", true)]
+    #[case::yaml_empty_license("environment_variables: {LITELLM_LICENSE: ''}", false)]
+    #[case::yaml_invalid_license("environment_variables: {LITELLM_LICENSE: invalid}", false)]
+    #[case::yaml_secret_license(
+        "environment_variables: {LITELLM_LICENSE: os.environ/MISSING}",
+        false
+    )]
+    #[case::general_license("general_settings: {litellm_license: null}", false)]
+    #[case::yaml_dnt_wins(
+        "environment_variables: {DO_NOT_TRACK: 1, LITELLM_TELEMETRY: true}",
+        false
+    )]
+    #[case::enterprise_opt_in(
+        "environment_variables: {LITELLM_LICENSE: invalid, LITELLM_TELEMETRY: true}",
+        true
+    )]
+    fn analytics_defaults_use_license_declarations_after_yaml_overlay(
+        #[case] yaml: &str,
+        #[case] enabled: bool,
+    ) {
+        let config = Config::from_yaml(yaml).unwrap();
+        let inputs = analytics_inputs_with(&config, |_| None).unwrap();
+        assert_eq!(inputs.decision().enabled, enabled);
+    }
+
+    #[rstest]
+    fn yaml_analytics_controls_override_environment_and_resolve_references_once() {
+        let config = Config::from_yaml(
+            "environment_variables: {DO_NOT_TRACK: os.environ/OPT_OUT, LITELLM_TELEMETRY: false}",
+        )
+        .unwrap();
+        let inputs = analytics_inputs_with(&config, |name| match name {
+            "OPT_OUT" => Some("1".into()),
+            "LITELLM_TELEMETRY" => Some("true".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(inputs.do_not_track.as_deref(), Some("1"));
+        assert_eq!(inputs.explicit.as_deref(), Some("false"));
+        assert!(!inputs.decision().enabled);
     }
 }
