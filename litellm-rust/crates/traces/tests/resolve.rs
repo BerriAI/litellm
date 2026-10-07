@@ -1,5 +1,5 @@
 use litellm_traces::{
-    AgentNode, SpanStatus, SpendMatch, iso_time, listed_summary,
+    AgentNode, RunSourceType, SpanStatus, SpendMatch, iso_time, listed_summary,
     query::named::{ListTracesRow, SpendByResponseIdsRow, TraceSpansRow},
     resolve_trace,
 };
@@ -33,6 +33,7 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         call_keys: Vec::new(),
         call_evidence: None,
         tool_call_id: String::new(),
+        source_type: String::new(),
         source_url: String::new(),
         source_title: String::new(),
         team_id: "team".into(),
@@ -211,6 +212,19 @@ fn summary_source_links_where_the_run_started(
             .map(|source| (source.url.as_str(), source.title.as_str())),
         expected
     );
+}
+
+#[rstest]
+#[case::slack("slack", RunSourceType::Slack)]
+#[case::teams("teams", RunSourceType::Teams)]
+#[case::custom("custom", RunSourceType::Custom)]
+#[case::unknown_is_custom("my-bot", RunSourceType::Custom)]
+#[case::missing_is_custom("", RunSourceType::Custom)]
+fn summary_source_type_picks_the_app(#[case] source_type: &str, #[case] expected: RunSourceType) {
+    let mut root = sourced(row("root", "", "agent", "agent", "agent"), THREAD, "t");
+    root.source_type = source_type.into();
+    let source = resolve_trace("t", "", &[root], &[]).unwrap().summary.source;
+    assert_eq!(source.map(|source| source.kind), Some(expected));
 }
 
 #[rstest]
