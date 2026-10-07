@@ -246,8 +246,9 @@ class AutoRouterBaselineCache(CustomLogger):
         if isinstance(plan, UnsupportedCachePlan):
             return None, plan.reason
         details: Final = usage.prompt_tokens_details if usage is not None else None
+        selected: Final = parse_cache_plan(_JSON_BODY.validate_json(wire.content))
         if (
-            not plan.breakpoints
+            (isinstance(selected, UnsupportedCachePlan) or not selected.breakpoints)
             and details is not None
             and ((details.cached_tokens or 0) + (details.cache_creation_tokens or 0))
         ):

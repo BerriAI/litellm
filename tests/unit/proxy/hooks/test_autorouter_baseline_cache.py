@@ -1008,3 +1008,91 @@ async def test_native_baseline_abstains_after_selected_tier_compaction(monkeypat
     assert "compacted" in wire and "Background detail" not in wire
     assert observed.reason == "unsupported_request_transformation" and observed.plan is None
     assert observed.usage is not None
+
+
+async def test_selected_tier_cache_markers_do_not_hide_an_unmarked_baseline_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    models: Final = _MESSAGES.validate_python(
+        [
+            _MODELS[0],
+            {
+                "model_name": "sonnet",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5",
+                    "api_key": "test-selected",
+                    "cache_control_injection_points": [{"location": "message", "role": "user", "index": -1}],
+                },
+                "model_info": {"id": "selected"},
+            },
+            _MODELS[2],
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models)
+    with _transport(_upstream) as route:
+        await _call(
+            rig.router,
+            rig.logging(),
+            messages='[{"role":"user","content":[{"type":"text","text":"stable"},{"type":"text","text":"question"}]}]',
+        )
+        observed: Final = _observation(await rig.capture.payload()).observation
+        wire: Final = route.calls.last.request.content.decode()
+    assert "cache_control" in wire
+    assert observed.outcome == "complete" and not observed.baseline_equivalent
+    assert observed.reason is None and observed.plan is not None and not observed.plan.breakpoints
+
+
+@pytest.mark.parametrize("recovery", ("retry", "fallback"))
+async def test_tier_pins_never_enter_the_caller_snapshot_on_later_routing_passes(
+    monkeypatch: pytest.MonkeyPatch, recovery: str
+) -> None:
+    pinned: Final = {"model_name": "first", "litellm_params": {"reasoning_effort": "high", "max_tokens": 777}}
+    models: Final = _MESSAGES.validate_python(
+        [
+            {
+                "model_name": "test-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": pinned, "MEDIUM": pinned, "COMPLEX": pinned, "REASONING": "opus"},
+                        "session_affinity": False,
+                    },
+                },
+            },
+            {
+                "model_name": "fallback-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {"SIMPLE": "sonnet", "MEDIUM": "sonnet", "COMPLEX": "sonnet", "REASONING": "opus"},
+                        "session_affinity": False,
+                    },
+                },
+            },
+            {
+                "model_name": "first",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5" if recovery == "retry" else "anthropic/claude-haiku-5",
+                    "api_key": "test-selected",
+                },
+                "model_info": {"id": "first"},
+            },
+            *_MODELS[1:],
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models, retries=1 if recovery == "retry" else 0)
+    rig.router.fallbacks = [{"test-router": ["fallback-router"]}]
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        return _upstream(request) if route.call_count else _error(request, 429, "first attempt")
+
+    log: Final = rig.logging()
+    with _transport(upstream) as route:
+        await _call(rig.router, log)
+        await rig.capture.payload()
+        first_wire: Final = _JSON_OBJECT.validate_json(route.calls[0].request.content)
+    assert first_wire.get("output_config") == {"effort": "high"} and first_wire.get("max_tokens") == 777
+    context: Final = log.baseline_cache_context
+    assert context is not None and context.baseline_body is not None
+    assert context.baseline_body.get("max_tokens") == 16
+    assert "output_config" not in context.baseline_body and "thinking" not in context.baseline_body
