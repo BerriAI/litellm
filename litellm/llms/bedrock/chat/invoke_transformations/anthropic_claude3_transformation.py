@@ -19,10 +19,13 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
     bedrock_supports_tool_search,
+    extract_model_name_from_bedrock_arn,
     get_anthropic_beta_from_headers,
+    is_bedrock_application_inference_profile_arn,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    strip_bedrock_routing_prefix,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
 )
@@ -41,6 +44,24 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def _get_bedrock_claude_response_model(
+    route_model: str,
+    requested_model_id: str | None,
+    provider_response_model: object,
+) -> str:
+    if requested_model_id is not None and is_bedrock_application_inference_profile_arn(requested_model_id):
+        if isinstance(provider_response_model, str):
+            return (
+                provider_response_model
+                if provider_response_model.startswith("anthropic.")
+                else f"anthropic.{provider_response_model}"
+            )
+        return strip_bedrock_routing_prefix(route_model)
+    if requested_model_id is not None:
+        return extract_model_name_from_bedrock_arn(requested_model_id)
+    return strip_bedrock_routing_prefix(route_model)
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -378,7 +399,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        return AnthropicConfig.transform_response(
+        transformed: Final = AnthropicConfig.transform_response(
             self,
             model=model,
             raw_response=raw_response,
@@ -392,3 +413,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+        requested_model_id_param: Final = litellm_params.get("bedrock_invoke_model_id")
+        requested_model_id: Final[str | None] = (
+            requested_model_id_param if isinstance(requested_model_id_param, str) else None
+        )
+        response_model: Final = _get_bedrock_claude_response_model(
+            route_model=model,
+            requested_model_id=requested_model_id,
+            provider_response_model=transformed.model,
+        )
+        transformed.model = strip_bedrock_routing_prefix(response_model)
+        resolved_region: Final = litellm_params.get("aws_region_name")
+        if isinstance(resolved_region, str):
+            transformed._hidden_params["region_name"] = resolved_region
+        return transformed

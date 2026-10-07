@@ -119,11 +119,22 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         Get the complete url for the request
         """
         provider: Final = self.get_bedrock_invoke_provider(model)
+        model_id_param: Final = optional_params.get("model_id")
+        unencoded_model_id: Final[str | None] = model_id_param if isinstance(model_id_param, str) else None
         modelId: Final = self.get_bedrock_model_id(
             model=model,
             provider=provider,
             optional_params=optional_params,
         )
+        aws_region_name: Final = self._get_aws_region_name(
+            optional_params=optional_params,
+            model=model,
+            model_id=unencoded_model_id,
+        )
+        optional_params["aws_region_name"] = aws_region_name
+        litellm_params["aws_region_name"] = aws_region_name
+        if unencoded_model_id is not None:
+            litellm_params["bedrock_invoke_model_id"] = unencoded_model_id
         ### SET RUNTIME ENDPOINT ###
         aws_bedrock_runtime_endpoint: Final = optional_params.get(
             "aws_bedrock_runtime_endpoint", None
@@ -131,7 +142,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
-            aws_region_name=self._get_aws_region_name(optional_params=optional_params, model=model),
+            aws_region_name=aws_region_name,
         )
 
         if (stream is not None and stream is True) and provider != "ai21":

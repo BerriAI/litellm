@@ -5095,6 +5095,39 @@ def test_transform_parsed_response_reverse_maps_tool_names():
     assert _json.loads(tcs[0].function.arguments) == {"job_id": 123}
 
 
+def test_transform_parsed_response_keeps_hidden_params_set_before_the_call():
+    """main.py writes region_name / custom_llm_provider onto the response before the
+    provider call, for region-based pricing. Rebuilding _hidden_params dropped them (#44002)."""
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+    raw_response = MagicMock()
+    raw_response.headers = {}
+    raw_response.status_code = 200
+    completion_response = {
+        "id": "msg_1",
+        "model": "claude-opus-5",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+        "content": [{"type": "text", "text": "hello there"}],
+    }
+    model_response = ModelResponse()
+    model_response._hidden_params["region_name"] = "us-gov-west-1"
+    model_response._hidden_params["custom_llm_provider"] = "bedrock"
+
+    out = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+    )
+
+    assert out._hidden_params["region_name"] == "us-gov-west-1"
+    assert out._hidden_params["custom_llm_provider"] == "bedrock"
+    assert out._hidden_params["original_response"] == completion_response["content"]
+    assert "additional_headers" in out._hidden_params
+    assert "provider_specific_fields" in out._hidden_params
+
+
 def test_transform_parsed_response_does_not_rewrite_unmapped_names():
     """CRITICAL: a tool legitimately named `foo_bar` must NOT be rewritten
     to `foo/bar` just because some other request had that pair. The reverse

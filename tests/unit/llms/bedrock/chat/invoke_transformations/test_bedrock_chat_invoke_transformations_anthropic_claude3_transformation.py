@@ -15,7 +15,7 @@ import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -1136,3 +1136,171 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
     assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+
+
+_INVOKE_CLAUDE_BODY: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-5",
+    "content": [{"type": "text", "text": "hello there"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 10, "output_tokens": 20},
+}
+_CONVERSE_BODY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "hello there"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 10, "outputTokens": 20, "totalTokens": 30},
+    "metrics": {"latencyMs": 1},
+}
+
+
+class _FakeBedrockHTTPHandler(HTTPHandler):
+    def post(self, url: str, *args: object, **kwargs: object) -> httpx.Response:
+        body = _CONVERSE_BODY if url.endswith("/converse") else _INVOKE_CLAUDE_BODY
+        return httpx.Response(
+            200,
+            json=body,
+            headers={"content-type": "application/json"},
+            request=httpx.Request("POST", url),
+        )
+
+
+def _complete_bedrock_claude(
+    model: str,
+    aws_region_name: str | None = None,
+    model_id: str | None = None,
+) -> litellm.ModelResponse:
+    return litellm.completion(
+        model=model,
+        model_id=model_id,
+        aws_region_name=aws_region_name,
+        messages=[{"role": "user", "content": "hi"}],
+        client=_FakeBedrockHTTPHandler(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("aws_region_name", "bedrock_model", "cost_key"),
+    [
+        ("us-gov-west-1", "anthropic.claude-opus-5", "bedrock/us-gov-west-1/anthropic.claude-opus-5"),
+        ("us-west-2", "anthropic.claude-opus-5", None),
+        ("us-west-2", "us.anthropic.claude-opus-5", "us.anthropic.claude-opus-5"),
+        ("us-west-2", "global.anthropic.claude-opus-5", "global.anthropic.claude-opus-5"),
+        ("ap-northeast-2", "apac.anthropic.claude-opus-5", "apac.anthropic.claude-opus-5"),
+    ],
+)
+def test_invoke_claude_prices_like_converse_for_the_same_region_and_model(
+    local_model_cost_map: object,
+    monkeypatch: pytest.MonkeyPatch,
+    aws_region_name: str,
+    bedrock_model: str,
+    cost_key: str | None,
+):
+    """Invoke Claude used to drop region_name and report the Anthropic body model, so a
+    GovCloud call was priced at the commercial rate while Converse got the GovCloud key
+    (#44002). Cross-region profiles (us., apac.) must keep their own rate too."""
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    invoke: Final = _complete_bedrock_claude(f"bedrock/invoke/{bedrock_model}", aws_region_name)
+    converse: Final = _complete_bedrock_claude(f"bedrock/converse/{bedrock_model}", aws_region_name)
+
+    for response in (invoke, converse):
+        assert response._hidden_params["region_name"] == aws_region_name
+        assert response._hidden_params["custom_llm_provider"] == "bedrock"
+        assert response.model == bedrock_model
+    assert invoke._hidden_params["response_cost"] == pytest.approx(converse._hidden_params["response_cost"])
+    if cost_key is not None:
+        prices: Final = litellm.model_cost[cost_key]
+        expected_cost: Final = 10 * prices["input_cost_per_token"] + 20 * prices["output_cost_per_token"]
+        assert invoke._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_invoke_claude_uses_model_id_override_for_response_and_cost(
+    local_model_cost_map: object,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    model_id: Final = "us.anthropic.claude-opus-5"
+    prices: Final = litellm.model_cost[model_id]
+    expected_cost: Final = 10 * prices["input_cost_per_token"] + 20 * prices["output_cost_per_token"]
+
+    response: Final = _complete_bedrock_claude(
+        "bedrock/invoke/anthropic.claude-opus-5",
+        aws_region_name="us-west-2",
+        model_id=model_id,
+    )
+
+    assert response.model == model_id
+    assert response._hidden_params["region_name"] == "us-west-2"
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
+    ("environment_region", "model_id", "expected_region"),
+    [
+        ("us-gov-west-1", None, "us-gov-west-1"),
+        (
+            None,
+            "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/abc123",
+            "us-gov-west-1",
+        ),
+    ],
+)
+def test_invoke_claude_keeps_resolved_region(
+    local_model_cost_map: object,
+    monkeypatch: pytest.MonkeyPatch,
+    environment_region: str | None,
+    model_id: str | None,
+    expected_region: str,
+):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    if environment_region is None:
+        monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    else:
+        monkeypatch.setenv("AWS_REGION_NAME", environment_region)
+    cost_key: Final = f"bedrock/{expected_region}/anthropic.claude-opus-5"
+    prices: Final = litellm.model_cost[cost_key]
+    expected_cost: Final = 10 * prices["input_cost_per_token"] + 20 * prices["output_cost_per_token"]
+
+    response: Final = _complete_bedrock_claude(
+        "bedrock/invoke/anthropic.claude-opus-5",
+        model_id=model_id,
+    )
+
+    assert response.model == "anthropic.claude-opus-5"
+    assert response._hidden_params["region_name"] == expected_region
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_invoke_claude_application_profile_uses_provider_response_model_for_cost(
+    local_model_cost_map: object,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    model_id: Final = "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/opus-profile"
+    cost_key: Final = "bedrock/us-gov-west-1/anthropic.claude-opus-5"
+    prices: Final = litellm.model_cost[cost_key]
+    expected_cost: Final = 10 * prices["input_cost_per_token"] + 20 * prices["output_cost_per_token"]
+
+    response: Final = _complete_bedrock_claude(
+        "bedrock/invoke/anthropic.claude-haiku-4-5",
+        model_id=model_id,
+    )
+
+    assert response.model == "anthropic.claude-opus-5"
+    assert response._hidden_params["region_name"] == "us-gov-west-1"
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
