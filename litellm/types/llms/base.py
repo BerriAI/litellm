@@ -91,9 +91,8 @@ class HiddenParams(OpenAIObject):
     def model_dump(self, **kwargs):
         # Override model_dump to include private attributes
         data: Final = super().model_dump(**kwargs)
-        if kwargs.get("exclude_unset"):
-            return data
-        return {**data, "_response_ms": self._response_ms}
+        data["_response_ms"] = self._response_ms
+        return data
 
 
 class CachedTokensDetails(LiteLLMBaseModel):

@@ -170,7 +170,7 @@ def test_hidden_params_model_view_excludes_unset_fields() -> None:
     assert "response_cost" not in view
     assert "_response_ms" not in view
     assert view.get("model_id", "d") == "d"
-    assert "_response_ms" not in storage.model_dump(exclude_unset=True)
+    assert "_response_ms" not in storage.model_fields_set
 
     with pytest.raises(KeyError, match="response_cost"):
         del view["response_cost"]
@@ -181,6 +181,8 @@ def test_hidden_params_model_view_excludes_unset_fields() -> None:
     assert "model_id" in view
     assert "extra" in view
     assert set(view) == {"model_id", "extra"}
+    assert "model_id" in storage.model_fields_set
+    assert "extra" in (storage.model_extra or {})
     assert storage.model_id == "m"
     assert storage.extra == 1
 
@@ -192,6 +194,12 @@ def test_hidden_params_model_view_excludes_unset_fields() -> None:
 
     assert merged_after_fallback == {"model_id": "m1"}
     assert merged_before_fallback == {"model_id": "m1"}
+
+
+def test_hidden_params_model_dump_includes_response_ms_when_excluding_unset() -> None:
+    storage: Final = HiddenParams(response_cost=1.0)
+
+    assert "_response_ms" in storage.model_dump(exclude_unset=True)
 
 
 def test_openai_text_completion_conversion_preserves_hidden_params_storage() -> None:
