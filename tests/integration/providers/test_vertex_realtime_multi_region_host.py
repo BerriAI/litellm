@@ -16,6 +16,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from hashlib import sha256
+from itertools import chain, repeat
 from pathlib import Path
 from typing import Final
 
@@ -386,7 +387,7 @@ def test_concurrent_sessions_across_locations_each_reach_the_upstream_once(gatew
             )
             for location in LOCATIONS
         }
-        order: Final = tuple(location for location in LOCATIONS for _ in range(SESSIONS_PER_LOCATION))
+        order: Final = tuple(chain.from_iterable(repeat(location, SESSIONS_PER_LOCATION) for location in LOCATIONS))
         sessions: Final = asyncio.run(
             _burst(_ws_base(_proxy_url(gateway)), tuple(models[location] for location in order), key)
         )
