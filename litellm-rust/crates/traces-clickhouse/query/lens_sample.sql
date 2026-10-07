@@ -46,8 +46,8 @@ SELECT *, selection_key FROM (
     WHERE {source:String} IN ('requests','both')
       AND ({all_teams:UInt8}=1 OR team_id={team:String})
       AND ({key_hash:String}='' OR api_key={key_hash:String})
-      AND start_time >= fromUnixTimestamp64Milli(toInt64({start:UInt64})) - INTERVAL 7 DAY
-      AND start_time < fromUnixTimestamp64Milli(toInt64({end:UInt64}))
+      AND spend_logs.start_time >= fromUnixTimestamp64Milli(toInt64({start:UInt64})) - INTERVAL 7 DAY
+      AND spend_logs.start_time < fromUnixTimestamp64Milli(toInt64({end:UInt64}))
       AND if(EngineReceivedMs>0,toInt64(EngineReceivedMs),toUnixTimestamp64Milli(end_time)) >= {start:UInt64}
       AND EngineReceivedMs < {end:UInt64}
       AND toUnixTimestamp64Milli(end_time) < {end:UInt64}
