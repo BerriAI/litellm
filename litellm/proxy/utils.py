@@ -1487,6 +1487,7 @@ _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRai
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
+_PROXY_ONLY_ERROR_LOGGED_METADATA_FIELDS: Final = frozenset({"tags", "standard_logging_guardrail_information"})
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
@@ -1521,8 +1522,53 @@ def _provider_billed_the_failure(exception: Exception) -> bool:
     return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
 
 
-def _proxy_only_error_log_fields(request_data: Mapping[str, _T]) -> Mapping[str, _T]:
-    return MappingProxyType({k: v for k, v in request_data.items() if k in _PROXY_ONLY_ERROR_LOGGED_FIELDS})
+def _as_str_mapping(value: object) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        return MappingProxyType({})
+    return cast(  # cast-ok: the runtime Mapping check validates the container shape
+        Mapping[str, object], value
+    )
+
+
+def _is_logged_metadata_value(key: str, value: object, *, include_guardrail_information: bool) -> bool:
+    if key == "tags":
+        return isinstance(value, list) and all(isinstance(item, str) for item in value)
+    return key != "standard_logging_guardrail_information" or include_guardrail_information
+
+
+def _proxy_only_error_log_metadata(
+    value: object, *, include_guardrail_information: bool
+) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    metadata: Final = _as_str_mapping(value)
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key in _PROXY_ONLY_ERROR_LOGGED_METADATA_FIELDS
+        and _is_logged_metadata_value(key, value, include_guardrail_information=include_guardrail_information)
+    }
+
+
+def _proxy_only_error_log_fields(
+    request_data: Mapping[str, object], *, include_guardrail_information: bool
+) -> Mapping[str, object]:
+    metadata_fields: Final = {
+        key: filtered_metadata
+        for key in ("metadata", "litellm_metadata")
+        if (
+            filtered_metadata := _proxy_only_error_log_metadata(
+                request_data.get(key), include_guardrail_information=include_guardrail_information
+            )
+        )
+        is not None
+    }
+    return MappingProxyType(
+        {
+            **{key: value for key, value in request_data.items() if key in _PROXY_ONLY_ERROR_LOGGED_FIELDS},
+            **metadata_fields,
+        }
+    )
 
 
 def _failure_fields_to_lift(
@@ -3887,19 +3933,22 @@ class ProxyLogging:
         """
         litellm_logging_obj: Logging | None = request_data.get("litellm_logging_obj", None)
         set_up_by_request: Final = litellm_logging_obj is not None
+        include_guardrail_information: Final = litellm_logging_obj is not None
+        user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+            user_api_key_dict=user_api_key_dict
+        )
         if litellm_logging_obj is None:
             from litellm._uuid import uuid
 
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
-            user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-                user_api_key_dict=user_api_key_dict
-            )
 
             litellm_logging_obj, data = litellm.utils.function_setup(
                 original_function=route or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
-                **_proxy_only_error_log_fields(request_data),
+                **_proxy_only_error_log_fields(
+                    request_data, include_guardrail_information=include_guardrail_information
+                ),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
@@ -3913,14 +3962,34 @@ class ProxyLogging:
             _litellm_params: Final = {}
 
             litellm_param_keys: Final = LoggedLiteLLMParams.__annotations__.keys()
-            for k, v in _proxy_only_error_log_fields(request_data).items():
+            for k, v in _proxy_only_error_log_fields(
+                request_data, include_guardrail_information=include_guardrail_information
+            ).items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
                 elif k not in ("model", "user", "litellm_logging_obj"):
                     _optional_params[k] = v
 
+            existing: Final = _as_str_mapping(litellm_logging_obj.litellm_params)
+            litellm_params: Final = {
+                **_litellm_params,
+                "metadata": {
+                    **_as_str_mapping(existing.get("metadata")),
+                    **_as_str_mapping(_litellm_params.get("metadata")),
+                    **user_api_key_logged_metadata,
+                },
+                **{
+                    key: {
+                        **_as_str_mapping(existing.get(key)),
+                        **_as_str_mapping(value),
+                    }
+                    for key, value in _litellm_params.items()
+                    if key == "litellm_metadata"
+                },
+            }
+
             attribution: Final = _stamp_deployment_attribution(
-                _litellm_params,
+                litellm_params,
                 request_data.get("model"),
                 user_api_key_dict.team_id,
                 dispatched=_reached_deployment(litellm_logging_obj),
@@ -3930,7 +3999,7 @@ class ProxyLogging:
                 model=request_data.get("model", ""),
                 user=request_data.get("user", ""),
                 optional_params=_optional_params,
-                litellm_params=_litellm_params,
+                litellm_params=litellm_params,
                 **(
                     {"custom_llm_provider": attribution["custom_llm_provider"]}
                     if "custom_llm_provider" in attribution

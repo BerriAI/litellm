@@ -574,9 +574,8 @@ async def test_post_call_failure_hook_omits_provider_when_a_deployment_does_not_
 async def test_handle_logging_proxy_only_path_attributes_with_read_only_metadata(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
-    """With a logging object already on the request, a read-only metadata mapping
-    must not crash the stamp, the failure handler still receives the provider
-    attribution, and the request's metadata is not copied into the update."""
+    """With a logging object already on the request, allowlisted metadata is kept,
+    a read-only mapping must not crash the stamp, and the failure handler receives provider attribution."""
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(
@@ -595,16 +594,26 @@ async def test_handle_logging_proxy_only_path_attributes_with_read_only_metadata
     logging_obj = MagicMock()
     logging_obj.call_type = "acompletion"
     logging_obj.model_call_details = {}
+    logging_obj.litellm_params = {"metadata": {"preexisting": "logged"}}
     logging_obj.async_failure_handler = AsyncMock()
+    guardrail_info: Final = [
+        {
+            "guardrail_name": "local-block",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_cost": 0.25,
+        }
+    ]
 
     await proxy_logging._handle_logging_proxy_only_error(
         request_data={
             "litellm_logging_obj": logging_obj,
             "model": "internal-model",
             "messages": [{"role": "user", "content": "hi"}],
-            "metadata": MappingProxyType({"user_api_key_alias": "frozen"}),
+            "metadata": MappingProxyType(
+                {"tags": ["checkout"], "standard_logging_guardrail_information": guardrail_info}
+            ),
         },
-        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions", key_alias="frozen"),
         route="/chat/completions",
         original_exception=HTTPException(status_code=403, detail="blocked"),
     )
@@ -613,7 +622,11 @@ async def test_handle_logging_proxy_only_path_attributes_with_read_only_metadata
     update_kwargs = logging_obj.update_environment_variables.call_args.kwargs
     assert update_kwargs["custom_llm_provider"] == "openai"
     assert update_kwargs["litellm_params"]["custom_llm_provider"] == "openai"
-    assert "user_api_key_alias" not in update_kwargs["litellm_params"]["metadata"]
+    assert {
+        key: update_kwargs["litellm_params"]["metadata"][key] for key in ("preexisting", "user_api_key_alias")
+    } == {"preexisting": "logged", "user_api_key_alias": "frozen"}
+    assert update_kwargs["litellm_params"]["metadata"]["tags"] == ["checkout"]
+    assert update_kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"] == guardrail_info
 
 
 @pytest.mark.asyncio
