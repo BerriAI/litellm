@@ -192,6 +192,33 @@ def get_str_from_messages(messages: list[AllMessageValues]) -> str:
     return text
 
 
+def get_semantic_cache_prompt_from_messages(messages: Sequence[Mapping[str, object]]) -> str:
+    """
+    The text a semantic cache embeds for a request: `get_str_from_messages` plus the text inside
+    Messages API `tool_result` blocks, so a tool turn does not embed identically to the turn before it
+    """
+    return "".join(
+        _semantic_cache_content_text(message.get("content"))
+        + extract_search_results_text(message.get("search_results"))
+        for message in messages
+    )
+
+
+def _semantic_cache_content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "".join(_semantic_cache_block_text(block) for block in content if isinstance(block, Mapping))
+
+
+def _semantic_cache_block_text(block: Mapping[str, object]) -> str:
+    if block.get("type") == "tool_result":
+        return _semantic_cache_content_text(block.get("content"))
+    text: Final = block.get("text")
+    return text if isinstance(text, str) else ""
+
+
 def is_non_content_values_set(message: AllMessageValues) -> bool:
     ignore_keys: Final = ["content", "role", "name"]
     return any(message.get(key, None) is not None for key in message if key not in ignore_keys)

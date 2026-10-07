@@ -62,7 +62,7 @@ class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
         returned_response.model = "snowflake/" + (returned_response.model or "")
 
         if model is not None:
-            returned_response._hidden_params["model"] = model
+            returned_response.hidden_params["model"] = model
         return returned_response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

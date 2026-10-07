@@ -69,13 +69,13 @@ class GcsPubSubLogger(CustomBatchLogger):
         (
             _auth_header,
             vertex_project,
-        ) = await vertex_chat_completion._ensure_access_token_async(
+        ) = await vertex_chat_completion.ensure_access_token_async(
             credentials=self.path_service_account_json,
             project_id=self.project_id,
             custom_llm_provider="vertex_ai",
         )
 
-        auth_header, _ = vertex_chat_completion._get_token_and_url(
+        auth_header, _ = vertex_chat_completion.get_token_and_url(
             model="pub-sub",
             auth_header=_auth_header,
             vertex_credentials=self.path_service_account_json,

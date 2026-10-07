@@ -30,12 +30,15 @@ _UPSTREAM_PUMP_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdl
 _DETACHED_STREAM_DRAINS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: bounded strong-ref set, detached drains
 
 
-def _is_message_stop_chunk(chunk: object) -> bool:
+def is_message_stop_chunk(chunk: object) -> bool:
     if isinstance(chunk, dict):
         return chunk.get("type") == "message_stop"
     if isinstance(chunk, (bytes, bytearray)):
         return any(line == b"event: message_stop" for line in chunk.splitlines())
     return False
+
+
+_is_message_stop_chunk = is_message_stop_chunk
 
 
 def is_anthropic_ping_chunk(chunk: object) -> bool:
@@ -133,8 +136,11 @@ def _anthropic_error_body(chunk: object) -> Mapping[str, object] | None:
     return error_body if isinstance(error_body, dict) else None
 
 
-def _is_provider_error_chunk(chunk: object) -> bool:
+def is_provider_error_chunk(chunk: object) -> bool:
     return _anthropic_error_body(chunk) is not None
+
+
+_is_provider_error_chunk = is_provider_error_chunk
 
 
 def parse_anthropic_error_event(chunk: object) -> tuple[str, str, int] | None:
@@ -161,7 +167,7 @@ def parse_anthropic_error_event(chunk: object) -> tuple[str, str, int] | None:
 
 
 def _is_terminal_stream_chunk(chunk: object) -> bool:
-    return _is_message_stop_chunk(chunk) or _is_provider_error_chunk(chunk)
+    return is_message_stop_chunk(chunk) or is_provider_error_chunk(chunk)
 
 
 def _try_claim_detached_drain_slot() -> bool:
@@ -363,6 +369,14 @@ class AnthropicMessagesStreamingResponse:
         hidden_params: AnthropicMessagesStreamHiddenParams,
     ) -> None:
         self.completion_stream = completion_stream
+        self._hidden_params = hidden_params
+
+    @property
+    def hidden_params(self) -> AnthropicMessagesStreamHiddenParams:
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: AnthropicMessagesStreamHiddenParams) -> None:
         self._hidden_params = hidden_params
 
     @property
