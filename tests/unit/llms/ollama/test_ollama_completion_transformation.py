@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import sys
+from typing import Final
 from litellm._uuid import uuid
 from unittest.mock import MagicMock, patch
 
@@ -62,6 +63,41 @@ class TestOllamaConfig:
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["total_tokens"] == 15
+
+    def test_transform_response_reports_cached_tokens_ollama_sent(self):
+        config: Final = OllamaConfig()
+
+        raw_response: Final = MagicMock()
+        raw_response.json.return_value = {
+            "response": "Hello",
+            "prompt_eval_count": 6024,
+            "prompt_eval_cached_count": 6016,
+            "eval_count": 5,
+        }
+
+        model_response: Final = ModelResponse(
+            id="test_id",
+            choices=[{"message": Message(content="")}],
+        )
+
+        mock_encoding: Final = MagicMock()
+        mock_encoding.encode.return_value = [1, 2, 3]
+
+        result: Final = config.transform_response(
+            model="llama2",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=mock_encoding,
+        )
+
+        assert result["usage"]["prompt_tokens"] == 6024
+        assert result.usage.prompt_tokens_details is not None
+        assert result.usage.prompt_tokens_details.cached_tokens == 6016
 
     @patch("uuid.uuid4")
     def test_transform_response_json_function_call(self, mock_uuid4):
@@ -664,6 +700,26 @@ class TestOllamaTextCompletionResponseIterator:
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["total_tokens"] == 15
+
+    def test_chunk_parser_done_chunk_reports_cached_tokens(self):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        done_chunk: Final = {
+            "model": "llama2",
+            "created_at": "2025-08-06T14:34:31.5276077Z",
+            "response": "",
+            "done": True,
+            "prompt_eval_count": 6024,
+            "prompt_eval_cached_count": 6016,
+            "eval_count": 5,
+        }
+
+        result: Final = iterator.chunk_parser(done_chunk)
+
+        assert result["usage"] is not None
+        assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 6016
 
 
 async def test_ollama_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):

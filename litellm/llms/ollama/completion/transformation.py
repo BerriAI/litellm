@@ -374,6 +374,7 @@ class OllamaConfig(BaseConfig):
         completion_tokens: Final = response_json.get(
             "eval_count", len((response_json.get("message") or {}).get("content", ""))
         )
+        cached_tokens: Final = response_json.get("prompt_eval_cached_count", 0)
         setattr(
             model_response,
             "usage",
@@ -381,6 +382,7 @@ class OllamaConfig(BaseConfig):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
+                prompt_tokens_details={"cached_tokens": cached_tokens},
             ),
         )
         return model_response
@@ -533,10 +535,12 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
 
                 usage: ChatCompletionUsageBlock | None = None
                 if prompt_eval_count is not None and eval_count is not None:
+                    cached_tokens: Final = chunk.get("prompt_eval_cached_count", 0)
                     usage = ChatCompletionUsageBlock(
                         prompt_tokens=prompt_eval_count,
                         completion_tokens=eval_count,
                         total_tokens=prompt_eval_count + eval_count,
+                        prompt_tokens_details={"cached_tokens": cached_tokens},
                     )
                 return GenericStreamingChunk(
                     text=text,
