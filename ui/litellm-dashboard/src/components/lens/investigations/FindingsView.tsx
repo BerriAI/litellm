@@ -9,7 +9,7 @@ import { useLensApi } from "../data/LensServices";
 import { useLensUpdate } from "../data/mutations";
 import { lensQueries } from "../data/queries";
 import { agoLabel } from "../model/format";
-import { findingFrequency, percentLabel } from "../model/frequency";
+import { findingReach, percentLabel } from "../model/frequency";
 import {
   ALL_AGENTS,
   filterInbox,
@@ -68,8 +68,8 @@ function FilterSelect<T extends string>({
 }
 
 function FindingRow({ row, now }: { row: InboxRow; now: number }) {
-  const frequency = findingFrequency(inboxFinding(row).occurrences, inboxSampledRuns(row));
-  const percent = percentLabel(frequency.affected, frequency.total);
+  const reach = findingReach(inboxFinding(row).occurrences, inboxSampledRuns(row));
+  const percent = percentLabel(reach.affected, reach.total);
   return (
     <Inspector.Row
       item={row}
