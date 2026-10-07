@@ -1203,6 +1203,11 @@ async def _get_tools_from_mcp_servers(
             for server, (_, outcome) in zip(allowed_mcp_servers, results)
             if server is not None
         }
+        outcomes_by_server_id: Final[dict[str, ServerOutcome]] = {
+            server.server_id: outcome
+            for server, (_, outcome) in zip(allowed_mcp_servers, results)
+            if server is not None
+        }
 
         # If logging is enabled, enrich spend_logs_metadata with counts
         if litellm_logging_obj:
@@ -1242,7 +1247,9 @@ async def _get_tools_from_mcp_servers(
 
         verbose_logger.info("Successfully fetched %s tools total from all MCP servers", len(all_tools))
 
-        return AggregateToolListing(tools=all_tools, outcomes=server_outcomes)
+        return AggregateToolListing(
+            tools=all_tools, outcomes=server_outcomes, outcomes_by_server_id=outcomes_by_server_id
+        )
     except Exception as e:
         # Only fire failure hook if logging was requested for this list-tools execution
         if log_list_tools_to_spendlogs and user_api_key_auth is not None:
@@ -1478,7 +1485,7 @@ async def _list_mcp_tools(
     except Exception as e:
         verbose_logger.exception("Error getting tools from managed MCP servers: %s", e)
         # Continue with an empty listing instead of failing completely
-        return AggregateToolListing(tools=[], outcomes={})
+        return AggregateToolListing(tools=[], outcomes={}, outcomes_by_server_id={})
 
 
 async def _list_mcp_prompts(
@@ -2737,7 +2744,7 @@ async def _execute_handle_list_tools(
             client_ip=_client_ip,
             record_listing=True,
         )
-        auth_failure: Final = listing_auth_error(listing.outcomes)
+        auth_failure: Final = listing_auth_error(listing.outcomes_by_server_id)
         if auth_failure is not None:
             raise auth_failure
         verbose_logger.info("MCP list_tools - Successfully returned %s tools", len(listing.tools))

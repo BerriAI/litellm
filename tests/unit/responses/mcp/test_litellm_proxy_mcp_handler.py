@@ -660,7 +660,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
             inputSchema={"type": "object", "properties": {"query": {"type": "string", "description": "For [MASKED]"}}},
         ),
     ]
-    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=served_tools, outcomes={}))
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=served_tools, outcomes={}, outcomes_by_server_id={}))
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,
@@ -719,7 +719,7 @@ def test_get_parent_request_tags_from_nested_litellm_params():
 
 @pytest.mark.asyncio
 async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
-    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}, outcomes_by_server_id={}))
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,
@@ -1498,7 +1498,7 @@ async def _tools_listing_kwargs_for_toolset_url(monkeypatch, team_toolset_id: st
     from litellm.proxy._experimental.mcp_server.ui_session_utils import granted_toolset_ids
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
 
-    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}, outcomes_by_server_id={}))
     monkeypatch.setattr("litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers", mock_get_tools)
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",

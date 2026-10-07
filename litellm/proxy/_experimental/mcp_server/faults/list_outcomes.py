@@ -69,8 +69,13 @@ domain per the MCP spec's ``_meta`` key format so it cannot collide with spec-re
 
 
 class AggregateToolListing(NamedTuple):
+    """``outcomes`` is keyed by the caller-visible display prefix for the wire and spend metadata,
+    so two servers sharing an alias collapse into one row there; ``outcomes_by_server_id`` keeps
+    every server's outcome, and it is the only mapping a whole-listing decision may read."""
+
     tools: list[MCPTool]
     outcomes: dict[str, ServerOutcome]
+    outcomes_by_server_id: dict[str, ServerOutcome]
 
 
 def listing_auth_error(outcomes: Mapping[str, ServerOutcome]) -> MCPUpstreamAuthError | None:

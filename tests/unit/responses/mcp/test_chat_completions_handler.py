@@ -1429,7 +1429,7 @@ async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
     monkeypatch.setattr(server, "_get_tools_from_mcp_servers", AsyncMock(return_value=AggregateToolListing(
-        tools=[Tool(name="observer-execute", inputSchema={"type": "object"})], outcomes={}
+        tools=[Tool(name="observer-execute", inputSchema={"type": "object"})], outcomes={}, outcomes_by_server_id={}
     )))
     responses = [
         ModelResponse(choices=[{"message": {"role": "assistant", "content": None, "tool_calls": [

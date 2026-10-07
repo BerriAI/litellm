@@ -663,7 +663,7 @@ class TestCallToolRestApiVirtualTools:
         with patch(
             "litellm.proxy._experimental.mcp_server.operations._list_mcp_tools",
             new_callable=AsyncMock,
-            return_value=AggregateToolListing(tools=[mock_tool], outcomes={}),
+            return_value=AggregateToolListing(tools=[mock_tool], outcomes={}, outcomes_by_server_id={}),
         ):
             result = await self._get_call_fn()(
                 request=request,
@@ -790,7 +790,7 @@ class TestCallToolRestApiVirtualTools:
             patch(
                 "litellm.proxy._experimental.mcp_server.operations._list_mcp_tools",
                 new_callable=AsyncMock,
-                return_value=AggregateToolListing(tools=[], outcomes={}),
+                return_value=AggregateToolListing(tools=[], outcomes={}, outcomes_by_server_id={}),
             ) as mock_list,
         ):
             await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
@@ -923,7 +923,7 @@ class TestCallToolRestApiVirtualTools:
             patch(  # test-quality-ok: the authorized catalog is the seam every virtual tool shares; the ranking under test stays real
                 "litellm.proxy._experimental.mcp_server.operations._list_mcp_tools",
                 new_callable=AsyncMock,
-                return_value=AggregateToolListing(tools=list(CATALOG), outcomes={}),
+                return_value=AggregateToolListing(tools=list(CATALOG), outcomes={}, outcomes_by_server_id={}),
             ) as mock_list,
         ):
             result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)

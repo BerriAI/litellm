@@ -9857,6 +9857,65 @@ async def test_aggregate_listing_reports_per_server_outcomes():
     assert "broken_server" not in listing.outcomes
 
 
+def _aliased_server(server_id: str, alias: str, *, caller_owns_credential: bool) -> MagicMock:
+    server = MagicMock()
+    server.name = server_id
+    server.server_name = server_id
+    server.server_id = server_id
+    server.alias = alias
+    server.short_prefix = None
+    server.allowed_tools = None
+    server.disallowed_tools = None
+    server.auth_type = None
+    server.extra_headers = None
+    server.tool_name_to_display_name = None
+    server.tool_name_to_description = None
+    server.is_client_forwarded_token = caller_owns_credential
+    return server
+
+
+@pytest.mark.asyncio
+async def test_listing_challenge_never_discards_a_healthy_server_sharing_the_display_prefix():
+    """Outcome rows on the wire are keyed by display prefix, so two servers with the same alias
+    collapse into one row and the later fault overwrites the healthy outcome there; escalating the
+    whole listing to a 401 from that collapsed view would throw away the healthy server's tools."""
+    try:
+        from litellm.proxy._experimental.mcp_server import operations
+        from litellm.proxy._experimental.mcp_server.server import set_auth_context
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    from mcp.types import ListToolsRequest, Tool
+
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    set_auth_context(user_api_key_auth)
+    healthy = _aliased_server("srv-healthy", "github", caller_owns_credential=True)
+    challenged = _aliased_server("srv-challenged", "github", caller_owns_credential=True)
+    servers = {"srv-healthy": healthy, "srv-challenged": challenged}
+
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=list(servers))
+    mock_manager.get_mcp_server_by_id = servers.get
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
+
+    async def mock_get_tools_from_server(server, **kwargs):
+        if server is healthy:
+            return [Tool(name="github-search", inputSchema={"type": "object"})]
+        raise MCPUpstreamAuthError(401, 'Bearer realm="github"', server.name)
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch.object(operations, "global_mcp_server_manager", mock_manager):
+        result = await operations.GatewayOperations().execute(
+            ListToolsRequest(), OperationContext(_caller=user_api_key_auth)
+        )
+
+    assert [tool.name for tool in result.tools] == ["github-search"]
+
+
 @pytest.mark.asyncio
 async def test_outcome_keys_use_display_prefix_never_canonical_names():
     """Outcome keys are client-visible and must use the same display naming (alias or short prefix)
@@ -9901,6 +9960,7 @@ async def test_handle_list_tools_attaches_outcome_meta(_mcp_request_ctx):
     listing = AggregateToolListing(
         tools=[tool],
         outcomes={"healthy": ServerListOk(tool_count=1), "broken": ServerListFault(tag="unreachable")},
+        outcomes_by_server_id={"srv-healthy": ServerListOk(tool_count=1), "srv-broken": ServerListFault(tag="unreachable")},
     )
 
     async def fake_auth_context():
@@ -11011,7 +11071,7 @@ async def test_legacy_sse_mount_emits_message_endpoint(
             assert await post(b'{"jsonrpc":"2.0","method":"notifications/initialized"}') == 202
             for request_id, marker in ((2, "first-post"), (3, "second-post")):
                 post_auth: Final = UserAPIKeyAuth(api_key="test-owner", user_id=marker)
-                listing: Final = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
+                listing: Final = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}, outcomes_by_server_id={}))
                 with (
                     patch.object(
                         mcp_server,

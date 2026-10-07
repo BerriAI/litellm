@@ -562,9 +562,8 @@ async def test_protocol_listing_does_not_report_success_when_every_server_requir
     from litellm.proxy._types import UserAPIKeyAuth
 
     context: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="reader"))
-    listing: Final = AggregateToolListing(
-        [], {"github": ServerListFault(tag="auth_required", status_code=401, relayable=True)}
-    )
+    fault: Final = ServerListFault(tag="auth_required", status_code=401, relayable=True)
+    listing: Final = AggregateToolListing([], {"github": fault}, {"github": fault})
     with patch.object(operations, "_list_mcp_tools", AsyncMock(return_value=listing)):
         with pytest.raises(MCPUpstreamAuthError) as caught:
             await operations.GatewayOperations().execute(ListToolsRequest(), context)
@@ -591,19 +590,13 @@ async def test_streamable_http_listing_returns_late_oauth_challenge(
     )
     monkeypatch.setattr(server, "_raise_preemptive_401_for_unauthenticated_servers", AsyncMock())
     monkeypatch.setattr(server, "_check_passthrough_upstream_auth", AsyncMock())
-    listing: Final = AsyncMock(
-        return_value=AggregateToolListing(
-            [],
-            {
-                "github": ServerListFault(
-                    tag="auth_required",
-                    status_code=401,
-                    www_authenticate='Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/github"',
-                    relayable=True,
-                )
-            },
-        )
+    fault: Final = ServerListFault(
+        tag="auth_required",
+        status_code=401,
+        www_authenticate='Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/github"',
+        relayable=True,
     )
+    listing: Final = AsyncMock(return_value=AggregateToolListing([], {"github": fault}, {"github": fault}))
     if method != "tools/list":
         listing.side_effect = MCPUpstreamAuthError(
             401, 'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/github"', "github"
