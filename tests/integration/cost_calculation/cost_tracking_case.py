@@ -257,6 +257,7 @@ class CostTrackingTestCase(BaseModel):
     deployment: Deployment | None = None
     upload: Upload | None = None
     request: dict[str, JsonValue]
+    upstream_request: dict[str, JsonValue] | None = None
     response: StoredResponse
     expected: Expected
     fallback_from: StoredResponse | None = None

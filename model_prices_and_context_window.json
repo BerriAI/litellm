@@ -34527,7 +34527,8 @@
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
-            "/v1/responses"
+            "/v1/responses",
+            "/v1/decisions"
         ],
         "supported_modalities": [
             "text",

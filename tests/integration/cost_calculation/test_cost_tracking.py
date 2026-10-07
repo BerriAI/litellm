@@ -251,33 +251,25 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert row.spend == 0, f"{case.name}: failure spend was {row.spend}"
             return
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
-        if case.endpoint == "/v1/decisions":
+        if case.upstream_request is not None:
             observed: Final = JSON_OBJECT.validate_json(
                 httpx.get(f"{gateway.upstream_url}/__observations", timeout=5, trust_env=False).content
             )
-            decision_observations: Final = tuple(
+            upstream_path: Final = f"/{scenario_id}{case.endpoint}"
+            upstream_observations: Final = tuple(
                 value
                 for value in observed["requests"]
-                if isinstance(value, dict) and value.get("path") == f"/{scenario_id}/v1/decisions"
+                if isinstance(value, dict) and value.get("path") == upstream_path
             )
-            assert decision_observations == (
+            assert upstream_observations == (
                 {
-                    "path": f"/{scenario_id}/v1/decisions",
-                    "authorization": "Bearer sk-scripted-provider",
+                    "path": upstream_path,
+                    "authorization": f"Bearer {case.api_key}",
                     "method": "POST",
                     "api_key": "",
-                    "body": {
-                        "model": "pplx-decider-v1-27b",
-                        "state": "cost-tracking",
-                        "questions": {
-                            "is_defect": {
-                                "type": "noul",
-                                "instructions": "Is this a defect?",
-                            }
-                        },
-                    },
+                    "body": case.upstream_request,
                 },
-            )
+            ), f"{case.name}: upstream saw {upstream_observations}"
         if case.response.content_type == "text/event-stream":
             _assert_stream_has_no_error(response.text)
         rows: Final = poll_rows(key, len(responses) + (prior_response_id is not None))

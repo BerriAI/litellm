@@ -64,6 +64,24 @@
       "mode": "evaluation",
       "output_cost_per_token": 0.0
     },
+    "gpt-6-luna": {
+      "cache_creation_input_token_cost": 1.25e-07,
+      "cache_read_input_token_cost": 1e-08,
+      "input_cost_per_token": 1e-07,
+      "input_cost_per_token_batches": 5e-08,
+      "input_cost_per_token_flex": 5e-08,
+      "input_cost_per_token_priority": 2e-07,
+      "litellm_provider": "openai",
+      "max_input_tokens": 922000,
+      "max_output_tokens": 128000,
+      "max_tokens": 128000,
+      "mode": "chat",
+      "output_cost_per_token": 5e-07,
+      "output_cost_per_token_batches": 2.5e-07,
+      "output_cost_per_token_flex": 2.5e-07,
+      "output_cost_per_token_priority": 1e-06,
+      "supports_function_calling": true
+    },
     "deepseek/deepseek-v4-chat": {
       "litellm_provider": "deepseek",
       "mode": "chat",
@@ -31219,6 +31237,16 @@
           }
         ]
       },
+      "upstream_request": {
+        "model": "pplx-decider-v1-27b",
+        "state": "cost-tracking",
+        "questions": {
+          "is_defect": {
+            "type": "noul",
+            "instructions": "Is this a defect?"
+          }
+        }
+      },
       "response": {
         "content_type": "application/json",
         "body": {
@@ -31241,6 +31269,66 @@
         "output_cost": 0.0,
         "prompt_tokens": 367,
         "completion_tokens": 3
+      }
+    },
+    {
+      "name": "openai/gpt-6-luna-decisions",
+      "covers": "quota_management.spend_tracking.decisions_costs",
+      "model": "gpt-6-luna",
+      "endpoint": "/v1/decisions",
+      "request": {
+        "model": "$MODEL",
+        "input": "cost-tracking",
+        "questions": [
+          {
+            "type": "predicate",
+            "name": "is_defect",
+            "instructions": "Is this a defect?"
+          }
+        ]
+      },
+      "upstream_request": {
+        "model": "gpt-6-luna",
+        "input": "cost-tracking",
+        "questions": [
+          {
+            "type": "predicate",
+            "name": "is_defect",
+            "instructions": "Is this a defect?"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "model": "gpt-6-luna",
+          "answers": [
+            {
+              "type": "predicate",
+              "name": "is_defect",
+              "probability": 0.9
+            }
+          ],
+          "usage": {
+            "input_tokens": 373,
+            "input_tokens_details": {
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "output_tokens": 0,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 373
+          }
+        }
+      },
+      "expected": {
+        "spend": 3.73e-05,
+        "input_cost": 3.73e-05,
+        "output_cost": 0.0,
+        "prompt_tokens": 373,
+        "completion_tokens": 0
       }
     },
     {
