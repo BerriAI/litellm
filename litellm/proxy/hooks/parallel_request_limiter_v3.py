@@ -42,7 +42,12 @@ from litellm.caching.redis_batch import (
     active_request_redis_batch,
 )
 from litellm.caching.redis_cache import log_redis_failure
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import (
+    DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MAX_PARALLEL_REQUESTS_QUEUE_DEPTH,
+    MAX_PARALLEL_REQUESTS_QUEUE_TIMEOUT_SECONDS,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -110,7 +115,7 @@ PARALLEL_QUEUE_POLL_INTERVAL_SECONDS: Final = 0.25
 @dataclass(frozen=True, slots=True)
 class ParallelQueuePolicy:
     timeout_seconds: float
-    max_queued: int | None
+    max_queued: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +123,7 @@ class ParallelQueueOutcome:
     reason: Literal["timeout", "queue_full"]
     waited_seconds: float
     timeout_seconds: float
-    max_queued: int | None
+    max_queued: int
 
 
 class ParallelQueueClock(Protocol):
@@ -154,8 +159,15 @@ def _queue_outcome_detail(outcome: ParallelQueueOutcome | None) -> str:
     return f". Waited {outcome.waited_seconds:.1f}s in the request queue (timeout {outcome.timeout_seconds:g}s)"
 
 
-def parallel_queue_policy(metadata: Mapping[str, object]) -> ParallelQueuePolicy | None:
-    """The key's queue policy, or None when over-limit requests should be rejected at once (the default)."""
+def parallel_queue_policy(
+    metadata: Mapping[str, object],
+    max_timeout_seconds: float = MAX_PARALLEL_REQUESTS_QUEUE_TIMEOUT_SECONDS,
+    max_queue_depth: int = MAX_PARALLEL_REQUESTS_QUEUE_DEPTH,
+) -> ParallelQueuePolicy | None:
+    """
+    The key's queue policy, or None when over-limit requests should be rejected at once (the default).
+    Key metadata is user-controlled, so the operator's ceilings always bound how long and how many requests wait.
+    """
     try:
         settings: Final = _ParallelQueueSettings.model_validate(metadata)
     except ValidationError as e:
@@ -164,8 +176,10 @@ def parallel_queue_policy(metadata: Mapping[str, object]) -> ParallelQueuePolicy
     if settings.max_parallel_requests_mode != "queue":
         return None
     return ParallelQueuePolicy(
-        timeout_seconds=settings.max_parallel_requests_queue_timeout or DEFAULT_PARALLEL_QUEUE_TIMEOUT_SECONDS,
-        max_queued=settings.max_parallel_requests_max_queued,
+        timeout_seconds=min(
+            settings.max_parallel_requests_queue_timeout or DEFAULT_PARALLEL_QUEUE_TIMEOUT_SECONDS, max_timeout_seconds
+        ),
+        max_queued=min(settings.max_parallel_requests_max_queued or max_queue_depth, max_queue_depth),
     )
 
 
@@ -907,7 +921,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # follow-up because Lua dominates wall-time and the lock is held for
         # one round-trip.
         self._check_and_increment_lock = asyncio.Lock()
-        self._parallel_slot_released = asyncio.Event()
+        self._parallel_slot_released: dict[str, asyncio.Event] = {}
         self._parallel_queue_depth: collections.Counter[str] = collections.Counter()
 
     def _get_batch_rate_limiter(self) -> CallTypeRateLimiter | None:
@@ -1757,20 +1771,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
 
             if max_parallel_requests_limit is not None:
-                queue_policy = rate_limit.get("max_parallel_requests_queue")
-                counter_key = self.create_rate_limit_keys(descriptor_key, descriptor_value, "max_parallel_requests")
                 gauges.append(
-                    ParallelRequestGauge(
-                        counter_key=counter_key,
-                        limit=int(max_parallel_requests_limit),
-                        descriptor_key=descriptor_key,
-                        queue=queue_policy,
-                    )
-                    if queue_policy is not None
-                    else ParallelRequestGauge(
-                        counter_key=counter_key,
-                        limit=int(max_parallel_requests_limit),
-                        descriptor_key=descriptor_key,
+                    self._parallel_request_gauge(
+                        descriptor_key,
+                        descriptor_value,
+                        int(max_parallel_requests_limit),
+                        rate_limit.get("max_parallel_requests_queue"),
                     )
                 )
 
@@ -1871,6 +1877,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return first_attempt
         return await self._queue_for_parallel_slots(gauges, gauge_keys, slot_id, parent_otel_span, first_attempt)
 
+    def _parallel_request_gauge(
+        self, descriptor_key: str, descriptor_value: str, limit: int, queue_policy: ParallelQueuePolicy | None
+    ) -> ParallelRequestGauge:
+        counter_key: Final = self.create_rate_limit_keys(descriptor_key, descriptor_value, "max_parallel_requests")
+        if queue_policy is None:
+            return ParallelRequestGauge(counter_key=counter_key, limit=limit, descriptor_key=descriptor_key)
+        return ParallelRequestGauge(
+            counter_key=counter_key, limit=limit, descriptor_key=descriptor_key, queue=queue_policy
+        )
+
     async def _queue_for_parallel_slots(
         self,
         gauges: list[ParallelRequestGauge],
@@ -1895,7 +1911,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if rejecting_gauge is None or policy is None:
             return rejection
         queue_key: Final = rejecting_gauge["counter_key"]
-        if policy.max_queued is not None and self._parallel_queue_depth[queue_key] >= policy.max_queued:
+        if self._parallel_queue_depth[queue_key] >= policy.max_queued:
             return self._queue_rejection(rejection, "queue_full", 0.0, policy)
 
         started_at: Final = self._queue_clock.now()
@@ -1904,9 +1920,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         try:
             while (remaining := deadline - self._queue_clock.now()) > 0:
                 await self._queue_clock.wait(
-                    self._parallel_slot_released, min(remaining, PARALLEL_QUEUE_POLL_INTERVAL_SECONDS)
+                    self._parallel_slot_released.setdefault(queue_key, asyncio.Event()),
+                    min(remaining, PARALLEL_QUEUE_POLL_INTERVAL_SECONDS),
                 )
-                attempt = await self._acquire_parallel_slots(
+                if self._queue_clock.now() >= deadline:
+                    break
+                attempt: Final = await self._acquire_parallel_slots(
                     gauges, gauge_keys, slot_id, parent_otel_span, consult_local_mirror=False
                 )
                 if attempt["overall_code"] == "OK":
@@ -1915,6 +1934,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self._parallel_queue_depth[queue_key] -= 1
             if self._parallel_queue_depth[queue_key] <= 0:
                 del self._parallel_queue_depth[queue_key]
+                self._parallel_slot_released.pop(queue_key, None)
         return self._queue_rejection(rejection, "timeout", self._queue_clock.now() - started_at, policy)
 
     @staticmethod
@@ -1935,10 +1955,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             statuses=[RateLimitStatus(**rejection["statuses"][0], queue_outcome=outcome)],
         )
 
-    def _signal_parallel_slot_released(self) -> None:
-        released: Final = self._parallel_slot_released
-        self._parallel_slot_released = asyncio.Event()
-        released.set()
+    def _signal_parallel_slot_released(self, counter_keys: Sequence[str]) -> None:
+        for released in (self._parallel_slot_released.pop(key, None) for key in counter_keys):
+            if released is not None:
+                released.set()
 
     async def _acquire_parallel_slots(
         self,
@@ -2110,7 +2130,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     args=[slot_id for _ in counter_keys],
                 )
                 await self._mirror_released_parallel_slots(counter_keys, raw, parent_otel_span)
-                self._signal_parallel_slot_released()
+                self._signal_parallel_slot_released(counter_keys)
                 return
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
                 log_redis_failure(
@@ -2190,7 +2210,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     litellm_parent_otel_span=parent_otel_span,
                     local_only=True,
                 )
-        self._signal_parallel_slot_released()
+        self._signal_parallel_slot_released(counter_keys)
 
     @with_service_target("rate_limits")
     async def atomic_check_and_increment_by_n(

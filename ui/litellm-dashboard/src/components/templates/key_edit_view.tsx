@@ -543,10 +543,6 @@ export function KeyEditView({
             )}
           </FormField>
 
-          <FormField control={form.control} name="max_parallel_requests" label="Max Parallel Requests">
-            {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
-          </FormField>
-
           <KeyParallelRequestQueueFields control={form.control} />
 
           <FormField control={form.control} name="model_tpm_limit" label="Model TPM Limit">

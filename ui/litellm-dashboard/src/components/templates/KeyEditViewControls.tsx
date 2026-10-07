@@ -112,12 +112,15 @@ const PARALLEL_MODE_HINT =
 const PARALLEL_MODE_LABELS = { reject: "Reject with 429", queue: "Queue until a slot frees up" };
 const QUEUE_TIMEOUT_HINT = "Seconds a queued request waits for a free slot before it gets a 429. Defaults to 60.";
 const MAX_QUEUED_HINT =
-  "Most requests that can wait for this key on one proxy worker. Requests beyond this get a 429 at once. Leave empty for no cap.";
+  "Most requests that can wait for this key on one proxy worker. Requests beyond this get a 429 at once. Leave empty to use the server limit (1000 by default).";
 
 export const KeyParallelRequestQueueFields = ({ control }: { control: Control<KeyEditFormValues> }) => {
   const mode = useWatch({ control, name: "max_parallel_requests_mode" });
   return (
     <>
+      <FormField control={control} name="max_parallel_requests" label="Max Parallel Requests">
+        {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
+      </FormField>
       <FormField
         control={control}
         name="max_parallel_requests_mode"
@@ -156,7 +159,7 @@ export const KeyParallelRequestQueueFields = ({ control }: { control: Control<Ke
             label={labelWithHint("Max Queued Requests per Worker", MAX_QUEUED_HINT)}
           >
             {({ ref: _ref, ...field }) => (
-              <NumericalInput {...field} value={field.value ?? ""} min={1} step={1} placeholder="No cap" />
+              <NumericalInput {...field} value={field.value ?? ""} min={1} step={1} placeholder="Server limit" />
             )}
           </FormField>
         </>

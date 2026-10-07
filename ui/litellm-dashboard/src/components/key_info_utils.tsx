@@ -62,9 +62,6 @@ export const stripTagsFromMetadata = (metadata: any) => {
   return rest;
 };
 
-/**
- * Human-readable summary of a key's max_parallel_requests overflow behavior, read from its metadata.
- */
 export const parallelRequestOverflowLabel = (metadata: Record<string, unknown> | null | undefined): string => {
   if (metadata?.max_parallel_requests_mode !== "queue") {
     return "Reject with 429";

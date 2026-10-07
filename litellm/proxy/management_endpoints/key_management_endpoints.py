@@ -2332,6 +2332,13 @@ async def generate_service_account_key_fn(
     )
 
 
+_NULL_CLEARS_METADATA_FIELDS: Final = (
+    "max_parallel_requests_mode",
+    "max_parallel_requests_queue_timeout",
+    "max_parallel_requests_max_queued",
+)
+
+
 def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_metadata: dict) -> dict:
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
@@ -2378,6 +2385,11 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - %s", e
         )
+
+    if casted_metadata is not None:
+        for field in _NULL_CLEARS_METADATA_FIELDS:
+            if field in data.model_fields_set and getattr(data, field, None) is None:
+                casted_metadata.pop(field, None)
 
     non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
     return non_default_values
