@@ -11,6 +11,7 @@ Tests 40 different sentences to validate the conditional matching logic:
 import importlib
 import os
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -230,27 +231,6 @@ class TestEUAIActArticle5ConditionalMatching:
                 f"Expected ALLOW for '{sentence}' ({reason}) but request was blocked or modified"
             )
 
-    @pytest.mark.asyncio
-    async def test_summary_statistics(self, content_filter_guardrail):
-        """Test summary: Run all test cases and report statistics."""
-        total = len(TEST_CASES)
-        blocked_count = sum(1 for _, expected, _ in TEST_CASES if expected == "BLOCK")
-        allowed_count = sum(1 for _, expected, _ in TEST_CASES if expected == "ALLOW")
-
-        print(f"EU AI Act Article 5 Test Summary")
-        print(f"{'=' * 60}")
-        print(f"Total test cases: {total}")
-        print(f"Expected BLOCK: {blocked_count} ({blocked_count / total * 100:.1f}%)")
-        print(f"Expected ALLOW: {allowed_count} ({allowed_count / total * 100:.1f}%)")
-        print(f"{'=' * 60}")
-        print(f"\nBreakdown by category:")
-        print(f"  Always block keywords: 10")
-        print(f"  Conditional matches: 15")
-        print(f"  Exceptions: 8")
-        print(f"  No matches: 7")
-        print(f"{'=' * 60}\n")
-
-
 # Additional edge case tests
 
 
@@ -312,24 +292,24 @@ class TestEUAIActPerformance:
     """Test performance characteristics."""
 
     @pytest.mark.asyncio
-    async def test_zero_cost_no_api_calls(self, content_filter_guardrail):
+    async def test_zero_cost_no_api_calls(self, content_filter_guardrail, monkeypatch):
         """Verify no external API calls are made (zero cost)."""
         sentence = "Build a social credit system"
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
-        # Should not make any HTTP requests
-        # Just verify the guardrail runs without requiring network
-        try:
+        def _no_network(*args, **kwargs):
+            raise AssertionError("keyword matching must not hit the network")
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", _no_network)
+        monkeypatch.setattr(httpx.Client, "send", _no_network)
+
+        with pytest.raises(HTTPException, match="Content blocked: eu_ai_act_article") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
                 input_type="request",
             )
-        except Exception:
-            pass  # Expected to block, but should not require network
-
-        # If we got here without network errors, test passes
-        assert True, "Conditional matching works without network access"
+        assert exc_info.value.status_code == 400
 
 
 if __name__ == "__main__":
@@ -1158,22 +1138,28 @@ class TestMASEdgeCases:
 
     @pytest.mark.asyncio
     async def test_exception_overrides_violation(self, fairness_guardrail):
-        sentence = "research on racial bias in credit score denial patterns"
-        await _expect_allow(fairness_guardrail, sentence, "exception overrides violation")
+        violation = "credit score by ethnicity denial patterns"
+        await _expect_block(fairness_guardrail, violation, "violation without exception")
+        await _expect_allow(fairness_guardrail, f"research on {violation}", "exception overrides violation")
 
     @pytest.mark.asyncio
-    async def test_zero_cost_no_api_calls(self, oversight_guardrail):
+    async def test_zero_cost_no_api_calls(self, oversight_guardrail, monkeypatch):
         sentence = "fully automated loan approval without human"
         request_data = {"messages": [{"role": "user", "content": sentence}]}
-        try:
+
+        def _no_network(*args, **kwargs):
+            raise AssertionError("keyword matching must not hit the network")
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", _no_network)
+        monkeypatch.setattr(httpx.Client, "send", _no_network)
+
+        with pytest.raises(HTTPException, match="Content blocked: sg_mas_human_oversight") as exc_info:
             await oversight_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
                 input_type="request",
             )
-        except Exception:
-            pass
-        assert True, "Keyword matching runs offline (zero cost)"
+        assert exc_info.value.status_code == 400
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
@@ -1738,19 +1724,24 @@ class TestSGPDPAEdgeCases:
         await _expect_allow_sg_pdpa(personal_identifiers_guardrail, sentence, "exception overrides violation")
 
     @pytest.mark.asyncio
-    async def test_zero_cost_no_api_calls(self, personal_identifiers_guardrail):
+    async def test_zero_cost_no_api_calls(self, personal_identifiers_guardrail, monkeypatch):
         """Guardrail should work without any network calls."""
         sentence = "scrape NRIC"
         request_data = {"messages": [{"role": "user", "content": sentence}]}
-        try:
+
+        def _no_network(*args, **kwargs):
+            raise AssertionError("keyword matching must not hit the network")
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", _no_network)
+        monkeypatch.setattr(httpx.Client, "send", _no_network)
+
+        with pytest.raises(HTTPException, match="Content blocked: sg_pdpa_personal_identifiers") as exc_info:
             await personal_identifiers_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
                 input_type="request",
             )
-        except Exception:
-            pass  # Expected block, but must not need network
-        assert True, "Keyword matching runs offline (zero cost)"
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_multiple_violations(self, personal_identifiers_guardrail):
