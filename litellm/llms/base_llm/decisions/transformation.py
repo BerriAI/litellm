@@ -1,20 +1,49 @@
-from dataclasses import dataclass
-from typing import Protocol
+from abc import ABC
+from collections.abc import Mapping
+from typing import Final
+
+import httpx
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.decisions import DecisionsRequest, DecisionsResponse
+
+PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
+_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
+_RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-type"})
 
 
-@dataclass(frozen=True, slots=True)
-class JevCompatibleDecisionsEndpoint:
-    default_api_base_value: str | None
-    path: str
-    api_key_env: tuple[str, ...]
-    api_base_env: str
+class BaseDecisionsConfig(ABC):
+    """A Decisions provider: where to send the request and how to translate it.
+
+    LiteLLM's public /v1/decisions shape is the Jev / System One wire contract, which is also what TypeSafe,
+    Perplexity, OpenRouter, Cloudflare Clef and Strands Decider speak, so the defaults pass the body through:
+    POST {api_base}{path} with {"model", "state", "questions"} and a Bearer header when a key is set. Providers
+    override the hooks whose wire shape differs (path, URL, model naming, response envelope, or the whole request
+    and response translation).
+    """
+
+    path: str = "/v1/systemone"
+    api_key_env: tuple[str, ...] = ()
+    api_base_env: tuple[str, ...] = ()
     api_key_required: bool = True
 
-    def default_api_base(self) -> str | None:
-        return self.default_api_base_value
+    def get_default_api_base(self) -> str | None:
+        return None
 
-    def missing_api_base_message(self, provider: str) -> str:
-        return f"api_base is required for Decisions provider '{provider}'"
+    def missing_api_base_message(self, custom_llm_provider: str) -> str:
+        return f"api_base is required for Decisions provider '{custom_llm_provider}'"
+
+    def resolve_api_base(self, api_base: str | None) -> str | None:
+        return api_base or self._first_secret(self.api_base_env) or self.get_default_api_base()
+
+    def resolve_api_key(self, api_key: str | None) -> str | None:
+        return api_key or self._first_secret(self.api_key_env)
+
+    @staticmethod
+    def _first_secret(names: tuple[str, ...]) -> str | None:
+        return next((value for value in (get_secret_str(name) for name in names) if value), None)
 
     def canonical_model(self, model: str) -> str:
         return model
@@ -22,31 +51,66 @@ class JevCompatibleDecisionsEndpoint:
     def request_model(self, model: str) -> str:
         return model
 
-    def endpoint_url(self, api_base: str, model: str) -> str:
+    def validate_environment(self, headers: Mapping[str, str], model: str, api_key: str | None) -> dict[str, str]:
+        return {
+            **{name: value for name, value in headers.items() if name.lower() not in _RESERVED_HEADERS},
+            **({"Authorization": f"Bearer {api_key}"} if api_key is not None else {}),
+            "Content-Type": "application/json",
+        }
+
+    def get_complete_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"
+
+    def transform_decisions_request(
+        self,
+        model: str,
+        request: DecisionsRequest,
+        custom_llm_provider: str,
+    ) -> dict[str, object]:
+        return {
+            "model": self.request_model(model),
+            "state": request.state,
+            "questions": {
+                name: question.model_dump(mode="json", exclude_none=True)
+                for name, question in request.questions.items()
+            },
+        }
 
     def unwrap_response(self, payload: object) -> object:
         return payload
 
+    def transform_decisions_response(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        raw_response: httpx.Response,
+        request: DecisionsRequest,
+    ) -> DecisionsResponse:
+        payload: Final[object] = PAYLOAD_ADAPTER.validate_json(raw_response.content)
+        try:
+            response: Final = _RESPONSE_ADAPTER.validate_python(self.unwrap_response(payload))
+        except ValidationError as error:
+            raise BaseLLMException(
+                status_code=500,
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
+            ) from error
+        self.set_hidden_params(response, model, custom_llm_provider)
+        return response
 
-class DecisionsProviderConfig(Protocol):
-    @property
-    def api_key_env(self) -> tuple[str, ...]: ...
+    @staticmethod
+    def set_hidden_params(response: DecisionsResponse, model: str, custom_llm_provider: str) -> None:
+        response.set_hidden_params(
+            {
+                "model": f"{custom_llm_provider}/{model}",
+                "custom_llm_provider": custom_llm_provider,
+                "provider_response_model": f"{custom_llm_provider}/{model}",
+            }
+        )
 
-    @property
-    def api_base_env(self) -> str: ...
-
-    @property
-    def api_key_required(self) -> bool: ...
-
-    def default_api_base(self) -> str | None: ...
-
-    def missing_api_base_message(self, provider: str) -> str: ...
-
-    def canonical_model(self, model: str) -> str: ...
-
-    def request_model(self, model: str) -> str: ...
-
-    def endpoint_url(self, api_base: str, model: str) -> str: ...
-
-    def unwrap_response(self, payload: object) -> object: ...
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, str] | httpx.Headers,
+    ) -> BaseLLMException:
+        return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
