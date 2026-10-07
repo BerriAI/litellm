@@ -6,6 +6,7 @@ use std::{
 use litellm_auth::InputSource;
 use litellm_host_python::{from_py, from_py_argument};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 /// The keyword arguments every value route shares, validated at the Python boundary.
@@ -23,18 +24,6 @@ pub(crate) fn messages_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Value>
         Value::Array(values) => Ok(values),
         _ => Err(PyValueError::new_err("messages must be a list")),
     }
-}
-
-pub(crate) fn optional_params_argument(
-    value: &Bound<'_, PyAny>,
-) -> PyResult<Option<Map<String, Value>>> {
-    optional_object("optional_params", value)
-}
-
-pub(crate) fn extra_headers_argument(
-    value: &Bound<'_, PyAny>,
-) -> PyResult<Option<Map<String, Value>>> {
-    optional_object("extra_headers", value)
 }
 
 fn required_object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
@@ -69,6 +58,48 @@ pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyRe
         .getattr("timeout_to_seconds")?
         .call1((timeout,))?
         .extract()
+}
+
+pub(crate) fn required_field<'py>(
+    fields: &Bound<'py, PyDict>,
+    name: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    fields
+        .get_item(name)?
+        .ok_or_else(|| PyValueError::new_err(format!("{name} is required")))
+}
+
+pub(crate) fn optional_field<T: DeserializeOwned>(
+    fields: &Bound<'_, PyDict>,
+    name: &str,
+) -> PyResult<Option<T>> {
+    fields
+        .get_item(name)?
+        .map(|value| from_py_argument(&value))
+        .transpose()
+        .map(Option::flatten)
+}
+
+pub(crate) fn optional_object_field(
+    fields: &Bound<'_, PyDict>,
+    name: &'static str,
+) -> PyResult<Option<Map<String, Value>>> {
+    fields
+        .get_item(name)?
+        .map(|value| optional_object(name, &value))
+        .transpose()
+        .map(Option::flatten)
+}
+
+pub(crate) fn value_route_options(fields: &Bound<'_, PyDict>) -> PyResult<RouteOptions> {
+    Ok(RouteOptions {
+        model: from_py_argument(&required_field(fields, "model")?)?,
+        api_key: optional_field(fields, "api_key")?,
+        api_base: optional_field(fields, "api_base")?,
+        custom_llm_provider: optional_field(fields, "custom_llm_provider")?,
+        extra_headers: optional_object_field(fields, "extra_headers")?,
+        timeout: optional_timeout(optional_field(fields, "timeout_seconds")?),
+    })
 }
 
 pub(crate) fn project_optional_fields(
@@ -244,15 +275,15 @@ mod tests {
 
             let params = py.eval(c"{'temperature': 0.2}", None, None).unwrap();
             assert_eq!(
-                optional_params_argument(&params).unwrap(),
+                optional_object("optional_params", &params).unwrap(),
                 Some(required_object("optional_params", json!({"temperature": 0.2})).unwrap())
             );
             assert_eq!(
-                optional_params_argument(&py.None().into_bound(py)).unwrap(),
+                optional_object("optional_params", &py.None().into_bound(py)).unwrap(),
                 None
             );
             assert_eq!(
-                extra_headers_argument(&py.None().into_bound(py)).unwrap(),
+                optional_object("extra_headers", &py.None().into_bound(py)).unwrap(),
                 None
             );
         });

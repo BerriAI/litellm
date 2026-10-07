@@ -14,6 +14,7 @@ from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socket import socket as Socket
+from types import SimpleNamespace
 from typing import Final
 
 REQUEST_STARTED: Final = threading.Event()
@@ -25,6 +26,10 @@ ANTHROPIC_RESPONSE: Final = (
     b'"stop_reason":"end_turn","stop_sequence":null,'
     b'"usage":{"input_tokens":2,"output_tokens":3}}'
 )
+
+
+class NativeRouteServer(ThreadingHTTPServer):
+    request_queue_size = 64
 
 
 class NativeRouteHandler(BaseHTTPRequestHandler):
@@ -110,6 +115,11 @@ def load_native(native_path: Path) -> object:
     return native_module
 
 
+def route_call(route: str, api_base: str, outcome: str) -> SimpleNamespace:
+    fields: Final = route_kwargs(route, api_base, outcome)
+    return SimpleNamespace(args=(), kwargs=fields, bound=fields)
+
+
 def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
     common: Final = {
         "api_base": api_base,
@@ -161,9 +171,9 @@ def assert_rate_limit(route: str, error: BaseException) -> None:
 def exercise_sync(native: object, api_base: str) -> None:
     for route in ("transcription", "chat_completions"):
         function: Final = getattr(native, route)
-        assert_success(route, function(**route_kwargs(route, api_base, "success")))
+        assert_success(route, function(route_call(route, api_base, "success")))
         try:
-            function(**route_kwargs(route, api_base, "429"))
+            function(route_call(route, api_base, "429"))
         except native.RustUpstreamError as error:
             assert_rate_limit(route, error)
         else:
@@ -173,18 +183,18 @@ def exercise_sync(native: object, api_base: str) -> None:
 async def exercise_async(native: object, api_base: str) -> None:
     for route in ("transcription", "chat_completions"):
         function: Final = getattr(native, f"a{route}")
-        assert_success(route, await function(**route_kwargs(route, api_base, "success")))
+        assert_success(route, await function(route_call(route, api_base, "success")))
         try:
-            await function(**route_kwargs(route, api_base, "429"))
+            await function(route_call(route, api_base, "429"))
         except native.RustUpstreamError as error:
             assert_rate_limit(route, error)
         else:
             raise AssertionError(f"a{route} accepted a 429 response")
 
-
-async def exercise_async_concurrency(native: object, api_base: str) -> None:
     responses: Final = await asyncio.wait_for(
-        asyncio.gather(*(native.achat_completions(**route_kwargs("chat_completions", api_base, "success")) for _ in range(32))),
+        asyncio.gather(
+            *(native.achat_completions(route_call("chat_completions", api_base, "success")) for _ in range(32))
+        ),
         timeout=15,
     )
     for response in responses:
@@ -195,14 +205,13 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
     native: Final = load_native(native_path)
     exercise_sync(native, api_base)
     asyncio.run(exercise_async(native, api_base))
-    asyncio.run(exercise_async_concurrency(native, api_base))
     return native
 
 
 def exercise_signal(native: object, api_base: str) -> int:
     try:
         native.chat_completions(
-            **route_kwargs("chat_completions", api_base, "hang"),
+            route_call("chat_completions", api_base, "hang"),
         )
     except KeyboardInterrupt:
         sys.stdout.write("KeyboardInterrupt\n")
@@ -264,7 +273,7 @@ def verify_wheel(wheel: Path) -> int:
             raise AssertionError(f"expected one native extension, found {len(native_members)}")
         native_path: Final = wheel_root / native_members[0].filename
 
-        server: Final = ThreadingHTTPServer(("127.0.0.1", 0), NativeRouteHandler)
+        server: Final = NativeRouteServer(("127.0.0.1", 0), NativeRouteHandler)
         server_thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
         api_base: Final = f"http://127.0.0.1:{server.server_address[1]}"

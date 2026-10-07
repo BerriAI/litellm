@@ -10,11 +10,11 @@ import litellm
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
-from litellm.rust_bridge.chat_completions.entrypoints import NATIVE_ACOMPLETION, LiteLLMChatCompletionsRequest
+from litellm.rust_bridge.chat_completions.entrypoints import NATIVE_ACOMPLETION
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.dispatch import call_hook
-from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, LiteLLMMessagesRequest
-from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES, LiteLLMResponsesRequest
+from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
+from litellm.rust_bridge.public_call import NativeCall
+from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
@@ -48,13 +48,24 @@ async def invoke(
         arguments: Final = {"model": RESPONSES_MODEL, "input": "hello", **common}
         if not native:
             return await litellm.aresponses(**arguments)
-        request: Final = LiteLLMResponsesRequest(
-            RESPONSES_MODEL, "hello", None, "test-key", server.base_url, "openai", None, arguments
+        request: Final = NativeCall(
+            args=(),
+            kwargs=arguments,
+            bound={
+                "model": RESPONSES_MODEL,
+                "input": "hello",
+                "stream": None,
+                "api_key": "test-key",
+                "api_base": server.base_url,
+                "custom_llm_provider": "openai",
+                "extra_headers": None,
+                **arguments,
+            },
         )
         return await runtime.arun(
             RouteContext(Route.RESPONSES),
             binding=NATIVE_ARESPONSES,
-            native=lambda hook: call_hook(hook, request, (), arguments),
+            native=lambda hook: hook(request),
             python=runtime.NO_PYTHON,
             rules=(RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),),
         )
@@ -67,25 +78,34 @@ async def invoke(
     if route == "chat":
         if not native:
             return await litellm.acompletion(**parameters)
-        chat: Final = LiteLLMChatCompletionsRequest(
-            MESSAGES_MODEL, list(MESSAGES), None, "test-key", server.base_url, None, None, parameters
-        )
+        chat: Final = NativeCall(args=(), kwargs=parameters, bound=parameters)
         return await runtime.arun(
             RouteContext(Route.CHAT_COMPLETIONS),
             binding=NATIVE_ACOMPLETION,
-            native=lambda hook: call_hook(hook, chat, (), parameters),
+            native=lambda hook: hook(chat),
             python=runtime.NO_PYTHON,
             rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
         )
     if not native:
         return await litellm.anthropic_messages(**parameters)
-    messages: Final = LiteLLMMessagesRequest(
-        MESSAGES_MODEL, list(MESSAGES), 32, None, "test-key", server.base_url, "anthropic", parameters
+    messages: Final = NativeCall(
+        args=(),
+        kwargs=parameters,
+        bound={
+            "model": MESSAGES_MODEL,
+            "messages": list(MESSAGES),
+            "max_tokens": 32,
+            "stream": None,
+            "api_key": "test-key",
+            "api_base": server.base_url,
+            "custom_llm_provider": "anthropic",
+            **parameters,
+        },
     )
     return await runtime.arun(
         RouteContext(Route.MESSAGES),
         binding=NATIVE_AMESSAGES,
-        native=lambda hook: call_hook(hook, messages, (), parameters),
+        native=lambda hook: hook(messages),
         python=runtime.NO_PYTHON,
         rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),),
     )

@@ -86,6 +86,9 @@ impl InferenceHost {
         if let Some(value) = lookup(arguments, request, name)? {
             return Ok((!value.is_none()).then_some(value));
         }
+        if request.is_instance_of::<PyDict>() {
+            return Ok(None);
+        }
         let parameter = request
             .getattr("parameters")?
             .call_method1("get", (name,))?;

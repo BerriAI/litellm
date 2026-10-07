@@ -1,40 +1,24 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Awaitable, Iterator
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
-
-
-@dataclass(frozen=True, slots=True)
-class LiteLLMMessagesRequest:
-    model: str
-    messages: Sequence[object]
-    max_tokens: int
-    stream: bool | None
-    api_key: str | None
-    api_base: str | None
-    custom_llm_provider: str | None
-    kwargs: Mapping[str, object]
 
 
 class NativeMessages(Protocol):
     def __call__(
         self,
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> AnthropicMessagesResponse | Iterator[bytes]: ...
 
 
 class NativeAmessages(Protocol):
     def __call__(
         self,
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> Awaitable[AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
 
 

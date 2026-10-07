@@ -2,8 +2,7 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.rust_bridge.messages.route_host import arguments, response
-from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
-from dataclasses import astuple
+from litellm.rust_bridge.public_call import NativeCall
 import pytest
 import litellm
 from litellm.rust_bridge.messages import route_host
@@ -30,67 +29,37 @@ def test_response_is_a_detached_public_messages_dict() -> None:
     assert "_hidden_params" not in native
 
 
-def test_arguments_are_the_public_kwargs_view() -> None:
+def test_arguments_preserve_the_bound_view() -> None:
     kwargs: Final = MappingProxyType({"litellm_metadata": {"user_id": "u"}})
-    request: Final = LiteLLMMessagesRequest(
-        model="claude-sonnet-4-5",
-        messages=[{"role": "user", "content": "hi"}],
-        max_tokens=16,
-        stream=None,
-        api_key=None,
-        api_base=None,
-        custom_llm_provider="anthropic",
+    request: Final = NativeCall(
+        args=(),
         kwargs=kwargs,
-    )
-
-    assert arguments(request) is kwargs
-
-
-pytestmark = pytest.mark.usefixtures("local_model_cost_map")
-
-
-def _flag_model(monkeypatch: pytest.MonkeyPatch, name: str, **flags: bool) -> None:
-    monkeypatch.setitem(
-        litellm.model_cost,
-        name,
-        {
-            "litellm_provider": "anthropic",
-            "mode": "chat",
-            "input_cost_per_token": 0,
-            "output_cost_per_token": 0,
-            **flags,
+        bound={
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 16,
+            "stream": None,
+            "api_key": None,
+            "api_base": None,
+            "custom_llm_provider": "anthropic",
+            **kwargs,
         },
     )
 
-
-def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    _flag_model(
-        monkeypatch,
-        "claude-test-adaptive",
-        supports_reasoning=True,
-        supports_adaptive_thinking=True,
-        supports_output_config=True,
-        supports_xhigh_reasoning_effort=True,
-        supports_sampling_params=False,
-    )
-
-    capabilities: Final = route_host.model_capabilities("anthropic/claude-test-adaptive", None)
-
-    assert capabilities.supports_adaptive_thinking
-    assert capabilities.supports_output_config
-    assert not capabilities.supports_legacy_thinking
-    assert not capabilities.supports_sampling_params
-    assert capabilities.effort_tiers.xhigh
-    assert not capabilities.effort_tiers.max
+    assert arguments(request.bound) is request.bound
 
 
-def test_unmapped_model_keeps_sampling_params_and_no_reasoning_features() -> None:
-    capabilities: Final = route_host.model_capabilities("anthropic/not-a-real-model", None)
+def test_settings_project_caller_configuration_without_resolving_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
 
-    assert capabilities.supports_sampling_params
-    assert not capabilities.supports_reasoning
-    assert not capabilities.supports_adaptive_thinking
-    assert not any(astuple(capabilities.effort_tiers))
+    projected: Final = route_host.settings({"drop_params": "true", "additional_drop_params": ["metadata.user_id"]})
+
+    assert projected == {
+        "drop_params": True,
+        "reasoning_auto_summary": True,
+        "additional_drop_params": ("metadata.user_id",),
+    }
 
 
 @pytest.mark.parametrize(
@@ -108,7 +77,7 @@ def test_drop_params_merges_the_global_flag_with_the_request(
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", global_flag)
 
-    assert route_host.shaping("anthropic/not-a-real-model", None, kwargs)["drop_params"] is expected
+    assert route_host.settings(kwargs)["drop_params"] is expected
 
 
 @pytest.mark.parametrize(
@@ -120,36 +89,42 @@ def test_drop_params_merges_the_global_flag_with_the_request(
     ],
 )
 def test_additional_drop_params_keep_only_string_paths(configured: object, expected: tuple[str, ...]) -> None:
-    shaping: Final = route_host.shaping("anthropic/not-a-real-model", None, {"additional_drop_params": configured})
+    settings: Final = route_host.settings({"additional_drop_params": configured})
 
-    assert shaping["additional_drop_params"] == expected
+    assert settings["additional_drop_params"] == expected
 
 
 def test_native_request_rejections_map_to_the_public_400() -> None:
     from types import MappingProxyType
 
-    from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
+    from litellm.rust_bridge.public_call import NativeCall
 
-    request: Final = LiteLLMMessagesRequest(
-        model="anthropic/claude-sonnet-5",
-        messages=(),
-        max_tokens=8,
-        stream=None,
-        api_key=None,
-        api_base=None,
-        custom_llm_provider=None,
+    request: Final = NativeCall(
+        args=(),
         kwargs=MappingProxyType({}),
+        bound={
+            "model": "anthropic/claude-sonnet-5",
+            "messages": (),
+            "max_tokens": 8,
+            "stream": None,
+            "api_key": None,
+            "api_base": None,
+            "custom_llm_provider": None,
+            **MappingProxyType({}),
+        },
     )
     rejected: Final = ValueError("claude-sonnet-5 does not support top_k=5")
     rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
 
-    mapped: Final = route_host.map_failure(rejected, request, "anthropic")
+    mapped: Final = route_host.map_failure(rejected, request.bound, "anthropic")
 
     assert isinstance(mapped, litellm.BadRequestError)
     assert mapped.status_code == 400
     assert "does not support top_k=5" in mapped.message
     assert mapped.model == "claude-sonnet-5"
-    assert not isinstance(route_host.map_failure(ValueError("plain"), request, "anthropic"), litellm.BadRequestError)
+    assert not isinstance(
+        route_host.map_failure(ValueError("plain"), request.bound, "anthropic"), litellm.BadRequestError
+    )
 
 
 def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handler_does() -> None:

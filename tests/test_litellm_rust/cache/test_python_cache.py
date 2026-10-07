@@ -22,7 +22,7 @@ from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import call_hook
-from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.caching import CachingSupportedCallTypes
 from tests.test_litellm_rust.support.cache import cache_key, collect, invoke, payload
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
@@ -443,15 +443,26 @@ def test_sync_rust_messages_calls_python_cache(recording_server: RecordingServer
         "api_key": "test-key",
         "api_base": recording_server.base_url,
     }
-    request: Final = LiteLLMMessagesRequest(
-        MESSAGES_MODEL, list(MESSAGES), 32, None, "test-key", recording_server.base_url, "anthropic", arguments
+    request: Final = NativeCall(
+        args=(),
+        kwargs=arguments,
+        bound={
+            "model": MESSAGES_MODEL,
+            "messages": list(MESSAGES),
+            "max_tokens": 32,
+            "stream": None,
+            "api_key": "test-key",
+            "api_base": recording_server.base_url,
+            "custom_llm_provider": "anthropic",
+            **arguments,
+        },
     )
 
     def call() -> object:
         return runtime.run(
             RouteContext(Route.MESSAGES),
             binding=NATIVE_MESSAGES,
-            native=lambda hook: call_hook(hook, request, (), arguments),
+            native=lambda hook: hook(request),
             python=runtime.NO_PYTHON,
             rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),),
         )

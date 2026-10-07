@@ -81,23 +81,15 @@ fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
 }
 
 #[pyfunction]
-pub(crate) fn ocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, false)
+pub(crate) fn ocr(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let call = super::NativeCall::extract(&call)?;
+    run_ocr(py, call.bound.into_any(), call.args, call.kwargs, false)
 }
 
 #[pyfunction]
-pub(crate) fn aocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, true)
+pub(crate) fn aocr(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let call = super::NativeCall::extract(&call)?;
+    run_ocr(py, call.bound.into_any(), call.args, call.kwargs, true)
 }
 
 #[pyfunction]
