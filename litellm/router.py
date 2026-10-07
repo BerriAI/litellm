@@ -91,6 +91,13 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     is_registered_custom_provider,
 )
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
+)
+from litellm.litellm_core_utils.hidden_params import (
+    get_hidden_params,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -149,7 +156,6 @@ from litellm.router_strategy.tag_based_routing import (
 )
 from litellm.router_utils.access_windows import access_windows_config_error, filter_reserved_deployments
 from litellm.router_utils.add_retry_fallback_headers import (
-    HiddenParamsHost,
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
     apply_quality_router_decision_headers,
@@ -2989,7 +2995,7 @@ class Router:
         fallback_item: object,
         prepared_fallback_hidden_params: tuple[dict[str, object], dict[str, object]],
     ) -> None:
-        if fallback_item is None or not hasattr(fallback_item, "_hidden_params"):
+        if fallback_item is None or not hasattr(fallback_item, _HIDDEN_PARAMS_ATTR):
             return
 
         fallback_hidden_params, fallback_headers = prepared_fallback_hidden_params
@@ -2998,11 +3004,14 @@ class Router:
         if not isinstance(item_headers, dict):
             item_headers = {}
 
-        cast(HiddenParamsHost, fallback_item)._hidden_params = {
-            **item_hidden_params,
-            **fallback_hidden_params,
-            "additional_headers": {**item_headers, **fallback_headers},
-        }
+        set_hidden_params(
+            fallback_item,
+            {
+                **item_hidden_params,
+                **fallback_hidden_params,
+                "additional_headers": {**item_headers, **fallback_headers},
+            },
+        )
 
     async def _acompletion_streaming_iterator(
         self,
@@ -3038,8 +3047,9 @@ class Router:
                 if isinstance(inner_chunks, list):
                     self.chunks = inner_chunks
                 # Preserve hidden params (including litellm_overhead_time_ms) from original response
-                if hasattr(model_response, "_hidden_params"):
-                    self._hidden_params = model_response._hidden_params.copy()
+                model_response_hidden_params: Final = get_hidden_params(model_response)
+                if model_response_hidden_params is not None:
+                    self._hidden_params = dict(model_response_hidden_params)
 
             def __aiter__(self):
                 return self
@@ -3656,8 +3666,9 @@ class Router:
                     _response_headers=getattr(model_response, "_response_headers", None),
                 )
                 self._sync_generator = sync_generator
-                if hasattr(model_response, "_hidden_params"):
-                    self._hidden_params = model_response._hidden_params.copy()
+                model_response_hidden_params: Final = get_hidden_params(model_response)
+                if model_response_hidden_params is not None:
+                    self._hidden_params = dict(model_response_hidden_params)
 
             def __iter__(self):
                 return self
@@ -4484,7 +4495,8 @@ class Router:
 
                 if result is not None:
                     # Return the first successful result
-                    result._hidden_params["fastest_response_batch_completion"] = True
+                    if (result_hidden_params := get_hidden_params(result)) is not None:
+                        result_hidden_params["fastest_response_batch_completion"] = True
                     return result
 
         # If we exit the loop without returning, all tasks failed
@@ -4553,8 +4565,12 @@ class Router:
         if make_request:
             try:
                 _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
-                _response._hidden_params.setdefault("additional_headers", {})
-                _response._hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
+                response_hidden_params: Final = get_hidden_params(_response)
+                if response_hidden_params is not None:
+                    additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
+                        dict[str, object], response_hidden_params.setdefault("additional_headers", {})
+                    )
+                    additional_headers.update({"x-litellm-request-prioritization-used": True})
                 return _response
             except Exception as e:
                 setattr(e, "priority", priority)
@@ -4613,11 +4629,12 @@ class Router:
         if make_request:
             try:
                 _response: Final = await original_function(*args, **kwargs)
-                if isinstance(_response._hidden_params, dict):
-                    _response._hidden_params.setdefault("additional_headers", {})
-                    _response._hidden_params["additional_headers"].update(
-                        {"x-litellm-request-prioritization-used": True}
+                response_hidden_params: Final = get_hidden_params(_response)
+                if response_hidden_params is not None:
+                    additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
+                        dict[str, object], response_hidden_params.setdefault("additional_headers", {})
                     )
+                    additional_headers.update({"x-litellm-request-prioritization-used": True})
                 return _response
             except Exception as e:
                 setattr(e, "priority", priority)
@@ -6453,7 +6470,9 @@ class Router:
                 healthy_deployments=healthy_deployments, responses=responses
             )
             returned_response: Final = cast(OpenAIFileObject, responses[0])
-            returned_response._hidden_params["model_file_id_mapping"] = model_file_id_mapping
+            returned_response_hidden_params: Final = get_hidden_params(returned_response)
+            if returned_response_hidden_params is not None:
+                returned_response_hidden_params["model_file_id_mapping"] = model_file_id_mapping
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
@@ -9316,10 +9335,10 @@ class Router:
             if access_windows_error is not None:
                 raise ValueError(access_windows_error)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
-            merged_params: Final[Mapping[str, Any]] = (
+            merged_params: Final[Mapping[str, object]] = (
                 _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
             )
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**merged_params)
+            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params.model_validate(dict(**merged_params))
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
             deployment = Deployment(
                 **deployment_info,

@@ -21,6 +21,7 @@ import openai
 import pytest
 from e2e_config import PROVIDER_EDGE_ADVERTISE_HOST, PROVIDER_EDGE_BIND_HOST, unique_marker
 from e2e_http import assert_client_error
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, LiteLLMParamsBody
 from openai.types.responses import (
@@ -52,7 +53,10 @@ class _OptionalResponsesBody(BaseModel):
     max_output_tokens: int | None = None
 
 
-BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+OPENAI_MINI_BACKEND: Final = "openai/gpt-4o-mini"
+OPENAI_VISION_BACKEND: Final = "openai/gpt-4o"
+ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
+BEDROCK_CONVERSE_BACKEND: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
 AZURE_OPENAI_BACKEND: Final = "azure/gpt-5.4-nano"
 AZURE_OPENAI_API_VERSION: Final = "v1"
@@ -100,11 +104,11 @@ WEATHER_TOOL: FunctionToolParam = {
 
 
 def _openai_params() -> LiteLLMParamsBody:
-    return LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY")
+    return LiteLLMParamsBody(model=OPENAI_MINI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
 
 
 def _anthropic_params() -> LiteLLMParamsBody:
-    return LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key="os.environ/ANTHROPIC_API_KEY")
+    return LiteLLMParamsBody(model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY")
 
 
 def _bedrock_params() -> LiteLLMParamsBody:
@@ -160,6 +164,15 @@ class WeatherArguments(BaseModel):
 
 class TestResponses:
     @pytest.mark.covers("llm.responses.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MINI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_returns_completion(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -172,6 +185,15 @@ class TestResponses:
         assert response.output_text.strip(), f"/responses returned no output text: {response.output!r}"
 
     @pytest.mark.covers("llm.responses.openai.basic.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MINI_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_responses_streaming_returns_completion(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -194,6 +216,15 @@ class TestResponses:
         )
 
     @pytest.mark.covers("llm.responses.openai.basic.nonstream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MINI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_logs_cost(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = _register(proxy, resources, _openai_params())
         client = sdk.openai(resources.key())
@@ -219,6 +250,16 @@ class TestResponses:
         assert "gpt-4o-mini" in (row.model or ""), f"unexpected spend row model: {row.model}"
 
     @pytest.mark.covers("llm.responses.openai.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MINI_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_returns_function_call(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -235,13 +276,23 @@ class TestResponses:
         _assert_weather_call(response)
 
     @pytest.mark.covers("llm.responses.openai.vision.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_VISION_BACKEND,),
+            capabilities=(Capability.VISION,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_vision_describes_image(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         model = _register(
             proxy,
             resources,
-            LiteLLMParamsBody(model="openai/gpt-4o", api_key="os.environ/OPENAI_API_KEY"),
+            LiteLLMParamsBody(model=OPENAI_VISION_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
         )
         client = sdk.openai(resources.key())
 
@@ -264,6 +315,15 @@ class TestResponses:
         )
 
     @pytest.mark.covers("llm.responses.anthropic.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_anthropic_returns_completion(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -276,6 +336,16 @@ class TestResponses:
         assert response.output_text.strip(), f"/responses returned no output text: {response.output!r}"
 
     @pytest.mark.covers("llm.responses.anthropic.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_anthropic_returns_function_call(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -292,6 +362,15 @@ class TestResponses:
         _assert_weather_call(response)
 
     @pytest.mark.covers("llm.responses.bedrock_converse.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_bedrock_returns_completion(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -304,6 +383,16 @@ class TestResponses:
         assert response.output_text.strip(), f"/responses over bedrock returned no output text: {response.output!r}"
 
     @pytest.mark.covers("llm.responses.bedrock_converse.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_CONVERSE_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_bedrock_returns_function_call(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -320,6 +409,15 @@ class TestResponses:
         _assert_weather_call(response)
 
     @pytest.mark.covers("llm.responses.vertex.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_vertex_returns_completion(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -332,6 +430,16 @@ class TestResponses:
         assert response.output_text.strip(), f"/responses over vertex returned no output text: {response.output!r}"
 
     @pytest.mark.covers("llm.responses.vertex.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_vertex_returns_function_call(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -349,6 +457,15 @@ class TestResponses:
         _assert_weather_call(response)
 
     @pytest.mark.covers("llm.responses.azure_openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_azure_openai_returns_completion(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -363,6 +480,16 @@ class TestResponses:
         )
 
     @pytest.mark.covers("llm.responses.azure_openai.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_azure_openai_returns_function_call(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -380,7 +507,37 @@ class TestResponses:
         _assert_weather_call(response)
 
     @pytest.mark.provider_edge_host
-    @pytest.mark.parametrize("endpoint", ["/v1/responses", "/v1/chat/completions"])
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            pytest.param(
+                "/v1/responses",
+                marks=meta(
+                    Subject(
+                        domain=Domain.LLM_TRANSLATION,
+                        route=Route.RESPONSES,
+                        providers=(Provider.BEDROCK,),
+                        models=(BEDROCK_CONVERSE_BACKEND,),
+                        mode=Mode.NONSTREAM,
+                    )
+                ),
+                id="/v1/responses",
+            ),
+            pytest.param(
+                "/v1/chat/completions",
+                marks=meta(
+                    Subject(
+                        domain=Domain.LLM_TRANSLATION,
+                        route=Route.CHAT_COMPLETIONS,
+                        providers=(Provider.BEDROCK,),
+                        models=(BEDROCK_CONVERSE_BACKEND,),
+                        mode=Mode.NONSTREAM,
+                    )
+                ),
+                id="/v1/chat/completions",
+            ),
+        ],
+    )
     def test_bedrock_forwards_allowed_safety_identifier_as_additional_model_request_field(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, endpoint: str
     ) -> None:
@@ -442,6 +599,14 @@ class TestResponses:
         reason="stage red: product gap, /v1/responses 500s (aresponses TypeError) on missing input instead of 400"
     )
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MINI_BACKEND,),
+        )
+    )
     def test_missing_input_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = _register(proxy, resources, _openai_params(), prefix="e2e-responses-val")
         key = resources.key()
@@ -453,6 +618,12 @@ class TestResponses:
         assert_client_error(result, "responses missing input")
 
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+        )
+    )
     def test_missing_model_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         result = proxy.transport.send(
@@ -463,6 +634,14 @@ class TestResponses:
         assert_client_error(result, "responses missing model")
 
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MINI_BACKEND,),
+        )
+    )
     def test_empty_input_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = _register(proxy, resources, _openai_params(), prefix="e2e-responses-val")
         key = resources.key()
@@ -509,6 +688,16 @@ class TodayReport(BaseModel):
 
 
 class TestResponsesOpenAIHostedFeatures:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(REASONING_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING, Capability.REASONING, Capability.RESPONSE_SCHEMA),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_reasoning_items_replay_into_structured_output_after_tool_call(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -561,6 +750,15 @@ class TestResponsesOpenAIHostedFeatures:
         assert TOOL_DATE in report.today, f"structured output ignored the tool result: {report!r}"
 
     @pytest.mark.provider_live
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(SHELL_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_shell_tool_stream_surfaces_shell_call_and_its_output(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:

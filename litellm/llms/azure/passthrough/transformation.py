@@ -128,7 +128,7 @@ class AzurePassthroughConfig(BasePassthroughConfig):
 
         caller_api_version: Final = request_query_params.get("api-version") if request_query_params else None
         relay_base: Final = without_api_version(base_target_url) if caller_api_version else base_target_url
-        complete_url: Final = BaseAzureLLM._get_base_azure_url(
+        complete_url: Final = BaseAzureLLM.get_base_azure_url(
             api_base=relay_base,
             litellm_params=MappingProxyType(
                 {**litellm_params, "api_version": caller_api_version or litellm_params.get("api_version")}
@@ -150,7 +150,7 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        return BaseAzureLLM._base_validate_azure_environment(
+        return BaseAzureLLM.base_validate_azure_environment(
             headers=headers,
             litellm_params=GenericLiteLLMParams.model_validate({**litellm_params, "api_key": api_key}),
         )

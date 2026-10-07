@@ -24,8 +24,10 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
+    with_prompt_cache_breakpoint,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
@@ -992,20 +994,25 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Preserve hidden params from the ResponsesAPIResponse, especially the headers
         # which contain important provider information like x-request-id
-        raw_response_hidden_params: Final = getattr(raw_response, "_hidden_params", {})
+        raw_response_hidden_params: Final = get_hidden_params(raw_response) or {}
         if raw_response_hidden_params:
-            if not hasattr(model_response, "_hidden_params") or model_response._hidden_params is None:
-                model_response._hidden_params = {}
+            model_response_hidden_params: Final = get_or_create_hidden_params(model_response)
             # Merge the raw_response hidden params with model_response hidden params
             # Preserve existing keys in model_response but add/override with raw_response params
             for key, value in raw_response_hidden_params.items():
-                if key == "additional_headers" and key in model_response._hidden_params:
-                    # Merge additional_headers to preserve both sets
-                    existing_additional_headers = model_response._hidden_params.get("additional_headers", {})
-                    merged_headers = {**value, **existing_additional_headers}
-                    model_response._hidden_params[key] = merged_headers
+                if key == "additional_headers" and key in model_response_hidden_params:
+                    existing_additional_headers = model_response_hidden_params.get("additional_headers", {})
+                    merged_headers = {
+                        **cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                            "dict[str, object]", value
+                        ),
+                        **cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                            "dict[str, object]", existing_additional_headers
+                        ),
+                    }
+                    model_response_hidden_params[key] = merged_headers
                 else:
-                    model_response._hidden_params[key] = value
+                    model_response_hidden_params[key] = value
 
         return model_response
 
@@ -1089,16 +1096,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Handle multimodal content
                     original_type = item.get("type")
                     if original_type == "text":
-                        converted = self._convert_content_str_to_input_text(item.get("text", ""), role)
+                        converted = with_prompt_cache_breakpoint(
+                            self._convert_content_str_to_input_text(item.get("text", ""), role),
+                            item.get("prompt_cache_breakpoint"),
+                        )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   text -> %s", converted)
                     elif original_type == "image_url":
                         # Map to responses API image format
-                        converted = cast(
-                            dict,
-                            self._convert_content_to_responses_format_image(
-                                cast(ChatCompletionImageObject, item), role
+                        converted = with_prompt_cache_breakpoint(
+                            cast(
+                                dict,
+                                self._convert_content_to_responses_format_image(
+                                    cast(ChatCompletionImageObject, item), role
+                                ),
                             ),
+                            item.get("prompt_cache_breakpoint"),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   image_url -> %s", converted)
@@ -1110,8 +1123,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   image -> %s", converted)
                         elif item_type == "file":
-                            converted = _input_file_from_file_value(
-                                cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                            converted = with_prompt_cache_breakpoint(
+                                _input_file_from_file_value(
+                                    cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                                ),
+                                item.get("prompt_cache_breakpoint"),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)

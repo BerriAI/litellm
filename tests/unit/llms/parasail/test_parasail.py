@@ -41,7 +41,7 @@ def test_parasail_dynamic_config_env_vars():
             "PARASAIL_API_BASE": PARASAIL_RESPONSES_GATEWAY,
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
 
     assert api_base == PARASAIL_RESPONSES_GATEWAY
     assert api_key == "test-key"

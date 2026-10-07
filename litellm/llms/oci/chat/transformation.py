@@ -23,14 +23,14 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     version,
 )
 from litellm.llms.oci.chat.cohere import (
-    _extract_text_content,
     adapt_messages_to_cohere_standard,
     adapt_tool_definitions_to_cohere_standard,
+    extract_text_content,
     handle_cohere_response,
     handle_cohere_stream_chunk,
 )
@@ -563,13 +563,13 @@ class OCIChatConfig(BaseConfig):
             system_messages: Final = [m for m in messages if m.get("role") == "system"]
             preamble_override = None
             if system_messages:
-                preamble: Final = "\n".join(_extract_text_content(m["content"]) for m in system_messages)
+                preamble: Final = "\n".join(extract_text_content(m["content"]) for m in system_messages)
                 if preamble:
                     preamble_override = preamble
 
             chat_request: Final = CohereChatRequest(
                 apiFormat="COHERE",
-                message=_extract_text_content(user_messages[-1]["content"]),
+                message=extract_text_content(user_messages[-1]["content"]),
                 chatHistory=adapt_messages_to_cohere_standard([m for m in messages if m.get("role") != "system"]),
                 preambleOverride=preamble_override,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
@@ -626,7 +626,7 @@ class OCIChatConfig(BaseConfig):
         else:
             model_response = handle_generic_response(response_json, model, model_response, raw_response)
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
+        model_response.hidden_params["additional_headers"] = raw_response.headers
         return model_response
 
     @track_llm_api_timing()
@@ -647,7 +647,7 @@ class OCIChatConfig(BaseConfig):
         timeout: float | httpx.Timeout | None = None,
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         try:
             response: Final = client.post(

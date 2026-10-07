@@ -39,7 +39,6 @@ from typing import (
     Optional,
     Protocol,
     TypeAlias,
-    TypedDict,
     Union,
     cast,
     get_args,
@@ -50,9 +49,9 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
-from typing_extensions import NotRequired, ReadOnly, assert_never
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -336,6 +335,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
+from litellm.proxy._experimental.mcp_server.catalog import public_catalog_operation
 from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_ENABLED_ENV_VAR, is_mcp_stdio_flag_key
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
@@ -1190,6 +1190,34 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
 _AiohttpAddrInfo: TypeAlias = tuple[int | socket.AddressFamily, int | socket.SocketKind, int, str, tuple[object, ...]]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
+class _LoginRequestBody(TypedDict, total=False):
+    username: ReadOnly[object]
+    password: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _LoginExchangeRequestBody(TypedDict, total=False):
+    code: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AnthropicBetaHeadersReloadConfig(TypedDict, total=False):
+    interval_hours: ReadOnly[int | float | None]
+    force_reload: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _WebsearchInterceptionLitellmSettings(TypedDict, total=False):
+    websearch_interception_params: ReadOnly[object]
+
+
+_LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
+_LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
+_ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
+_WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
+
+
 class _AiohttpConnectorKwargs(TypedDict, total=False):
     keepalive_timeout: float
     ttl_dns_cache: int
@@ -1205,7 +1233,7 @@ async def _initialize_shared_aiohttp_session():
         from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 
         from litellm.llms.custom_httpx.http_handler import (
-            _build_aiohttp_keepalive_socket_factory,
+            build_aiohttp_keepalive_socket_factory,
         )
 
         connector_kwargs: Final[_AiohttpConnectorKwargs] = {
@@ -1218,7 +1246,7 @@ async def _initialize_shared_aiohttp_session():
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
             connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        socket_factory: Final = _build_aiohttp_keepalive_socket_factory()
+        socket_factory: Final = build_aiohttp_keepalive_socket_factory()
         if socket_factory is not None:
             connector_kwargs["socket_factory"] = socket_factory
 
@@ -4549,7 +4577,7 @@ async def _adaptive_router_flusher_loop():
                     ar = tagged.strategy
                     # Lazy state load: covers adaptive routers registered via
                     # `/config/reload` after proxy boot.
-                    if not getattr(ar, "state_loaded", False):
+                    if not ar.state_loaded:
                         try:
                             await ar.load_state_from_db(prisma_client)
                         finally:
@@ -8470,9 +8498,10 @@ class ProxyConfig:
             if config_record is None or config_record.param_value is None:
                 return
 
-            litellm_settings = config_record.param_value
-            if isinstance(litellm_settings, str):
-                litellm_settings = json.loads(litellm_settings)
+            raw_litellm_settings: Final = config_record.param_value
+            litellm_settings: Final = _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS.validate_python(
+                json.loads(raw_litellm_settings) if isinstance(raw_litellm_settings, str) else raw_litellm_settings
+            )
 
             websearch_config: Final = litellm_settings.get("websearch_interception_params", None)
 
@@ -8725,7 +8754,7 @@ class ProxyConfig:
             if config_record is None or config_record.param_value is None:
                 return  # No configuration found, skip reload
 
-            config: Final = config_record.param_value
+            config: Final = _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG.validate_python(config_record.param_value)
             interval_hours: Final = config.get("interval_hours")
             force_reload: Final = config.get("force_reload", False)
 
@@ -17126,7 +17155,7 @@ async def login_v2(request: Request):
     from litellm.proxy.utils import get_custom_url
 
     try:
-        body: Final = await request.json()
+        body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
         username: Final = str(body.get("username"))
         password: Final = str(body.get("password"))
 
@@ -17198,7 +17227,7 @@ async def login_v3(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body: Final = await request.json()
+        body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
         username: Final = str(body.get("username"))
         password: Final = str(body.get("password"))
 
@@ -17270,7 +17299,7 @@ async def login_v3_exchange(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body: Final = await request.json()
+        body: Final = _LOGIN_EXCHANGE_REQUEST_BODY.validate_python(await request.json())
         code: Final = body.get("code")
         if not code:
             raise ProxyException(
@@ -20368,30 +20397,26 @@ async def _resolve_mcp_csv_tokens(csv_segment: str, client_ip: str | None) -> li
     all-unmatched server filter falls back to the full ``allowed_mcp_servers``
     list and silently broadens the request scope).
     """
-    from litellm.constants import DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
+    from litellm.proxy._experimental.mcp_server.catalog import global_manager
 
-    seen: Final[set] = set()
-    deduped: Final[list[str]] = []
-    for raw in csv_segment.split(","):
-        token = raw.strip()
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        deduped.append(token)
-        if len(deduped) >= DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS:
-            break
+    async with global_manager().catalog.operation():
+        from litellm.constants import DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
 
-    resolved: Final[list[str]] = []
-    for token in deduped:
-        if global_mcp_server_manager.get_mcp_server_by_name(token, client_ip=client_ip):
-            resolved.append(token)
-            continue
-        if await _is_mcp_access_group_cached(token):
-            resolved.append(token)
-    return resolved
+        deduped: Final = tuple(
+            token for token in dict.fromkeys(raw.strip() for raw in csv_segment.split(",")) if token
+        )[:DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS]
+
+        resolved: Final[list[str]] = []  # mutable-ok: sequential await per token cannot live in a comprehension
+        for token in deduped:
+            if global_mcp_server_manager.get_mcp_server_by_name(token, client_ip=client_ip):
+                resolved.append(token)
+                continue
+            if await _is_mcp_access_group_cached(token):
+                resolved.append(token)
+        return resolved
 
 
 async def _is_mcp_access_group_cached(name: str) -> bool:
@@ -20428,12 +20453,13 @@ async def _is_mcp_access_group_cached(name: str) -> bool:
     "/{mcp_server_name}/mcp",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
 )
+@public_catalog_operation
 async def dynamic_mcp_route(mcp_server_name: str, request: Request):
     """Handle /{name}/mcp for MCP server aliases, toolsets, MCP access group tags, and comma-separated lists.
 
     Resolution order:
     1. Registered MCP server alias / name
-    2. Comma-separated list (short-circuits before any DB call)
+    2. Comma-separated list
     3. Toolset name (DB lookup, cached)
     4. MCP access group tag (DB lookup, cached)
     """
@@ -20446,7 +20472,9 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
 
         # 1. Registered MCP server alias
-        if global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip):
+        async with global_mcp_server_manager.catalog.operation():
+            server: Final = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
+        if server is not None:
             return await _mcp_forward_as_path(mcp_server_name, request)
 
         # 2. Comma-separated list — validate every token resolves to a known

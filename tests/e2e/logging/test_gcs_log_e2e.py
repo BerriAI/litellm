@@ -22,6 +22,7 @@ import math
 import pytest
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from gcs_reader import GcsLogReader, build_gcs_reader, utc_now
 from lifecycle import ResourceManager
 from logging_client import LoggingClient, completion_response_id, first_ok, readiness_details_body
@@ -52,6 +53,14 @@ def _assert_gcs_configured(client: LoggingClient) -> None:
 
 class TestGcsLogDelivery:
     @pytest.mark.covers("logging.gcs_bucket.success.writes_object", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_writes_one_success_record(
         self, client: LoggingClient, gcs_logs: GcsLogReader, resources: ResourceManager
     ) -> None:
