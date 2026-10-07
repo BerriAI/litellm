@@ -639,6 +639,7 @@ class DeploymentTypedDict(TypedDict, total=False):
     litellm_params: Required[LiteLLMParamsTypedDict]
     model_info: dict | ModelInfo
 
+
 SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
 
 
