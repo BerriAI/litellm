@@ -6,8 +6,6 @@ import httpx
 from pydantic import JsonValue
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
-from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName, TraceScope
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -83,44 +81,22 @@ def aocr(
 def ocr_health_check_document(model: str, custom_llm_provider: str | None) -> dict[str, object]: ...
 def ocr_passthrough_response(model: str, endpoint: str, body: bytes) -> dict[str, object] | None: ...
 def embedding(
-    request: LiteLLMEmbeddingRequest,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    call: NativeCall,
 ) -> EmbeddingResponse: ...
 def aembedding(
-    request: LiteLLMEmbeddingRequest,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    call: NativeCall,
 ) -> Coroutine[object, object, EmbeddingResponse]: ...
 def transcription(
-    model: str,
-    audio: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    optional_params: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
+    call: NativeCall,
 ) -> dict[str, object]: ...
 def atranscription(
-    model: str,
-    audio: object,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    optional_params: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
+    call: NativeCall,
 ) -> Future[dict[str, object]]: ...
 def completion(
-    request: LiteLLMChatCompletionsRequest,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    call: NativeCall,
 ) -> ModelResponse: ...
 def acompletion(
-    request: LiteLLMChatCompletionsRequest,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
+    call: NativeCall,
 ) -> Coroutine[object, object, ModelResponse]: ...
 def responses(
     call: NativeCall,
@@ -135,24 +111,10 @@ def amessages(
     call: NativeCall,
 ) -> Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
 def chat_completions(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
+    call: NativeCall,
 ) -> dict[str, object]: ...
 def achat_completions(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
+    call: NativeCall,
 ) -> Future[dict[str, object]]: ...
 
 @final

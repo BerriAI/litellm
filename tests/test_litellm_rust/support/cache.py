@@ -10,9 +10,8 @@ import litellm
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
-from litellm.rust_bridge.chat_completions.entrypoints import NATIVE_ACOMPLETION, LiteLLMChatCompletionsRequest
+from litellm.rust_bridge.chat_completions.entrypoints import NATIVE_ACOMPLETION
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.dispatch import call_hook
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES
@@ -79,13 +78,11 @@ async def invoke(
     if route == "chat":
         if not native:
             return await litellm.acompletion(**parameters)
-        chat: Final = LiteLLMChatCompletionsRequest(
-            MESSAGES_MODEL, list(MESSAGES), None, "test-key", server.base_url, None, None, parameters
-        )
+        chat: Final = NativeCall(args=(), kwargs=parameters, bound=parameters)
         return await runtime.arun(
             RouteContext(Route.CHAT_COMPLETIONS),
             binding=NATIVE_ACOMPLETION,
-            native=lambda hook: call_hook(hook, chat, (), parameters),
+            native=lambda hook: hook(chat),
             python=runtime.NO_PYTHON,
             rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
         )

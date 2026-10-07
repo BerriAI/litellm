@@ -7,11 +7,11 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import RateLimitError
+from litellm.chat_completions import dispatch as chat_dispatch
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge import _native
-from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, ModelResponse
@@ -66,10 +66,8 @@ def native_call(
             "max_tokens": 32,
             **options,
         }
-        request: Final = LiteLLMChatCompletionsRequest(
-            MESSAGES_MODEL, list(MESSAGES), None, "test-key", server.base_url, None, None, kwargs
-        )
-        return (_native.acompletion if asynchronous else _native.completion)(request, (), kwargs)
+        request: Final = NativeCall(args=(), kwargs=kwargs, bound=kwargs)
+        return (_native.acompletion if asynchronous else _native.completion)(request)
     response_kwargs: Final = {
         "model": RESPONSES_MODEL,
         "input": "hello",
@@ -295,7 +293,7 @@ async def test_native_projection_reads_positional_parameters(route: Route, recor
         args: Final = (MESSAGES_MODEL, list(MESSAGES), 12.0, 0.25)
         request: Final = chat_dispatch.request(args, kwargs)
         assert request is not None
-        await asyncio.to_thread(_native.completion, request, args, kwargs)
+        await asyncio.to_thread(_native.completion, request)
         assert _OBJECT.validate_python(recording_server.requests[0].body)["temperature"] == 0.25
     else:
         response_args: Final = ("hello", RESPONSES_MODEL, None, "Be brief", 16)
@@ -362,3 +360,24 @@ async def test_native_responses_decode_continuation_ids(
     )
     await execute("responses", asynchronous, recording_server, {"previous_response_id": previous})
     assert _OBJECT.validate_python(recording_server.requests[0].body)["previous_response_id"] == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_native_chat_uses_bound_positional_parameters(
+    asynchronous: bool, recording_server: RecordingServer
+) -> None:
+    recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    arguments: Final = (MESSAGES_MODEL, list(MESSAGES), 12.0, 0.35)
+    supplied: Final = {"base_url": recording_server.base_url, "api_key": "test-key", "max_tokens": 32}
+    call: Final = chat_dispatch._DISPATCH.request(arguments, supplied)  # pyright: ignore[reportPrivateUsage]  # exercise the native request produced by public binding
+    assert call is not None
+    result: Final = (
+        await _native.acompletion(call) if asynchronous else await asyncio.to_thread(_native.completion, call)
+    )
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "Hello from native Messages"
+    assert len(recording_server.requests) == 1
+    body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
+    assert body["temperature"] == arguments[3]
+    assert body["max_tokens"] == supplied["max_tokens"]
