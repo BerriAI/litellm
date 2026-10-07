@@ -16,6 +16,7 @@ from typing import Final
 import pytest
 from e2e_config import provider_edge_base, unique_marker
 from e2e_http import assert_client_error
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -24,6 +25,10 @@ from sdk_clients import NO_PROXY_CACHE, SdkClients, response_header
 
 pytestmark = pytest.mark.e2e
 
+OPENAI_EMBEDDING: Final = "openai/text-embedding-3-small"
+BEDROCK_TITAN_EMBEDDING: Final = "bedrock/amazon.titan-embed-text-v2:0"
+COHERE_EMBEDDING: Final = "cohere/embed-v4.0"
+MISTRAL_EMBEDDING: Final = "mistral/mistral-embed"
 VERTEX_TEXT_EMBEDDING: Final = "vertex_ai/text-embedding-005"
 VERTEX_MULTIMODAL_EMBEDDING: Final = "vertex_ai/multimodalembedding@001"
 TOKENS_TEXT: Final = "The quick brown fox jumps over the lazy dog"
@@ -45,7 +50,7 @@ def _cosine(left: list[float], right: list[float]) -> float:
 
 def _titan_params() -> LiteLLMParamsBody:
     return LiteLLMParamsBody(
-        model="bedrock/amazon.titan-embed-text-v2:0",
+        model=BEDROCK_TITAN_EMBEDDING,
         aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
         aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
         aws_region_name="os.environ/AWS_REGION",
@@ -62,7 +67,7 @@ def _openai_embeddings_params() -> LiteLLMParamsBody:
     Vertex stay live: SigV4 signs the Host header, and neither has an edge mount."""
     base = provider_edge_base("openai")
     return LiteLLMParamsBody(
-        model="openai/text-embedding-3-small",
+        model=OPENAI_EMBEDDING,
         api_key="os.environ/OPENAI_API_KEY",
         api_base=None if base is None else f"{base}/v1",
     )
@@ -97,10 +102,28 @@ def _assert_embedding_vector(
 class TestEmbeddingsEndpoint:
     @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_EMBEDDING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_embeddings_returns_vector(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         _assert_embedding_vector(proxy, resources, sdk, "e2e-embeddings", _openai_embeddings_params())
 
     @pytest.mark.covers("llm.embeddings.bedrock.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_TITAN_EMBEDDING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_embeddings_returns_vector(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -113,6 +136,15 @@ class TestEmbeddingsEndpoint:
         )
 
     @pytest.mark.covers("llm.embeddings.cohere.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+            providers=(Provider.COHERE,),
+            models=(COHERE_EMBEDDING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_cohere_embeddings_returns_vector(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -121,10 +153,19 @@ class TestEmbeddingsEndpoint:
             resources,
             sdk,
             "e2e-embeddings-cohere",
-            LiteLLMParamsBody(model="cohere/embed-v4.0", api_key="os.environ/COHERE_API_KEY"),
+            LiteLLMParamsBody(model=COHERE_EMBEDDING, api_key="os.environ/COHERE_API_KEY"),
         )
 
     @pytest.mark.covers("llm.embeddings.vertex.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_TEXT_EMBEDDING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_vertex_embeddings_returns_vector(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -134,12 +175,21 @@ class TestEmbeddingsEndpoint:
             sdk,
             "e2e-embeddings-vertex",
             LiteLLMParamsBody(
-                model="vertex_ai/text-embedding-005",
+                model=VERTEX_TEXT_EMBEDDING,
                 vertex_project="os.environ/VERTEXAI_PROJECT",
                 vertex_location="us-central1",
             ),
         )
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+            providers=(Provider.MISTRAL,),
+            models=(MISTRAL_EMBEDDING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_mistral_embeddings_returns_vector(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -148,10 +198,19 @@ class TestEmbeddingsEndpoint:
             resources,
             sdk,
             "e2e-embeddings-mistral",
-            LiteLLMParamsBody(model="mistral/mistral-embed", api_key="os.environ/MISTRAL_API_KEY"),
+            LiteLLMParamsBody(model=MISTRAL_EMBEDDING, api_key="os.environ/MISTRAL_API_KEY"),
         )
 
     @pytest.mark.covers("llm.embeddings.vertex.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_TEXT_EMBEDDING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_vertex_embeddings_honor_requested_dimensions(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -166,6 +225,15 @@ class TestEmbeddingsEndpoint:
         assert len(embeddings.data[0].embedding) == 8, f"dimensions=8 was not honored: {embeddings!r}"
         assert embeddings.usage.prompt_tokens > 0, f"vertex embeddings reported no prompt usage: {embeddings.usage!r}"
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_MULTIMODAL_EMBEDDING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_vertex_multimodal_embeddings_honor_dimensions_and_are_costed(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -181,6 +249,15 @@ class TestEmbeddingsEndpoint:
         cost = response_header(raw.headers, "x-litellm-response-cost")
         assert cost is not None and float(cost) > 0, f"multimodal embedding was not costed: {cost!r}"
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_TITAN_EMBEDDING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_titan_embeds_token_array_input_as_its_decoded_text(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -199,6 +276,15 @@ class TestEmbeddingsEndpoint:
 
     @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_EMBEDDING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_array_input_returns_vectors(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model, key = _register(proxy, resources, "e2e-embeddings-array", _openai_embeddings_params())
         embeddings = sdk.openai(key).embeddings.create(
@@ -208,6 +294,12 @@ class TestEmbeddingsEndpoint:
 
     @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+        )
+    )
     def test_missing_model_returns_client_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         result = proxy.transport.send(
@@ -219,6 +311,12 @@ class TestEmbeddingsEndpoint:
 
     @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.EMBEDDINGS,
+        )
+    )
     def test_missing_input_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources, "e2e-embeddings-missin", _openai_embeddings_params())
         result = proxy.transport.send(

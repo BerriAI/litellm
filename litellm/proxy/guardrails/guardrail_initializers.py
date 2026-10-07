@@ -1,5 +1,5 @@
 # litellm/proxy/guardrails/guardrail_initializers.py
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -100,7 +100,7 @@ _MCP_EVENT_HOOKS: Final = frozenset(
 )
 
 
-def _configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
+def configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
     if isinstance(mode, str):
         return (mode,)
     if isinstance(mode, list):
@@ -114,7 +114,7 @@ def _configured_event_hooks(mode: str | list[str] | Mode) -> tuple[str, ...]:
 
 
 def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
-    hooks: Final = _configured_event_hooks(mode)
+    hooks: Final = configured_event_hooks(mode)
     return bool(hooks) and all(hook in _MCP_EVENT_HOOKS for hook in hooks)
 
 
@@ -218,7 +218,7 @@ def initialize_tool_permission(litellm_params: LitellmParams, guardrail: Guardra
         ToolPermissionGuardrail,
     )
 
-    rules: list[dict[str, Any]] | None = None
+    rules: list[dict[str, object]] | None = None
     if litellm_params.rules:
         rules = []
         for rule in litellm_params.rules:

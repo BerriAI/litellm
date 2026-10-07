@@ -1,7 +1,7 @@
-import gzip
+import asyncio, gzip, importlib, os
 import io
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, Literal, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,8 +12,8 @@ from starlette.datastructures import FormData
 from starlette.requests import Request
 
 
-
 import litellm
+import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
@@ -30,16 +30,29 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
     read_raw_json_body,
 )
+from fastapi import Request as Request_http_parsing
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.utils import _invalidate_model_cost_lowercase_map
+from starlette.types import Message
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 def _starlette_request(
-    body: bytes, content_type: str, path: str = "/v1/messages", content_encoding: str = ""
+    body: bytes,
+    content_type: str,
+    path: str = "/v1/messages",
+    content_encoding: str = "",
+    content_length: str = "",
 ) -> Request:
     scope = {
         "type": "http",
         "method": "POST",
         "path": path,
-        "headers": [(b"content-type", content_type.encode()), (b"content-encoding", content_encoding.encode())],
+        "headers": [
+            (b"content-type", content_type.encode()),
+            (b"content-encoding", content_encoding.encode()),
+            (b"content-length", content_length.encode()),
+        ],
         "query_string": b"",
     }
     chunks = iter((body,))
@@ -48,6 +61,46 @@ def _starlette_request(
         return {"type": "http.request", "body": next(chunks, b""), "more_body": False}
 
     return Request(scope, receive)
+
+
+@pytest.mark.asyncio
+async def test_read_request_body_marks_body_received_once_with_its_size(monkeypatch: pytest.MonkeyPatch):
+    events: list[tuple[str, dict[str, str | int]]] = []  # mutable-ok: recorder for the injected phase_event double
+
+    def record(name: str, attributes: dict[str, str | int]) -> None:
+        events.append((name, dict(attributes)))
+
+    monkeypatch.setattr(http_parsing_utils, "phase_event", record)
+    body: Final = orjson.dumps({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "x" * 4096}]})
+    request: Final = _starlette_request(body, "application/json")
+
+    assert await _read_request_body(request) == orjson.loads(body)
+    assert await _read_request_body(request) == orjson.loads(body)
+
+    assert events == [("litellm.request.body_received", {"litellm.request.body_bytes": len(body)})]
+
+
+@pytest.mark.asyncio
+async def test_read_request_body_marks_body_received_for_binary_and_form_bodies(monkeypatch: pytest.MonkeyPatch):
+    events: list[tuple[str, dict[str, str | int] | None]] = []  # mutable-ok: recorder for the phase_event double
+
+    def record(name: str, attributes: dict[str, str | int] | None) -> None:
+        events.append((name, None if attributes is None else dict(attributes)))
+
+    monkeypatch.setattr(http_parsing_utils, "phase_event", record)
+    protobuf: Final = b"\x08\x96\x01" * 50
+    form: Final = b"model=whisper-1&language=en"
+    form_type: Final = "application/x-www-form-urlencoded"
+
+    await _read_request_body(_starlette_request(protobuf, "application/x-protobuf"))
+    await _read_request_body(_starlette_request(form, form_type, content_length=str(len(form))))
+    await _read_request_body(_starlette_request(form, form_type))
+
+    assert events == [
+        ("litellm.request.body_received", {"litellm.request.body_bytes": len(protobuf)}),
+        ("litellm.request.body_received", {"litellm.request.body_bytes": len(form)}),
+        ("litellm.request.body_received", None),
+    ]
 
 
 @pytest.mark.asyncio
@@ -429,9 +482,7 @@ async def test_circular_reference_handling():
 
     # Second parse using the same request - will use the modified cached value
     result2 = await _read_request_body(mock_request)
-    assert (
-        "proxy_server_request" not in result2
-    )  # This will pass, showing the cache pollution
+    assert "proxy_server_request" not in result2  # This will pass, showing the cache pollution
 
 
 @pytest.mark.asyncio
@@ -449,7 +500,7 @@ async def test_json_parsing_error_handling():
                 "type": "mcp",
                 "server_label": "litellm",
                 "headers": {
-                    "x-litellm-api-key": "Bearer sk-1234",
+                    "x-litellm-api-key": "Bearer sk-9876",
                 }
             }
         ],
@@ -501,7 +552,7 @@ async def test_json_parsing_error_handling():
                 "type": "mcp",
                 "server_label": "litellm",
                 "headers": {
-                    "x-litellm-api-key": "Bearer sk-1234"
+                    "x-litellm-api-key": "Bearer sk-9876"
                 }
             }
         ],
@@ -542,9 +593,7 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 
     # Cap the repair at ~100 bytes so the test stays fast and independent of the default.
-    monkeypatch.setattr(
-        http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 100 / (1024 * 1024)
-    )
+    monkeypatch.setattr(http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 100 / (1024 * 1024))
 
     small_body = b'{"model":"gpt-4o","x":NaN}'
     assert len(small_body) <= 100
@@ -552,9 +601,7 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     assert repaired["model"] == "gpt-4o"
 
     padding = "a" * 200
-    large_body = (
-        b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":NaN}'
-    )
+    large_body = b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":NaN}'
     assert len(large_body) > 100
     with pytest.raises(ProxyException) as exc_info:
         await _read_request_body(_make_json_request(large_body))
@@ -563,9 +610,7 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
 
     # Disabling the cap (0) restores repair for the same large body, proving the cap
     # — not the malformed content — is what short-circuits the repair.
-    monkeypatch.setattr(
-        http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 0
-    )
+    monkeypatch.setattr(http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 0)
     repaired_large = await _read_request_body(_make_json_request(large_body))
     assert repaired_large["model"] == "gpt-4o"
 
@@ -594,7 +639,7 @@ async def test_lone_surrogate_escape_is_rejected_with_400(content: bytes):
 
     paired = body.replace(content, b"say ok \\ud83d\\ude00")
     parsed = await _read_request_body(_make_json_request(paired))
-    assert parsed["messages"][0]["content"] == "say ok \U0001F600"
+    assert parsed["messages"][0]["content"] == "say ok \U0001f600"
 
 
 @pytest.mark.asyncio
@@ -816,9 +861,7 @@ def test_populate_request_with_path_params_does_not_overwrite_existing_values():
 
     # Verify existing values were NOT overwritten
     assert result["model"] == "gpt-4"  # Should keep original, not "gpt-3.5-turbo"
-    assert (
-        result["organization_id"] == "org-existing"
-    )  # Should keep original, not "org-query-param"
+    assert result["organization_id"] == "org-existing"  # Should keep original, not "org-query-param"
     # Verify other data is preserved
     assert result["messages"] == [{"role": "user", "content": "Hello"}]
 
@@ -986,9 +1029,7 @@ class TestGetTagsFromRequestBodyStringCoerce:
         )
 
         # Must not raise; must yield no metadata tags but keep root tags
-        tags = get_tags_from_request_body(
-            {"metadata": "not-json", "tags": ["root-only"]}
-        )
+        tags = get_tags_from_request_body({"metadata": "not-json", "tags": ["root-only"]})
         assert tags == ["root-only"]
 
     def test_dict_metadata_still_works(self):
@@ -1045,9 +1086,7 @@ class TestReadRequestBodyNonCanonicalContentType:
             "multiform/anything",
         ],
     )
-    async def test_json_body_with_formlike_content_type_parses_as_json(
-        self, content_type
-    ):
+    async def test_json_body_with_formlike_content_type_parses_as_json(self, content_type):
         payload = {"user_config": {"model_list": []}, "model": "x"}
 
         mock_request = MagicMock()
@@ -1280,6 +1319,8 @@ def test_shared_inference_model_selection_preserves_handler_precedence(
     "method,path,skip_parse",
     [
         ("POST", "/v1/traces", True),
+        ("POST", "/v1/logs", True),
+        ("GET", "/v1/logs", False),
         ("GET", "/v1/traces", False),
         ("POST", "/v1/messages", False),
         ("POST", "/v1/traces/other", False),
@@ -1291,7 +1332,10 @@ async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_pa
     receive: Final = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
     request: Final = Request(
         {
-            "type": "http", "method": method, "path": root_path + path, "root_path": root_path,
+            "type": "http",
+            "method": method,
+            "path": root_path + path,
+            "root_path": root_path,
             "headers": [(b"content-type", b"application/json")],
         },
         receive,
@@ -1307,9 +1351,14 @@ async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("content_type, encoding", [
-    ("application/json", ""), ("application/x-protobuf", ""), ("application/json", "gzip"),
-])
+@pytest.mark.parametrize(
+    "content_type, encoding",
+    [
+        ("application/json", ""),
+        ("application/x-protobuf", ""),
+        ("application/json", "gzip"),
+    ],
+)
 async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_limit(content_type, encoding):
     from litellm.constants import OTLP_MAX_BODY_BYTES
     from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
@@ -1322,17 +1371,26 @@ async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_lim
         assert len(received) <= 2, "receiver must reject without consuming subsequent chunks"
         return {"type": "http.request", "body": chunk, "more_body": True}
 
-    request = Request({"type": "http", "method": "POST", "path": "/v1/traces", "headers": [
-        (b"content-type", content_type.encode()), (b"content-encoding", encoding.encode()),
-    ]}, receive)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/traces",
+            "headers": [
+                (b"content-type", content_type.encode()),
+                (b"content-encoding", encoding.encode()),
+            ],
+        },
+        receive,
+    )
     assert await _read_request_body(request) == {}
     assert received == []
-    store = MagicMock()
-    store.insert_spans = AsyncMock()
+    storage = MagicMock()
+    storage.ingest = AsyncMock()
     with pytest.raises(TracingPayloadTooLargeError):
-        await TraceReceiver(store).ingest(request.stream(), content_type, encoding, Tenant("team", "key"))
+        await TraceReceiver(storage).ingest(request.stream(), content_type, encoding, Tenant("team", "key"))
     assert len(received) == 2
-    store.insert_spans.assert_not_awaited()
+    storage.ingest.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1344,17 +1402,15 @@ async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
     from litellm.tracing import TraceReceiver
 
     chunk: Final = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
-    receive: Final = AsyncMock(
-        side_effect=[{"type": "http.request", "body": chunk, "more_body": True}] * 2
-    )
+    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": chunk, "more_body": True}] * 2)
     request: Final = Request(
         {"type": "http", "method": "POST", "path": "/v1/traces", "headers": [(b"content-type", b"application/json")]},
         receive,
     )
-    store: Final = MagicMock()
-    store.insert_spans = AsyncMock()
+    storage: Final = MagicMock()
+    storage.ingest = AsyncMock()
     context: Final = await tracing_endpoints.provide_trace_access(
-        auth=UserAPIKeyAuth(token="key", team_id="team"), tracing=TraceReceiver(store), log_team_lookup=AsyncMock()
+        auth=UserAPIKeyAuth(token="key", team_id="team"), tracing=TraceReceiver(storage), log_team_lookup=AsyncMock()
     )
 
     parsed, parse_error = await _read_request_body_deferring_parse_failure(request)
@@ -1365,4 +1421,156 @@ async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
     response: Final = await tracing_endpoints.ingest_otlp_traces(request, context)
     assert response.status_code == 413
     assert receive.await_count == 2
-    store.insert_spans.assert_not_awaited()
+    storage.ingest.assert_not_awaited()
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    _invalidate_model_cost_lowercase_map()
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception:
+            pass
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+def _request(receive: Callable[[], Awaitable[Message]]) -> Request_http_parsing:
+    return Request_http_parsing(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+def _request_with_body(body: bytes) -> Request_http_parsing:
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return _request(receive)
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_read_request_body_valid_json():
+    result = await _read_request_body(_request_with_body(b'{"key": "value"}'))
+    assert result == {"key": "value"}
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_read_request_body_empty_body():
+    result = await _read_request_body(_request_with_body(b""))
+    assert result == {}
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_read_request_body_invalid_json():
+    with pytest.raises(ProxyException):
+        await _read_request_body(_request_with_body(b'{"key": value}'))
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_read_request_body_large_payload():
+    large_payload = '{"key":' + '"a"' * 10**6 + "}"
+    with pytest.raises(ProxyException):
+        await _read_request_body(_request_with_body(large_payload.encode()))
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+async def test_read_request_body_unexpected_error():
+    async def receive() -> Message:
+        raise ValueError("Unexpected error")
+
+    result = await _read_request_body(_request(receive))
+    assert result == {}

@@ -5,7 +5,7 @@ Used when the target model is an OpenAI or Azure model.
 """
 
 from collections.abc import AsyncIterator, Coroutine, Mapping
-from typing import Any, Final, TypeAlias
+from typing import Final, TypeAlias
 
 import litellm
 from litellm.types.llms.anthropic import (
@@ -63,7 +63,7 @@ def _build_responses_kwargs(
     top_p: float | None = None,
     output_format: AnthropicOutputSchema | None = None,
     extra_kwargs: Mapping[str, object] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """

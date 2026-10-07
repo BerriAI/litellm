@@ -6,16 +6,16 @@ from typing import Final, Protocol, TypeAlias
 from pydantic import TypeAdapter
 
 from litellm.proxy.lens.models import (
+    ActivitySelection,
     Evidence,
     Execution,
     ExecutionContent,
-    LensSettings,
     MetadataFilter,
     Sample,
     Scope,
     TracePart,
 )
-from litellm.rust_bridge.trace_queries import (
+from litellm.rust_bridge.trace.generated.models import (
     ActivityAvailability,
     AgentRow,
     CountRow,
@@ -73,7 +73,7 @@ class SourceReader:
     async def sample(
         self,
         scope: Scope,
-        settings: LensSettings,
+        settings: ActivitySelection,
         start: int,
         end: int,
         offset: int = 0,
@@ -126,7 +126,7 @@ class SourceReader:
                     metadata=tuple(
                         MetadataFilter(key=k, value=v)
                         for k, v in row.attributes
-                        if k != "litellm.api_key_hash" and 0 < len(k) <= 200 and 0 < len(v) <= 500
+                        if k != "litellm.api_key_hash" and k and v
                     ),
                 )
                 for row in rows
@@ -142,6 +142,7 @@ class SourceReader:
             id=execution.trace_id,
             trace_ref=execution.trace_ref,
             record_team=execution.team_id,
+            start_time=execution.start_time,
             cursor=cursor,
             offset=offset + 1,
         )
@@ -155,6 +156,8 @@ class SourceReader:
                     parent_span_id=row.parent_span_id,
                     name=row.name,
                     kind=row.kind,
+                    start_time=row.start_time,
+                    end_time=row.end_time,
                     content=row.content,
                     truncated=bool(row.truncated),
                 )
@@ -173,6 +176,7 @@ class SourceReader:
             id=execution.trace_id,
             trace_ref=execution.trace_ref,
             record_team=execution.team_id,
+            start_time=execution.start_time,
             span=evidence.span_id,
             quote=evidence.quote,
         )

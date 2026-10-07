@@ -21,7 +21,7 @@ test_paths:
       Live-provider caching cases in tests/local_testing that remain outside CI. Jobs that
       glob that directory either deselect them (local_testing_part1 and part2 carry `-k "... and
       not caching and not cache"`) or keep only another keyword (langfuse, router, assistants).
-      Separately, test-redis-compat.yml selects two IAM cluster authentication tests in
+      Separately, the CircleCI redis-compat jobs select two IAM cluster authentication tests in
       test_caching.py by node ID. It does not run that file's other tests.
       The gap was eight files and 118 tests when measured 2026-08-20; the five keyless files now
       run in the caching-local shard, leaving live cases in these three. Measured 2026-08-21 with no provider

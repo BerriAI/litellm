@@ -17,7 +17,7 @@ from litellm.types.router import CredentialLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 
-def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
+def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
     if request_kwargs is None:
         return False
     metadata_value: Final = request_kwargs.get("metadata")
@@ -26,6 +26,9 @@ def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool
     litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
     user_api_key_auth: Final = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
     return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
+
+
+_is_proxy_admin_request = is_proxy_admin_request
 
 
 def get_request_team_id(request_kwargs: Mapping[str, object] | None) -> str | None:
@@ -155,7 +158,7 @@ def filter_team_based_models(
     metadata: Final = request_kwargs.get("metadata") or {}
     litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
     request_team_id: Final = get_request_team_id(request_kwargs)
-    if request_team_id is None and _is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
+    if request_team_id is None and is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
         requested_model: Final = (
             request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")
         )

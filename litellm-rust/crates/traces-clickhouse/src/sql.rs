@@ -3,8 +3,10 @@ use std::collections::BTreeMap;
 use litellm_http::Client;
 use litellm_traces::ReadQuery;
 
-use super::query::{lens::*, named::*};
-use super::{Connection, Error, Parameter};
+use super::{
+    Connection, Error, Parameter,
+    query::{lens::*, named::*},
+};
 use litellm_storage_clickhouse::{Query, fetch_json};
 
 pub async fn execute_named_read(
@@ -19,6 +21,9 @@ pub async fn execute_named_read(
             named_json::<TraceIdentity>(client, connection, parameters).await
         }
         ReadQuery::TraceSpans => named_json::<TraceSpans>(client, connection, parameters).await,
+        ReadQuery::TracePageSpans => {
+            named_json::<TracePageSpans>(client, connection, parameters).await
+        }
         ReadQuery::SpanDetail => named_json::<SpanDetail>(client, connection, parameters).await,
         ReadQuery::SpanError => named_json::<SpanError>(client, connection, parameters).await,
         ReadQuery::SpendByResponseIds => {
