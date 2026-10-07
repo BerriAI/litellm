@@ -39,7 +39,6 @@ from typing import (
     Optional,
     Protocol,
     TypeAlias,
-    TypedDict,
     Union,
     cast,
     get_args,
@@ -50,9 +49,9 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
-from typing_extensions import NotRequired, ReadOnly, assert_never
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -1191,6 +1190,34 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
 _AiohttpAddrInfo: TypeAlias = tuple[int | socket.AddressFamily, int | socket.SocketKind, int, str, tuple[object, ...]]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
+class _LoginRequestBody(TypedDict, total=False):
+    username: ReadOnly[object]
+    password: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _LoginExchangeRequestBody(TypedDict, total=False):
+    code: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AnthropicBetaHeadersReloadConfig(TypedDict, total=False):
+    interval_hours: ReadOnly[int | float | None]
+    force_reload: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _WebsearchInterceptionLitellmSettings(TypedDict, total=False):
+    websearch_interception_params: ReadOnly[object]
+
+
+_LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
+_LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
+_ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
+_WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
+
+
 class _AiohttpConnectorKwargs(TypedDict, total=False):
     keepalive_timeout: float
     ttl_dns_cache: int
@@ -1206,7 +1233,7 @@ async def _initialize_shared_aiohttp_session():
         from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 
         from litellm.llms.custom_httpx.http_handler import (
-            _build_aiohttp_keepalive_socket_factory,
+            build_aiohttp_keepalive_socket_factory,
         )
 
         connector_kwargs: Final[_AiohttpConnectorKwargs] = {
@@ -1219,7 +1246,7 @@ async def _initialize_shared_aiohttp_session():
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
             connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        socket_factory: Final = _build_aiohttp_keepalive_socket_factory()
+        socket_factory: Final = build_aiohttp_keepalive_socket_factory()
         if socket_factory is not None:
             connector_kwargs["socket_factory"] = socket_factory
 
@@ -8471,9 +8498,10 @@ class ProxyConfig:
             if config_record is None or config_record.param_value is None:
                 return
 
-            litellm_settings = config_record.param_value
-            if isinstance(litellm_settings, str):
-                litellm_settings = json.loads(litellm_settings)
+            raw_litellm_settings: Final = config_record.param_value
+            litellm_settings: Final = _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS.validate_python(
+                json.loads(raw_litellm_settings) if isinstance(raw_litellm_settings, str) else raw_litellm_settings
+            )
 
             websearch_config: Final = litellm_settings.get("websearch_interception_params", None)
 
@@ -8726,7 +8754,7 @@ class ProxyConfig:
             if config_record is None or config_record.param_value is None:
                 return  # No configuration found, skip reload
 
-            config: Final = config_record.param_value
+            config: Final = _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG.validate_python(config_record.param_value)
             interval_hours: Final = config.get("interval_hours")
             force_reload: Final = config.get("force_reload", False)
 
@@ -17127,7 +17155,7 @@ async def login_v2(request: Request):
     from litellm.proxy.utils import get_custom_url
 
     try:
-        body: Final = await request.json()
+        body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
         username: Final = str(body.get("username"))
         password: Final = str(body.get("password"))
 
@@ -17199,7 +17227,7 @@ async def login_v3(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body: Final = await request.json()
+        body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
         username: Final = str(body.get("username"))
         password: Final = str(body.get("password"))
 
@@ -17271,7 +17299,7 @@ async def login_v3_exchange(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body: Final = await request.json()
+        body: Final = _LOGIN_EXCHANGE_REQUEST_BODY.validate_python(await request.json())
         code: Final = body.get("code")
         if not code:
             raise ProxyException(

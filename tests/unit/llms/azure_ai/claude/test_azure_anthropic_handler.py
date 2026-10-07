@@ -215,12 +215,10 @@ class TestAzureAnthropicChatCompletion:
         client.post.assert_awaited_once()
         assert result.custom_llm_provider == "azure_ai"
 
-    @patch("litellm.llms.custom_httpx.http_handler._get_httpx_client")
+    @patch("litellm.llms.custom_httpx.http_handler.get_httpx_client")
     @patch("litellm.utils.ProviderConfigManager")
     @patch("litellm.llms.azure_ai.anthropic.handler.AzureAnthropicConfig")
-    def test_completion_non_streaming(
-        self, mock_azure_config, mock_provider_manager, mock_get_client
-    ):
+    def test_completion_non_streaming(self, mock_azure_config, mock_provider_manager, mock_get_client):
         # Note: decorators are applied in reverse order
         """Test completion without streaming"""
         handler = AzureAnthropicChatCompletion()

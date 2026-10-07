@@ -25,6 +25,7 @@ from typing import Final
 
 import pytest
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, OTEL_EXPORTER_ENDPOINT, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
 from models import LiteLLMParamsBody
@@ -34,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 pytestmark = pytest.mark.e2e
 
 MODEL = CHEAP_ANTHROPIC_MODEL
+FAILING_BACKEND_MODEL: Final = "anthropic/claude-haiku-4-5"
 DB_SPAN_PREFIX = "postgres."
 #: The active OTEL v2 logger's name in /health/readiness/details success_callbacks.
 OTEL_V2_LOGGER_NAME = "OpenTelemetryV2"
@@ -279,6 +281,15 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
 
 class TestOtelTraceCompleteness:
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -312,6 +323,14 @@ class TestOtelTraceCompleteness:
         _assert_complete_trace(traces, route=route, genai_span=f"chat {MODEL}")
 
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     @pytest.mark.otel_tls
     def test_otel_export_over_tls_with_internal_ca_reaches_destination(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
@@ -337,6 +356,15 @@ class TestOtelTraceCompleteness:
         _assert_complete_trace(hits, route=route, genai_span=f"chat {MODEL}")
 
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_messages_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -366,6 +394,15 @@ class TestOtelTraceCompleteness:
         _assert_complete_trace(traces, route=route, genai_span=f"chat {MODEL}")
 
     @pytest.mark.covers("logging.otel.success.exports_metric", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_responses_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -396,6 +433,15 @@ class TestOtelTraceCompleteness:
         _assert_complete_trace(traces, route=route, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_chat_completions_stream_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -444,6 +490,15 @@ class TestOtelTraceCompleteness:
         )
 
     @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_messages_stream_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -492,6 +547,15 @@ class TestOtelTraceCompleteness:
         )
 
     @pytest.mark.covers("logging.otel.stream.exports_metric", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_responses_stream_exports_complete_trace(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -544,6 +608,15 @@ class TestOtelTraceCompleteness:
         )
 
     @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_chat_completions_stream_records_real_ttft(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -582,6 +655,15 @@ class TestOtelTraceCompleteness:
         _assert_real_ttft(traces.hits, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_messages_stream_records_real_ttft(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -620,6 +702,15 @@ class TestOtelTraceCompleteness:
         _assert_real_ttft(traces.hits, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.stream.records_ttft", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_responses_stream_records_real_ttft(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -658,6 +749,15 @@ class TestOtelTraceCompleteness:
         _assert_real_ttft(traces.hits, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.failure.exports_metric", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(FAILING_BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_failed_chat_completions_error_span_attributes(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -677,7 +777,7 @@ class TestOtelTraceCompleteness:
         model_name = f"otel-err-{unique_marker()}"
         model_id = client.create_model(
             model_name,
-            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+            LiteLLMParamsBody(model=FAILING_BACKEND_MODEL, api_key=INVALID_UPSTREAM_API_KEY),
         )
         resources.defer(lambda: client.delete_model(model_id))
         key = client.key_with_alias(f"otel-err-{unique_marker()}", models=[model_name])
@@ -711,6 +811,15 @@ class TestOtelTraceCompleteness:
         _assert_error_span_contract(genai)
 
     @pytest.mark.covers("logging.otel.failure.exports_metric", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC,),
+            models=(FAILING_BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_failed_messages_error_span_attributes(
         self, client: LoggingClient, otel_reader: OtelReader, resources: ResourceManager
     ) -> None:
@@ -729,7 +838,7 @@ class TestOtelTraceCompleteness:
         model_name = f"otel-err-{unique_marker()}"
         model_id = client.create_model(
             model_name,
-            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+            LiteLLMParamsBody(model=FAILING_BACKEND_MODEL, api_key=INVALID_UPSTREAM_API_KEY),
         )
         resources.defer(lambda: client.delete_model(model_id))
         key = client.key_with_alias(f"otel-err-{unique_marker()}", models=[model_name])
