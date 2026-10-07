@@ -9,11 +9,17 @@ from pydantic import TypeAdapter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.systemone import (
     SYSTEM_ONE_RESPONSE_ADAPTER,
-    decisions_response,
     question_keys,
-    system_one_request,
+    to_decisions_response,
+    to_system_one_request,
 )
-from litellm.types.openai_decisions import ChoiceAnswer, DecisionsRequest, PredicateAnswer, ScoreAnswer
+from litellm.types.openai_decisions import (
+    ChoiceAnswer,
+    DecisionsRequest,
+    DecisionsRequestBody,
+    PredicateAnswer,
+    ScoreAnswer,
+)
 
 _INPUT: Final = "The export job hangs at 99% and never finishes"
 _QUESTIONS: Final[Sequence[Mapping[str, object]]] = (
@@ -88,14 +94,22 @@ _EXPECTED_USAGE: Final[Mapping[str, object]] = {
     "output_tokens_details": {"reasoning_tokens": 0},
     "total_tokens": 370,
 }
-_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequest]] = TypeAdapter(DecisionsRequest)
+_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
+
+
+def _body(
+    input_value: object = _INPUT,
+    questions: Sequence[Mapping[str, object]] = _QUESTIONS,
+) -> DecisionsRequestBody:
+    return _BODY_ADAPTER.validate_python({"input": input_value, "questions": questions})
 
 
 def _request(
     input_value: object = _INPUT,
     questions: Sequence[Mapping[str, object]] = _QUESTIONS,
+    model: str = "jev-1.13",
 ) -> DecisionsRequest:
-    return _REQUEST_ADAPTER.validate_python({"model": "jev-1.13", "input": input_value, "questions": questions})
+    return DecisionsRequest(model=model, body=_body(input_value, questions))
 
 
 def _predicate(name: str | None = "is_defect") -> tuple[Mapping[str, object]]:
@@ -103,7 +117,7 @@ def _predicate(name: str | None = "is_defect") -> tuple[Mapping[str, object]]:
 
 
 def test_openai_request_becomes_the_system_one_body() -> None:
-    assert system_one_request("jev-1.13", _request(), "typesafe") == {
+    assert to_system_one_request("jev-1.13", _body(), "typesafe") == {
         "model": "jev-1.13",
         "state": _INPUT,
         "questions": _SYSTEM_ONE_QUESTIONS,
@@ -111,7 +125,7 @@ def test_openai_request_becomes_the_system_one_body() -> None:
 
 
 def test_system_one_answers_become_openai_answers_in_question_order() -> None:
-    response: Final = decisions_response(
+    response: Final = to_decisions_response(
         SYSTEM_ONE_RESPONSE_ADAPTER.validate_python(_SYSTEM_ONE_RESPONSE), _request(), "typesafe"
     )
 
@@ -134,7 +148,7 @@ def test_user_messages_are_joined_into_one_system_one_state() -> None:
         },
     ]
 
-    body: Final = system_one_request("jev-1.13", _request(messages, _predicate()), "typesafe")
+    body: Final = to_system_one_request("jev-1.13", _body(messages, _predicate()), "typesafe")
 
     assert body["state"] == "first\nsecond\nthird"
 
@@ -162,18 +176,18 @@ def test_what_system_one_cannot_express_is_a_400(
     questions: Sequence[Mapping[str, object]],
 ) -> None:
     with pytest.raises(BaseLLMException, match=label) as error:
-        system_one_request("jev-1.13", _request(input_value, questions), "perplexity")
+        to_system_one_request("jev-1.13", _body(input_value, questions), "perplexity")
 
     assert error.value.status_code == 400
     assert "perplexity" in error.value.message
 
 
 def test_unnamed_questions_get_positional_keys_that_never_shadow_a_supplied_name() -> None:
-    request: Final = _request(questions=[*_predicate(None), *_predicate("q0"), *_predicate(None)])
+    body: Final = _body(questions=[*_predicate(None), *_predicate("q0"), *_predicate(None)])
 
-    assert question_keys(request.questions, "typesafe") == ("_q0", "q0", "q2")
+    assert question_keys(body.questions, "typesafe") == ("_q0", "q0", "q2")
     noul: Final = {"type": "noul", "instructions": "Is this a defect?"}
-    assert system_one_request("jev-1.13", request, "typesafe")["questions"] == {"_q0": noul, "q0": noul, "q2": noul}
+    assert to_system_one_request("jev-1.13", body, "typesafe")["questions"] == {"_q0": noul, "q0": noul, "q2": noul}
 
 
 def test_positional_answers_come_back_in_question_order_without_a_name() -> None:
@@ -182,7 +196,7 @@ def test_positional_answers_come_back_in_question_order_without_a_name() -> None
         {"answers": {"_q0": {"type": "noul", "noul": 0.25}, "q0": {"type": "noul", "noul": 0.75}}}
     )
 
-    response: Final = decisions_response(system_one, request, "typesafe")
+    response: Final = to_decisions_response(system_one, request, "typesafe")
 
     assert [answer.model_dump(mode="json") for answer in response.answers] == [
         {"type": "predicate", "name": None, "probability": 0.25},
@@ -201,11 +215,7 @@ def test_a_reply_without_a_model_reports_the_requested_model() -> None:
         {k: v for k, v in _SYSTEM_ONE_RESPONSE.items() if k != "model"}
     )
 
-    request: Final = _REQUEST_ADAPTER.validate_python(
-        {"model": "typesafe/jev-1.13.0", "input": _INPUT, "questions": _QUESTIONS}
-    )
-
-    response: Final = decisions_response(system_one, request, "typesafe")
+    response: Final = to_decisions_response(system_one, _request(model="typesafe/jev-1.13.0"), "typesafe")
 
     assert response.model == "typesafe/jev-1.13.0"
 
@@ -225,7 +235,7 @@ def test_a_choice_the_provider_left_out_of_probabilities_is_reported_at_zero() -
     )
     request: Final = _request(questions=_QUESTIONS[1:2])
 
-    response: Final = decisions_response(system_one, request, "typesafe")
+    response: Final = to_decisions_response(system_one, request, "typesafe")
 
     assert response.answers[0].model_dump(mode="json") == {
         "type": "choice",
@@ -247,6 +257,6 @@ def test_a_reply_without_a_matching_answer_is_a_server_error(answers: Mapping[st
     system_one: Final = SYSTEM_ONE_RESPONSE_ADAPTER.validate_python({"answers": answers})
 
     with pytest.raises(BaseLLMException, match="no predicate answer for question 'is_defect'") as error:
-        decisions_response(system_one, _request(questions=_predicate()), "typesafe")
+        to_decisions_response(system_one, _request(questions=_predicate()), "typesafe")
 
     assert error.value.status_code == 500

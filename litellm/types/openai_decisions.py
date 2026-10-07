@@ -1,8 +1,8 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, PrivateAttr, StrictBool, StrictStr, with_config
-from typing_extensions import ReadOnly, Required, TypedDict
+from pydantic import ConfigDict, Field, PrivateAttr, StrictBool, StrictStr
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -80,21 +80,10 @@ class DecisionsRequestBody(DecisionsObjectBase):
     safety_identifier: str | None = None
 
 
-class DecisionsRequest(DecisionsRequestBody):
+@dataclass(frozen=True, slots=True)
+class DecisionsRequest:
     model: str
-
-
-@with_config(ConfigDict(extra="allow"))
-class DecisionsCallParams(TypedDict, total=False):
-    model: Required[ReadOnly[str]]
-    input: Required[ReadOnly[DecisionsInput]]
-    questions: Required[ReadOnly[DecisionQuestions]]
-    safety_identifier: ReadOnly[str | None]
-    api_key: ReadOnly[str | None]
-    api_base: ReadOnly[str | None]
-    timeout: ReadOnly[float | None]
-    custom_llm_provider: ReadOnly[str | None]
-    extra_headers: ReadOnly[Mapping[str, str] | None]
+    body: DecisionsRequestBody
 
 
 class PredicateAnswer(DecisionsObjectBase):
