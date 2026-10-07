@@ -60,9 +60,9 @@ function useSignalSetup(enabled: boolean) {
   return { on: loaded && signalsConfigured(config.data), missing: loaded && !signalsConfigured(config.data) };
 }
 
-function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
+function useTracingSetup(traces: AgentTracesResult, isActive: boolean, filteredView: boolean) {
   const [setupResult, setSetupResult] = useState<{ detail: string | null } | null>(null);
-  const waitingForFirstTrace = traces.traces.length === 0 && !rangeChanged;
+  const waitingForFirstTrace = traces.traces.length === 0 && !filteredView;
   const settledResponse = isActive && !traces.isFetching && !traces.error;
   const rememberSetup = waitingForFirstTrace || setupResult !== null;
   if (settledResponse && rememberSetup && setupResult?.detail !== traces.notEnabledDetail) {
@@ -104,12 +104,19 @@ export function AgentTracesSection({
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
-  const traceQuery = { accessToken, range, enabled: isActive };
-  const traces = useAgentTraces({ ...traceQuery, agent });
-  const agentOptions = useTraceAgents(traceQuery);
-  const setup = useTracingSetup(traces, isActive, rangeChanged);
-  const checkHistory = setup.isEmpty && !rangeChanged;
+  const traceQuery = { accessToken, range, enabled: isActive, agent };
+  const traces = useAgentTraces(traceQuery);
+  const filteredView = rangeChanged || agent !== "";
+  const setup = useTracingSetup(traces, isActive, filteredView);
+  const checkHistory = setup.isEmpty && !filteredView;
   const history = useTraceAvailability(accessToken, isActive && checkHistory && setup.disabledDetail == null);
+  const onboarding = checkHistory && !history.error && history.data === false;
+  const rangeHasRuns = traces.traces.length > 0 || (agent !== "" && !traces.isLoading);
+  const agentOptions = useTraceAgents({
+    accessToken,
+    range,
+    enabled: isActive && rangeHasRuns && !setup.disabledDetail,
+  });
 
   const checkTraces = () => {
     traces.refetch();
@@ -121,10 +128,7 @@ export function AgentTracesSection({
   const pickedWindow = useMemo(() => timeWindow(range, minuteEndMs), [range, minuteEndMs]);
   // While the previous range's rows stay on screen, describe them with their own window.
   const window = traces.isPlaceholder && traces.window ? traces.window : pickedWindow;
-  const filtered = useMemo(
-    () => filterRuns(traces.traces, query, { agent, status }),
-    [traces.traces, query, agent, status],
-  );
+  const filtered = useMemo(() => filterRuns(traces.traces, query, status), [traces.traces, query, status]);
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
   const findings = useTraceFindings(accessToken, runs, isActive, canViewFindings);
@@ -154,8 +158,7 @@ export function AgentTracesSection({
 
   if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
-  if (checkHistory && !history.error && history.data === false)
-    return <TracingSetupCard detail={null} {...setupProps} />;
+  if (onboarding) return <TracingSetupCard detail={null} {...setupProps} />;
   if (showSetup) {
     return (
       <div>
@@ -245,7 +248,7 @@ export function AgentTracesSection({
           isPlaceholder={traces.isPlaceholder}
           onRetry={traces.hasMore ? traces.loadMore : traces.refetch}
           onLoadMore={traces.loadMore}
-          rangeEmpty={traces.traces.length === 0}
+          rangeEmpty={traces.traces.length === 0 && agent === ""}
           onSetUpTracing={() => setShowSetup(true)}
         />
         <TraceFooter runs={runs} hasMore={traces.hasMore} />
