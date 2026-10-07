@@ -19,29 +19,20 @@ export const useInfiniteUsers = (pageSize: number = DEFAULT_PAGE_SIZE, searchEma
   return useInfiniteQuery<UserListResponse>({
     queryKey: infiniteUsersKeys.list({ filters }),
     queryFn: async ({ pageParam }) => {
-      if (searchAlias) {
-        return await userListCall(
-          accessToken!,
-          null,
-          pageParam as number,
-          pageSize,
-          null,
-          null,
-          null,
-          null,
-          null,
-          null,
-          null,
-          null,
-          searchAlias,
-        );
-      }
       return await userListCall(
         accessToken!,
         null, // userIDs
         pageParam as number, // page
         pageSize, // page_size
         searchEmail || null, // userEmail
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        searchAlias ?? null,
       );
     },
     initialPageParam: 1,
