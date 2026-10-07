@@ -4,7 +4,7 @@ import json
 import math
 import re
 import time
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import closing
 from dataclasses import dataclass
 from itertools import chain
@@ -21,7 +21,8 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES
 from litellm.rust_bridge._native import NativeTraceConfig, NativeTraceStorage
 from litellm.rust_bridge.trace.generated.models import ActivityAvailability, LensAccessParams, TraceQueryHelp
-from litellm.rust_bridge.trace.generated.types import Trace, TraceScope
+from litellm.rust_bridge.trace.generated.responses import TraceAgentList
+from litellm.rust_bridge.trace.generated.types import Trace, TracePage, TraceScope, TraceSummary
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig, span_rows
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.types import SpendLogRecord
@@ -45,6 +46,7 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer, Re
 
 pytestmark = pytest.mark.requires_rust_extension
 QUERY_ROWS: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
+TRACE_PAGE: Final = TypeAdapter(TracePage)
 
 
 class CapturedSpendRow(BaseModel):
@@ -607,6 +609,35 @@ def test_query_correlation_requires_key_or_user_ownership_within_a_team(seeded_t
     matches: Final = api.query_example("Traces correlated with LLM call metadata")
     assert {str(row["request_id"]) for row in matches} == {row["request_id"] for row in api.spends}
     assert all(row["request_id"] != unrelated["request_id"] for row in matches)
+
+
+def test_claude_code_runs_are_listed_and_filtered_through_the_agent_endpoints(
+    seeded_trace_api: SeededTraceAPI,
+) -> None:
+    api: Final = seeded_trace_api
+    window: Final = {"start_ms": 0, "end_ms": time.time_ns() // 1_000_000 + 60_000}
+    agents_response: Final = api.client.get("/v1/traces/agents", params=window)
+    assert agents_response.status_code == 200, agents_response.text
+    agents: Final = TraceAgentList.model_validate(agents_response.json()).data
+    assert "claude-code" in agents
+    assert list(agents) == sorted(set(agents))
+
+    runs: Final = _all_runs(api.client, window)
+    claude_runs: Final = {run["trace_id"] for run in runs if "claude-code" in run["agent_names"]}
+    assert claude_runs
+    assert len(claude_runs) < len(runs)
+
+    filtered: Final = _all_runs(api.client, {**window, "agent": "claude-code"})
+    assert {run["trace_id"] for run in filtered} == claude_runs
+
+
+def _all_runs(client: TestClient, params: Mapping[str, str | int]) -> tuple[TraceSummary, ...]:
+    response: Final = client.get("/v1/traces", params=params)
+    assert response.status_code == 200, response.text
+    page: Final = TRACE_PAGE.validate_json(response.content)
+    cursor: Final = page["next_cursor"]
+    rest: Final = () if cursor is None else _all_runs(client, {**params, "cursor": cursor})
+    return (*page["data"], *rest)
 
 
 def _captured_replays(
