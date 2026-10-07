@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -36,6 +37,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     SafeRouteAdder,
+    _parse_request_data_by_content_type,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
     _with_trace_context,
@@ -53,13 +55,39 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.types import utils as types_utils
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    EndpointType,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    EndpointType,
 )
 from tests._master_key import MASTER_KEY
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [[], [1, {"a": 2}], 123, "str", True, None],
+    ids=["empty-list", "list", "number", "string", "boolean", "null"],
+)
+@pytest.mark.parametrize("content_type", ["application/json", "multipart/form-data; boundary=test"])
+async def test_parse_request_data_by_content_type_returns_no_envelope_for_non_object_json(
+    body: object, content_type: str
+) -> None:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": [(b"content-type", content_type.encode())],
+        },
+        receive,
+    )
+
+    assert await _parse_request_data_by_content_type(request) == (None, None, None, None)
 
 
 def test_with_trace_context_without_opentelemetry(monkeypatch: pytest.MonkeyPatch):
@@ -7881,7 +7909,10 @@ async def _run_db_sync_cycle(proxy: _DbBackedProxy) -> None:
 
 
 async def _send_through_proxy(
-    path: str, headers: Mapping[str, str], method: str = "POST"
+    path: str,
+    headers: Mapping[str, str],
+    method: str = "POST",
+    body: bytes | None = None,
 ) -> tuple[httpx.Response, list[httpx.Request]]:
     from litellm.proxy.proxy_server import app
 
@@ -7894,11 +7925,72 @@ async def _send_through_proxy(
     fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy.test") as client:
-            response = await client.request(method, path, headers=dict(headers), json={"q": 1})
+            response: Final = (
+                await client.request(method, path, headers=dict(headers), json={"q": 1})
+                if body is None
+                else await client.request(method, path, headers=dict(headers), content=body)
+            )
     finally:
         cleanup()
         await fake_client.aclose()
     return response, upstream_requests
+
+
+@pytest.mark.asyncio
+async def test_config_pass_through_forwards_non_object_json_bytes_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-json", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+    body: Final = b'[1, {"a":2}]'
+
+    response, upstream_requests = await _send_through_proxy(
+        "/cfg-json",
+        {"Content-Type": "application/json"},
+        body=body,
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(upstream_requests) == 1
+    assert upstream_requests[0].content == body
+    assert json.loads(upstream_requests[0].content) == [1, {"a": 2}]
+
+
+@pytest.mark.asyncio
+async def test_config_pass_through_rejects_non_object_json_when_guardrails_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {
+                "path": "/cfg-guarded",
+                "target": "http://config-upstream.test/api",
+                "auth": False,
+                "guardrails": ["configured-guardrail"],
+            }
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+
+    response, upstream_requests = await _send_through_proxy(
+        "/cfg-guarded",
+        {"Content-Type": "application/json"},
+        body=b"[]",
+    )
+
+    assert response.status_code == 400, response.text
+    assert "JSON request body must be an object" in response.text
+    assert upstream_requests == []
 
 
 @pytest.mark.asyncio
