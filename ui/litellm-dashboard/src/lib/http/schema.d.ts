@@ -8983,6 +8983,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Datasets */
+        get: operations["list_datasets_lens_datasets_get"];
+        put?: never;
+        /** Create Dataset */
+        post: operations["create_dataset_lens_datasets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/datasets/build": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build Dataset Cases */
+        post: operations["build_dataset_cases_lens_datasets_build_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/datasets/{dataset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Dataset */
+        get: operations["read_dataset_lens_datasets__dataset_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/datasets/{dataset_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Dataset */
+        get: operations["export_dataset_lens_datasets__dataset_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/datasets/{dataset_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save Revision */
+        post: operations["save_revision_lens_datasets__dataset_id__revisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/datasets/{dataset_id}/revisions/{revision}/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Eval Cases */
+        get: operations["eval_cases_lens_datasets__dataset_id__revisions__revision__cases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/preview/sample": {
         parameters: {
             query?: never;
@@ -9130,6 +9233,23 @@ export interface paths {
         put?: never;
         /** Result */
         post: operations["result_lens_worker__lens_id___job_id__result_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/worker/{lens_id}/{job_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cached Reviews */
+        get: operations["cached_reviews_lens_worker__lens_id___job_id__reviews_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -24577,7 +24697,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24588,7 +24708,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24599,7 +24719,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24610,7 +24730,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24621,7 +24741,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24632,7 +24752,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24643,7 +24763,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -25802,6 +25922,8 @@ export interface components {
             name: string;
             /** Parent Agent */
             parent_agent: string | null;
+            /** Priced Calls */
+            priced_calls: number;
             /** Spend */
             spend: number | null;
             /** Tool Calls */
@@ -27593,6 +27715,36 @@ export interface components {
             /** Budgets */
             budgets: string[];
         };
+        /** BudgetReservation */
+        BudgetReservation: {
+            /** Amount */
+            amount: number;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Id */
+            id: string;
+            /** Job Id */
+            job_id: string;
+            /** Month */
+            month: string;
+        };
+        /** BuildRequest */
+        BuildRequest: {
+            /**
+             * Dataset Id
+             * @default
+             */
+            dataset_id: string;
+            /** Sources */
+            sources: (components["schemas"]["TraceSource"] | components["schemas"]["FindingSource"] | components["schemas"]["TextSource"])[];
+        };
+        /** BuildResult */
+        BuildResult: {
+            /** Cases */
+            cases: components["schemas"]["DatasetCase"][];
+            /** Skipped */
+            skipped: components["schemas"]["SkippedCase"][];
+        };
         /**
          * BulkDeleteUserRequest
          * @description Body of `POST /management/v1/users/bulk_delete`.
@@ -28395,6 +28547,34 @@ export interface components {
             /** Threshold */
             threshold: number;
         };
+        /** CaseSource */
+        CaseSource: {
+            /**
+             * Finding Id
+             * @default
+             */
+            finding_id: string;
+            /**
+             * Lens Id
+             * @default
+             */
+            lens_id: string;
+            /**
+             * Span Id
+             * @default
+             */
+            span_id: string;
+            /**
+             * Trace Id
+             * @default
+             */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
             /** Current Password */
@@ -28961,6 +29141,8 @@ export interface components {
             job: components["schemas"]["Job"];
             /** Lens Id */
             lens_id: string;
+            /** Reviews */
+            reviews?: components["schemas"]["Review"][] | null;
         };
         /**
          * ClassificationRubric
@@ -29976,6 +30158,12 @@ export interface components {
             reject_clientside_metadata_tags?: boolean | null;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
+            /**
+             * Search Tool Deny By Default
+             * @description When True, a search tool must be explicitly listed in object_permission.search_tools: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing, and the unregistered search fallback is denied. The master key and dashboard sessions are exempt
+             * @default false
+             */
+            search_tool_deny_by_default: boolean;
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /**
@@ -30051,6 +30239,12 @@ export interface components {
              * @description Master switch for the SSRF guard applied to user-supplied URLs (image_url, file_url, MCP/OpenAPI spec URLs, etc). Defaults to True. Set to False to disable DNS/IP validation entirely (not recommended).
              */
             user_url_validation?: boolean | null;
+            /**
+             * Vector Store Deny By Default
+             * @description When True, a vector store must be explicitly listed in object_permission.vector_stores: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys are not yet covered
+             * @default false
+             */
+            vector_store_deny_by_default: boolean;
         };
         /** ConfigList */
         ConfigList: {
@@ -30824,6 +31018,16 @@ export interface components {
              */
             partial: number;
             /**
+             * Reusable
+             * @default 0
+             */
+            reusable: number;
+            /**
+             * Reused
+             * @default 0
+             */
+            reused: number;
+            /**
              * Screened
              * @default 0
              */
@@ -31209,6 +31413,116 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /** Dataset */
+        Dataset: {
+            /** Agent Name */
+            agent_name: string;
+            /** Cases */
+            cases: components["schemas"]["DatasetCase"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Revision */
+            revision: number;
+            /** Team Id */
+            team_id: string;
+        };
+        /** DatasetCase */
+        DatasetCase: {
+            /**
+             * Agent Version
+             * @default
+             */
+            agent_version: string;
+            /**
+             * Expected
+             * @default
+             */
+            expected: string;
+            /** Id */
+            id: string;
+            /**
+             * Included
+             * @default true
+             */
+            included: boolean;
+            /** Messages */
+            messages: components["schemas"]["DatasetMessage"][];
+            /**
+             * Reply
+             * @default
+             */
+            reply: string;
+            source: components["schemas"]["CaseSource"];
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["DatasetToolCall"][];
+        };
+        /** DatasetCreate */
+        DatasetCreate: {
+            /**
+             * Agent Name
+             * @default
+             */
+            agent_name: string;
+            /** Name */
+            name: string;
+        };
+        /** DatasetMessage */
+        DatasetMessage: {
+            /** Content */
+            content: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "system" | "user" | "assistant" | "tool";
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["DatasetToolCall"][];
+        };
+        /** DatasetSummary */
+        DatasetSummary: {
+            /** Agent Name */
+            agent_name: string;
+            /** Case Count */
+            case_count: number;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** DatasetToolCall */
+        DatasetToolCall: {
+            /** Arguments */
+            arguments: string;
+            /** Name */
+            name: string;
         };
         /**
          * DefaultInternalUserParams
@@ -31821,6 +32135,15 @@ export interface components {
             /** Updated At */
             updated_at?: number | null;
         };
+        /** EvalCases */
+        EvalCases: {
+            /** Cases */
+            cases: components["schemas"]["DatasetCase"][];
+            /** Dataset Id */
+            dataset_id: string;
+            /** Revision */
+            revision: number;
+        };
         /** Evidence */
         Evidence: {
             /** Execution Id */
@@ -31894,6 +32217,24 @@ export interface components {
          * @enum {string}
          */
         ExportType: "daily" | "daily_with_keys" | "daily_with_models" | "daily_with_users";
+        /** Extraction */
+        Extraction: {
+            /**
+             * Cannot Assess
+             * @default false
+             */
+            cannot_assess: boolean;
+            /**
+             * Observations
+             * @default []
+             */
+            observations: components["schemas"]["Observation"][];
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
+        };
         /**
          * FacetListResponse
          * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
@@ -32079,6 +32420,11 @@ export interface components {
             brief?: components["schemas"]["IssueBrief"] | null;
             /** Check Id */
             check_id: string;
+            /**
+             * Check Ids
+             * @default []
+             */
+            check_ids: string[];
             /** Description */
             description: string;
             /** Evidence */
@@ -32092,6 +32438,11 @@ export interface components {
             first_seen: string;
             /** Id */
             id: string;
+            /**
+             * Investigation Runs
+             * @default []
+             */
+            investigation_runs: string[];
             /**
              * Kind
              * @default issue
@@ -32108,6 +32459,11 @@ export interface components {
              * @default
              */
             limitation: string;
+            /**
+             * Merged Finding Ids
+             * @default []
+             */
+            merged_finding_ids: string[];
             /**
              * Occurrences
              * @default []
@@ -32145,6 +32501,11 @@ export interface components {
             brief?: components["schemas"]["IssueBrief"] | null;
             /** Check Id */
             check_id: string;
+            /**
+             * Check Ids
+             * @default []
+             */
+            check_ids: string[];
             /** Description */
             description: string;
             /** Evidence */
@@ -32163,6 +32524,11 @@ export interface components {
              */
             limitation: string;
             /**
+             * Merged Finding Ids
+             * @default []
+             */
+            merged_finding_ids: string[];
+            /**
              * Priority
              * @default medium
              * @enum {string}
@@ -32175,6 +32541,18 @@ export interface components {
             suggestion: string;
             /** Title */
             title: string;
+        };
+        /** FindingSource */
+        FindingSource: {
+            /** Finding Ids */
+            finding_ids: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "finding";
+            /** Lens Id */
+            lens_id: string;
         };
         /** FindingUpdate */
         FindingUpdate: {
@@ -33423,6 +33801,8 @@ export interface components {
              *       "inconclusive": 0,
              *       "investigated": 0,
              *       "partial": 0,
+             *       "reusable": 0,
+             *       "reused": 0,
              *       "screened": 0,
              *       "selected": 0,
              *       "unassessable": 0
@@ -33457,6 +33837,11 @@ export interface components {
              * @default []
              */
             reading: components["schemas"]["InFlight"][];
+            /**
+             * Review Versions
+             * @default []
+             */
+            review_versions: components["schemas"]["ReviewVersion"][];
             /**
              * Reviewed
              * @default 0
@@ -33797,6 +34182,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Criteria Updated At */
+            criteria_updated_at?: string | null;
             /**
              * Findings
              * @default []
@@ -33816,6 +34203,11 @@ export interface components {
              * Format: date-time
              */
             next_run_at: string;
+            /**
+             * Reservations
+             * @default []
+             */
+            reservations: components["schemas"]["BudgetReservation"][];
             /**
              * Revision
              * @default 1
@@ -35332,6 +35724,8 @@ export interface components {
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
             output_cost_per_image_token?: number | null;
+            /** Output Cost Per Image Token Batches */
+            output_cost_per_image_token_batches?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -39422,6 +39816,24 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** Observation */
+        Observation: {
+            /** Check Id */
+            check_id: string;
+            /**
+             * Evidence
+             * @default []
+             */
+            evidence: components["schemas"]["Evidence"][];
+            /**
+             * Kind
+             * @default issue
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /** Summary */
+            summary: string;
+        };
         /**
          * OpenIdConnectSecurityScheme
          * @description Defines a security scheme using OpenID Connect.
@@ -42070,18 +42482,18 @@ export interface components {
             fallback_tier?: string | null;
             /**
              * Heuristic First Max Tier
-             * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence, which is how a chained router would silently send unclassified traffic to the cheapest model. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
+             * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence. With local_heuristic 'heuristic_v2', the predicted tier must meet its success threshold. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
              */
             heuristic_first_max_tier?: string | null;
             /**
              * Heuristic V2 Artifact
-             * @description Success-probability artifact used by classifier_type 'heuristic_v2'. The bundled UltraFeedback artifact is selected by default; an inline trained artifact may replace it
+             * @description Success-probability artifact used by standalone or chained heuristic_v2. The bundled UltraFeedback artifact is selected by default; an inline trained artifact may replace it
              * @default ultrafeedback
              */
             heuristic_v2_artifact: components["schemas"]["TrainedTierArtifact"] | "ultrafeedback";
             /**
              * Heuristic V2 Success Threshold
-             * @description Minimum predicted success probability for classifier_type 'heuristic_v2' to select a tier. The first tier meeting this threshold is selected, or REASONING if none meets it. When omitted or null, uses the artifact's routing_threshold (0.75 for the bundled artifact). Other classifier types ignore this setting
+             * @description Minimum predicted success probability for standalone or chained heuristic_v2 to select a tier. The first tier meeting this threshold is selected. When none meets it, standalone heuristic_v2 selects REASONING and chained heuristic_v2 defers to the LLM judge. When omitted or null, uses the artifact's routing_threshold (0.75 for the bundled artifact). Ignored when heuristic_v2 is not selected
              */
             heuristic_v2_success_threshold?: number | null;
             /**
@@ -42091,7 +42503,7 @@ export interface components {
             housekeeping_patterns?: string[] | null;
             /**
              * Hybrid Boundary Margin
-             * @description How close to a tier boundary a heuristic score has to land before the LLM classifier breaks the tie; required when classifier_type is 'hybrid' and rejected otherwise. Everything further than this from every active boundary routes on the scorer's own tier with no classifier call, at any tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A prompt where no dimension fired still goes to the classifier, since the scorer has no opinion to be near a boundary with. 0 escalates only scores sitting exactly on a boundary.
+             * @description How close to a tier boundary a heuristic score has to land before the LLM classifier breaks the tie; required when classifier_type is 'hybrid' and rejected otherwise. Everything further than this from every active boundary routes on the scorer's own tier with no classifier call, at any tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A prompt where no dimension fired still goes to the classifier, since the scorer has no opinion to be near a boundary with. With local_heuristic 'heuristic_v2', a tier must meet its success threshold and its probability and all lower-tier probabilities must be further than this margin from that threshold. 0 escalates only scores or probabilities exactly on a boundary.
              */
             hybrid_boundary_margin?: number | null;
             /**
@@ -42101,6 +42513,11 @@ export interface components {
             keyword_tier_rules?: components["schemas"]["KeywordTierRule"][] | null;
             /** @description Experimental joint task-demand and solver-capability forecasting for classifier_type llm_v2. */
             llm_v2_config?: components["schemas"]["LLMV2Config"] | null;
+            /**
+             * Local Heuristic
+             * @description Local scorer for heuristic_first or hybrid. Omitted or null keeps heuristic v1; heuristic_v2 uses the trained success predictor. Rejected for other classifier types.
+             */
+            local_heuristic?: ("heuristic" | "heuristic_v2") | null;
             /**
              * Match Threshold
              * @description Minimum cosine similarity for a semantic keyword match
@@ -43770,6 +44187,11 @@ export interface components {
              * @default []
              */
             findings: components["schemas"]["FindingDraft"][];
+            /**
+             * Review Versions
+             * @default []
+             */
+            review_versions: components["schemas"]["ReviewVersion"][];
         };
         /** Result */
         "Result-Output": {
@@ -43852,19 +44274,40 @@ export interface components {
              * @default false
              */
             cannot_assess: boolean;
+            /**
+             * Consolidated
+             * @default false
+             */
+            consolidated: boolean;
+            /**
+             * Content Version
+             * @default
+             */
+            content_version: string;
             /** Duration Ms */
             duration_ms: number;
             /** Execution Id */
             execution_id: string;
+            extraction?: components["schemas"]["Extraction"] | null;
             /** Model */
             model: string;
             /** Name */
             name: string;
             /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /**
              * Reasoning
              * @default
              */
             reasoning: string;
+            /**
+             * Reused
+             * @default false
+             */
+            reused: boolean;
             /**
              * Spans
              * @default []
@@ -43917,6 +44360,20 @@ export interface components {
             kind: "issue" | "pattern";
             /** Summary */
             summary: string;
+        };
+        /** ReviewVersion */
+        ReviewVersion: {
+            /** Content Version */
+            content_version: string;
+            /** Execution Id */
+            execution_id: string;
+        };
+        /** RevisionSave */
+        RevisionSave: {
+            /** Base Revision */
+            base_revision: number;
+            /** Cases */
+            cases: components["schemas"]["DatasetCase"][];
         };
         /**
          * RoleMappings
@@ -45073,6 +45530,15 @@ export interface components {
             /** Version */
             version?: string;
         };
+        /** SkippedCase */
+        SkippedCase: {
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "duplicate" | "no_content" | "too_large" | "over_limit" | "invalid";
+            source: components["schemas"]["CaseSource"];
+        };
         /** Span */
         Span: {
             /** Agent */
@@ -45103,6 +45569,10 @@ export interface components {
             span_id: string;
             /** Spend */
             spend: number | null;
+            /** Spend Log Request Id */
+            spend_log_request_id: string | null;
+            /** Spend Match */
+            spend_match: ("matched" | "no_call_id" | "no_spend_log" | "ambiguous" | "incomplete_evidence") | null;
             /** Start Offset Ms */
             start_offset_ms: number;
             /**
@@ -45300,7 +45770,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "prompt_cache_cost" | "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "prompt_cache_cost" | "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit" | "semantic_match" | "semantic_no_match" | "semantic_error";
             /** Classifier Calibrated Capable P Solve */
             classifier_calibrated_capable_p_solve?: number;
             /** Classifier Calibrated Efficient P Solve */
@@ -45321,6 +45791,13 @@ export interface components {
             classifier_crux?: string;
             /** Classifier Efficient P Solve */
             classifier_efficient_p_solve?: number;
+            /** Classifier Error Type */
+            classifier_error_type?: string;
+            /**
+             * Classifier Failure Reason
+             * @enum {string}
+             */
+            classifier_failure_reason?: "timeout" | "circuit_open" | "not_configured" | "unsupported_input" | "invalid_response" | "declined" | "classifier_error";
             /** Classifier Max Quality Gap */
             classifier_max_quality_gap?: number;
             /** Classifier Model */
@@ -45356,13 +45833,19 @@ export interface components {
             request_type?: string;
             /** Routed Model */
             routed_model?: string;
+            /** Router Config Fingerprint */
+            router_config_fingerprint?: string;
+            /** Router Config Id */
+            router_config_id?: string;
+            /** Router Config Updated At */
+            router_config_updated_at?: string;
             /** Router Model Name */
             router_model_name?: string;
             /**
              * Router Type
              * @enum {string}
              */
-            router_type?: "complexity" | "adaptive" | "quality";
+            router_type?: "complexity" | "adaptive" | "quality" | "semantic";
             /** Savings Baseline Deployment Id */
             savings_baseline_deployment_id?: string;
             /** Savings Baseline Model */
@@ -46456,6 +46939,16 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** TextSource */
+        TextSource: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "text";
+            /** Text */
+            text: string;
+        };
         /** TierCohortStatistic */
         TierCohortStatistic: {
             /** Cohort */
@@ -47226,6 +47719,26 @@ export interface components {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
         };
+        /** TraceSource */
+        TraceSource: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "trace";
+            /**
+             * Span Id
+             * @default
+             */
+            span_id: string;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
         /** TraceSummary */
         TraceSummary: {
             /** Agent Count */
@@ -47252,6 +47765,8 @@ export interface components {
             name: string;
             /** Output Tokens */
             output_tokens: number;
+            /** Priced Calls */
+            priced_calls: number;
             /** Resolution Limited */
             resolution_limited?: boolean;
             /** Service */
@@ -50106,6 +50621,8 @@ export interface components {
             output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
             output_cost_per_image_token?: number | null;
+            /** Output Cost Per Image Token Batches */
+            output_cost_per_image_token_batches?: number | null;
             /** Output Cost Per Pixel */
             output_cost_per_pixel?: number | null;
             /** Output Cost Per Reasoning Token */
@@ -62312,6 +62829,225 @@ export interface operations {
             };
         };
     };
+    list_datasets_lens_datasets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetSummary"][];
+                };
+            };
+        };
+    };
+    create_dataset_lens_datasets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dataset"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    build_dataset_cases_lens_datasets_build_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_dataset_lens_datasets__dataset_id__get: {
+        parameters: {
+            query?: {
+                revision?: number | null;
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dataset"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_dataset_lens_datasets__dataset_id__export_get: {
+        parameters: {
+            query?: {
+                revision?: number | null;
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_revision_lens_datasets__dataset_id__revisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevisionSave"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dataset"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eval_cases_lens_datasets__dataset_id__revisions__revision__cases_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_id: string;
+                revision: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalCases"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     preview_sample_lens_preview_sample_post: {
         parameters: {
             query?: never;
@@ -62593,6 +63329,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Lens"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cached_reviews_lens_worker__lens_id___job_id__reviews_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Review"][];
                 };
             };
             /** @description Validation Error */

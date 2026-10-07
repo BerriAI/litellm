@@ -1,29 +1,28 @@
-import os
-import traceback
-
-import litellm.cost_calculator
-
 import asyncio
+import json
+import os
 import time
+import traceback
 from typing import Final, Optional
 from unittest.mock import MagicMock, patch
+
+import httpx
 import pytest
 
 import litellm
+import litellm.cost_calculator
 from litellm import (
     TranscriptionResponse,
     completion_cost,
     cost_per_token,
     model_cost,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
-import json
-import httpx
-from litellm.types.utils import PromptTokensDetails
 from litellm.litellm_core_utils.litellm_logging import CustomLogger
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.utils import PromptTokensDetails
 
 
 class CustomLoggingHandler(CustomLogger):
@@ -966,28 +965,6 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
     assert cost_1 > cost_2
 
 
-@pytest.mark.flaky(retries=6, delay=2)
-@pytest.mark.parametrize(
-    "model",
-    [
-        "databricks/databricks-meta-llama-3.2-3b-instruct",
-        "databricks/databricks-meta-llama-3-70b-instruct",
-        "databricks/databricks-dbrx-instruct",
-        # "databricks/databricks-mixtral-8x7b-instruct",
-    ],
-)
-@pytest.mark.skip(reason="databricks is having an active outage")
-def test_completion_cost_databricks(model):
-    litellm._turn_on_debug()
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    messages = [{"role": "user", "content": "What is 2+2?"}]
-
-    resp = litellm.completion(model=model, messages=messages)  # works fine
-
-    print(resp)
-    print(f"hidden_params: {resp._hidden_params}")
-    assert resp._hidden_params["response_cost"] > 0
 
 
 @pytest.mark.parametrize(
@@ -1148,8 +1125,8 @@ def test_completion_cost_vertex_llama3():
 
 
 def test_cost_openai_prompt_caching():
-    from litellm.utils import Choices, Message, ModelResponse, Usage
     from litellm import get_model_info
+    from litellm.utils import Choices, Message, ModelResponse, Usage
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2125,9 +2102,8 @@ def test_completion_cost_params_2():
 
 
 def test_completion_cost_params_gemini_3():
-    from litellm.utils import Choices, Message, ModelResponse, Usage
-
     from litellm.llms.vertex_ai.cost_calculator import cost_per_character
+    from litellm.utils import Choices, Message, ModelResponse, Usage
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -2205,13 +2181,13 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     from litellm.types.utils import (
+        ChatCompletionAudioResponse,
         Choices,
+        CompletionTokensDetailsWrapper,
         Message,
         ModelResponse,
-        Usage,
-        ChatCompletionAudioResponse,
-        CompletionTokensDetailsWrapper,
         PromptTokensDetailsWrapper,
+        Usage,
     )
 
     usage_object = Usage(
@@ -2357,7 +2333,7 @@ def test_completion_cost_azure_tts():
 
 
 def test_select_model_name_for_cost_calc():
-    from litellm.cost_calculator import _select_model_name_for_cost_calc
+    from litellm.cost_calculator import select_model_name_for_cost_calc
     from litellm.types.utils import ModelResponse, Choices, Usage, Message
 
     args = {
@@ -2393,7 +2369,7 @@ def test_select_model_name_for_cost_calc():
         "custom_pricing": None,
     }
 
-    return_model = _select_model_name_for_cost_calc(**args)
+    return_model = select_model_name_for_cost_calc(**args)
     assert return_model == "azure_ai/mistral-large"
 
 
@@ -2449,69 +2425,6 @@ def test_add_known_models():
     )
 
 
-@pytest.mark.skip(reason="flaky test")
-def test_bedrock_cost_calc_with_region():
-
-    from litellm import ModelResponse
-
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    litellm.add_known_models()
-
-    hidden_params = {
-        "custom_llm_provider": "bedrock",
-        "region_name": "us-east-1",
-        "optional_params": {},
-        "litellm_call_id": "cf371a5d-679b-410f-b862-8084676d6d59",
-        "model_id": None,
-        "api_base": None,
-        "response_cost": 0.0005639999999999999,
-        "additional_headers": {},
-    }
-
-    litellm.set_verbose = True
-
-    bedrock_models = litellm.bedrock_models + litellm.bedrock_converse_models
-
-    for model in bedrock_models:
-        if litellm.model_cost[model]["mode"] == "chat":
-            response = {
-                "id": "cmpl-55db75e0b05344058b0bd8ee4e00bf84",
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "index": 0,
-                        "logprobs": None,
-                        "message": {
-                            "content": 'Here\'s one:\n\nWhy did the Linux kernel go to therapy?\n\nBecause it had a lot of "core" issues!\n\nHope that one made you laugh!',
-                            "refusal": None,
-                            "role": "assistant",
-                            "audio": None,
-                            "function_call": None,
-                            "tool_calls": [],
-                        },
-                    }
-                ],
-                "created": 1729243714,
-                "model": model,
-                "object": "chat.completion",
-                "service_tier": None,
-                "system_fingerprint": None,
-                "usage": {
-                    "completion_tokens": 32,
-                    "prompt_tokens": 16,
-                    "total_tokens": 48,
-                    "completion_tokens_details": None,
-                    "prompt_tokens_details": None,
-                },
-            }
-
-            model_response = ModelResponse(**response)
-            model_response._hidden_params = hidden_params
-            cost = completion_cost(model_response, custom_llm_provider="bedrock")
-
-            assert cost > 0
 
 
 # @pytest.mark.parametrize(
@@ -2578,7 +2491,7 @@ def test_cost_calculator_with_base_model_with_router(base_model_arg):
 def test_cost_calculator_with_base_model_with_router_embedding(base_model_arg):
     from litellm import Router
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     model_item = {
         "model_name": "random-model",

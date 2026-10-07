@@ -16,7 +16,7 @@ import traceback
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast
 
 from pydantic import BaseModel
 
@@ -363,12 +363,12 @@ class Cache:
         cache_key = ""
         # verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
 
-        preset_cache_key: Final = self._get_preset_cache_key_from_kwargs(**kwargs)
+        preset_cache_key: Final = self.get_preset_cache_key_from_kwargs(**kwargs)
         if preset_cache_key is not None:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs: Final = ModelParamHelper._get_all_llm_api_params()
+        combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
         is_semantic_cache: Final = self._is_semantic_cache()
         scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
         for param in kwargs:
@@ -460,7 +460,7 @@ class Cache:
             or litellm_params.get("file_name")
         )
 
-    def _get_preset_cache_key_from_kwargs(self, **kwargs) -> str | None:
+    def get_preset_cache_key_from_kwargs(self, **kwargs: object) -> str | None:
         """
         Get the preset cache key from kwargs["litellm_params"]
 
@@ -469,10 +469,16 @@ class Cache:
         1. optional params like max_tokens, get transformed for bedrock -> max_new_tokens
         2. avoid doing duplicate / repeated work
         """
-        if kwargs:
-            if "litellm_params" in kwargs:
-                return kwargs["litellm_params"].get("preset_cache_key", None)
+        if "litellm_params" in kwargs:
+            litellm_params: Final = cast(  # cast-ok: cache kwargs retain dynamic caller values
+                Mapping[str, object], kwargs["litellm_params"]
+            )
+            return cast(  # cast-ok: preserve dynamically supplied cache keys
+                str | None, litellm_params.get("preset_cache_key", None)
+            )
         return None
+
+    _get_preset_cache_key_from_kwargs = get_preset_cache_key_from_kwargs
 
     def _set_preset_cache_key_in_kwargs(self, preset_cache_key: str, **kwargs) -> None:
         """
@@ -539,11 +545,11 @@ class Cache:
             }
             time.sleep(CACHED_STREAMING_CHUNK_DELAY)
 
-    def _get_cache_logic(
+    def get_cache_logic(
         self,
         cached_result: object | None,
         max_age: float | None,
-    ):
+    ) -> object | None:
         """
         Common get cache logic across sync + async implementations
         """
@@ -571,6 +577,8 @@ class Cache:
                 cached_response = ast.literal_eval(cached_response)
             return cached_response
         return cached_result
+
+    _get_cache_logic = get_cache_logic
 
     @staticmethod
     def _get_safe_cache_lookup_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
@@ -628,7 +636,7 @@ class Cache:
                         original_kwargs=kwargs,
                         cache_lookup_kwargs=cache_lookup_kwargs,
                     )
-                    return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                    return self.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
@@ -658,7 +666,7 @@ class Cache:
                         cached_result = await dynamic_cache_object.async_get_cache(cache_key, **kwargs)
                     else:
                         cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
-                    return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                    return self.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
@@ -957,7 +965,7 @@ class Cache:
         if hasattr(self.cache, "disconnect"):
             await self.cache.disconnect()
 
-    def _supports_async(self) -> bool:
+    def supports_async(self) -> bool:
         """
         Internal method to check if the cache type supports async get/set operations
 
@@ -965,6 +973,8 @@ class Cache:
 
         """
         return True
+
+    _supports_async = supports_async
 
 
 def enable_cache(

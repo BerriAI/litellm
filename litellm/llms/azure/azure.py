@@ -1254,7 +1254,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 and litellm_params is not None
                 and litellm_params.get("base_model", None) is not None
             ):
-                model_response._hidden_params["model"] = litellm_params.get("base_model", None)
+                model_response.hidden_params["model"] = litellm_params.get("base_model", None)
 
             # Azure image generation API doesn't support extra_body parameter
             extra_body: Final = optional_params.pop("extra_body", {})

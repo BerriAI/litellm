@@ -1577,7 +1577,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler.map_reasoning_effort(effort)
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
@@ -1593,7 +1593,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = True
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler.map_reasoning_effort(effort)
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
@@ -1609,7 +1609,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = False
         monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
-        result = handler._map_reasoning_effort("high")
+        result = handler.map_reasoning_effort("high")
         assert (
             result["summary"] == "detailed"
         ), "Summary should be 'detailed' when env var is enabled"
@@ -1621,7 +1621,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         dict_input = {"effort": "high", "summary": "custom_summary"}
-        result_dict = handler._map_reasoning_effort(dict_input)
+        result_dict = handler.map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
@@ -4355,6 +4355,53 @@ def test_streaming_final_chunk_carries_provider_metadata():
 
 def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
+
+
+@pytest.mark.parametrize(
+    ("content_block", "expected_content"),
+    [
+        (
+            {"type": "text", "text": "Stable prefix"},
+            {"type": "input_text", "text": "Stable prefix"},
+        ),
+        (
+            {"type": "image_url", "image_url": "https://example.com/image.png"},
+            {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "auto"},
+        ),
+        (
+            {"type": "file", "file": {"file_id": "file-123"}},
+            {"type": "input_file", "file_id": "file-123"},
+        ),
+    ],
+    ids=("text", "image_url", "file"),
+)
+def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion(
+    content_block: dict[str, object], expected_content: dict[str, object]
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    marked_content: Final = {**content_block, "prompt_cache_breakpoint": cache_breakpoint}
+
+    request: Final = handler.transform_request(
+        model="gpt-5.6-sol",
+        messages=[
+            {
+                "role": "user",
+                "content": [marked_content],
+            }
+        ],
+        optional_params={"prompt_cache_options": cache_breakpoint},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"][0] == {
+        "type": "message",
+        "role": "user",
+        "content": [{**expected_content, "prompt_cache_breakpoint": cache_breakpoint}],
+    }
+    assert request["prompt_cache_options"] == cache_breakpoint
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():

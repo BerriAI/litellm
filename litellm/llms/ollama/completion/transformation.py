@@ -4,7 +4,8 @@ from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
-from pydantic import ConfigDict, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -66,14 +67,29 @@ class _OllamaGenerateReasoning(LiteLLMBaseModel):
         """Reasoning reaches `/api/generate` either in the top-level `thinking` field or
         inline in `<think>` tags, never both. The field wins, matching `ollama_chat`."""
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            _parse_content_for_reasoning,
+            parse_content_for_reasoning,
         )
 
         if self.thinking:
             return self.thinking, self.response
         if self.response is None:
             return None, None
-        return _parse_content_for_reasoning(self.response)
+        return parse_content_for_reasoning(self.response)
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _OllamaGenerateMessage(TypedDict):
+    content: ReadOnly[NotRequired[str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _OllamaGenerateResponse(TypedDict):
+    message: ReadOnly[NotRequired[_OllamaGenerateMessage]]
+    prompt_eval_count: ReadOnly[NotRequired[int]]
+    eval_count: ReadOnly[NotRequired[int]]
+
+
+_OLLAMA_GENERATE_RESPONSE: Final = TypeAdapter(_OllamaGenerateResponse)
 
 
 class OllamaConfig(BaseConfig):
@@ -159,7 +175,7 @@ class OllamaConfig(BaseConfig):
         system: str | None = None,
         template: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[dict[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -288,7 +304,7 @@ class OllamaConfig(BaseConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        response_json: Final = raw_response.json()
+        response_json: Final = _OLLAMA_GENERATE_RESPONSE.validate_python(raw_response.json())
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
         if request_data.get("format", "") == "json":
@@ -303,7 +319,7 @@ class OllamaConfig(BaseConfig):
                 model_response.choices[0].finish_reason = "stop"
             else:
                 try:
-                    response_content: Final = json.loads(response_text)
+                    response_content: Final[object] = json.loads(response_text)
 
                     # Check if this is a function call format with name/arguments structure
                     if (
@@ -356,7 +372,7 @@ class OllamaConfig(BaseConfig):
             len(tokenizer.encode(_prompt, disallowed_special=())),
         )
         completion_tokens: Final = response_json.get(
-            "eval_count", len(response_json.get("message", dict()).get("content", ""))
+            "eval_count", len((response_json.get("message") or {}).get("content", ""))
         )
         setattr(
             model_response,

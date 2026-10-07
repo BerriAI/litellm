@@ -68,6 +68,8 @@ pub struct TraceSpansParams {
 pub struct TraceSpansRow {
     #[serde(default)]
     pub trace_id: String,
+    #[serde(default)]
+    pub original_trace_id: String,
     pub span_id: String,
     pub parent_span_id: String,
     pub name: String,
@@ -111,6 +113,16 @@ pub struct TraceSpansRow {
     pub team_id: String,
     pub api_key_hash: String,
     pub user_id: String,
+}
+
+impl TraceSpansRow {
+    pub(crate) fn transport_trace_id(&self) -> &str {
+        if self.original_trace_id.is_empty() {
+            &self.trace_id
+        } else {
+            &self.original_trace_id
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -163,6 +175,7 @@ pub struct SpendByResponseIdsParams {
     #[serde(flatten)]
     pub access: ReadAccessParams,
     pub response_ids: Vec<String>,
+    pub provider_request_ids: Vec<String>,
     pub request_ids: Vec<String>,
     pub trace_ids: Vec<String>,
     pub start_ms: i64,
@@ -175,6 +188,8 @@ pub struct SpendByResponseIdsRow {
     pub litellm_call_id: String,
     pub response_id: String,
     pub upstream_response_id: String,
+    #[serde(default)]
+    pub provider_request_id: String,
     pub trace_id: String,
     pub span_id: String,
     pub team_id: String,

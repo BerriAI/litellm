@@ -42,12 +42,14 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.core_helpers import (
-    _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    get_parent_otel_span_from_kwargs,
     is_codex_user_agent,
 )
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     as_openai_image_part,
@@ -77,6 +79,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+    ClassifierFailureReason,
     ModelResponse,
     RoutingDecisionCause,
     StandardLoggingHeuristicV2Forecast,
@@ -112,6 +115,7 @@ from .config import (
     CustomDimension,
     OpenSourceClassifierConfig,
     TierDefinition,
+    configured_local_heuristic,
 )
 from .jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
@@ -410,9 +414,9 @@ def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mappi
     return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
 
 
-def _response_cost_or_none(response: ModelResponse | ResponsesAPIResponse) -> float | None:
-    hidden_params: Final = response._hidden_params
-    if not isinstance(hidden_params, dict):
+def _response_cost_or_none(response: object) -> float | None:
+    hidden_params: Final = get_hidden_params(response)
+    if hidden_params is None:
         return None
     cost: Final = hidden_params.get("response_cost")
     if isinstance(cost, bool) or not isinstance(cost, (int, float)):
@@ -1084,10 +1088,21 @@ class ClassificationOutcome(NamedTuple):
     llm_v2_forecast: LLMV2Decision | None = None
     jev_verdict: JevVerdict | None = None
     heuristic_v2_forecast: StandardLoggingHeuristicV2Forecast | None = None
+    classifier_failure_reason: ClassifierFailureReason | None = None
+    classifier_error_type: str | None = None
 
 
-def _with_signal(outcome: ClassificationOutcome, signal: str | None) -> ClassificationOutcome:
-    return outcome if signal is None else outcome._replace(signals=(*outcome.signals, signal))
+def _with_classifier_failure(
+    outcome: ClassificationOutcome,
+    failure_reason: ClassifierFailureReason,
+    error_type: str | None,
+    signal: str | None,
+) -> ClassificationOutcome:
+    return outcome._replace(
+        signals=(*outcome.signals, signal) if signal is not None else outcome.signals,
+        classifier_failure_reason=failure_reason,
+        classifier_error_type=error_type,
+    )
 
 
 def _with_llm_v2_forecast(
@@ -1218,6 +1233,12 @@ def _is_classifier_timeout(exc: BaseException) -> bool:
     from litellm.exceptions import Timeout as LiteLLMTimeout
 
     return isinstance(exc, LiteLLMTimeout)
+
+
+def _classifier_failure_reason(exc: Exception) -> ClassifierFailureReason:
+    if _is_classifier_timeout(exc):
+        return "timeout"
+    return "invalid_response" if isinstance(exc, ValidationError) else "classifier_error"
 
 
 def _allowed(models: tuple[str, ...], fit_filter: frozenset[str] | None) -> tuple[str, ...]:
@@ -1488,7 +1509,10 @@ class ComplexityRouter(CustomLogger):
                 resolve_tier_artifact(self.config.heuristic_v2_artifact),
                 routing_threshold=self.config.heuristic_v2_success_threshold,
             )
-            if self.config.classifier_type == "heuristic_v2"
+            if configured_local_heuristic(
+                {"classifier_type": self.config.classifier_type, "local_heuristic": self.config.local_heuristic}
+            )
+            == "heuristic_v2"
             else None
         )
 
@@ -1831,6 +1855,8 @@ class ComplexityRouter(CustomLogger):
         escalated: bool = False,
         classifier_model: str | None = None,
         classifier_cost: float | None = None,
+        classifier_failure_reason: ClassifierFailureReason | None = None,
+        classifier_error_type: str | None = None,
         conversation_continuing: bool = True,
         tier_litellm_params: Mapping[str, object] | None = None,
         context_escalation_original_tier: ComplexityTier | str | None = None,
@@ -1849,6 +1875,12 @@ class ComplexityRouter(CustomLogger):
             routed_model=routed_model,
             cause=cause,
             conversation_continuing=conversation_continuing,
+            **(
+                {"classifier_failure_reason": classifier_failure_reason}
+                if classifier_failure_reason is not None
+                else {}
+            ),
+            **({"classifier_error_type": classifier_error_type} if classifier_error_type is not None else {}),
         )
         if (baseline := self.savings_baseline) is not None:
             decision["savings_baseline_model"] = baseline.model
@@ -1940,9 +1972,30 @@ class ComplexityRouter(CustomLogger):
         if self.config.classifier_type == "capability" and self.config.classifier_llm_config is not None:
             return await self._capability_classifier_outcome(prompt, request_kwargs, messages)
         if self.config.classifier_type not in ("llm", "llm_v2") or self.config.classifier_llm_config is None:
-            tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+            return self._classify_locally(prompt, system_prompt)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+
+    def _classify_locally(self, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+        if self._tier_success_predictor is not None:
+            return self._classify_with_heuristic_v2(prompt)
+        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+        return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+
+    def _local_outcome_is_decided(self, outcome: ClassificationOutcome, margin: float | None = None) -> bool:
+        forecast: Final = outcome.heuristic_v2_forecast
+        if forecast is None:
+            return bool(outcome.signals) and (
+                margin is None or (outcome.score is not None and not self._is_near_tier_boundary(outcome.score, margin))
+            )
+        threshold: Final = forecast["threshold"]
+        if forecast["probabilities"][forecast["predicted_tier"]] < threshold:
+            return False
+        if margin is None:
+            return True
+        deciding_tiers: Final = TIER_SEVERITY_ORDER[
+            : TIER_SEVERITY_ORDER.index(ComplexityTier(forecast["predicted_tier"])) + 1
+        ]
+        return all(abs(forecast["probabilities"][tier.value] - threshold) > margin for tier in deciding_tiers)
 
     def _classify_with_heuristic_v2(self, prompt: str) -> ClassificationOutcome:
         predictor: Final = self._tier_success_predictor
@@ -1981,27 +2034,27 @@ class ComplexityRouter(CustomLogger):
         """Score locally, and only pay for the classifier call when the scorer did not confidently
         place the request at or below heuristic_first_max_tier.
 
-        Confidence is `signals`, not `score`. A prompt where no dimension fired scores exactly 0.0,
+        For v1, confidence is `signals`, not `score`. A prompt where no dimension fired scores exactly 0.0,
         which is below simple_medium and so lands SIMPLE by default rather than by evidence, and a
         threshold check alone would hand that traffic to the cheapest model without ever consulting
         the classifier. Scores also go negative when simple indicators fire, so a score threshold
-        would reject exactly the trivial prompts this path exists to serve.
+        would reject exactly the trivial prompts this path exists to serve. V2 requires its predicted
+        tier to meet the configured success threshold.
 
         A turn carrying images the classifier would see is never decided cheaply: the scorer reads
         text alone, so its confidence describes a request it has only partly seen, and a trivial
         caption beside a screenshot is exactly the misrouting vision classification exists to stop.
         """
-        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        scored: Final = self._classify_locally(prompt, system_prompt)
         threshold: Final = self.config.heuristic_first_max_tier
         decided_cheaply: Final = (
             threshold is not None
-            and bool(signals)
+            and self._local_outcome_is_decided(scored)
             and not self._classifier_image_parts(messages)
-            and self._active_tier_severity(tier) <= self._active_tier_severity(threshold)
+            and self._active_tier_severity(scored.tier) <= self._active_tier_severity(threshold)
         )
         if decided_cheaply:
-            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="heuristic_first_short_circuit")
+            return scored._replace(cause="heuristic_first_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
 
     async def _classify_hybrid(
@@ -2015,21 +2068,20 @@ class ComplexityRouter(CustomLogger):
 
         Where heuristic_first asks how CHEAP the scorer's tier is, this asks how DECIDED it is, so a
         confident score keeps its tier at every tier including the most expensive one. Two things make
-        a score undecided: landing within hybrid_boundary_margin of an active boundary, where a
+        a v1 score undecided: landing within hybrid_boundary_margin of an active boundary, where a
         hair's difference in score would have named the adjacent tier and its model pool, and firing
         no dimension at all, which scores 0.0 and lands SIMPLE by default rather than by evidence.
+        V2 compares its selected and lower-tier probabilities against the success threshold.
         """
-        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        scored: Final = self._classify_locally(prompt, system_prompt)
         margin: Final = self.config.hybrid_boundary_margin
         decided: Final = (
             margin is not None
-            and bool(signals)
+            and self._local_outcome_is_decided(scored, margin)
             and not self._classifier_image_parts(messages)
-            and not self._is_near_tier_boundary(score, margin)
         )
         if decided:
-            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="hybrid_short_circuit")
+            return scored._replace(cause="hybrid_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
 
     def _classifier_image_parts(
@@ -2070,7 +2122,9 @@ class ComplexityRouter(CustomLogger):
         permit: Final = breaker.acquire_permit() if breaker is not None else None
         if breaker is not None and permit is None:
             return self._capability_classifier_failure_outcome(
-                "capability classifier circuit is open", signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL
+                "capability classifier circuit is open",
+                failure_reason="circuit_open",
+                signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
             )
         try:
             tier, classifier_cost, forecast = await self._classify_with_capability_llm(prompt, request_kwargs, messages)
@@ -2094,9 +2148,20 @@ class ComplexityRouter(CustomLogger):
         except Exception as e:  # noqa: BLE001 -- every unavailable or invalid judge verdict must fail closed
             if breaker is not None and permit is not None:
                 breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
-            return self._capability_classifier_failure_outcome(f"capability classifier failed ({type(e).__name__})")
+            return self._capability_classifier_failure_outcome(
+                f"capability classifier failed ({type(e).__name__})",
+                failure_reason=_classifier_failure_reason(e),
+                error_type=type(e).__name__,
+            )
 
-    def _capability_classifier_failure_outcome(self, reason: str, signal: str | None = None) -> ClassificationOutcome:
+    def _capability_classifier_failure_outcome(
+        self,
+        reason: str,
+        *,
+        failure_reason: ClassifierFailureReason,
+        error_type: str | None = None,
+        signal: str | None = None,
+    ) -> ClassificationOutcome:
         """Fail closed to the configured capable tier without consulting another taxonomy."""
         capability: Final = self.config.capability_classifier_config
         if capability is None:
@@ -2117,6 +2182,8 @@ class ComplexityRouter(CustomLogger):
             score=None,
             signals=signals,
             cause="capability_classifier_fallback",
+            classifier_failure_reason=failure_reason,
+            classifier_error_type=error_type,
         )
 
     async def _llm_classifier_outcome(
@@ -2140,6 +2207,7 @@ class ComplexityRouter(CustomLogger):
                 prompt,
                 system_prompt,
                 scored,
+                failure_reason="circuit_open",
                 signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
             )
         try:
@@ -2169,7 +2237,12 @@ class ComplexityRouter(CustomLogger):
             if breaker is not None and permit is not None:
                 breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
             return self._classifier_failure_outcome(
-                f"LLM classifier failed ({type(e).__name__})", prompt, system_prompt, scored
+                f"LLM classifier failed ({type(e).__name__})",
+                prompt,
+                system_prompt,
+                scored,
+                failure_reason=_classifier_failure_reason(e),
+                error_type=type(e).__name__,
             )
 
     async def _jev_classifier_outcome(
@@ -2182,11 +2255,16 @@ class ComplexityRouter(CustomLogger):
         config: Final = self.config.opensource_classifier_config
         client: Final = self._jev_client
         if config is None or client is None:
-            return self._classifier_failure_outcome("jev classifier is not configured", prompt, system_prompt)
+            return self._classifier_failure_outcome(
+                "jev classifier is not configured", prompt, system_prompt, failure_reason="not_configured"
+            )
         marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
         if _encrypted_classifier_task(request_kwargs, marker_pairs) is not None:
             return self._classifier_failure_outcome(
-                "jev classifier does not support encrypted agent tasks", prompt, system_prompt
+                "jev classifier does not support encrypted agent tasks",
+                prompt,
+                system_prompt,
+                failure_reason="unsupported_input",
             )
         breaker: Final = self._classifier_circuit_breaker
         permit: Final = breaker.acquire_permit() if breaker is not None else None
@@ -2195,6 +2273,7 @@ class ComplexityRouter(CustomLogger):
                 "jev classifier circuit is open",
                 prompt,
                 system_prompt,
+                failure_reason="circuit_open",
                 signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
             )
         criteria: Final[Mapping[str, str]] = (
@@ -2264,7 +2343,11 @@ class ComplexityRouter(CustomLogger):
             if breaker is not None and permit is not None:
                 breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
             return self._classifier_failure_outcome(
-                f"jev classifier failed ({type(e).__name__})", prompt, system_prompt
+                f"jev classifier failed ({type(e).__name__})",
+                prompt,
+                system_prompt,
+                failure_reason=_classifier_failure_reason(e),
+                error_type=type(e).__name__,
             )
 
     def _classifier_failure_outcome(
@@ -2273,6 +2356,9 @@ class ComplexityRouter(CustomLogger):
         prompt: str,
         system_prompt: str | None,
         scored: ClassificationOutcome | None = None,
+        *,
+        failure_reason: ClassifierFailureReason,
+        error_type: str | None = None,
         signal: str | None = None,
     ) -> ClassificationOutcome:
         """The outcome when the LLM classifier or classifier plugin produced no usable tier:
@@ -2283,36 +2369,44 @@ class ComplexityRouter(CustomLogger):
         v2: Final = self.config.llm_v2_config
         if v2 is not None:
             verbose_router_logger.warning("ComplexityRouter: %s, routing to llm_v2 capable tier", reason)
-            return _with_signal(
+            return _with_classifier_failure(
                 ClassificationOutcome(
                     tier=ComplexityTier(v2.capable_tier),
                     score=None,
                     signals=("llm-v2:fallback-capable",),
                     cause="llm_v2_fallback",
                 ),
+                failure_reason,
+                error_type,
                 signal,
             )
         fallback_tier: Final = self.config.fallback_tier
         if fallback_tier is not None:
             verbose_router_logger.warning("ComplexityRouter: %s, routing to fallback_tier %s", reason, fallback_tier)
-            return _with_signal(
+            return _with_classifier_failure(
                 ClassificationOutcome(
                     tier=fallback_tier,
                     score=None,
                     signals=(f"classifier-fallback:{fallback_tier}",),
                     cause="classifier_fallback",
                 ),
+                failure_reason,
+                error_type,
                 signal,
             )
         verbose_router_logger.warning(
             "ComplexityRouter: %s, falling back to %s", reason, self.config.classifier_fallback
         )
         if self.config.classifier_fallback == "default_model":
-            return _with_signal(self._default_model_fallback_outcome(), signal)
+            return _with_classifier_failure(self._default_model_fallback_outcome(), failure_reason, error_type, signal)
         if scored is not None:
-            return _with_signal(scored, signal)
-        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
-        return _with_signal(ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause), signal)
+            return _with_classifier_failure(scored, failure_reason, error_type, signal)
+        return _with_classifier_failure(
+            self._classify_locally(prompt, system_prompt),
+            failure_reason,
+            error_type,
+            signal,
+        )
 
     async def _classify_with_plugin(
         self,
@@ -2326,7 +2420,9 @@ class ComplexityRouter(CustomLogger):
 
         plugin: Final = self.config.classifier_plugin
         if plugin is None:
-            return self._classifier_failure_outcome("classifier_plugin is not set", prompt, system_prompt)
+            return self._classifier_failure_outcome(
+                "classifier_plugin is not set", prompt, system_prompt, failure_reason="not_configured"
+            )
         kwargs: Final = request_kwargs if request_kwargs is not None else EMPTY_MAPPING
         pools: Final = self._tier_pools()
         try:
@@ -2342,29 +2438,48 @@ class ComplexityRouter(CustomLogger):
             verdict: Final = await asyncio.wait_for(
                 plugin.classify(context), timeout=self.config.classifier_plugin_timeout_ms / 1000
             )
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             return self._classifier_failure_outcome(
-                f"classifier plugin timed out after {self.config.classifier_plugin_timeout_ms}ms", prompt, system_prompt
+                f"classifier plugin timed out after {self.config.classifier_plugin_timeout_ms}ms",
+                prompt,
+                system_prompt,
+                failure_reason="timeout",
+                error_type=type(e).__name__,
             )
         except Exception as e:  # noqa: BLE001 -- an operator hook can fail in arbitrary ways (network, bug); any failure must fall back rather than fail the request
-            return self._classifier_failure_outcome(f"classifier plugin failed ({e})", prompt, system_prompt)
+            return self._classifier_failure_outcome(
+                f"classifier plugin failed ({e})",
+                prompt,
+                system_prompt,
+                failure_reason=_classifier_failure_reason(e),
+                error_type=type(e).__name__,
+            )
         if verdict is None:
-            return self._classifier_failure_outcome("classifier plugin declined to classify", prompt, system_prompt)
+            return self._classifier_failure_outcome(
+                "classifier plugin declined to classify", prompt, system_prompt, failure_reason="declined"
+            )
         if not isinstance(verdict, str):
             return self._classifier_failure_outcome(
                 f"classifier plugin returned a non-string verdict of type {type(verdict).__name__}",
                 prompt,
                 system_prompt,
+                failure_reason="invalid_response",
             )
         tier: Final = self.config.resolve_classified_tier(verdict)
         if tier is None:
             return self._classifier_failure_outcome(
-                f"classifier plugin returned unknown tier {verdict!r}", prompt, system_prompt
+                f"classifier plugin returned unknown tier {verdict!r}",
+                prompt,
+                system_prompt,
+                failure_reason="invalid_response",
             )
         tier_key: Final = _tier_name(tier)
         if not pools.get(tier_key):
             return self._classifier_failure_outcome(
-                f"classifier plugin returned tier {tier_key!r}, which has no models configured", prompt, system_prompt
+                f"classifier plugin returned tier {tier_key!r}, which has no models configured",
+                prompt,
+                system_prompt,
+                failure_reason="invalid_response",
             )
         return ClassificationOutcome(
             tier=tier,
@@ -2628,9 +2743,13 @@ class ComplexityRouter(CustomLogger):
             verdict: Final = LLMV2Verdict.model_validate_json(extract_classifier_json(content))
         except ValidationError as error:
             _log_rejected_classifier_verdict(error, content, request_kwargs)
-            return self._classifier_failure_outcome("Invalid LLM V2 forecast", prompt, system_prompt)._replace(
-                classifier_cost=classifier_cost
-            )
+            return self._classifier_failure_outcome(
+                "Invalid LLM V2 forecast",
+                prompt,
+                system_prompt,
+                failure_reason="invalid_response",
+                error_type=type(error).__name__,
+            )._replace(classifier_cost=classifier_cost)
         decision: Final = v2.classify(verdict)
         return ClassificationOutcome(
             tier=ComplexityTier(v2.efficient_tier if decision.use_efficient else v2.capable_tier),
@@ -3745,7 +3864,7 @@ class ComplexityRouter(CustomLogger):
                 request_kwargs=probe_kwargs,
                 messages=messages,
                 input=input,
-                parent_otel_span=_get_parent_otel_span_from_kwargs(request_kwargs),
+                parent_otel_span=get_parent_otel_span_from_kwargs(request_kwargs),
                 health_check_probe=True,
             )
         except (RouterRateLimitError, RouterRateLimitErrorBasic, BadRequestError) as exc:
@@ -4071,6 +4190,10 @@ class ComplexityRouter(CustomLogger):
         try:
             semantic_tier: Final = await self._semantic_tier_override(user_message, request_kwargs)
         except Exception as e:  # noqa: BLE001 -- embedding call can fail many ways (timeout, provider/network/parse error); any failure must fall back to scoring, never fail the request
+            phase_event(
+                "litellm.router.semantic_keyword_fallback",
+                {"litellm.router.failure_reason": _classifier_failure_reason(e), "error.type": type(e).__name__},
+            )
             verbose_router_logger.warning(
                 "ComplexityRouter: semantic keyword matching failed (%s), falling back to complexity scoring", e
             )
@@ -4705,6 +4828,8 @@ class ComplexityRouter(CustomLogger):
                     conversation_continuing=conversation_continuing,
                     cause=outcome.cause,
                     signals=outcome.signals,
+                    classifier_failure_reason=outcome.classifier_failure_reason,
+                    classifier_error_type=outcome.classifier_error_type,
                     escalation_keyword=escalation_keyword,
                     escalated=False,
                     tier_litellm_params=fallback_tier_params,
@@ -4817,6 +4942,8 @@ class ComplexityRouter(CustomLogger):
             escalated=escalated,
             classifier_model=classifier_model,
             classifier_cost=outcome.classifier_cost,
+            classifier_failure_reason=outcome.classifier_failure_reason,
+            classifier_error_type=outcome.classifier_error_type,
             tier_litellm_params=tier_litellm_params,
             context_escalation_original_tier=context_original_tier,
         )

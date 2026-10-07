@@ -342,13 +342,21 @@ def test_issue_and_pattern_with_same_title_keep_independent_feedback(explicit_re
     assert pattern.kind == "pattern"
     assert pattern.status == "open" and pattern.reason == ""
     assert pattern.occurrences == ("new",)
-    assert snapshot_finding(reviewed, draft, 1, NOW).id == pattern.id
+    assert (
+        snapshot_finding(
+            reviewed.model_copy(update={"findings": (issue, pattern)}),
+            draft.model_copy(update={"existing_finding_id": pattern.id}),
+            1,
+            NOW,
+        ).id
+        == pattern.id
+    )
     both: Final = reviewed.model_copy(update={"findings": (issue, pattern)})
     assert merge_finding(both, finding("again"), 1, NOW).id == issue.id
     assert merge_finding(both, finding("again"), 1, NOW).status == "dismissed"
 
 
-def test_legacy_finding_identity_preserves_feedback_only_for_same_kind_and_check() -> None:
+def test_legacy_finding_identity_preserves_feedback_when_explicitly_matched_across_checks() -> None:
     import hashlib
 
     original: Final = lens()
@@ -363,8 +371,9 @@ def test_legacy_finding_identity_preserves_feedback_only_for_same_kind_and_check
     assert repeated.status == "dismissed" and repeated.reason == "Accepted"
     other: Final = finding("new").model_copy(update={"check_id": "different", "existing_finding_id": legacy_id})
     separate: Final = merge_finding(reviewed, other, 2, NOW)
-    assert separate.id != legacy_id
-    assert separate.status == "open" and separate.reason == ""
+    assert separate.id == legacy_id
+    assert separate.status == "dismissed"
+    assert separate.check_ids == ("different", "retries") and separate.reason == "Accepted"
 
 
 def test_only_successful_scheduled_scans_move_the_next_scan_forward() -> None:
@@ -535,3 +544,73 @@ def test_activity_updates_preserve_coverage_reviews_and_other_concurrent_lanes()
     assert end_job(updated, "cancelled", NOW).activities == ()
     expired: Final = replace_job(queue_job(lens(), NOW, "job"), updated.model_copy(update={"lease_until": NOW}))
     assert claim_job(expired, worker(), NOW).jobs[0].activities == ()
+
+
+def test_one_issue_preserves_all_traces_checks_and_contributing_runs_without_counting_overlap() -> None:
+    initial: Final = lens()
+    first: Final = merge_finding(initial, finding("trace-a"), 1, NOW, "run-1")
+    persisted: Final = initial.model_copy(update={"findings": (first,)})
+    repeated: Final = merge_finding(persisted, finding("trace-a"), 1, NOW + timedelta(hours=1), "run-2")
+    assert repeated.id == first.id
+    assert repeated.investigation_runs == ("run-1",)
+    assert repeated.last_seen == first.last_seen
+    next_draft: Final = finding("trace-b").model_copy(
+        update={
+            "title": "Same failure described differently",
+            "check_id": "unhappy",
+            "existing_finding_id": first.id,
+        }
+    )
+    updated: Final = merge_finding(persisted, next_draft, 1, NOW + timedelta(hours=2), "run-3")
+    assert updated.id == first.id
+    assert updated.occurrences == ("trace-a", "trace-b")
+    assert updated.check_ids == ("retries", "unhappy")
+    assert updated.investigation_runs == ("run-1", "run-3")
+    assert {quote.execution_id for quote in updated.evidence} == {"trace-a", "trace-b"}
+
+
+def test_old_criteria_run_cannot_advance_the_new_criteria_scan_cursor() -> None:
+    original: Final = lens()
+    running: Final = queue_job(original, NOW, "old-criteria").jobs[0]
+    updated: Final = original.model_copy(
+        update={"settings": original.settings.model_copy(update={"context": "Find failed tool calls"})}
+    )
+    assert next_scan_start(updated, running, failed=False) is None
+
+
+def test_explicit_cluster_match_does_not_absorb_a_same_title_issue_with_different_feedback() -> None:
+    first: Final = merge_finding(lens(), finding("trace-a"), 1, NOW, "first-run")
+    unrelated: Final = first.model_copy(
+        update={"id": "other", "status": "dismissed", "reason": "Intentional", "occurrences": ("trace-b",)}
+    )
+    stored: Final = lens().model_copy(update={"findings": (first, unrelated)})
+    updated: Final = merge_finding(
+        stored, finding("trace-c").model_copy(update={"existing_finding_id": first.id}), 1, NOW, "new-run"
+    )
+    assert updated.id == first.id
+    assert updated.occurrences == ("trace-a", "trace-c")
+    assert updated.status == "open"
+    assert "other" not in updated.merged_finding_ids
+
+
+def test_feedback_changed_during_analysis_survives_a_stale_merge_decision() -> None:
+    from litellm.proxy.lens.endpoints import merge_results
+    from litellm.proxy.lens.models import Result
+
+    first: Final = merge_finding(lens(), finding("trace-a"), 1, NOW, "first-run")
+    later: Final = merge_finding(lens(), finding("trace-b"), 1, NOW + timedelta(minutes=1), "second-run")
+    feedback: Final = later.model_copy(update={"status": "resolved", "reason": "Fixed in the latest release"})
+    stored: Final = lens().model_copy(update={"findings": (first, feedback)})
+    stale: Final = finding("trace-c").model_copy(
+        update={"existing_finding_id": first.id, "merged_finding_ids": (later.id,)}
+    )
+
+    updated: Final = merge_results(
+        stored, Result(coverage=Coverage(), findings=(stale,)), 1, NOW + timedelta(hours=1), "new-run"
+    )
+
+    assert len(updated.findings) == 2
+    assert feedback in updated.findings
+    extended: Final = next(item for item in updated.findings if item.id == first.id)
+    assert extended.status == "open" and extended.occurrences == ("trace-a", "trace-c")
+    assert feedback.id not in extended.merged_finding_ids

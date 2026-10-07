@@ -82,7 +82,7 @@ fn assert_invariants(span: &DecodedSpan) {
     }
     assert!(normalized.input_preview.chars().count() <= 240);
     if let Ok(Value::Array(messages)) = serde_json::from_str(&normalized.input) {
-        let user = messages.iter().rev().find_map(|message| {
+        let user = messages.iter().find_map(|message| {
             (message.get("role")?.as_str()? == "user")
                 .then(|| {
                     message
@@ -284,6 +284,7 @@ fn llamaindex_wrapped_responses_keep_provider_call_keys(#[case] body: &[u8]) {
 #[rstest]
 #[case::request(litellm_traces::CallKey::LiteLlmRequest("request:with:colons".to_owned()))]
 #[case::response(litellm_traces::CallKey::ProviderResponse("response:with:colons".to_owned()))]
+#[case::provider_request(litellm_traces::CallKey::ProviderRequest("req_native".into()))]
 #[case::transport(litellm_traces::CallKey::Transport)]
 #[case::gateway_attempt(litellm_traces::CallKey::GatewayAttempt)]
 fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
@@ -305,6 +306,7 @@ fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
 #[rstest]
 #[case::missing_separator("provider_response")]
 #[case::missing_response("provider_response:")]
+#[case::missing_provider_request("provider_request:")]
 #[case::missing_request("litellm_request:")]
 #[case::transport_id("transport:unexpected")]
 #[case::gateway_attempt_separator("gateway_attempt")]

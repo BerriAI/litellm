@@ -361,6 +361,70 @@ class TestNewRelicTeamCallbackValidation:
             is_otel_v2_enabled.cache_clear()
 
 
+class TestArizeOtlpProtocolValidation:
+    def test_valid_protocols_are_accepted(self):
+        from litellm.proxy._types import AddTeamCallback
+
+        for protocol in ("grpc", "http/protobuf"):
+            data = AddTeamCallback(
+                callback_name="arize",
+                callback_type="success",
+                callback_vars={"arize_api_key": "k", "arize_space_id": "s", "arize_otlp_protocol": protocol},
+            )
+            assert data.callback_vars["arize_otlp_protocol"] == protocol
+
+    def test_an_invalid_protocol_is_rejected_at_model_validation(self):
+        from pydantic import ValidationError
+
+        from litellm.proxy._types import AddTeamCallback
+
+        with pytest.raises(ValidationError, match="arize_otlp_protocol"):
+            AddTeamCallback(
+                callback_name="arize",
+                callback_type="success",
+                callback_vars={"arize_otlp_protocol": "otlp_grpc"},
+            )
+
+    def test_a_failure_only_team_callback_rejects_the_protocol(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy._types import AddTeamCallback
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_team_callback
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(
+                    AddTeamCallback(
+                        callback_name="arize",
+                        callback_type="failure",
+                        callback_vars={
+                            "arize_api_key": "k",
+                            "arize_space_id": "s",
+                            "arize_otlp_protocol": "http/protobuf",
+                        },
+                    )
+                )
+            assert exc.value.status_code == 400
+            assert "arize_otlp_protocol" in str(exc.value.detail)
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_the_raw_otlp_env_var_name_stays_rejected(self):
+        from pydantic import ValidationError
+
+        from litellm.proxy._types import AddTeamCallback
+
+        with pytest.raises(ValidationError, match="Invalid callback variable"):
+            AddTeamCallback(
+                callback_name="arize",
+                callback_type="success",
+                callback_vars={"OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf"},
+            )
+
+
 class TestNewRelicKeyLoggingValidation:
     """Key-level logging is written through key metadata, not /team/callback."""
 

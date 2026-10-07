@@ -129,7 +129,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         correctly and the provider is creating a cache.
         """
         _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
 
@@ -167,7 +167,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         This validates that caching is working end-to-end.
         """
         _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
 
@@ -208,7 +208,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         E2E test: Prompt caching with system message should work.
         """
         _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         messages = [
             {
@@ -270,7 +270,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         are correctly returned in the streaming response's message_delta event.
         """
         _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
 
@@ -368,7 +368,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         E2E test: Second streaming call should return cache_read_input_tokens > 0.
         """
         _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
 
@@ -447,7 +447,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         wasn't supported.
         """
         _skip_live_prompt_caching_test()
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
 

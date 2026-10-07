@@ -1,15 +1,14 @@
 import asyncio
-from typing import Final
 import json
 import os
 import traceback
 from types import MappingProxyType
+from typing import Final
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -3930,55 +3929,11 @@ def test_completion_text_003_prompt_array():
 
 
 ##### hugging face tests
-@pytest.mark.skip(reason="local test")
-def test_completion_hf_prompt_array():
-    try:
-        litellm.set_verbose = True
-        print("\n testing hf mistral\n")
-        response = text_completion(
-            model="huggingface/mistralai/Mistral-7B-Instruct-v0.3",
-            prompt=token_prompt,  # token prompt is a 2d list,
-            max_tokens=0,
-            temperature=0.0,
-            # echo=True, # hugging face inference api is currently raising errors for this, looks like they have a regression on their side
-        )
-        print("\n\n response")
-
-        print(response)
-        print(response.choices)
-        assert len(response.choices) == 2
-        # response_str = response["choices"][0]["text"]
-    except litellm.RateLimitError:
-        print("got rate limit error from hugging face... passsing")
-        return
-    except Exception as e:
-        print(str(e))
-        if "is currently loading" in str(e):
-            return
-        if "Service Unavailable" in str(e):
-            return
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_hf_prompt_array()
 
 
-@pytest.mark.skip(
-    reason="HF Inference API is unstable, this is now the 3rd time it's stopped working"
-)
-def test_text_completion_stream():
-    try:
-        for _ in range(2):  # check if closed client used
-            response = text_completion(
-                model="huggingface/deepseek-ai/DeepSeek-R1",
-                prompt="good morning",
-                stream=True,
-                max_tokens=10,
-            )
-            for chunk in response:
-                print(f"chunk: {chunk}")
-    except Exception as e:
-        pytest.fail(f"GOT exception for HF In streaming{e}")
 
 
 # test_text_completion_stream()
@@ -4144,16 +4099,6 @@ def test_completion_vllm(provider):
         assert "hello" in mock_call.call_args.kwargs["extra_body"]
 
 
-@pytest.mark.skip(reason="fireworks is having an active outage")
-def test_completion_fireworks_ai_multiple_choices():
-    litellm._turn_on_debug()
-    response = litellm.text_completion(
-        model="fireworks_ai/llama-v3p1-8b-instruct",
-        prompt=["halo", "hi", "halo", "hi"],
-    )
-    print(response.choices)
-
-    assert len(response.choices) == 4
 
 
 @pytest.mark.parametrize("stream", [True, False])
