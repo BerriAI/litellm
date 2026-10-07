@@ -1,8 +1,10 @@
+import os
+
 from openai import OpenAI
 
 client = OpenAI(
     base_url="http://0.0.0.0:4000",
-    api_key="sk-1234",
+    api_key=os.environ["LITELLM_MASTER_KEY"],
 )
 
 BEDROCK_BATCH_MODEL = "bedrock/batch-anthropic.claude-3-5-sonnet-20240620-v1:0"

@@ -1,20 +1,58 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+if TYPE_CHECKING:
+    from mcp.types import (
+        ListPromptsRequest,
+        ListPromptsResult,
+        ListResourcesRequest,
+        ListResourcesResult,
+        ListResourceTemplatesRequest,
+        ListResourceTemplatesResult,
+        ListToolsRequest,
+        ListToolsResult,
+    )
+
+    CatalogListRequest: TypeAlias = (
+        ListToolsRequest | ListPromptsRequest | ListResourcesRequest | ListResourceTemplatesRequest
+    )
+    CatalogListResult: TypeAlias = (
+        ListToolsResult | ListPromptsResult | ListResourcesResult | ListResourceTemplatesResult
+    )
+
+    from litellm.proxy._experimental.mcp_server.server_resolution import ResolvedMCPServer
+
+
+class TargetCatalog(Protocol):
+    async def list(self, context: OperationContext, request: CatalogListRequest) -> CatalogListResult: ...
+
+    async def resolve(
+        self,
+        server_id: str,
+        caller: UserAPIKeyAuth,
+        *,
+        is_admin_view: bool,
+        not_found_detail: Mapping[str, str],
+        forbidden_detail: Mapping[str, str],
+        non_admin_missing: Literal["not_found", "forbidden"],
+    ) -> ResolvedMCPServer: ...
 
 
 def copy_caller(auth: UserAPIKeyAuth | None) -> UserAPIKeyAuth | None:
     if auth is None:
         return None
     span: Final = auth.parent_otel_span
-    return deepcopy(auth, {id(span): span} if span is not None else None)  # mutable-ok: deepcopy mutates its memo
+    return deepcopy(auth, {id(span): span} if span is not None else None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,12 +107,12 @@ class OperationContext:
         return (
             self.user_api_key_auth,
             self.mcp_auth_header,
-            list(self.mcp_servers) if self.mcp_servers is not None else None,  # mutable-ok: legacy policy list input
+            list(self.mcp_servers) if self.mcp_servers is not None else None,
             {key: dict(value) for key, value in self.mcp_server_auth_headers.items()}
             if self.mcp_server_auth_headers is not None
             else None,
             dict(self.oauth2_headers) if self.oauth2_headers is not None else None,
-            dict(self.raw_headers) if self.raw_headers is not None else None,  # mutable-ok: legacy request header input
+            dict(self.raw_headers) if self.raw_headers is not None else None,
             self.client_ip,
         )
 

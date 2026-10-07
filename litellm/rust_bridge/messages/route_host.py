@@ -50,7 +50,7 @@ class MessagesShaping:
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
     return cast(  # cast-ok: AnthropicMessagesResponse is a TypedDict over the normalized native payload
         AnthropicMessagesResponse,
-        dict(value),  # mutable-ok: the public Messages response is a TypedDict the caller may annotate in place
+        dict(value),
     )
 
 

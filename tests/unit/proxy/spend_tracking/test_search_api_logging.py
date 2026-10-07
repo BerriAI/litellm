@@ -22,6 +22,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.spend_tracking.spend_management_endpoints import view_spend_logs
 from litellm.proxy.utils import ProxyLogging, hash_token, update_spend
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+from tests._master_key import MASTER_KEY
 
 
 @pytest.fixture
@@ -66,7 +67,7 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
     6. spend is calculated and logged
     """
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     # Setup router with search tool
@@ -95,7 +96,7 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key=MASTER_KEY,
         user_id="test_user",
     )
 

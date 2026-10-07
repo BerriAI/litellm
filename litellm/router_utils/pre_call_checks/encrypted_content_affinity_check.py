@@ -36,7 +36,8 @@ Safe to enable globally:
 - No cache required.
 """
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
+from functools import cache
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 from litellm._logging import verbose_router_logger
@@ -114,23 +115,31 @@ class EncryptedContentAffinityCheck(CustomLogger):
         if not isinstance(request_input, list):
             return None
 
-        for item in request_input:
-            if not isinstance(item, dict):
-                continue
+        return next(
+            (
+                model_id
+                for item in request_input
+                if (model_id := EncryptedContentAffinityCheck._model_id_of_input_item(item)) is not None
+            ),
+            None,
+        )
 
-            # First, try to decode from item ID (if present)
-            item_id = item.get("id")
-            if item_id and isinstance(item_id, str):
-                decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
-                if decoded:
-                    return decoded.get("model_id")
+    @staticmethod
+    def _model_id_of_input_item(item: object) -> str | None:
+        if not isinstance(item, dict):
+            return None
 
-            # If no encoded ID, check if encrypted_content itself is wrapped
-            encrypted_content = item.get("encrypted_content")
-            if encrypted_content and isinstance(encrypted_content, str):
-                model_id = EncryptedContentAffinityCheck._model_id_from_wrapped_encrypted_content(encrypted_content)
-                if model_id:
-                    return model_id
+        item_id: Final = item.get("id")
+        if item_id and isinstance(item_id, str):
+            decoded: Final = ResponsesAPIRequestUtils.decode_encrypted_item_id(item_id)
+            if decoded:
+                return decoded.get("model_id")
+
+        encrypted_content: Final = item.get("encrypted_content")
+        if encrypted_content and isinstance(encrypted_content, str):
+            model_id: Final = EncryptedContentAffinityCheck._model_id_from_wrapped_encrypted_content(encrypted_content)
+            if model_id:
+                return model_id
 
         return None
 
@@ -147,8 +156,15 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _model_id_from_wrapped_encrypted_content(encrypted_content: str) -> str | None:
-        model_id, _ = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(encrypted_content)
+        model_id, _ = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(encrypted_content)
         return model_id or None
+
+    @staticmethod
+    def _model_id_of_anthropic_block(block: Mapping[str, object]) -> str | None:
+        encrypted_content: Final = encrypted_content_of_block(block)
+        if encrypted_content is None:
+            return None
+        return EncryptedContentAffinityCheck._model_id_from_wrapped_encrypted_content(encrypted_content)
 
     @staticmethod
     def _extract_model_id_from_anthropic_messages(messages: object) -> str | None:
@@ -156,13 +172,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             (
                 model_id
                 for block in EncryptedContentAffinityCheck._anthropic_content_blocks(messages)
-                if (encrypted_content := encrypted_content_of_block(block)) is not None
-                if (
-                    model_id := EncryptedContentAffinityCheck._model_id_from_wrapped_encrypted_content(
-                        encrypted_content
-                    )
-                )
-                is not None
+                if (model_id := EncryptedContentAffinityCheck._model_id_of_anthropic_block(block)) is not None
             ),
             None,
         )
@@ -243,6 +253,50 @@ class EncryptedContentAffinityCheck(CustomLogger):
         ]
         return matches, originating
 
+    def _strip_reasoning_the_target_cannot_decrypt(
+        self,
+        request_input: object,
+        anthropic_messages: object,
+        target_deployments: Sequence[Mapping[str, object]],
+    ) -> None:
+        target_ids: Final = frozenset(
+            str(model_info["id"])
+            for target in target_deployments
+            if isinstance((model_info := target.get("model_info")), Mapping) and model_info.get("id") is not None
+        )
+        target_boundaries: Final = frozenset(
+            boundary
+            for target in target_deployments
+            if (boundary := self._encryption_boundary_key(target.get("litellm_params"))) is not None
+        )
+
+        @cache
+        def target_can_decrypt(origin_model_id: str) -> bool:
+            if origin_model_id in target_ids:
+                return True
+            if self.router is None:
+                return False
+            origin: Final = self.router.get_deployment(model_id=origin_model_id)
+            origin_boundary: Final = (
+                self._encryption_boundary_key(origin.litellm_params.model_dump(exclude_none=True))
+                if origin is not None
+                else None
+            )
+            return origin_boundary is not None and origin_boundary in target_boundaries
+
+        def should_strip_input_item(item: Mapping[str, object]) -> bool:
+            origin_model_id: Final = self._model_id_of_input_item(item)
+            return origin_model_id is not None and not target_can_decrypt(origin_model_id)
+
+        def should_strip_anthropic_block(block: Mapping[str, object]) -> bool:
+            origin_model_id: Final = self._model_id_of_anthropic_block(block)
+            return origin_model_id is not None and not target_can_decrypt(origin_model_id)
+
+        ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(
+            request_input, should_strip=should_strip_input_item
+        )
+        strip_encrypted_reasoning_from_messages(anthropic_messages, should_strip=should_strip_anthropic_block)
+
     # ------------------------------------------------------------------
     # Request routing  (pre-call filter)
     # ------------------------------------------------------------------
@@ -303,6 +357,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 model_id,
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
+            self._strip_reasoning_the_target_cannot_decrypt(request_input, anthropic_messages, (deployment,))
             return [deployment]
 
         # Follow-up switched model_name (LIT-2531): pin by Azure resource instead.
@@ -318,6 +373,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 len(boundary_matches),
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
+            self._strip_reasoning_the_target_cannot_decrypt(request_input, anthropic_messages, boundary_matches)
             return boundary_matches
 
         # The origin cannot serve this turn and no peer shares its encryption boundary, so its

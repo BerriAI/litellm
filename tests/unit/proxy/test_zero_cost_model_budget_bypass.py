@@ -588,3 +588,84 @@ class TestEdgeCases:
             request=MagicMock(),
         )
         assert result is True
+
+
+class TestOverBudgetRequestThroughModelGroupAlias:
+    """The whole path a request takes, not just the predicate.
+
+    `user_api_key_auth._should_skip_budget_checks()` derives the exemption from the requested
+    model name and `common_checks()` enforces the budgets with it, so a break anywhere between
+    alias resolution and enforcement shows up here. See
+    https://github.com/BerriAI/litellm/issues/35369.
+    """
+
+    ROUTE = "/v1/chat/completions"
+
+    @staticmethod
+    def _router() -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "ollama/llama2",
+                        "api_base": "http://localhost:11434",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
+                    "model_info": {"id": "paid-model-id"},
+                },
+            ],
+            model_group_alias={"free-model-alias": "free-model", "paid-model-alias": "paid-model"},
+        )
+
+    async def _request(self, model: str, proxy_logging) -> bool:
+        """Run one over-budget request for `model`, deriving the exemption the way auth does."""
+        from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+
+        router = self._router()
+        request_data = {"model": model}
+        skip_budget_checks = _should_skip_budget_checks(
+            request_data=request_data, route=self.ROUTE, request=None, llm_router=router
+        )
+        return await common_checks(
+            request_body=request_data,
+            team_object=None,
+            user_object=LiteLLM_UserTable(user_id="test-user", spend=100.0, max_budget=50.0),
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=self.ROUTE,
+            llm_router=router,
+            proxy_logging_obj=proxy_logging,
+            valid_token=UserAPIKeyAuth(token="test-token", user_id="test-user"),
+            request=MagicMock(),
+            skip_budget_checks=skip_budget_checks,
+        )
+
+    @pytest.mark.asyncio
+    async def test_over_budget_request_for_aliased_free_model_is_allowed(self, mock_proxy_logging):
+        assert await self._request("free-model-alias", mock_proxy_logging) is True
+
+    @pytest.mark.asyncio
+    async def test_over_budget_request_for_free_model_is_allowed(self, mock_proxy_logging):
+        """The same deployment under its own name, so the alias is the only difference above."""
+        assert await self._request("free-model", mock_proxy_logging) is True
+
+    @pytest.mark.asyncio
+    async def test_over_budget_request_for_aliased_paid_model_is_blocked(self, mock_proxy_logging):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await self._request("paid-model-alias", mock_proxy_logging)
+
+        assert exc_info.value.current_cost == 100.0
+        assert exc_info.value.max_budget == 50.0
+
+    @pytest.mark.asyncio
+    async def test_over_budget_request_for_paid_model_is_blocked(self, mock_proxy_logging):
+        with pytest.raises(litellm.BudgetExceededError):
+            await self._request("paid-model", mock_proxy_logging)

@@ -228,7 +228,7 @@ class RouteChecks:
         # Use SensitiveDataMasker with custom configuration for user_id
         masker: Final = SensitiveDataMasker(visible_prefix=6, visible_suffix=2, mask_char="*")
 
-        return masker._mask_value(user_id)
+        return masker.mask_value(user_id)
 
     @staticmethod
     def _raise_admin_only_route_exception(
@@ -410,7 +410,7 @@ class RouteChecks:
         if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_inference_routes.value):
             return True
 
-        if route in LiteLLMRoutes.litellm_native_routes.value:
+        if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.litellm_native_routes.value):
             return True
 
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"

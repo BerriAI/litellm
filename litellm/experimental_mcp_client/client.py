@@ -12,7 +12,7 @@ from contextlib import AbstractAsyncContextManager
 from functools import partial
 from importlib.metadata import version
 from types import MappingProxyType
-from typing import Final, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar, cast
 
 import anyio
 import httpx2
@@ -36,6 +36,7 @@ from mcp.types import (
     METHOD_NOT_FOUND,
     REQUEST_TIMEOUT,
     ClientCapabilities,
+    DiscoverResult,
     ElicitationCapability,
     FormElicitationCapability,
     GetPromptRequestParams,
@@ -46,9 +47,13 @@ from mcp.types import (
     InitializeRequestParams,
     InitializeResult,
     InputRequiredResult,
+    ListPromptsRequest,
     ListPromptsResult,
+    ListResourcesRequest,
     ListResourcesResult,
     ListResourceTemplatesResult,
+    ListToolsRequest,
+    ListToolsResult,
     PaginatedRequestParams,
     PaginatedResult,
     Prompt,
@@ -84,8 +89,12 @@ from litellm.types.mcp import (
     MCPUpstreamProtocol,
     credential_redirect_hook,
     has_header,
+    validate_mcp_protocol_transport,
     without_header,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult
 
 
 def to_basic_auth(auth_value: str) -> str:
@@ -401,7 +410,10 @@ class MCPClient:
         logging_callback: Callable | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
     ):
-        self.protocol_version: MCPUpstreamProtocol = TypeAdapter(MCPUpstreamProtocol).validate_python(protocol_version)
+        self.protocol_version: MCPUpstreamProtocol = TypeAdapter[MCPUpstreamProtocol](
+            MCPUpstreamProtocol
+        ).validate_python(protocol_version)
+        validate_mcp_protocol_transport(self.protocol_version, transport_type)
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
@@ -540,6 +552,17 @@ class MCPClient:
 
         return safe_env
 
+    async def _prepare_session(self, session: ClientSession) -> InitializeResult | DiscoverResult:
+        if self.protocol_version != "2026-07-28":
+            return await self._initialize_session(session)
+        discovery: Final = DiscoverResult.model_validate(await session.send_discover(self.protocol_version))
+        if self.protocol_version not in discovery.supported_versions:
+            raise MCPError(code=-32022, message="Upstream did not accept the configured MCP protocol version")
+        session.adopt(discovery)
+        if session.protocol_version != self.protocol_version:
+            raise MCPError(code=-32022, message="Upstream selected an unsupported MCP protocol version")
+        return discovery
+
     async def _initialize_session(self, session: ClientSession) -> InitializeResult:
         if self.protocol_version == "auto":
             automatic: Final = await session.initialize()
@@ -623,7 +646,7 @@ class MCPClient:
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
-                        init_result: Final = await self._initialize_session(session)
+                        init_result: Final = await self._prepare_session(session)
                         instructions: Final = getattr(init_result, "instructions", None)
                         self._last_initialize_instructions = (
                             instructions.strip() or None if isinstance(instructions, str) else None
@@ -814,6 +837,51 @@ class MCPClient:
 
         return factory
 
+    async def list_page(self, request: "CatalogListRequest") -> "CatalogListResult":
+        from mcp.types import INVALID_PARAMS
+
+        params: Final = request.params or PaginatedRequestParams()
+        if isinstance(request, ListToolsRequest):
+            return await self.list_tools_page(params)
+
+        async def fetch(session: ClientSession) -> "CatalogListResult":
+            capabilities: Final = session.server_capabilities
+            empty: Final = (
+                ListPromptsResult(prompts=[])
+                if isinstance(request, ListPromptsRequest)
+                else ListResourcesResult(resources=[])
+                if isinstance(request, ListResourcesRequest)
+                else ListResourceTemplatesResult(resource_templates=[])
+            )
+            supported: Final = capabilities is None or (
+                capabilities.prompts is not None
+                if isinstance(request, ListPromptsRequest)
+                else capabilities.resources is not None
+            )
+            if not supported:
+                if params.cursor is not None:
+                    raise MCPError(
+                        code=INVALID_PARAMS, message="Upstream catalog became unavailable; start a fresh listing"
+                    )
+                return empty
+            try:
+                if isinstance(request, ListPromptsRequest):
+                    return await session.list_prompts(params=params)
+                if isinstance(request, ListResourcesRequest):
+                    return await session.list_resources(params=params)
+                return await session.list_resource_templates(params=params)
+            except MCPError as error:
+                if error.error.code == METHOD_NOT_FOUND and params.cursor is None:
+                    return empty
+                raise
+
+        with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
+            return await self.run_with_session(fetch, quiet_on_error=True)
+
+    async def list_tools_page(self, params: PaginatedRequestParams) -> ListToolsResult:
+        with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
+            return await self.run_with_session(lambda session: session.list_tools(params=params), quiet_on_error=True)
+
     async def list_tools(self, raise_on_error: bool = False) -> list[MCPTool]:
         """List available tools from the server.
 
@@ -830,7 +898,7 @@ class MCPClient:
             # A per-server timeout above the global default extends the whole-walk deadline
             listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
             tools: Final = await self.run_with_session(
-                partial(list_tools_with_pagination, listing_deadline=listing_deadline),
+                partial(list_tools_with_pagination, listing_deadline=listing_deadline, require_complete=raise_on_error),
                 quiet_on_error=raise_on_error,
             )
             tool_count: Final = len(tools)
@@ -911,6 +979,12 @@ class MCPClient:
 
         async def _call_tool_operation(session: ClientSession):
             verbose_logger.debug("MCP client sending tool call to session")
+            if self.protocol_version == "2026-07-28":
+                tools: Final = await list_tools_with_pagination(
+                    session, listing_deadline=max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
+                )
+                if not any(tool.name == call_tool_request_params.name for tool in tools):
+                    raise MCPError(code=-32603, message="Tool schema is unavailable from the bounded upstream catalog")
             return await session.call_tool(
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,
@@ -1136,7 +1210,7 @@ class MCPClient:
         async def _list_resource_templates_operation(session: ClientSession) -> ListResourceTemplatesResult:
             capabilities: Final = session.server_capabilities
             if capabilities is not None and capabilities.resources is None:
-                return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
+                return ListResourceTemplatesResult(resource_templates=[])
             try:
                 return ListResourceTemplatesResult(
                     resource_templates=await self._list_optional_pages(
@@ -1150,7 +1224,7 @@ class MCPClient:
                 verbose_logger.debug(
                     "MCP client list_resource_templates is unsupported by %s: %s", self.server_url or "stdio", error
                 )
-                return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
+                return ListResourceTemplatesResult(resource_templates=[])
 
         try:
             result: Final = await self.run_with_session(_list_resource_templates_operation)

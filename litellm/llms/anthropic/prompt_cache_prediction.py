@@ -5,27 +5,41 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import reduce
 from itertools import accumulate, groupby
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, ValidationError
 
 import litellm
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, is_anthropic_oauth_key
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    is_anthropic_oauth_key,
+    strip_provider_specific_fields_from_anthropic_messages,
+)
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
-from litellm.types.router import LiteLLM_Params
+from litellm.llms.anthropic.pass_through.messages.utils import AnthropicMessagesRequestUtils, prepare_native_messages
+from litellm.router_utils.baseline_request import (
+    BASELINE_PARAMETERS,
+    capture_baseline_parameters,
+)
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import ModelResponse
 from litellm.utils import supports_thinking_cache_preservation
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _HEADERS: Final = TypeAdapter(dict[str, str])
+_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
+_SYSTEM: Final = TypeAdapter(str | list[dict[str, JsonValue]] | None)
 _counter: Final = AnthropicCountTokensHandler()
 
 
@@ -65,7 +79,7 @@ _DEPLOYMENT_OPTIONS: Final = frozenset(
 )
 
 
-class _StrictModel(BaseModel):
+class _StrictModel(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
@@ -324,7 +338,7 @@ def _entry_fingerprint(fingerprint: str, ttl_seconds: int) -> str:
 
 def parse_cache_plan(body: Mapping[str, JsonValue]) -> PromptCachePlan | UnsupportedCachePlan:
     try:
-        request: Final = _PlanRequest.model_validate(body)
+        request: Final = _PlanRequest.model_validate(dict(body))
         positions: Final = _positions(body)
     except ValidationError:
         return UnsupportedCachePlan("unsupported_prompt_shape")
@@ -455,37 +469,37 @@ def cache_scope(
     return _digest((caller_key_hash, deployment_id, provider_key, model, anthropic_version))
 
 
-class _TTLUsage(BaseModel):
+class _TTLUsage(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     ephemeral_5m_input_tokens: int = Field(default=0, ge=0)
     ephemeral_1h_input_tokens: int = Field(default=0, ge=0)
 
 
-class _CacheUsage(BaseModel):
+class _CacheUsage(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     cached_tokens: int = Field(default=0, ge=0)
     cache_creation_tokens: int = Field(default=0, ge=0)
     cache_creation_token_details: _TTLUsage | None = None
 
 
-class _Usage(BaseModel):
+class _Usage(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     prompt_tokens: int = Field(ge=0)
     prompt_tokens_details: _CacheUsage
 
 
-class _Choice(BaseModel):
+class _Choice(LiteLLMBaseModel):
     finish_reason: str = Field(min_length=1)
 
 
-class _Response(BaseModel):
+class _Response(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     model: str
     usage: _Usage
     choices: tuple[_Choice, ...] = Field(min_length=1, strict=False)
 
 
-class _CountBody(BaseModel):
+class _CountBody(LiteLLMBaseModel):
     messages: Sequence[Mapping[str, JsonValue]]
     tools: Sequence[Mapping[str, JsonValue]] | None = None
     system: str | Sequence[Mapping[str, JsonValue]] | None = None
@@ -494,7 +508,7 @@ class _CountBody(BaseModel):
     output_config: Mapping[str, JsonValue] | None = None
 
 
-class _CountResult(BaseModel):
+class _CountResult(LiteLLMBaseModel):
     input_tokens: Annotated[StrictInt, Field(ge=0)]
 
 
@@ -505,7 +519,7 @@ class TokenCounter(Protocol):
 def _count_objects(
     values: Sequence[Mapping[str, JsonValue]],
 ) -> list[dict[str, JsonValue]]:  # mutable-ok: the existing provider count API requires JSON lists/dicts
-    return [dict(value) for value in values]  # mutable-ok: serialize read-only inputs at the provider API boundary
+    return [dict(value) for value in values]
 
 
 def _messages_url(model: str, api_key: str, api_base: str | None) -> str:
@@ -524,17 +538,19 @@ async def count_prompt_tokens(
     body: Mapping[str, JsonValue],
     api_base: str | None = None,
 ) -> int | None:
+    auth_header: Final = AnthropicModelInfo.get_auth_header(api_key=api_key, api_base=api_base)
+    if auth_header is None:
+        return None
     try:
         native: Final = _CountBody.model_validate(body)
-        count_url: Final = _messages_url(model, api_key, api_base) + "/count_tokens"
         result: Final = _CountResult.model_validate(
             await _counter.handle_count_tokens_request(
                 model=model,
                 messages=_count_objects(native.messages),
                 tools=_count_objects(native.tools) if native.tools is not None else None,
                 system=_JSON_OBJECT.validate_python(MappingProxyType({"system": native.system}))["system"],
-                api_key=api_key,
-                api_base=count_url,
+                auth_header=auth_header,
+                api_base=api_base,
                 optional_params=_JSON_OBJECT.validate_python(
                     MappingProxyType({key: body[key] for key in COUNT_TOKEN_OPTION_NAMES if key in body})
                 ),
@@ -615,13 +631,56 @@ def resolve_baseline_prediction_target(params: LiteLLM_Params) -> NativePredicti
     return _resolve_prediction_target(params, allow_configured_endpoint=True)
 
 
+def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> Mapping[str, JsonValue] | None:
+    parameters: Final = capture_baseline_parameters(request)
+    if parameters is None:
+        return None
+    source: Final = {**parameters, "messages": request.get("messages"), "stream": request.get("stream", False)}
+    try:
+        owned: Final = _JSON_OBJECT.validate_python(source)
+        context: Final = {**{k: v for k, v in request.items() if k not in ("metadata", "litellm_metadata")}, **owned}
+        resolved_model: Final = litellm.get_llm_provider(model=model, custom_llm_provider="anthropic")[0]
+        messages, system = prepare_native_messages(
+            _MESSAGES.validate_python(owned.get("messages")),
+            _SYSTEM.validate_python(owned.get("system")),
+            context,
+            model=resolved_model,
+            custom_llm_provider="anthropic",
+            tools=_MESSAGES.validate_python(owned.get("tools") or []),
+        )
+        options: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+            {**owned, "system": system},
+            model=resolved_model,
+            custom_llm_provider="anthropic",
+            drop_params=owned.get("drop_params") is True,
+        )
+        filtered: Final = reduce(
+            delete_nested_value,
+            TypeAdapter(tuple[str, ...]).validate_python(owned.get("additional_drop_params") or ()),
+            dict(options),
+        )
+        body: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+            model=resolved_model,
+            messages=strip_provider_specific_fields_from_anthropic_messages(messages),
+            anthropic_messages_optional_request_params=filtered,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        return MappingProxyType(_JSON_OBJECT.validate_python(body))
+    except Exception:  # noqa: BLE001  # an unsupported hypothetical request is unavailable, never an inference failure
+        return None
+
+
 def _resolve_prediction_target(
     params: LiteLLM_Params,
     *,
     allow_configured_endpoint: bool,
 ) -> NativePredictionTarget | UnsupportedPredictionTarget:
     configured_options: Final = frozenset(params.model_dump(exclude_defaults=True, exclude_none=True))
-    if configured_options - _DEPLOYMENT_OPTIONS:
+    allowed: Final = (
+        _DEPLOYMENT_OPTIONS | frozenset(BASELINE_PARAMETERS) if allow_configured_endpoint else _DEPLOYMENT_OPTIONS
+    )
+    if configured_options - allowed:
         return UnsupportedPredictionTarget("unsupported_deployment_configuration")
     api_base: Final = AnthropicModelInfo.get_api_base(params.api_base)
     if not allow_configured_endpoint and api_base not in (

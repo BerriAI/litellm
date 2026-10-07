@@ -24,15 +24,16 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, TypeAlias
 
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
-    _count_entry_tokens,
-    _estimate_batch_entry_tokens,
-    _extract_file_access_credentials,
-    _iter_batch_input_lines,
+    count_entry_tokens,
+    estimate_batch_entry_tokens,
+    extract_file_access_credentials,
+    iter_batch_input_lines,
 )
 from litellm.constants import BATCH_TPD_DESCRIPTOR_SUFFIX, BATCH_TPD_WINDOW_SECONDS
 from litellm.exceptions import RateLimitErrorCategory
@@ -61,6 +62,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -100,7 +102,7 @@ _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapte
 IncrementAmounts: TypeAlias = dict[Literal["requests", "tokens"], int]
 
 
-class BatchFileUsage(BaseModel):
+class BatchFileUsage(LiteLLMBaseModel):
     """
     Internal model for batch file usage tracking, used for batch rate limiting
     """
@@ -326,7 +328,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for descriptor in model_descriptors:
                 extra_descriptors.append(descriptor)
                 extra_increments.append(
-                    {  # mutable-ok: atomic limiter API requires mutable increment records
+                    {
                         "requests": 0,
                         "tokens": usage.get("output_tokens", 0)
                         if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
@@ -522,7 +524,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         )
         from litellm.proxy.proxy_server import llm_router
 
-        fetch_kwargs: Final[dict[str, Any]] = {
+        fetch_kwargs: Final[dict[str, object]] = {
             "custom_llm_provider": custom_llm_provider,
         }
 
@@ -535,7 +537,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         model_id=model_from_file_id,
                         operation_context="batch input file read (rate limiting)",
                     )
-                    fetch_kwargs.update(_extract_file_access_credentials(credentials))
+                    fetch_kwargs.update(extract_file_access_credentials(credentials))
                     fetch_kwargs["model"] = model_from_file_id
                     provider = credentials.get("custom_llm_provider")
                     if provider:
@@ -552,7 +554,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     model_id=request_model,
                     operation_context="batch input file read (rate limiting)",
                 )
-                fetch_kwargs.update(_extract_file_access_credentials(credentials))
+                fetch_kwargs.update(extract_file_access_credentials(credentials))
                 fetch_kwargs["model"] = request_model
                 provider = credentials.get("custom_llm_provider")
                 if provider:
@@ -744,7 +746,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             )
 
         increments: list[IncrementAmounts] = [  # mutable-ok: reassigned below to append project IO increments
-            {  # mutable-ok: atomic limiter API requires mutable increment records
+            {
                 "requests": batch_usage.request_count,
                 "tokens": batch_usage.total_tokens,
             }
@@ -840,6 +842,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             if (descriptor := tpd_descriptors_by_counter.get(counter_key)) is not None
         )
 
+    @with_service_target("rate_limits")
     async def count_input_file_usage(
         self,
         file_id: str,
@@ -944,12 +947,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             total_tokens = 0
             output_tokens = 0  # rebind-ok: accumulated per JSONL row in the loop below
             request_count = 0
-            for raw_line in _iter_batch_input_lines(file_content_bytes):
+            for raw_line in iter_batch_input_lines(file_content_bytes):
                 request_count += 1
                 try:
                     entry = json.loads(raw_line)
                 except Exception:
-                    entry_total_tokens = _estimate_batch_entry_tokens(raw_line)
+                    entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                     entry_output_tokens = self.parallel_request_limiter.no_max_tokens_output_floor(
                         min_configured_otpm_limit
                     )
@@ -970,9 +973,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 output_tokens += entry_output_tokens
 
                 try:
-                    entry_total_tokens = _count_entry_tokens(entry)
+                    entry_total_tokens = count_entry_tokens(entry)
                 except Exception:
-                    entry_total_tokens = _estimate_batch_entry_tokens(raw_line)
+                    entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens
 
                 if model:
@@ -1177,6 +1180,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return file_content
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
