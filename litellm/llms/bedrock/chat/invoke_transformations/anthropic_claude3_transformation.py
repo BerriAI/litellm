@@ -19,7 +19,9 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
     bedrock_supports_tool_search,
+    extract_model_name_from_bedrock_arn,
     get_anthropic_beta_from_headers,
+    is_bedrock_application_inference_profile_arn,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
@@ -393,5 +395,15 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
-        transformed.model = strip_bedrock_routing_prefix(model)
+        requested_model_id: Final = litellm_params.get("bedrock_invoke_model_id")
+        response_model: Final = (
+            model
+            if not isinstance(requested_model_id, str)
+            or is_bedrock_application_inference_profile_arn(requested_model_id)
+            else extract_model_name_from_bedrock_arn(requested_model_id)
+        )
+        transformed.model = strip_bedrock_routing_prefix(response_model)
+        resolved_region: Final = litellm_params.get("aws_region_name")
+        if isinstance(resolved_region, str):
+            transformed._hidden_params["region_name"] = resolved_region
         return transformed
