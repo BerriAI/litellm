@@ -71,8 +71,12 @@ describe("signal settings", () => {
     renderWithLens(<SignalForm saved={customConfig} />);
 
     const question = await screen.findByRole("textbox", { name: "Question for Tool failure" });
+    const model = await screen.findByRole("combobox", { name: "System 1 model" });
+    const threshold = screen.getByRole("spinbutton", { name: "Flag at score" });
     expect(question).toHaveValue(customQuestion);
     expect(screen.getByRole("button", { name: /^Tool failure/ })).toHaveAttribute("aria-pressed", "false");
+    expect(model).toHaveValue("jev");
+    expect(threshold).toHaveValue(50);
 
     await user.click(screen.getByRole("button", { name: /^Tool failure/ }));
     expect(screen.getByRole("button", { name: /^Tool failure/ })).toHaveAttribute("aria-pressed", "true");
@@ -86,5 +90,31 @@ describe("signal settings", () => {
     await user.click(screen.getByRole("button", { name: "Remove Tool failure" }));
     expect(screen.queryByRole("textbox", { name: "Question for Tool failure" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Tool failure/ })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: /^Tool failure/ }));
+    expect(screen.getByRole("button", { name: /^Tool failure/ })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("Pick at least one signal to flag traces")).toBeInTheDocument();
+    expect(model).toHaveValue("jev");
+    expect(threshold).toHaveValue(50);
+  });
+
+  it("removes only the library signal when toggling it off beside a custom signal", async () => {
+    const user = userEvent.setup();
+    const customQuestion = "Does this custom failure condition apply?";
+    const customConfig: SignalConfig = {
+      ...saved,
+      signals: [{ id: "tool_failure", name: "Tool failure", question: customQuestion }],
+    };
+    renderWithLens(<SignalForm saved={customConfig} />);
+
+    const question = await screen.findByRole("textbox", { name: "Question for Tool failure" });
+    const tile = screen.getByRole("button", { name: /^Tool failure/ });
+
+    await user.click(tile);
+    expect(tile).toHaveAttribute("aria-pressed", "true");
+    await user.click(tile);
+
+    expect(screen.getByRole("button", { name: /^Tool failure/ })).toHaveAttribute("aria-pressed", "false");
+    expect(question).toHaveValue(customQuestion);
   });
 });
