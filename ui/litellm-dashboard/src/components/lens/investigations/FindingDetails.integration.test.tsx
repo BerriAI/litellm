@@ -116,8 +116,7 @@ it("stacks a quote's original step over the finding and keeps the feedback draft
   const panel = screen.getByRole("complementary", { name: "Finding details" });
   const reason = () => within(panel).getByRole("textbox", { name: "What should Lens remember?", hidden: true });
   fireEvent.change(reason(), { target: { value: "Draft feedback" } });
-  for (const summary of within(panel).getAllByText(/quote$/)) await user.click(summary);
-  await user.click(within(panel).getAllByRole("button", { name: "Open original step" })[0]);
+  await user.click(within(panel).getAllByRole("button", { name: "View span" })[0]);
   expect(await within(panel).findByTestId("run-view")).toHaveTextContent("trace-1 at step-a");
   expect(reason()).not.toBeVisible();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -127,11 +126,49 @@ it("stacks a quote's original step over the finding and keeps the feedback draft
   expect(reason()).toBeVisible();
   expect(reason()).toHaveValue("Draft feedback");
 
-  await user.click(within(panel).getAllByRole("button", { name: "Open original step" })[1]);
+  await user.click(within(panel).getAllByRole("button", { name: "View span" })[1]);
   expect(await within(panel).findByTestId("run-view")).toHaveTextContent("trace-2 at step-b");
   const url = new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
   expect(url.get("evidence")).toBe(traceOf("trace-2"));
   expect(url.get("evidence_span")).toBe("step-b");
+});
+
+it("reports how many sampled traces the finding affected and highlights each quoted line", () => {
+  const traceOf = (id: string) => btoa(JSON.stringify(["traces", "", id]));
+  const sampled = ["a", "b", "c", "d"].map((id) => ({
+    id: traceOf(id),
+    name: `run ${id}`,
+    start_time: "2026-10-01T10:00:00Z",
+    metadata: [],
+    root_seen: true,
+    service: "support_agent",
+    source: "traces" as const,
+    span_count: 1,
+    team_id: "",
+    trace_id: id,
+    trace_ref: "",
+  }));
+  const current: Finding = {
+    ...finding,
+    occurrences: [traceOf("a")],
+    evidence: [{ execution_id: traceOf("a"), span_id: "s", quote: "files:read is missing", role: "support" }],
+  };
+  renderWithLens(
+    <Inspector.Root
+      items={[]}
+      itemKey={ownedFindingKey}
+      selected={owned(current)}
+      onSelectedChange={vi.fn()}
+      noun="finding"
+      storageKey="test.finding"
+    >
+      <FindingPanel readOnly busy={false} sampledRuns={sampled} onReview={vi.fn()} />
+    </Inspector.Root>,
+  );
+  expect(screen.getByRole("region", { name: "Frequency" })).toHaveTextContent(/25%\s*1 of 4 traces affected/);
+  const example = screen.getByRole("article", { name: "run a" });
+  expect(within(example).getByText("files:read is missing").tagName).toBe("MARK");
+  expect(screen.queryByRole("article", { name: "run b" })).not.toBeInTheDocument();
 });
 
 it("shows contributing investigation runs and every affected trace, including older traces without retained quotes", async () => {
@@ -142,8 +179,33 @@ it("shows contributing investigation runs and every affected trace, including ol
     investigation_runs: ["first-investigation-run", "second-investigation-run"],
   };
   renderWithLens(<Harness current={current} onReview={vi.fn()} />);
-  expect(screen.getByText("Found across 2 investigation runs")).toBeInTheDocument();
-  expect(screen.getByText(/1 affected trace/)).toBeInTheDocument();
-  fireEvent.click(screen.getByText("older-trace"));
-  expect(screen.getByRole("button", { name: "Open original trace" })).toBeInTheDocument();
+  expect(screen.getByText("1 affected trace")).toBeVisible();
+  expect(screen.getByText("Found across 2 investigation runs")).toBeVisible();
+  const example = screen.getByRole("article", { name: "Trace older-tr" });
+  expect(within(example).getByText("No quote was retained for this trace.")).toBeVisible();
+  expect(within(example).getByRole("button", { name: "View trace" })).toBeVisible();
+});
+
+it("shows the finding's priority and keeps the first three examples, revealing the rest on request", async () => {
+  const user = userEvent.setup();
+  const traceOf = (id: string) => btoa(JSON.stringify(["traces", "", id]));
+  const ids = ["t1", "t2", "t3", "t4", "t5"];
+  const current: Finding = {
+    ...finding,
+    occurrences: ids.map(traceOf),
+    evidence: ids.map((id) => ({
+      execution_id: traceOf(id),
+      span_id: id,
+      quote: `Input: ${id}\nOutput: done`,
+      role: "support" as const,
+    })),
+  };
+  renderWithLens(<Harness current={current} onReview={vi.fn()} />);
+  const panel = screen.getByRole("complementary", { name: "Finding details" });
+  expect(within(panel).getByText("High priority")).toBeVisible();
+  expect(within(panel).getAllByRole("article")).toHaveLength(3);
+  expect(within(panel).getAllByText("Call and result")).toHaveLength(3);
+  await user.click(within(panel).getByRole("button", { name: "Show 2 more examples" }));
+  expect(within(panel).getAllByRole("article")).toHaveLength(5);
+  expect(within(panel).queryByRole("button", { name: /Show \d+ more/ })).not.toBeInTheDocument();
 });

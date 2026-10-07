@@ -141,9 +141,7 @@ describe("Lens interactive demo", () => {
     await user.click(await screen.findByRole("row", { name: /Repeated lookups leave customers without an answer/ }));
     const finding = screen.getByRole("complementary", { name: "Finding details" });
     expect(within(finding).getByText(/The support agent retries/)).toBeVisible();
-    const summaries = within(finding).getAllByText("support_agent", { exact: true });
-    await user.click(summaries[0]);
-    await user.click(within(finding).getAllByRole("button", { name: /Open original step/ })[0]);
+    await user.click(within(finding).getAllByRole("button", { name: "View span" })[0]);
     expect(await screen.findByRole("complementary", { name: "Span details" })).toHaveTextContent(
       "I will check that for you.",
     );
@@ -157,7 +155,8 @@ describe("Lens interactive demo", () => {
     await user.click(within(finding).getByRole("button", { name: "Back to finding" }));
     expect(within(finding).getByText(/The support agent retries/)).toBeVisible();
     await user.click(within(finding).getByRole("button", { name: "Close finding (Esc)" }));
-    expect(await screen.findByRole("table", { name: "Findings" })).toBeVisible();
+    expect(await screen.findByRole("grid", { name: "Findings" })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "Finding details" })).not.toBeInTheDocument();
     expect(network).not.toHaveBeenCalled();
     await expectUrl(onUrlUpdate, (url) => expect(url.get("demo")).toBe("true"));
     await expectUrl(onUrlUpdate, (url) => expect(url.has("span")).toBe(false));
