@@ -57,13 +57,13 @@ def test_classifies_legacy_httpx_errors(error: Exception, expected: TransportErr
     ],
 )
 def test_classifies_httpx2_errors(class_name: str, expected: TransportErrorKind | None):
-    httpx2 = pytest.importorskip("httpx2")
+    httpx2: Final = pytest.importorskip("httpx2")
 
     assert classify_transport_error(getattr(httpx2, class_name)("transport failure")) is expected
 
 
 def test_classifies_the_sdk_wrapper_by_the_error_it_was_raised_from():
-    httpx2 = pytest.importorskip("httpx2")
+    httpx2: Final = pytest.importorskip("httpx2")
 
     dropped: Final = _raised_from(openai.APIConnectionError(request=REQUEST), httpx2.ReadError("peer closed"))
     timed_out: Final = _raised_from(openai.APITimeoutError(request=REQUEST), httpx2.ReadTimeout("timed out"))
@@ -92,7 +92,7 @@ def test_a_cause_chain_deeper_than_the_walk_is_not_scanned_forever():
 
 
 def test_as_public_exception_maps_each_transport_kind():
-    httpx2 = pytest.importorskip("httpx2")
+    httpx2: Final = pytest.importorskip("httpx2")
 
     timeout: Final = as_public_exception(httpx2.ReadTimeout("timed out"), model="gpt-5.6", llm_provider="openai")
     dropped: Final = as_public_exception(httpx2.ReadError("peer closed"), model="gpt-5.6", llm_provider="openai")
