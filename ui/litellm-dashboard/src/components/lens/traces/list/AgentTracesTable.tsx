@@ -41,6 +41,7 @@ interface AgentTracesTableProps {
   rangeEmpty?: boolean;
   onSetUpTracing: () => void;
   onVisibleRunsChange?: (runs: readonly TraceRef[]) => void;
+  onRunIntent?: (run: TraceSummary) => void;
 }
 
 export const formatCost = (cost: number): string => {
@@ -328,6 +329,7 @@ export function AgentTracesTable({
   rangeEmpty = false,
   onSetUpTracing,
   onVisibleRunsChange,
+  onRunIntent,
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
@@ -373,6 +375,7 @@ export function AgentTracesTable({
                       item={traceRefOf(row.original)}
                       data-testid="agent-trace-row"
                       data-flagged={flagged || undefined}
+                      onPointerEnter={() => onRunIntent?.(row.original)}
                       className={cn("h-9", flagged && FLAGGED_ROW)}
                     />
                   );
