@@ -1,5 +1,6 @@
 import os
 import uuid
+from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # the only type CustomGuardrail.__init__ accepts for its open-ended kwargs
@@ -15,6 +16,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -36,6 +38,56 @@ ACTION_INTERVENED: Final = "GUARDRAIL_INTERVENED"
 DEFAULT_BLOCKED_MESSAGE: Final = "Blocked by your organization's content policy."
 
 SUPPORTED_EVENT_HOOKS: Final = (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call)
+
+
+def _stream_cannot_carry_a_rewrite(request_data: Mapping[str, object] | None) -> bool:
+    """Whether this is a streamed response on a route the framework can only block, not rewrite.
+
+    ``incremental_diff``, the mode that writes a rewrite into the stream, exists only for OpenAI chat
+    completions: ``UnifiedLLMGuardrails._resolve_transform_call_type`` sends every other streamed route
+    to ``block_only``, which drops the rewrite and replays the buffered original. On those routes a
+    REDACT verdict can only be honoured as a block. The route check mirrors that resolver so the two
+    cannot disagree, and a route it cannot resolve fails closed the same way the resolver does.
+    """
+    if request_data is None or not _is_streamed(request_data):
+        return False
+    route: Final = _request_route(request_data)
+    call_types: Final = get_call_types_for_route(route) if route else None
+    if not call_types:
+        return True
+    # Deferred like the resolver's own import: the handler package imports the proxy.
+    from litellm.llms import load_guardrail_translation_mappings  # noqa: PLC0415
+    from litellm.llms.openai.chat.guardrail_translation.handler import (  # noqa: PLC0415
+        OpenAIChatCompletionsHandler,
+    )
+
+    handler: Final[object] = load_guardrail_translation_mappings().get(call_types[0])
+    return not (isinstance(handler, type) and issubclass(handler, OpenAIChatCompletionsHandler))
+
+
+def _is_streamed(request_data: Mapping[str, object]) -> bool:
+    if request_data.get("stream") is True:
+        return True
+    proxy_request: Final = _as_object(request_data.get("proxy_server_request"))
+    body: Final = _as_object(proxy_request.get("body")) if proxy_request is not None else None
+    return body is not None and body.get("stream") is True
+
+
+def _request_route(request_data: Mapping[str, object]) -> str | None:
+    """The route the proxy stamps as ``user_api_key_request_route``, in whichever metadata bucket the
+    route uses: ``metadata`` for chat completions, ``litellm_metadata`` for Responses and Anthropic."""
+    for bucket_name in ("metadata", "litellm_metadata"):
+        bucket = _as_object(request_data.get(bucket_name))
+        route = bucket.get("user_api_key_request_route") if bucket is not None else None
+        if isinstance(route, str) and route:
+            return route
+    return None
+
+
+def _as_object(value: object) -> dict[str, object] | None:
+    """`value` as a JSON object, or None. States the key type once so the checker does not see
+    `dict[Unknown, Unknown]` at every read."""
+    return value if isinstance(value, dict) else None
 
 
 class AiriaGuardrail(CustomGuardrail):
@@ -61,6 +113,11 @@ class AiriaGuardrail(CustomGuardrail):
         self.api_key = api_key or os.getenv("AIRIA_API_KEY")
         self.streaming_transform_mode: Final[Literal["block_only", "incremental_diff"]] = "incremental_diff"
         self.streaming_end_of_stream_only: Final = True
+        # incremental_diff exists only for streamed chat completions. Every other streamed route falls
+        # back to block_only, where the framework releases the original text live unless told to hold
+        # it; holding it keeps the text behind the end-of-stream verdict, and apply_guardrail turns a
+        # REDACT that block_only cannot deliver into a block. Never read on the incremental_diff path.
+        self.streaming_buffer_until_moderated: Final = True
 
         if not self.api_base:
             raise ValueError("AiriaGuardrail requires api_base, or the AIRIA_GATEWAY_URL environment variable.")
@@ -130,6 +187,8 @@ class AiriaGuardrail(CustomGuardrail):
             )
 
         if action == ACTION_INTERVENED:
+            if input_type == "response" and _stream_cannot_carry_a_rewrite(request_data):
+                raise self._blocked()
             return self._rewritten(body, inputs)
 
         if action != ACTION_NONE:

@@ -1,3 +1,4 @@
+import json
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Final, Literal
@@ -367,7 +368,8 @@ async def test_streaming_redaction_actually_reaches_the_client() -> None:
         user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
         response=source_stream(),
         request_data={  # mutable-ok: one-shot request_data the framework requires as a plain dict
-            "messages": [{"role": "user", "content": "share your contact"}]
+            "messages": [{"role": "user", "content": "share your contact"}],
+            "stream": True,
         },
         guardrail_to_apply=guardrail,
     ):
@@ -377,6 +379,166 @@ async def test_streaming_redaction_actually_reaches_the_client() -> None:
 
     assert "[EmailAddress1]" in assembled
     assert "ada@example.com" not in assembled
+    guardrail.async_handler.post.assert_called_once()
+
+
+def _streamed_request(route: str | None) -> dict[str, object]:
+    """A proxy request_data as the streaming hook sees it: `stream` set, and the route the proxy
+    stamped into the metadata bucket (`litellm_metadata` for the non-chat routes under test)."""
+    request_data: dict[str, object] = {"stream": True}  # mutable-ok: built once per test
+    if route is not None:
+        request_data["litellm_metadata"] = {"user_api_key_request_route": route}
+    return request_data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/messages", "/v1/responses", "/responses", "/unknown/route", None])
+async def test_streamed_redaction_on_a_route_without_stream_rewrites_is_enforced_as_a_block(
+    route: str | None,
+) -> None:
+    """incremental_diff exists only for chat completions; every other streamed route runs block_only,
+    which drops rewrites and replays the original text. There a REDACT verdict must block instead."""
+    guardrail = _make_guardrail_with_response({"action": "GUARDRAIL_INTERVENED", "texts": ["[Redacted]"]})
+
+    with pytest.raises(GuardrailRaisedException) as excinfo:
+        await guardrail.apply_guardrail(
+            inputs=_inputs(texts=["secret"]), request_data=_streamed_request(route), input_type="response"
+        )
+
+    assert excinfo.value.blocked_content is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/chat/completions", "/v1/chat/completions"])
+async def test_streamed_redaction_on_chat_completions_is_still_delivered(route: str) -> None:
+    guardrail = _make_guardrail_with_response({"action": "GUARDRAIL_INTERVENED", "texts": ["[Redacted]"]})
+    request_data: dict[str, object] = {"stream": True, "metadata": {"user_api_key_request_route": route}}
+
+    result = await guardrail.apply_guardrail(
+        inputs=_inputs(texts=["secret"]), request_data=request_data, input_type="response"
+    )
+
+    assert result["texts"] == ["[Redacted]"]
+
+
+@pytest.mark.asyncio
+async def test_unstreamed_redaction_on_a_non_chat_route_is_delivered() -> None:
+    """Only the stream cannot carry a rewrite; a non-streamed Responses call is rewritten as usual."""
+    guardrail = _make_guardrail_with_response({"action": "GUARDRAIL_INTERVENED", "texts": ["[Redacted]"]})
+    request_data: dict[str, object] = {"litellm_metadata": {"user_api_key_request_route": "/v1/responses"}}
+
+    result = await guardrail.apply_guardrail(
+        inputs=_inputs(texts=["secret"]), request_data=request_data, input_type="response"
+    )
+
+    assert result["texts"] == ["[Redacted]"]
+
+
+@pytest.mark.asyncio
+async def test_streamed_request_side_redaction_is_unaffected() -> None:
+    """A pre_call rewrite lands in the prompt before the model is called; streaming is irrelevant there."""
+    guardrail = _make_guardrail_with_response({"action": "GUARDRAIL_INTERVENED", "texts": ["[Redacted]"]})
+
+    result = await guardrail.apply_guardrail(
+        inputs=_inputs(texts=["secret"]), request_data=_streamed_request("/v1/messages"), input_type="request"
+    )
+
+    assert result["texts"] == ["[Redacted]"]
+
+
+@pytest.mark.asyncio
+async def test_stream_flag_is_also_read_from_the_proxied_request_body() -> None:
+    guardrail = _make_guardrail_with_response({"action": "GUARDRAIL_INTERVENED", "texts": ["[Redacted]"]})
+    request_data: dict[str, object] = {
+        "proxy_server_request": {"body": {"stream": True}},
+        "litellm_metadata": {"user_api_key_request_route": "/v1/messages"},
+    }
+
+    with pytest.raises(GuardrailRaisedException) as excinfo:
+        await guardrail.apply_guardrail(
+            inputs=_inputs(texts=["secret"]), request_data=request_data, input_type="response"
+        )
+
+    assert excinfo.value.blocked_content is True
+
+
+def _anthropic_sse(event_type: str, data: dict[str, object]) -> bytes:
+    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+async def _anthropic_messages_stream() -> AsyncGenerator[bytes, None]:
+    """A complete Anthropic /v1/messages SSE stream, the shape the proxy relays on that route."""
+    yield _anthropic_sse(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_orig",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-sonnet",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 1, "output_tokens": 0},
+            },
+        },
+    )
+    yield _anthropic_sse(
+        "content_block_start",
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+    )
+    for text in ("Contact ", "me at ", "ada@example.com"):
+        yield _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        )
+    yield _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+    yield _anthropic_sse(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 5},
+        },
+    )
+    yield _anthropic_sse("message_stop", {"type": "message_stop"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        {"action": "BLOCKED", "blocked_reason": "policy"},
+        {"action": "GUARDRAIL_INTERVENED", "texts": ["Contact me at [EmailAddress1]"]},
+    ],
+)
+async def test_non_chat_streamed_route_releases_nothing_before_the_verdict(verdict: dict[str, object]) -> None:
+    """Drives the real UnifiedLLMGuardrails iterator on /v1/messages, which incremental_diff does not
+    support, so the framework takes its block_only fallback. streaming_buffer_until_moderated holds
+    the text until the end-of-stream verdict; a block, and a redaction block_only could not deliver,
+    both refuse the response without one original chunk reaching the client."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+        UnifiedLLMGuardrails,
+    )
+
+    guardrail: Final = _make_guardrail_with_response(verdict, event_hook="post_call", default_on=True)
+
+    released: list[object] = []  # mutable-ok: what the client received before the stream was refused
+    with pytest.raises(GuardrailRaisedException) as excinfo:
+        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/messages"),
+            response=_anthropic_messages_stream(),
+            request_data={  # mutable-ok: one-shot request_data the framework requires as a plain dict
+                "messages": [{"role": "user", "content": "share your contact"}],
+                "stream": True,
+            },
+            guardrail_to_apply=guardrail,
+        ):
+            released.append(chunk)  # noqa: PERF401  # a comprehension would lose what leaked before the raise
+
+    assert excinfo.value.blocked_content is True
+    assert "ada@example.com" not in "".join(c.decode() if isinstance(c, bytes) else str(c) for c in released)
     guardrail.async_handler.post.assert_called_once()
 
 
