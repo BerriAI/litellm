@@ -2272,14 +2272,26 @@ class CustomStreamWrapper:
         it is transient and the Router should switch to another model group.
 
         An error an inner stream already wrapped (the chat-to-Responses bridge
-        consumes a Responses stream) is re-raised untouched, so the Router's
-        one-level unwrap surfaces the provider exception.
+        consumes a Responses stream) is rebuilt around the provider exception
+        with this wrapper's own bookkeeping, so the Router's one-level unwrap
+        surfaces the provider exception and is_pre_first_chunk says whether
+        this wrapper's consumer received anything (the inner stream counts a
+        lifecycle event the bridge never forwards as its first chunk).
         """
         from litellm.exceptions import MidStreamFallbackError
 
         if isinstance(e, MidStreamFallbackError):
             self._restore_consumer_correlation_context()
-            raise e
+            if e.original_exception is None:
+                raise e
+            raise MidStreamFallbackError(
+                message=str(e.original_exception),
+                model=self.model,
+                llm_provider=self.custom_llm_provider or "anthropic",
+                original_exception=e.original_exception,
+                generated_content=self.response_uptil_now,
+                is_pre_first_chunk=not self.sent_first_chunk,
+            )
 
         # Map to OpenAI exception format. Some providers' mappers (e.g.
         # _map_anthropic_exception, _map_aleph_alpha_exception) synchronously
