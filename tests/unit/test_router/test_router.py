@@ -4701,10 +4701,13 @@ async def test_an_over_window_prompt_without_a_pdf_fetches_its_remote_image_once
 ):
     monkeypatch.setattr(litellm, "user_url_validation", False)
     prompt: Final = [
-        {"role": "user", "content": [
-            {"type": "text", "text": caption},
-            {"type": "image_url", "image_url": {"url": _REMOTE_IMAGE_URL, "detail": "high"}},
-        ]}
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": caption},
+                {"type": "image_url", "image_url": {"url": _REMOTE_IMAGE_URL, "detail": "high"}},
+            ],
+        }
     ]
     router: Final = _window_router(1, _GEMINI_MODELS[0], _CLAUDE_MODELS[0])
 
@@ -4810,15 +4813,43 @@ def test_every_occurrence_of_a_pdf_is_repriced_for_the_deployment_it_fits(
     [
         {"messages": _PDF_DOCUMENT_PROMPT},
         {"input": _PDF_RESPONSES_INPUT},
-        {"messages": [{"role": "user", "content": [
-            {"type": "document", "source": {"type": "url", "url": _PDF_URL}},
-        ]}]},
-        {"messages": [{"role": "user", "content": [
-            {"type": "document", "source": {"type": "content", "content": _PDF_DOCUMENT_PROMPT[0]["content"]}},
-        ]}]},
-        {"messages": [{"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "document-tool", "content": _PDF_DOCUMENT_PROMPT[0]["content"]},
-        ]}]},
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "document", "source": {"type": "url", "url": _PDF_URL}},
+                    ],
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {"type": "content", "content": _PDF_DOCUMENT_PROMPT[0]["content"]},
+                        },
+                    ],
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "document-tool",
+                            "content": _PDF_DOCUMENT_PROMPT[0]["content"],
+                        },
+                    ],
+                }
+            ]
+        },
     ],
     ids=["anthropic_document", "responses_input_file", "document_url", "nested_document", "tool_result"],
 )
@@ -5015,6 +5046,33 @@ async def test_a_wildcard_route_checks_the_context_window_with_the_requested_ope
 
 
 _OVERSIZED_TOOL_DESCRIPTION = "look up the answer in the knowledge base. " * 40
+
+
+@pytest.mark.asyncio
+async def test_aanthropic_messages_enforces_context_window_with_schema_tokens():
+    messages: Final = [{"role": "user", "content": "hi"}]
+    schema: Final = {"type": "object", "properties": {"values": {"type": "array"}}}
+    small_tools: Final = [{"name": "lookup", "input_schema": schema}]
+    example: Final = {"values": ["A detailed example value that contributes tokens to the schema. " * 40]}
+    large_tools: Final = [{"name": "lookup", "input_schema": {**schema, "examples": [example]}}]
+    max_input_tokens: Final = litellm.token_counter(messages=messages, tools=small_tools)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "anthropic/claude-3-5-haiku-20241022", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": max_input_tokens},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    assert (
+        await router.aanthropic_messages(model="small-ctx", messages=messages, max_tokens=5, tools=small_tools)
+        is not None
+    )
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aanthropic_messages(model="small-ctx", messages=messages, max_tokens=5, tools=large_tools)
 
 
 @pytest.mark.asyncio
@@ -14289,9 +14347,7 @@ class TestMemberAutoRouterInference:
         assert (await self._route(router, request)).model == "permitted-model"
         assert len(self.teams.lookups) == 1
         assert len(self.stores.team_membership.lookups) == 1
-        self.teams.rows["router-team"] = self.team.model_copy(
-            update={"members_with_roles": []}
-        )
+        self.teams.rows["router-team"] = self.team.model_copy(update={"members_with_roles": []})
         await delete_cache_team_object(
             team_id=self.team.team_id,
             team_alias=None,

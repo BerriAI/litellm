@@ -2308,13 +2308,22 @@ def _format_function_definitions(tools: Sequence[object]) -> str:
     """Formats tool definitions in the format that OpenAI appears to use.
     Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
     """
-    lines: Final[list[str]] = []
-    lines.append("namespace functions {")
-    lines.append("")
-    for function in _function_definitions(tools):
-        lines.extend(_format_single_function_definition(function))
-    lines.append("} // namespace functions")
-    return "\n".join(lines)
+    from litellm.llms.anthropic.tool_token_counter import format_anthropic_tool_for_token_counting
+
+    formatted_tools: Final = tuple(_formatted_tool_definitions(tools, format_anthropic_tool_for_token_counting))
+    return "\n".join(("namespace functions {", "", *formatted_tools, "} // namespace functions"))
+
+
+def _formatted_tool_definitions(
+    tools: Sequence[object],
+    anthropic_formatter: Callable[[Mapping[str, object]], str | None],
+) -> Iterable[str]:
+    for tool in _tool_mappings(tools):
+        if (anthropic_definition := anthropic_formatter(tool)) is not None:
+            yield anthropic_definition
+            continue
+        for function in _function_definitions_for_tool(tool):
+            yield from _format_single_function_definition(function)
 
 
 def _tools_sent_as_functions(tools: Sequence[object]) -> tuple[Mapping[str, object], ...]:
