@@ -1,6 +1,7 @@
 import json
 import urllib.parse
 import uuid
+from collections.abc import Mapping
 from itertools import count
 from pathlib import Path
 from typing import Final
@@ -30,7 +31,7 @@ def create_peer(job_arn: str, request: Request) -> Reply:
     return Reply(status=404, body=b'{"message": "not scripted"}')
 
 
-def get_peer(calls: count, job: dict[str, str]) -> Reply:
+def get_peer(calls: count, job: Mapping[str, object]) -> Reply:
     index: Final = min(next(calls), len(LIFECYCLE) - 1)
     body: Final = {
         **job,
@@ -41,7 +42,6 @@ def get_peer(calls: count, job: dict[str, str]) -> Reply:
     return Reply(body=json.dumps(body).encode())
 
 
-@pytest.mark.covers("other.provider_wire.bedrock.batch_retrieve_maps_scheduled_to_in_progress")
 @pytest.mark.timeout(180)
 def test_bedrock_batch_retrieve_reports_lifecycle_status_in_order(gateway: Gateway, tmp_path: Path) -> None:
     job_arn: Final = JOB_ARN_PREFIX + uuid.uuid4().hex
