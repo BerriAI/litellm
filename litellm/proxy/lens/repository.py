@@ -239,7 +239,7 @@ class LensRepository:
     async def create(self, lens: Lens) -> Lens:
         await self.db.execute_raw(
             """INSERT INTO "LiteLLM_Lens" (id, version, data, due_at)
-            VALUES ($1,0,$2::jsonb,($3::timestamptz AT TIME ZONE 'UTC'))""",
+            VALUES ($1,0,$2::jsonb,($3::text::timestamptz AT TIME ZONE 'UTC'))""",
             lens.id,
             lens.model_dump_json(),
             scheduled_at.isoformat() if (scheduled_at := due_at(lens)) else None,
@@ -249,9 +249,9 @@ class LensRepository:
     async def sync_due(self, lens: Lens) -> None:
         await self.db.execute_raw(
             """UPDATE "LiteLLM_Lens"
-            SET due_at=($3::timestamptz AT TIME ZONE 'UTC')
+            SET due_at=($3::text::timestamptz AT TIME ZONE 'UTC')
             WHERE id=$1 AND version=$2
-              AND due_at IS DISTINCT FROM ($3::timestamptz AT TIME ZONE 'UTC')""",
+              AND due_at IS DISTINCT FROM ($3::text::timestamptz AT TIME ZONE 'UTC')""",
             lens.id,
             lens.version,
             scheduled_at.isoformat() if (scheduled_at := due_at(lens)) else None,
@@ -288,7 +288,7 @@ class LensRepository:
                 SELECT data FROM "LiteLLM_Lens" WHERE id=$2 AND version=$3 FOR UPDATE
             ), updated AS (
                 UPDATE "LiteLLM_Lens" SET data=$1::jsonb, version=version+1,
-                    due_at=($4::timestamptz AT TIME ZONE 'UTC')
+                    due_at=($4::text::timestamptz AT TIME ZONE 'UTC')
                 WHERE id=$2 AND version=$3 AND EXISTS (SELECT 1 FROM previous) RETURNING id
             )
             , archived AS (INSERT INTO "LiteLLM_LensRun" (id, lens_id, created_at, data)
