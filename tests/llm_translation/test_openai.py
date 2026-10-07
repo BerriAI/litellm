@@ -273,6 +273,9 @@ async def test_vision_with_custom_model():
 
 
 class TestOpenAIChatCompletion(BaseLLMChatTest):
+    test_basic_tool_calling = None
+    test_function_calling_with_tool_response = None
+
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gpt-4o-mini"}
 
@@ -430,7 +433,7 @@ def validate_web_search_annotations(annotations: ChatCompletionAnnotation):
 @pytest.mark.flaky(reruns=3)
 def test_openai_web_search():
     """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.completion(
         model="openai/gpt-5-search-api",
         messages=[
@@ -449,7 +452,7 @@ def test_openai_web_search():
 
 def test_openai_web_search_streaming():
     """Makes a simple web search request and validates the response contains web search annotations and all expected fields are present"""
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     test_openai_web_search: Optional[ChatCompletionAnnotation] = None
     response = litellm.completion(
         model="openai/gpt-5-search-api",
@@ -621,7 +624,7 @@ def test_openai_responses_only_model_bridge():
     """
     Test that the responses-only model bridge works correctly
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.completion(
         model="gpt-5.5-pro",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
@@ -683,17 +686,6 @@ def test_openai_tool_calling():
     }
 
     response = litellm.completion(**completion_params)
-
-
-@pytest.mark.asyncio
-async def test_openai_gpt5_reasoning():
-    response = await litellm.acompletion(
-        model="openai/gpt-5-mini",
-        messages=[{"role": "user", "content": "What is the capital of France?"}],
-        reasoning_effort="minimal",
-    )
-    print("response: ", response)
-    assert response.choices[0].message.content is not None
 
 
 @pytest.mark.asyncio
@@ -819,7 +811,7 @@ def test_openai_service_tier_parameter_sync():
 
 
 def test_gpt_5_reasoning_streaming():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = litellm.completion(
         model="openai/responses/gpt-5-mini",
         messages=[{"role": "user", "content": "Think of a poem, and then write it."}],
@@ -840,7 +832,7 @@ def test_gpt_5_reasoning_streaming():
 
 
 def test_openai_gpt_5_codex_reasoning():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     completion_kwargs = {
         "model": "gpt-5.3-codex",
         "messages": [

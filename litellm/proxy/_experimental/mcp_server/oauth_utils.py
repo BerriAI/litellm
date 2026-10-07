@@ -3,7 +3,7 @@
 
 import os
 from ipaddress import ip_address
-from typing import TYPE_CHECKING, Any, Final, NoReturn
+from typing import TYPE_CHECKING, Final, NoReturn
 from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
@@ -61,7 +61,7 @@ def _oauth_invalid_request(
     error_description: str,
     *,
     hint: str | None = None,
-    **extra: Any,
+    **extra: object,
 ) -> NoReturn:
     """Raise ``invalid_request`` (RFC 6749) with a debuggable description.
 
@@ -69,7 +69,7 @@ def _oauth_invalid_request(
     ``invalid_request``; ``error_description`` and ``hint`` explain what
     failed and how to fix it (e.g. reverse-proxy / PROXY_BASE_URL issues).
     """
-    detail: Final[dict[str, Any]] = {
+    detail: Final[dict[str, object]] = {
         "error": "invalid_request",
         "error_description": error_description,
     }
@@ -656,6 +656,17 @@ def canonicalize_url_identity(url: str) -> str:
     scheme: Final = parsed.scheme.lower()
     netloc: Final = _strip_default_port(scheme, parsed.netloc.rpartition("@")[2])
     return urlunparse((scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
+
+
+def oauth_client_registration_matches(
+    registered_issuer: str | None,
+    registered_url: str | None,
+    current_issuer: str | None,
+    current_url: str | None,
+) -> bool:
+    if registered_issuer and current_issuer:
+        return registered_issuer == current_issuer
+    return not registered_url or registered_url == current_url
 
 
 def canonical_resource_uri(url: str) -> str | None:

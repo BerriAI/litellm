@@ -10,7 +10,7 @@ Marengo 3.0 docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-pa
 from collections.abc import Mapping
 from typing import Final, cast
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
@@ -19,6 +19,7 @@ from litellm.llms.bedrock.embed.twelvelabs_marengo_3_transformation import (
     build_marengo_3_request,
     is_marengo_3_model,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import (
     TWELVELABS_EMBEDDING_INPUT_TYPES,
     TWELVELABS_MARENGO_3_INPUT_TYPES,
@@ -32,13 +33,13 @@ from litellm.types.llms.bedrock import (
 from litellm.types.utils import Embedding, EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 
 
-class MarengoEmbeddingItem(BaseModel):
+class MarengoEmbeddingItem(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     embedding: tuple[float, ...] | None = None
 
 
-class MarengoInvokeResponse(BaseModel):
+class MarengoInvokeResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     data: tuple[MarengoEmbeddingItem, ...] = ()
@@ -53,14 +54,14 @@ class MarengoInvokeResponse(BaseModel):
         return tuple(item.embedding for item in self.embeddings if item.embedding is not None)
 
 
-class MarengoBilledMultiInput(BaseModel):
+class MarengoBilledMultiInput(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     inputText: str | None = None
     mediaSources: tuple[Mapping[str, object], ...] = ()
 
 
-class MarengoBilledRequest(BaseModel):
+class MarengoBilledRequest(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     inputType: TWELVELABS_MARENGO_3_INPUT_TYPES | None = None

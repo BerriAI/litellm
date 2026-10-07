@@ -22,7 +22,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import SamplingMessage, TextContent
 from mcp_tests.mcp_e2e_upstream_server import add, multiply
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
@@ -216,6 +216,16 @@ JsonRpc = Mapping[str, object]
 class ScriptedTool:
     name: str
     respond: Callable[[JsonRpc], Reply | JsonRpc]
+    description: str | Callable[[Mapping[str, str]], str] | None = None
+    input_schema: JsonRpc = field(default_factory=lambda: {"type": "object"})
+
+    def listing(self, headers: Mapping[str, str]) -> JsonRpc:
+        described: Final = self.description(headers) if callable(self.description) else self.description
+        return {
+            "name": self.name,
+            "inputSchema": self.input_schema,
+            **({} if described is None else {"description": described}),
+        }
 
 
 def jsonrpc_reply(identity: object, result: JsonRpc) -> Reply:
@@ -253,9 +263,7 @@ def scripted_peer(*tools: ScriptedTool) -> Iterator[McpPeer]:
                 },
             )
         if method == "tools/list":
-            return jsonrpc_reply(
-                identity, {"tools": [{"name": name, "inputSchema": {"type": "object"}} for name in by_name]}
-            )
+            return jsonrpc_reply(identity, {"tools": [tool.listing(request.headers) for tool in by_name.values()]})
         if method != "tools/call":
             return jsonrpc_error(identity, -32601, f"unsupported method {method}")
         tool: Final = by_name.get(body["params"]["name"])
@@ -614,3 +622,114 @@ def tool_calls(observed: tuple[dict[str, object], ...]) -> tuple[dict[str, objec
     return tuple(
         item for item in observed if isinstance(item.get("body"), dict) and item["body"].get("method") == "tools/call"
     )
+
+
+@contextmanager
+def paginated_mcp_peer(
+    *,
+    page_size: int = 1,
+    repeat_cursor: bool = False,
+    fail_listing: bool = False,
+    fail_continuation: bool = False,
+    metadata: dict[str, JsonValue] | None = None,
+) -> Iterator[McpPeer]:
+    from contextlib import asynccontextmanager
+
+    from mcp.server.lowlevel.server import Server
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from mcp.types import (
+        CallToolResult,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        ListToolsResult,
+        Prompt,
+        Resource,
+        ResourceTemplate,
+        Tool,
+    )
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    def window(params):
+        if fail_listing or (fail_continuation and params is not None and params.cursor):
+            from mcp import MCPError
+            from mcp.types import INTERNAL_ERROR
+
+            raise MCPError(code=INTERNAL_ERROR, message="untrusted upstream message")
+        start = int(params.cursor) if params is not None and params.cursor else 0
+        end = min(start + page_size, 3)
+        return range(start, end), "1" if repeat_cursor else str(end) if end < 3 else None
+
+    async def tools(context, params):
+        indexes, cursor = window(params)
+        return ListToolsResult(
+            tools=[
+                Tool(
+                    name=f"add{index}",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                        "required": ["a", "b"],
+                    },
+                )
+                for index in indexes
+            ],
+            next_cursor=cursor,
+            meta={"revision": "stable", **(metadata or {})},
+        )
+
+    async def prompts(context, params):
+        indexes, cursor = window(params)
+        return ListPromptsResult(
+            prompts=[Prompt(name=f"prompt{index}") for index in indexes], next_cursor=cursor, meta=metadata
+        )
+
+    async def resources(context, params):
+        indexes, cursor = window(params)
+        return ListResourcesResult(
+            resources=[Resource(name=f"resource{index}", uri=f"status://item{index}") for index in indexes],
+            next_cursor=cursor,
+            meta=metadata,
+        )
+
+    async def templates(context, params):
+        indexes, cursor = window(params)
+        return ListResourceTemplatesResult(
+            resource_templates=[
+                ResourceTemplate(name=f"template{index}", uri_template=f"status{index}://{{item}}") for index in indexes
+            ],
+            next_cursor=cursor,
+            meta=metadata,
+        )
+
+    async def call(context, params):
+        assert params.name in ("add0", "add1", "add2")
+        return CallToolResult(
+            content=[TextContent(type="text", text=str(params.arguments["a"] + params.arguments["b"]))]
+        )
+
+    service = Server(
+        "paginated-catalog",
+        on_list_tools=tools,
+        on_list_prompts=prompts,
+        on_list_resources=resources,
+        on_list_resource_templates=templates,
+        on_call_tool=call,
+    )
+    manager = StreamableHTTPSessionManager(
+        service,
+        stateless=True,
+        json_response=True,
+        security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+
+    @asynccontextmanager
+    async def lifespan(app):
+        async with manager.run():
+            yield
+
+    app = Starlette(routes=[Mount("/mcp", app=manager.handle_request)], lifespan=lifespan)
+    observed = queue.Queue()
+    with asgi_server(_capturing(app, observed)) as url:
+        yield McpPeer(url + "/mcp/", observed)

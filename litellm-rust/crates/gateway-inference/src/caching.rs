@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_cache_response::{CacheOptions, CacheScope};
+use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
 use litellm_gateway_auth::AuthenticatedRequest;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -38,11 +38,13 @@ pub(crate) fn prepare(
         .map_err(|error| Error::InvalidBody(error.to_string()))?;
     let caller = identity.caller();
     let options = CacheOptions {
-        caching,
-        no_cache: controls.no_cache,
-        no_store: controls.no_store,
-        ttl: controls.ttl.map(duration).transpose()?,
-        max_age: controls.max_age.map(duration).transpose()?,
+        policy: CachePolicy {
+            caching,
+            no_cache: controls.no_cache,
+            no_store: controls.no_store,
+            ttl: controls.ttl.map(duration).transpose()?,
+            max_age: controls.max_age.map(duration).transpose()?,
+        },
         scope: CacheScope::Isolated(
             serde_json::json!([
                 caller.principal().authority(),
@@ -70,26 +72,26 @@ fn duration(seconds: f64) -> Result<Duration, Error> {
 #[derive(Clone, Default)]
 pub(crate) struct CacheHeaders(std::sync::Arc<std::sync::OnceLock<String>>);
 
-impl litellm_host::interceptors::Interceptors<litellm_core::RouteError> for CacheHeaders {
+impl litellm_host::interceptors::Interceptors<litellm_inference::RouteError> for CacheHeaders {
     async fn before_provider_request(
         &self,
         wire: litellm_host::interceptors::WireRequest,
         _: litellm_host::interceptors::RequestContext,
-    ) -> Result<litellm_host::interceptors::WireRequest, litellm_core::RouteError> {
+    ) -> Result<litellm_host::interceptors::WireRequest, litellm_inference::RouteError> {
         Ok(wire)
     }
 
     async fn after_provider_response(
         &self,
         _: litellm_host::interceptors::RawResponse,
-    ) -> Result<(), litellm_core::RouteError> {
+    ) -> Result<(), litellm_inference::RouteError> {
         Ok(())
     }
 
     async fn result_ready(
         &self,
         facts: litellm_host::interceptors::ExecutionFacts,
-    ) -> Result<(), litellm_core::RouteError> {
+    ) -> Result<(), litellm_inference::RouteError> {
         if let litellm_host::interceptors::ResultSource::Cache { key } = facts.source {
             let _ = self.0.set(key);
         }

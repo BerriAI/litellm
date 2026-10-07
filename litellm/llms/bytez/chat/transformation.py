@@ -231,7 +231,7 @@ class BytezChatConfig(BaseConfig):
 
         model_response.usage = usage
 
-        model_response._hidden_params["additional_headers"] = raw_response.headers
+        model_response.hidden_params["additional_headers"] = raw_response.headers
         message.provider_specific_fields = {
             "ratelimit-limit": raw_response.headers.get("ratelimit-limit"),
             "ratelimit-remaining": raw_response.headers.get("ratelimit-remaining"),
@@ -261,6 +261,7 @@ class BytezChatConfig(BaseConfig):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -305,6 +306,7 @@ class BytezChatConfig(BaseConfig):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})

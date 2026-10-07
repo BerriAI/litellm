@@ -57,6 +57,13 @@
         "search_context_size_high": 0.012
       }
     },
+    "perplexity/pplx-decider-v1-27b": {
+      "input_cost_per_token": 4e-08,
+      "litellm_provider": "perplexity",
+      "max_input_tokens": 262144,
+      "mode": "evaluation",
+      "output_cost_per_token": 0.0
+    },
     "deepseek/deepseek-v4-chat": {
       "litellm_provider": "deepseek",
       "mode": "chat",
@@ -743,6 +750,25 @@
       "output_cost_per_token": 2.16e-06,
       "litellm_provider": "together_ai",
       "mode": "completion"
+    },
+    "gemini/gemini-nano-banana-2.1": {
+      "input_cost_per_token": 1.5e-06,
+      "input_cost_per_token_batches": 7.5e-07,
+      "litellm_provider": "gemini",
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768,
+      "max_tokens": 32768,
+      "mode": "image_generation",
+      "output_cost_per_image": 0.0336,
+      "output_cost_per_image_token": 3e-05,
+      "output_cost_per_token": 7.5e-06,
+      "output_cost_per_token_batches": 3.75e-06,
+      "search_context_cost_per_query": {
+        "search_context_size_high": 0.014,
+        "search_context_size_low": 0.014,
+        "search_context_size_medium": 0.014
+      },
+      "web_search_billing_unit": "per_query"
     }
   },
   "cases": [
@@ -7736,7 +7762,7 @@
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
         },
-        "prompt_tokens": 47,
+        "prompt_tokens": 48,
         "completion_tokens": 10
       }
     },
@@ -7883,8 +7909,8 @@
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
         },
-        "prompt_tokens": 301,
-        "completion_tokens": 9
+        "prompt_tokens": 303,
+        "completion_tokens": 10
       }
     },
     {
@@ -27849,6 +27875,257 @@
       }
     },
     {
+      "name": "gpt-5.6-responses_web_search_reported_count_mixed_actions",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "search this text",
+        "tools": [
+          {
+            "type": "web_search_preview",
+            "search_context_size": "medium"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "web_search_call",
+              "id": "ws_0_$REQUEST_ID",
+              "status": "completed",
+              "action": {
+                "type": "search",
+                "query": "scripted query"
+              }
+            },
+            {
+              "type": "web_search_call",
+              "id": "ws_1_$REQUEST_ID",
+              "status": "completed",
+              "action": {
+                "type": "open_page",
+                "url": "https://scripted.example/a"
+              }
+            },
+            {
+              "type": "web_search_call",
+              "id": "ws_2_$REQUEST_ID",
+              "status": "completed",
+              "action": {
+                "type": "open_page",
+                "url": "https://scripted.example/b"
+              }
+            },
+            {
+              "type": "web_search_call",
+              "id": "ws_3_$REQUEST_ID",
+              "status": "completed",
+              "action": {
+                "type": "find_in_page",
+                "pattern": "release",
+                "url": "https://scripted.example/a"
+              }
+            },
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "tool_usage": {
+            "image_gen": {
+              "input_tokens": 0,
+              "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "total_tokens": 0
+            },
+            "web_search": {
+              "num_requests": 1
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.021488,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0125
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_web_search_reported_count_open_page_only",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "search this text",
+        "tools": [
+          {
+            "type": "web_search_preview",
+            "search_context_size": "medium"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "web_search_call",
+              "id": "ws_0_$REQUEST_ID",
+              "status": "completed",
+              "action": {
+                "type": "open_page",
+                "url": "https://scripted.example/a"
+              }
+            },
+            {
+              "type": "web_search_call",
+              "id": "ws_1_$REQUEST_ID",
+              "status": "completed",
+              "action": {
+                "type": "find_in_page",
+                "pattern": "release",
+                "url": "https://scripted.example/a"
+              }
+            },
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "tool_usage": {
+            "image_gen": {
+              "input_tokens": 0,
+              "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "output_tokens": 0,
+              "output_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 0
+              },
+              "total_tokens": 0
+            },
+            "web_search": {
+              "num_requests": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_web_search_reported_count_mixed_actions_stream",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "search this text",
+        "tools": [
+          {
+            "type": "web_search_preview",
+            "search_context_size": "medium"
+          }
+        ],
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_$REQUEST_ID\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"in_progress\",\"model\":\"gpt-5.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}],\"usage\":null}}",
+          "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}",
+          "event: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"content_part\",\"text\":\"\"}}",
+          "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"delta\":\"scripted \"}",
+          "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"delta\":\"response\"}",
+          "event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"text\":\"scripted response\"}",
+          "event: response.content_part.done\ndata: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}}",
+          "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}}",
+          "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_$REQUEST_ID\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"completed\",\"model\":\"gpt-5.6\",\"output\":[{\"type\":\"web_search_call\",\"id\":\"ws_0_$REQUEST_ID\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"scripted query\"}},{\"type\":\"web_search_call\",\"id\":\"ws_1_$REQUEST_ID\",\"status\":\"completed\",\"action\":{\"type\":\"open_page\",\"url\":\"https://scripted.example/a\"}},{\"type\":\"web_search_call\",\"id\":\"ws_2_$REQUEST_ID\",\"status\":\"completed\",\"action\":{\"type\":\"open_page\",\"url\":\"https://scripted.example/b\"}},{\"type\":\"web_search_call\",\"id\":\"ws_3_$REQUEST_ID\",\"status\":\"completed\",\"action\":{\"type\":\"find_in_page\",\"pattern\":\"release\",\"url\":\"https://scripted.example/a\"}},{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}] }],\"usage\":{\"input_tokens\":1840,\"output_tokens\":412,\"total_tokens\":2252,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens_details\":{\"reasoning_tokens\":0}},\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":1}}}}"
+        ]
+      },
+      "expected": {
+        "spend": 0.021488,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0125
+      }
+    },
+    {
       "name": "gpt-5.3-codex-responses_file_search",
       "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
       "model": "gpt-5.3-codex",
@@ -30532,7 +30809,8 @@
             "role": "user",
             "content": "proxy behaviour probe"
           }
-        ]
+        ],
+        "max_tokens": 412
       },
       "response": {
         "content_type": "application/json",
@@ -30926,6 +31204,47 @@
       }
     },
     {
+      "name": "perplexity/pplx-decider-v1-27b-decisions",
+      "covers": "quota_management.spend_tracking.decisions_costs",
+      "model": "perplexity/pplx-decider-v1-27b",
+      "endpoint": "/v1/decisions",
+      "request": {
+        "model": "$MODEL",
+        "state": {
+          "source": "cost-tracking"
+        },
+        "questions": {
+          "is_defect": {
+            "type": "noul",
+            "instructions": "Is this a defect?"
+          }
+        }
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "model": "pplx-decider-v1-27b",
+          "answers": {
+            "is_defect": {
+              "type": "noul",
+              "noul": 0.9
+            }
+          },
+          "usage": {
+            "input_tokens": 367,
+            "output_tokens": 3
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.468e-05,
+        "input_cost": 1.468e-05,
+        "output_cost": 0.0,
+        "prompt_tokens": 367,
+        "completion_tokens": 3
+      }
+    },
+    {
       "name": "gpt-5.6-client_disconnect_mid_stream",
       "covers": "quota_management.spend_tracking.scripted_wire.client_disconnect",
       "model": "gpt-5.6",
@@ -30978,6 +31297,810 @@
         "prompt_tokens": 10,
         "min_completion_tokens": 9,
         "max_completion_tokens": 30
+      }
+    },
+    {
+      "name": "gemini-nano-banana-2.1-input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-nano-banana-2.1",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "8e41cbb0a701 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "scripted answer 8e41cbb0a701"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 2000,
+            "candidatesTokenCount": 100,
+            "totalTokenCount": 2100,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 2000
+              }
+            ],
+            "candidatesTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ]
+          },
+          "modelVersion": "gemini-nano-banana-2.1"
+        }
+      },
+      "expected": {
+        "spend": 0.00375,
+        "input_cost": 0.003,
+        "output_cost": 0.00075,
+        "prompt_tokens": 2000,
+        "completion_tokens": 100
+      }
+    },
+    {
+      "name": "gemini-nano-banana-2.1-image_input",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-nano-banana-2.1",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "3f6c2d91a40e summarize the attached material in one line and name the city weather"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yVWQAAAAASUVORK5CYII=",
+                  "detail": "high"
+                }
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "scripted answer 3f6c2d91a40e"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 1680,
+            "candidatesTokenCount": 100,
+            "totalTokenCount": 1780,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 560
+              },
+              {
+                "modality": "IMAGE",
+                "tokenCount": 1120
+              }
+            ],
+            "candidatesTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ]
+          },
+          "modelVersion": "gemini-nano-banana-2.1"
+        }
+      },
+      "expected": {
+        "spend": 0.00327,
+        "input_cost": 0.00252,
+        "output_cost": 0.00075,
+        "prompt_tokens": 1680,
+        "completion_tokens": 100
+      }
+    },
+    {
+      "name": "gemini-nano-banana-2.1-output_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-nano-banana-2.1",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "d05a38c7e219 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "scripted answer d05a38c7e219"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 4000,
+            "totalTokenCount": 4100,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ],
+            "candidatesTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 4000
+              }
+            ]
+          },
+          "modelVersion": "gemini-nano-banana-2.1"
+        }
+      },
+      "expected": {
+        "spend": 0.03015,
+        "input_cost": 0.00015,
+        "output_cost": 0.03,
+        "prompt_tokens": 100,
+        "completion_tokens": 4000
+      }
+    },
+    {
+      "name": "gemini-nano-banana-2.1-reasoning",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-nano-banana-2.1",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "c71e4f0092ba summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": [
+          "reasoning_effort"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "scripted answer c71e4f0092ba"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 200,
+            "thoughtsTokenCount": 1800,
+            "totalTokenCount": 2100,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ],
+            "candidatesTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 200
+              }
+            ]
+          },
+          "modelVersion": "gemini-nano-banana-2.1"
+        }
+      },
+      "expected": {
+        "spend": 0.01515,
+        "input_cost": 0.00015,
+        "output_cost": 0.015,
+        "prompt_tokens": 100,
+        "completion_tokens": 2000
+      }
+    },
+    {
+      "name": "gemini-nano-banana-2.1-image_output_1k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-nano-banana-2.1",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "6a9f2c13b847 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "inlineData": {
+                      "mimeType": "image/png",
+                      "data": "aGVsbG8="
+                    }
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 1120,
+            "totalTokenCount": 1220,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ],
+            "candidatesTokensDetails": [
+              {
+                "modality": "IMAGE",
+                "tokenCount": 1120
+              }
+            ]
+          },
+          "modelVersion": "gemini-nano-banana-2.1"
+        }
+      },
+      "expected": {
+        "spend": 0.03375,
+        "input_cost": 0.00015,
+        "output_cost": 0.0336,
+        "prompt_tokens": 100,
+        "completion_tokens": 1120
+      }
+    },
+    {
+      "name": "gemini-nano-banana-2.1-image_output_2k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-nano-banana-2.1",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "24df708bc351 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "inlineData": {
+                      "mimeType": "image/png",
+                      "data": "aGVsbG8="
+                    }
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 1680,
+            "totalTokenCount": 1780,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ],
+            "candidatesTokensDetails": [
+              {
+                "modality": "IMAGE",
+                "tokenCount": 1680
+              }
+            ]
+          },
+          "modelVersion": "gemini-nano-banana-2.1"
+        }
+      },
+      "expected": {
+        "spend": 0.05055,
+        "input_cost": 0.00015,
+        "output_cost": 0.0504,
+        "prompt_tokens": 100,
+        "completion_tokens": 1680
+      }
+    },
+    {
+      "name": "gemini-nano-banana-2.1-image_output_4k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-nano-banana-2.1",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "b8a315e4706c summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "inlineData": {
+                      "mimeType": "image/png",
+                      "data": "aGVsbG8="
+                    }
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 2520,
+            "totalTokenCount": 2620,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ],
+            "candidatesTokensDetails": [
+              {
+                "modality": "IMAGE",
+                "tokenCount": 2520
+              }
+            ]
+          },
+          "modelVersion": "gemini-nano-banana-2.1"
+        }
+      },
+      "expected": {
+        "spend": 0.07575,
+        "input_cost": 0.00015,
+        "output_cost": 0.0756,
+        "prompt_tokens": 100,
+        "completion_tokens": 2520
+      }
+    },
+    {
+      "name": "gemini-nano-banana-2.1-mixed_text_image_output",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-nano-banana-2.1",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "91ce62a50d3b summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "scripted answer 91ce62a50d3b"
+                  },
+                  {
+                    "inlineData": {
+                      "mimeType": "image/png",
+                      "data": "aGVsbG8="
+                    }
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 1220,
+            "thoughtsTokenCount": 300,
+            "totalTokenCount": 1620,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ],
+            "candidatesTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              },
+              {
+                "modality": "IMAGE",
+                "tokenCount": 1120
+              }
+            ]
+          },
+          "modelVersion": "gemini-nano-banana-2.1"
+        }
+      },
+      "expected": {
+        "spend": 0.03675,
+        "input_cost": 0.00015,
+        "output_cost": 0.0366,
+        "prompt_tokens": 100,
+        "completion_tokens": 1520
+      }
+    },
+    {
+      "name": "gemini-nano-banana-2.1-web_search_single_query",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-nano-banana-2.1",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "f407b19d8e26 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "tools": [
+          {
+            "googleSearch": {}
+          }
+        ],
+        "allowed_openai_params": [
+          "web_search_options"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "scripted answer f407b19d8e26"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0,
+              "groundingMetadata": {
+                "webSearchQueries": [
+                  "query 0"
+                ]
+              }
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 100,
+            "totalTokenCount": 200,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ],
+            "candidatesTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ]
+          },
+          "modelVersion": "gemini-nano-banana-2.1"
+        }
+      },
+      "expected": {
+        "spend": 0.0149,
+        "input_cost": 0.00015,
+        "output_cost": 0.00075,
+        "tool_usage_cost": 0.014,
+        "prompt_tokens": 100,
+        "completion_tokens": 100
+      }
+    },
+    {
+      "name": "gemini-nano-banana-2.1-web_search_multiple_queries",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-nano-banana-2.1",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "a36d5f80c297 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "tools": [
+          {
+            "googleSearch": {}
+          }
+        ],
+        "allowed_openai_params": [
+          "web_search_options"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "scripted answer a36d5f80c297"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0,
+              "groundingMetadata": {
+                "webSearchQueries": [
+                  "query 0",
+                  "query 1",
+                  "query 2",
+                  "query 3"
+                ]
+              }
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 100,
+            "totalTokenCount": 200,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ],
+            "candidatesTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 100
+              }
+            ]
+          },
+          "modelVersion": "gemini-nano-banana-2.1"
+        }
+      },
+      "expected": {
+        "spend": 0.0569,
+        "input_cost": 0.00015,
+        "output_cost": 0.00075,
+        "tool_usage_cost": 0.056,
+        "prompt_tokens": 100,
+        "completion_tokens": 100
       }
     }
   ],

@@ -22,9 +22,10 @@ API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parame
 """
 
 import base64
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from httpx._types import RequestFiles
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -165,7 +166,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, RequestFiles]:
         """
         Transform OpenAI-style request to Bedrock Stability request format.
 
@@ -334,17 +335,16 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                     )
 
         if not hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params = {}
-        if "additional_headers" not in model_response._hidden_params:
-            model_response._hidden_params["additional_headers"] = {}
+            model_response.hidden_params = {}
+        additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
+            dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
+        )
 
         # Set cost based on model
         model_info: Final = get_model_info(model, custom_llm_provider="bedrock")
         cost_per_image: Final = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
-            model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                cost_per_image
-            )
+            additional_headers["llm_provider-x-litellm-response-cost"] = float(cost_per_image)
 
         return model_response
 

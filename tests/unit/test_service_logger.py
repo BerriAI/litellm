@@ -200,8 +200,8 @@ async def test_service_span_emitted_for_v2_logger_in_service_callback(monkeypatc
     parent.end()
 
     names = [s.name for s in exporter.get_finished_spans()]
-    # Span name is "{service} {call_type}" so repeated calls stay distinguishable.
-    assert "redis async_set_cache" in names
+    # Span name is "{service}.{verb}" (the method rides on db.operation.name) so repeated calls stay distinguishable.
+    assert "redis.set" in names
 
 
 @pytest.mark.asyncio
@@ -238,7 +238,7 @@ async def test_service_span_not_duplicated_for_string_and_instance(monkeypatch):
     parent.end()
 
     db_spans = [
-        s for s in exporter.get_finished_spans() if s.name == "postgres get_user_object"
+        s for s in exporter.get_finished_spans() if s.name == "postgres.select LiteLLM_UserTable"
     ]
     assert len(db_spans) == 1
 
@@ -274,6 +274,45 @@ async def test_service_failure_span_not_duplicated_for_string_and_instance(
     parent.end()
 
     db_spans = [
-        s for s in exporter.get_finished_spans() if s.name == "postgres get_user_object"
+        s for s in exporter.get_finished_spans() if s.name == "postgres.select LiteLLM_UserTable"
     ]
     assert len(db_spans) == 1
+
+
+@pytest.mark.asyncio
+async def test_only_redis_service_spans_carry_the_ambient_key_family(monkeypatch):
+    """A key family set for a Redis read must not label the DB write-back that a
+    task spawned inside that context performs later."""
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm._internal_context import service_target
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+    from litellm.integrations.otel.model.semconv import LiteLLM
+    from litellm.integrations.otel.plumbing import providers
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    exporter = InMemorySpanExporter()
+    otel = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
+    monkeypatch.setattr(litellm, "service_callback", [otel])
+    service_logger = ServiceLogging()
+    start = datetime(2026, 2, 13, 22, 35, 0)
+    end = datetime(2026, 2, 13, 22, 35, 1)
+
+    with service_target("router_session_pins"):
+        await service_logger.async_service_success_hook(
+            service=ServiceTypes.REDIS, call_type="async_get_cache", duration=1.0, start_time=start, end_time=end
+        )
+        await service_logger.async_service_success_hook(
+            service=ServiceTypes.BATCH_WRITE_TO_DB,
+            call_type="_PROXY_track_cost_callback",
+            duration=1.0,
+            start_time=start,
+            end_time=end,
+        )
+
+    targets = {span.name: span.attributes.get(LiteLLM.SERVICE_TARGET) for span in exporter.get_finished_spans()}
+    assert targets == {
+        "redis.get router_session_pins": "router_session_pins",
+        "batch_write_to_db _PROXY_track_cost_callback": None,
+    }
