@@ -157,6 +157,30 @@ describe("modelInfoCall", () => {
   });
 });
 
+describe("pinMCPServerTools", () => {
+  it("forwards custom upstream headers", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({}),
+      text: vi.fn().mockResolvedValue(""),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.pinMCPServerTools("token", "srv-1", undefined, {
+      "x-mcp-weather-authorization": "Bearer t",
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/mcp/server/srv-1/pin"),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-mcp-weather-authorization": "Bearer t",
+        }),
+      }),
+    );
+  });
+});
+
 describe("UI config and public endpoints", () => {
   const originalFetch = global.fetch;
 

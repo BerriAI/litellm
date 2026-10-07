@@ -9,20 +9,30 @@ must be cleared rather than left at its stored value.
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
-from prisma import Json, models
 from fastapi import HTTPException
+from prisma import Json, models
+from prisma.errors import UniqueViolationError
 
 from litellm.proxy._experimental.mcp_server.db import (
+    _MCP_PIN_ADVISORY_LOCK_SQL,
     create_mcp_server,
     decrypt_credentials,
     set_mcp_server_pinned_tools,
     update_mcp_server,
 )
 from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
-from litellm.types.mcp_server.mcp_server_manager import PinnedMCPTool
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPToolChangeKind,
+    MCPToolDeprecationRequest,
+    MCPToolVersion,
+    PinnedMCPTool,
+)
 
 
 def _credentials_cleared(value) -> bool:
@@ -38,14 +48,42 @@ def _mock_prisma():
     mock_prisma.db.litellm_mcpservertable.create = AsyncMock(return_value=row)
     mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_mcptoolversion = AsyncMock()
+    mock_prisma.db.litellm_mcptoolversion.create_many = AsyncMock(return_value=0)
+    mock_prisma.db.litellm_mcptoolversion.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_mcptoolversion.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_mcptoolversion.update = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_mcptoolversion.delete_many = AsyncMock(return_value=0)
     tx_client = MagicMock()
     tx_client.execute_raw = AsyncMock()
-    tx_client.litellm_mcpservertable = mock_prisma.db.litellm_mcpservertable
+    tx_client.litellm_mcpservertable = AsyncMock()
+    tx_client.litellm_mcpservertable.update = AsyncMock(return_value=row)
+    tx_client.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+    tx_client.litellm_mcptoolversion = AsyncMock()
+    tx_client.litellm_mcptoolversion.create_many = AsyncMock(return_value=0)
+    tx_client.litellm_mcptoolversion.find_many = AsyncMock(return_value=[])
     tx = MagicMock()
     tx.__aenter__ = AsyncMock(return_value=tx_client)
     tx.__aexit__ = AsyncMock(return_value=False)
-    mock_prisma.db.tx = MagicMock(return_value=tx)
+    mock_prisma.tx = MagicMock(return_value=tx)
+    db_tx_client = MagicMock()
+    db_tx_client.execute_raw = AsyncMock()
+    db_tx_client.litellm_mcpservertable = mock_prisma.db.litellm_mcpservertable
+    db_tx = MagicMock()
+    db_tx.__aenter__ = AsyncMock(return_value=db_tx_client)
+    db_tx.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma.db.tx = MagicMock(return_value=db_tx)
     return mock_prisma
+
+
+@pytest.fixture(autouse=True)
+def mock_config_sync_publish(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    publish: Final = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.config_sync_pubsub.publish_config_change_for_object_type",
+        publish,
+    )
+    return publish
 
 
 async def _run_update(data: UpdateMCPServerRequest, fields_set=None) -> dict:
@@ -1123,30 +1161,106 @@ async def test_register_and_update_bodies_never_write_pinned_tools():
 @pytest.mark.asyncio
 async def test_set_mcp_server_pinned_tools_writes_the_snapshot_and_null_clears_it():
     mock_prisma = _mock_prisma()
-    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=MagicMock())
+    tx_client = mock_prisma.tx.return_value.__aenter__.return_value
+    tx_client.litellm_mcpservertable.find_unique = AsyncMock(return_value=MagicMock())
     pinned = {"list_notes": PinnedMCPTool(description="List notes", input_schema={"type": "object"})}
 
     record = await set_mcp_server_pinned_tools(mock_prisma, "test-server", pinned, "admin")
 
-    written = mock_prisma.db.litellm_mcpservertable.update.call_args[1]
+    written = tx_client.litellm_mcpservertable.update.call_args[1]
     assert written["where"] == {"server_id": "test-server"}
     assert json.loads(written["data"]["pinned_tools"]) == {
         "list_notes": {"description": "List notes", "input_schema": {"type": "object"}}
     }
     assert written["data"]["updated_by"] == "admin"
     assert record is not None and record.server_id == "test-server"
+    version_row: Final = tx_client.litellm_mcptoolversion.create_many.call_args.kwargs["data"][0]
+    assert isinstance(version_row["input_schema"], str)
+    assert json.loads(version_row["input_schema"]) == {"type": "object"}
+    assert isinstance(version_row["changes"], str)
+    assert json.loads(version_row["changes"]) == []
 
     await set_mcp_server_pinned_tools(mock_prisma, "test-server", None, "admin")
-    assert mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]["pinned_tools"] == "{}"
+    assert tx_client.litellm_mcpservertable.update.call_args[1]["data"]["pinned_tools"] == "{}"
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_server_pinned_tools_uses_one_transaction_for_the_pin(
+    mock_config_sync_publish: AsyncMock,
+) -> None:
+    mock_prisma: Final = _mock_prisma()
+    calls: Final = MagicMock()
+    tx: Final = mock_prisma.tx.return_value
+    tx_client: Final = tx.__aenter__.return_value
+    updated_row: Final = tx_client.litellm_mcpservertable.update.return_value
+    tx_client.execute_raw.return_value = 1
+    tx_client.litellm_mcpservertable.find_unique.return_value = MagicMock()
+    tx_client.litellm_mcptoolversion.find_many.return_value = []
+    tx_client.litellm_mcptoolversion.create_many.return_value = 1
+    tx_client.litellm_mcpservertable.update.return_value = updated_row
+    tx.__aexit__.return_value = False
+    calls.attach_mock(tx_client.execute_raw, "lock")
+    calls.attach_mock(tx_client.litellm_mcpservertable.find_unique, "server_lookup")
+    calls.attach_mock(tx_client.litellm_mcptoolversion.find_many, "history_read")
+    calls.attach_mock(tx_client.litellm_mcptoolversion.create_many, "version_insert")
+    calls.attach_mock(tx_client.litellm_mcpservertable.update, "server_update")
+    calls.attach_mock(tx.__aexit__, "transaction_exit")
+    calls.attach_mock(mock_config_sync_publish, "publish")
+
+    await set_mcp_server_pinned_tools(
+        mock_prisma,
+        "test-server",
+        {"new": PinnedMCPTool()},
+        "admin",
+    )
+
+    tx_client.execute_raw.assert_awaited_once_with(_MCP_PIN_ADVISORY_LOCK_SQL, "mcp_pin:test-server")
+    tx_client.litellm_mcpservertable.find_unique.assert_awaited_once_with(where={"server_id": "test-server"})
+    tx_client.litellm_mcptoolversion.find_many.assert_awaited_once_with(
+        where={"server_id": "test-server"},
+        order=[{"tool_name": "asc"}, {"version": "desc"}],
+    )
+    tx_client.litellm_mcptoolversion.create_many.assert_awaited_once()
+    tx_client.litellm_mcpservertable.update.assert_awaited_once()
+    assert [entry[0] for entry in calls.mock_calls] == [
+        "lock",
+        "server_lookup",
+        "history_read",
+        "version_insert",
+        "server_update",
+        "transaction_exit",
+        "publish",
+    ]
+    assert calls.mock_calls[0] == call.lock(_MCP_PIN_ADVISORY_LOCK_SQL, "mcp_pin:test-server")
+    assert mock_prisma.db.litellm_mcpservertable.find_unique.await_count == 0
+    assert mock_prisma.db.litellm_mcpservertable.update.await_count == 0
+    assert mock_prisma.db.litellm_mcptoolversion.find_many.await_count == 0
+    assert mock_prisma.db.litellm_mcptoolversion.create_many.await_count == 0
+    mock_config_sync_publish.assert_awaited_once_with("litellm_mcpservertable")
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_server_pinned_tools_does_not_publish_when_snapshot_update_fails(
+    mock_config_sync_publish: AsyncMock,
+) -> None:
+    mock_prisma: Final = _mock_prisma()
+    tx_client: Final = mock_prisma.tx.return_value.__aenter__.return_value
+    tx_client.litellm_mcpservertable.find_unique = AsyncMock(return_value=MagicMock())
+    tx_client.litellm_mcpservertable.update = AsyncMock(side_effect=RuntimeError("update failed"))
+
+    with pytest.raises(RuntimeError, match="update failed"):
+        await set_mcp_server_pinned_tools(mock_prisma, "test-server", None, "admin")
+
+    mock_config_sync_publish.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_set_mcp_server_pinned_tools_on_a_missing_server_writes_nothing():
     mock_prisma = _mock_prisma()
-    mock_prisma.db.litellm_mcpservertable.find_unique.return_value = None
+    tx_client = mock_prisma.tx.return_value.__aenter__.return_value
 
     assert await set_mcp_server_pinned_tools(mock_prisma, "ghost", None, "admin") is None
-    mock_prisma.db.litellm_mcpservertable.update.assert_not_awaited()
+    tx_client.litellm_mcpservertable.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1365,3 +1479,297 @@ async def test_issuer_edit_preserves_replacement_with_same_client_id(replacement
     assert credentials["dcr_server_url"] == "https://new.example/mcp"
     assert credentials.get("client_secret") == replacement.get("client_secret")
     assert credentials.get("token_endpoint_auth_method") == replacement.get("token_endpoint_auth_method")
+
+
+def _mcp_tool_version(
+    tool_name: str,
+    version: int,
+    change_kind: MCPToolChangeKind,
+    description: str = "",
+    input_schema: dict[str, object] | None = None,
+    deprecated_at: datetime | None = None,
+) -> MCPToolVersion:
+    return MCPToolVersion(
+        server_id="test-server",
+        tool_name=tool_name,
+        version=version,
+        description=description,
+        input_schema=input_schema if input_schema is not None else {},
+        change_kind=change_kind,
+        changes=(),
+        created_at=datetime(2026, 10, 2, tzinfo=timezone.utc),
+        deprecated_at=deprecated_at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_server_pinned_tools_records_only_changed_versions_before_updating_pin():
+    mock_prisma: Final = _mock_prisma()
+    tx_client: Final = mock_prisma.tx.return_value.__aenter__.return_value
+    tx_client.litellm_mcpservertable.find_unique = AsyncMock(return_value=MagicMock())
+    tx_client.litellm_mcptoolversion.find_many = AsyncMock(
+        return_value=[
+            _mcp_tool_version("changed", 2, "non_breaking", input_schema={"properties": {"q": {"type": "string"}}}),
+            _mcp_tool_version("changed", 1, "initial"),
+            _mcp_tool_version("stable", 1, "initial", description="Stable"),
+        ]
+    )
+    pinned: Final = {
+        "changed": PinnedMCPTool(
+            description="Changed",
+            input_schema={"properties": {"q": {"type": "integer"}}},
+        ),
+        "stable": PinnedMCPTool(description="Stable"),
+    }
+
+    await set_mcp_server_pinned_tools(
+        mock_prisma,
+        "test-server",
+        pinned,
+        "admin-user",
+        changelog="Updated the changed tool",
+    )
+
+    inserted_rows: Final = tx_client.litellm_mcptoolversion.create_many.call_args.kwargs["data"]
+    expected_changes: Final = [
+        {"breaking": False, "summary": "Description changed"},
+        {
+            "breaking": True,
+            "summary": 'Parameter "q" type changed from "string" to "integer"',
+        },
+    ]
+    assert inserted_rows == (
+        {
+            "server_id": "test-server",
+            "tool_name": "changed",
+            "version": 3,
+            "description": "Changed",
+            "input_schema": inserted_rows[0]["input_schema"],
+            "change_kind": "breaking",
+            "changes": inserted_rows[0]["changes"],
+            "changelog": "Updated the changed tool",
+            "created_by": "admin-user",
+        },
+    )
+    assert isinstance(inserted_rows[0]["input_schema"], str)
+    assert json.loads(inserted_rows[0]["input_schema"]) == {"properties": {"q": {"type": "integer"}}}
+    assert isinstance(inserted_rows[0]["changes"], str)
+    assert json.loads(inserted_rows[0]["changes"]) == expected_changes
+    assert tx_client.litellm_mcpservertable.update.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_server_pinned_tools_does_not_update_pin_when_version_insert_fails():
+    mock_prisma: Final = _mock_prisma()
+    tx_client: Final = mock_prisma.tx.return_value.__aenter__.return_value
+    tx_client.litellm_mcpservertable.find_unique = AsyncMock(return_value=MagicMock())
+    tx_client.litellm_mcptoolversion.create_many = AsyncMock(
+        side_effect=UniqueViolationError({}, message="duplicate version")
+    )
+
+    with pytest.raises(UniqueViolationError):
+        await set_mcp_server_pinned_tools(
+            mock_prisma,
+            "test-server",
+            {"new": PinnedMCPTool()},
+            "admin",
+        )
+
+    tx_client.litellm_mcptoolversion.create_many.assert_awaited_once()
+    tx_client.litellm_mcpservertable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_tool_versions_orders_tools_and_versions():
+    mock_prisma: Final = _mock_prisma()
+    rows: Final = [
+        _mcp_tool_version("alpha", 2, "breaking"),
+        _mcp_tool_version("alpha", 1, "initial"),
+        _mcp_tool_version("beta", 1, "initial"),
+    ]
+    tx_client: Final = mock_prisma.tx.return_value.__aenter__.return_value
+    tx_client.litellm_mcptoolversion.find_many = AsyncMock(return_value=rows)
+
+    from litellm.proxy._experimental.mcp_server.db import _MCP_PIN_ADVISORY_LOCK_SQL, list_mcp_tool_versions
+
+    assert await list_mcp_tool_versions(mock_prisma, "test-server") == rows
+    tx_client.execute_raw.assert_awaited_once_with(_MCP_PIN_ADVISORY_LOCK_SQL, "mcp_pin:test-server")
+    tx_client.litellm_mcptoolversion.find_many.assert_awaited_once_with(
+        where={"server_id": "test-server"},
+        order=[{"tool_name": "asc"}, {"version": "desc"}],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_on_writer", ["recreated", "deleted"])
+async def test_list_mcp_tool_versions_hides_history_once_the_authorized_server_is_gone(server_on_writer: str):
+    authorized_at: Final = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    mock_prisma: Final = _mock_prisma()
+    tx_client: Final = mock_prisma.tx.return_value.__aenter__.return_value
+    tx_client.litellm_mcpservertable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(created_at=authorized_at + timedelta(minutes=5))
+        if server_on_writer == "recreated"
+        else None
+    )
+    tx_client.litellm_mcptoolversion.find_many = AsyncMock(return_value=[_mcp_tool_version("alpha", 1, "initial")])
+
+    from litellm.proxy._experimental.mcp_server.db import list_mcp_tool_versions
+
+    assert await list_mcp_tool_versions(mock_prisma, "test-server", authorized_at) == []
+    tx_client.litellm_mcptoolversion.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_tool_versions_returns_history_for_the_authorized_server_row():
+    authorized_at: Final = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    rows: Final = [_mcp_tool_version("alpha", 1, "initial")]
+    mock_prisma: Final = _mock_prisma()
+    tx_client: Final = mock_prisma.tx.return_value.__aenter__.return_value
+    tx_client.litellm_mcpservertable.find_unique = AsyncMock(return_value=SimpleNamespace(created_at=authorized_at))
+    tx_client.litellm_mcptoolversion.find_many = AsyncMock(return_value=rows)
+
+    from litellm.proxy._experimental.mcp_server.db import list_mcp_tool_versions
+
+    assert await list_mcp_tool_versions(mock_prisma, "test-server", authorized_at) == rows
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_tool_version_deprecation_preserves_existing_timestamp():
+    mock_prisma: Final = _mock_prisma()
+    calls: Final = MagicMock()
+    tx_client: Final = mock_prisma.tx.return_value.__aenter__.return_value
+    deprecated_at: Final = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    existing: Final = _mcp_tool_version("alpha", 2, "breaking", deprecated_at=deprecated_at)
+    updated: Final = existing.model_copy(
+        update={
+            "sunset_date": datetime(2026, 12, 31, tzinfo=timezone.utc),
+            "deprecation_note": "Switch to v3",
+        }
+    )
+    tx_client.execute_raw = AsyncMock(return_value=1)
+    tx_client.litellm_mcptoolversion.find_unique = AsyncMock(return_value=existing)
+    tx_client.litellm_mcptoolversion.update = AsyncMock(return_value=updated)
+    calls.attach_mock(tx_client.execute_raw, "lock")
+    calls.attach_mock(tx_client.litellm_mcptoolversion.find_unique, "lookup")
+    calls.attach_mock(tx_client.litellm_mcptoolversion.update, "update")
+
+    from litellm.proxy._experimental.mcp_server.db import set_mcp_tool_version_deprecation
+
+    result: Final = await set_mcp_tool_version_deprecation(
+        mock_prisma,
+        "test-server",
+        "alpha",
+        2,
+        MCPToolDeprecationRequest(
+            sunset_date=datetime(2026, 12, 31, tzinfo=timezone.utc),
+            deprecation_note="Switch to v3",
+        ),
+    )
+
+    assert result == updated
+    tx_client.litellm_mcptoolversion.update.assert_awaited_once_with(
+        where={
+            "server_id_tool_name_version": {
+                "server_id": "test-server",
+                "tool_name": "alpha",
+                "version": 2,
+            }
+        },
+        data={
+            "deprecated_at": deprecated_at,
+            "sunset_date": datetime(2026, 12, 31, tzinfo=timezone.utc),
+            "deprecation_note": "Switch to v3",
+        },
+    )
+    assert [entry[0] for entry in calls.mock_calls] == ["lock", "lookup", "update"]
+    assert calls.mock_calls[0] == call.lock(_MCP_PIN_ADVISORY_LOCK_SQL, "mcp_pin:test-server")
+    mock_prisma.db.litellm_mcptoolversion.find_unique.assert_not_awaited()
+    mock_prisma.db.litellm_mcptoolversion.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_on_writer", ["recreated", "deleted"])
+@pytest.mark.parametrize("deprecation", [MCPToolDeprecationRequest(deprecation_note="Use v2"), None])
+async def test_set_mcp_tool_version_deprecation_leaves_a_recreated_server_untouched(
+    server_on_writer: str,
+    deprecation: MCPToolDeprecationRequest | None,
+):
+    authorized_at: Final = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    mock_prisma: Final = _mock_prisma()
+    tx_client: Final = mock_prisma.tx.return_value.__aenter__.return_value
+    tx_client.litellm_mcpservertable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(created_at=authorized_at + timedelta(minutes=5))
+        if server_on_writer == "recreated"
+        else None
+    )
+    tx_client.litellm_mcptoolversion.find_unique = AsyncMock(return_value=_mcp_tool_version("alpha", 1, "initial"))
+    tx_client.litellm_mcptoolversion.update = AsyncMock()
+
+    from litellm.proxy._experimental.mcp_server.db import set_mcp_tool_version_deprecation
+
+    result: Final = await set_mcp_tool_version_deprecation(
+        mock_prisma, "test-server", "alpha", 1, deprecation, authorized_at
+    )
+
+    assert result is None
+    tx_client.execute_raw.assert_awaited_once_with(_MCP_PIN_ADVISORY_LOCK_SQL, "mcp_pin:test-server")
+    tx_client.litellm_mcptoolversion.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_tool_version_deprecation_updates_the_authorized_server_row():
+    authorized_at: Final = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    existing: Final = _mcp_tool_version("alpha", 1, "initial")
+    updated: Final = existing.model_copy(update={"deprecation_note": "Use v2"})
+    mock_prisma: Final = _mock_prisma()
+    tx_client: Final = mock_prisma.tx.return_value.__aenter__.return_value
+    tx_client.litellm_mcpservertable.find_unique = AsyncMock(return_value=SimpleNamespace(created_at=authorized_at))
+    tx_client.litellm_mcptoolversion.find_unique = AsyncMock(return_value=existing)
+    tx_client.litellm_mcptoolversion.update = AsyncMock(return_value=updated)
+
+    from litellm.proxy._experimental.mcp_server.db import set_mcp_tool_version_deprecation
+
+    result: Final = await set_mcp_tool_version_deprecation(
+        mock_prisma,
+        "test-server",
+        "alpha",
+        1,
+        MCPToolDeprecationRequest(deprecation_note="Use v2"),
+        authorized_at,
+    )
+
+    assert result == updated
+    tx_client.litellm_mcpservertable.find_unique.assert_awaited_once_with(where={"server_id": "test-server"})
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_tool_version_deprecation_clears_fields_or_returns_none_for_missing_row():
+    mock_prisma: Final = _mock_prisma()
+    tx_client: Final = mock_prisma.tx.return_value.__aenter__.return_value
+    existing: Final = _mcp_tool_version(
+        "alpha",
+        2,
+        "breaking",
+        deprecated_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )
+    tx_client.litellm_mcptoolversion.find_unique = AsyncMock(return_value=existing)
+    tx_client.litellm_mcptoolversion.update = AsyncMock(
+        return_value=existing.model_copy(update={"deprecated_at": None, "sunset_date": None, "deprecation_note": None})
+    )
+
+    from litellm.proxy._experimental.mcp_server.db import set_mcp_tool_version_deprecation
+
+    result: Final = await set_mcp_tool_version_deprecation(mock_prisma, "test-server", "alpha", 2, None)
+
+    assert result is not None
+    assert (result.deprecated_at, result.sunset_date, result.deprecation_note) == (None, None, None)
+    assert tx_client.litellm_mcptoolversion.update.call_args.kwargs["data"] == {
+        "deprecated_at": None,
+        "sunset_date": None,
+        "deprecation_note": None,
+    }
+
+    tx_client.litellm_mcptoolversion.find_unique = AsyncMock(return_value=None)
+    assert await set_mcp_tool_version_deprecation(mock_prisma, "test-server", "missing", 3, None) is None
+    tx_client.litellm_mcptoolversion.update.assert_awaited_once()
+    mock_prisma.db.litellm_mcptoolversion.find_unique.assert_not_awaited()

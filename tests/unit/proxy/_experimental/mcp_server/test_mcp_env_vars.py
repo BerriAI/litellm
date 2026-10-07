@@ -874,6 +874,12 @@ def _mock_env_vars_prisma(row=None):
     prisma.db.litellm_mcpuserenvvars.upsert = AsyncMock()
     prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock()
     prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock()
+    prisma.db.litellm_mcptoolversion.delete_many = AsyncMock()
+    prisma.db.execute_raw = AsyncMock()
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock(return_value=prisma.db)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    prisma.tx = MagicMock(return_value=tx)
     return prisma
 
 
@@ -1280,6 +1286,55 @@ async def test_delete_mcp_server_succeeds_when_orphan_cleanup_fails():
 
     assert result is deleted
     prisma.db.litellm_mcpuserenvvars.delete_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_removes_tool_version_rows():
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    prisma: Final = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=object())
+
+    await delete_mcp_server(prisma, "srv-1")
+
+    prisma.db.litellm_mcptoolversion.delete_many.assert_awaited_once_with(where={"server_id": "srv-1"})
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_removes_history_and_server_under_the_pin_lock():
+    from litellm.proxy._experimental.mcp_server.db import _MCP_PIN_ADVISORY_LOCK_SQL, delete_mcp_server
+
+    deleted: Final = object()
+    order: Final[list[str]] = []
+    prisma: Final = _mock_env_vars_prisma()
+    prisma.db.execute_raw = AsyncMock(side_effect=lambda *_: order.append("lock"))
+    prisma.db.litellm_mcptoolversion.delete_many = AsyncMock(side_effect=lambda **_: order.append("history"))
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(side_effect=lambda **_: order.append("server") or deleted)
+
+    result: Final = await delete_mcp_server(prisma, "srv-1")
+
+    assert result is deleted
+    assert order == ["lock", "history", "server"]
+    prisma.tx.assert_called_once_with()
+    prisma.db.execute_raw.assert_awaited_once_with(_MCP_PIN_ADVISORY_LOCK_SQL, "mcp_pin:srv-1")
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_keeps_server_when_tool_version_cleanup_fails():
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    prisma: Final = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=object())
+    prisma.db.litellm_mcptoolversion.delete_many = AsyncMock(side_effect=RuntimeError("connection pool exhausted"))
+
+    with pytest.raises(RuntimeError, match="connection pool exhausted"):
+        await delete_mcp_server(prisma, "srv-1")
+
+    prisma.db.litellm_mcpservertable.delete.assert_not_awaited()
 
 
 @pytest.mark.asyncio

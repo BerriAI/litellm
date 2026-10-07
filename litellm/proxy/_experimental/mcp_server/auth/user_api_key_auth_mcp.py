@@ -2489,7 +2489,7 @@ class MCPRequestHandler:
         return allowed_tools
 
     @staticmethod
-    def tool_is_granted(bare_tool_name: str, allowed_tool_names: list[str] | None) -> bool:
+    def tool_is_granted(bare_tool_name: str, allowed_tool_names: Sequence[str] | None) -> bool:
         """Whether key/team tool permissions reach ``bare_tool_name`` on one server.
 
         ``None`` means no tool-level restriction; an empty list grants nothing. Entries

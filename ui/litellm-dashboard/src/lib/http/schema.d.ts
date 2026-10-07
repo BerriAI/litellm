@@ -20937,6 +20937,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/server/{server_id}/tool-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch Mcp Server Tool Versions
+         * @description Returns the version history of the tools recorded for an MCP server.
+         */
+        get: operations["fetch_mcp_server_tool_versions_v1_mcp_server__server_id__tool_versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/server/{server_id}/tools/{tool_name}/versions/{version}/deprecation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Tool Version Deprecation
+         * @description Set deprecation and sunset metadata for an MCP tool version.
+         */
+        put: operations["set_tool_version_deprecation_v1_mcp_server__server_id__tools__tool_name__versions__version__deprecation_put"];
+        post?: never;
+        /**
+         * Clear Tool Version Deprecation
+         * @description Clear deprecation and sunset metadata for an MCP tool version.
+         */
+        delete: operations["clear_tool_version_deprecation_v1_mcp_server__server_id__tools__tool_name__versions__version__deprecation_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/server/{server_id}/user-credential": {
         parameters: {
             query?: never;
@@ -38046,6 +38090,20 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** MCPToolChange */
+        MCPToolChange: {
+            /** Breaking */
+            breaking: boolean;
+            /** Summary */
+            summary: string;
+        };
+        /** MCPToolDeprecationRequest */
+        MCPToolDeprecationRequest: {
+            /** Deprecation Note */
+            deprecation_note?: string | null;
+            /** Sunset Date */
+            sunset_date?: string | null;
+        };
         /**
          * MCPToolSearchSettings
          * @description `litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools.
@@ -38088,6 +38146,49 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /** MCPToolVersion */
+        MCPToolVersion: {
+            /**
+             * Change Kind
+             * @enum {string}
+             */
+            change_kind: "initial" | "non_breaking" | "breaking" | "removed";
+            /** Changelog */
+            changelog?: string | null;
+            /**
+             * Changes
+             * @default []
+             */
+            changes: components["schemas"]["MCPToolChange"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Deprecated At */
+            deprecated_at?: string | null;
+            /** Deprecation Note */
+            deprecation_note?: string | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Input Schema */
+            input_schema?: {
+                [key: string]: unknown;
+            };
+            /** Server Id */
+            server_id: string;
+            /** Sunset Date */
+            sunset_date?: string | null;
+            /** Tool Name */
+            tool_name: string;
+            /** Version */
+            version: number;
         };
         /** MCPToolsetTool */
         MCPToolsetTool: {
@@ -40749,6 +40850,11 @@ export interface components {
          * @enum {string}
          */
         PiiEntityType: "CREDIT_CARD" | "CRYPTO" | "DATE_TIME" | "EMAIL_ADDRESS" | "IBAN_CODE" | "IP_ADDRESS" | "NRP" | "LOCATION" | "PERSON" | "PHONE_NUMBER" | "MEDICAL_LICENSE" | "URL" | "MAC_ADDRESS" | "UUID" | "US_BANK_NUMBER" | "US_DRIVER_LICENSE" | "US_ITIN" | "US_PASSPORT" | "US_SSN" | "US_MBI" | "US_NPI" | "UK_NHS" | "UK_NINO" | "UK_PASSPORT" | "UK_POSTCODE" | "UK_VEHICLE_REGISTRATION" | "UK_DRIVING_LICENCE" | "ES_NIF" | "ES_NIE" | "ES_PASSPORT" | "IT_FISCAL_CODE" | "IT_DRIVER_LICENSE" | "IT_VAT_CODE" | "IT_PASSPORT" | "IT_IDENTITY_CARD" | "PL_PESEL" | "SG_NRIC_FIN" | "SG_UEN" | "AU_ABN" | "AU_ACN" | "AU_TFN" | "AU_MEDICARE" | "IN_PAN" | "IN_AADHAAR" | "IN_VEHICLE_REGISTRATION" | "IN_VOTER" | "IN_PASSPORT" | "IN_GSTIN" | "FI_PERSONAL_IDENTITY_CODE" | "DE_TAX_ID" | "DE_TAX_NUMBER" | "DE_VAT_ID" | "DE_PASSPORT" | "DE_ID_CARD" | "DE_FUEHRERSCHEIN" | "DE_SOCIAL_SECURITY" | "DE_HEALTH_INSURANCE" | "DE_LANR" | "DE_BSNR" | "DE_KFZ" | "DE_HANDELSREGISTER" | "DE_PLZ" | "KR_RRN" | "KR_FRN" | "KR_PASSPORT" | "KR_DRIVER_LICENSE" | "KR_BRN" | "CA_SIN" | "SE_PERSONNUMMER" | "SE_ORGANISATIONSNUMMER" | "TH_TNIN" | "TR_NATIONAL_ID" | "TR_LICENSE_PLATE" | "NG_NIN" | "NG_VEHICLE_REGISTRATION" | "PH_TIN" | "PH_UMID" | "PH_PASSPORT" | "ZA_ID_NUMBER";
+        /** PinMCPServerToolsRequest */
+        PinMCPServerToolsRequest: {
+            /** Changelog */
+            changelog?: string | null;
+        };
         /**
          * PinnedMCPTool
          * @description One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving.
@@ -79148,7 +79254,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PinMCPServerToolsRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -79227,6 +79337,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiteLLM_MCPServerTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_mcp_server_tool_versions_v1_mcp_server__server_id__tool_versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPToolVersion"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_tool_version_deprecation_v1_mcp_server__server_id__tools__tool_name__versions__version__deprecation_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+                tool_name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPToolDeprecationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPToolVersion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_tool_version_deprecation_v1_mcp_server__server_id__tools__tool_name__versions__version__deprecation_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+                tool_name: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPToolVersion"];
                 };
             };
             /** @description Validation Error */
