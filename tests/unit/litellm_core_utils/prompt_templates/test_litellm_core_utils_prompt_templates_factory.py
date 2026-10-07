@@ -134,6 +134,32 @@ def test_ollama_pt_simple_messages():
     assert result["images"] == []
 
 
+def test_ollama_pt_renders_tool_calls_in_function_prompt_format():
+    messages: Final = [
+        {"role": "user", "content": "Fix calc.py"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": '{"filePath": "calc.py"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "def add(a, b): return a - b"},
+    ]
+
+    result: Final = ollama_pt(model="gemma4:31b", messages=messages)
+
+    assert result["prompt"] == (
+        "### User:\nFix calc.py\n\n"
+        '### Assistant:\n{"name": "read", "arguments": {"filePath": "calc.py"}}\n\n'
+        "### User:\ndef add(a, b): return a - b\n\n"
+    )
+
+
 def test_ollama_pt_consecutive_user_messages():
     """Test handling consecutive user messages"""
     messages = [
