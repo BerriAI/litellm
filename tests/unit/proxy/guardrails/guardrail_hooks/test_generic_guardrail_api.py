@@ -6,6 +6,7 @@ specifically focusing on metadata extraction and passing.
 """
 
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -15,6 +16,7 @@ import litellm
 from litellm import ModelResponse
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -22,7 +24,12 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
-from litellm.types.utils import Choices, Message
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    GenericGuardrailAPIInputs,
+    Message,
+)
 
 
 @pytest.fixture
@@ -2141,3 +2148,47 @@ class TestFailOnError:
                     request_data={},
                     input_type="response",
                 )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_rewritten_tool_calls() -> None:
+    original_tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1",
+        type="function",
+        function={"name": "read_file", "arguments": '{"path": "/private/data"}'},
+    )
+    rewritten_tool_calls: Final = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "arguments": '{"path": "[REDACTED]"}',
+            },
+        }
+    ]
+
+    def respond(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"action": "GUARDRAIL_INTERVENED", "tool_calls": rewritten_tool_calls},
+        )
+
+    async_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    generic_guardrail: Final = GenericGuardrailAPI(
+        api_base="https://api.test.guardrail.com",
+        async_handler=async_handler,
+    )
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": [], "tool_calls": [original_tool_call]}
+    try:
+        result: Final[GenericGuardrailAPIInputs] = (
+            await generic_guardrail.apply_guardrail(  # pyright: ignore[reportUnknownMemberType]  # legacy request_data
+                inputs=inputs,
+                request_data={},
+                input_type="response",
+            )
+        )
+    finally:
+        await async_handler.close()
+
+    assert result.get("tool_calls") == rewritten_tool_calls

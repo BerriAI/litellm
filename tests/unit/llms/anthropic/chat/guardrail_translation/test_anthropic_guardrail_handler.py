@@ -6,19 +6,18 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
-from typing import Any, Literal, Optional
+from typing import Any, Final, Literal, Optional, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
+from litellm.types.utils import AnthropicMessagesResponse, GenericGuardrailAPIInputs
 
 
 class MockPassThroughGuardrail(CustomGuardrail):
@@ -2195,6 +2194,48 @@ class ToolCallArgumentsMaskingGuardrail(InputsRecordingGuardrail):
         for tool_call, masked_tool_call in zip(tool_calls, masked):
             tool_call["function"]["arguments"] = masked_tool_call["function"]["arguments"]
         return outputs
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_output_writes_masked_tool_call_into_tool_use() -> None:
+    handler: Final = AnthropicMessagesHandler()
+    guardrail: Final = ToolCallArgumentsMaskingGuardrail(return_copies=True)
+    response: Final = cast(
+        AnthropicMessagesResponse,
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "Bash",
+                    "input": {"cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"},
+                }
+            ],
+            "stop_reason": "tool_use",
+        },
+    )
+
+    result: Final[AnthropicMessagesResponse] = (
+        await handler.process_output_response(  # pyright: ignore[reportUnknownMemberType]  # legacy request_data
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+    )
+
+    content: Final = result.get("content")
+    assert isinstance(content, list)
+    tool_use: Final = content[0]
+    assert isinstance(tool_use, dict)
+    assert tool_use == {
+        "type": "tool_use",
+        "id": "toolu_01",
+        "name": "Bash",
+        "input": {"cmd": "AWS_ACCESS_KEY_ID=[BLOCKED] aws sts get-caller-identity"},
+    }
 
 
 class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:

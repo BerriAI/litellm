@@ -143,6 +143,12 @@ class _TextAttrBlock(Protocol):
     text: str
 
 
+@runtime_checkable
+class _ToolUseAttrBlock(Protocol):
+    name: str
+    input: dict[str, object]
+
+
 class _WritableMessage(Protocol):
     @overload
     def get(self, key: str, /) -> object | None: ...
@@ -248,6 +254,19 @@ def _write_back_tool_use(
     block["input"] = rewritten_input
     if shape.name is not None and shape.name != block.get("name"):
         block["name"] = shape.name
+
+
+def _write_back_output_tool_use(block: object, shape: _ToolCallShape, rewritten_input: Mapping[str, object]) -> None:
+    if isinstance(block, dict):
+        writable_block: Final = cast(_WritableMessage, block)
+        writable_block["input"] = dict(rewritten_input)
+        if shape.name is not None and shape.name != writable_block.get("name"):
+            writable_block["name"] = shape.name
+        return
+    if isinstance(block, _ToolUseAttrBlock):
+        block.input = dict(rewritten_input)
+        if shape.name is not None and shape.name != block.name:
+            block.name = shape.name
 
 
 @dataclass(frozen=True, slots=True)
@@ -1166,6 +1185,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             task_mappings,
             tool_calls_to_check,
         )
+        pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check or tool_calls_to_check:
@@ -1191,6 +1211,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+            self._apply_guardrail_tool_calls_to_output(
+                response_content=response_content,
+                pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                returned_tool_calls=guardrailed_inputs.get("tool_calls"),
+                guardrail_name=guardrail_to_apply.guardrail_name,
+            )
 
             # Step 3: Map guardrail responses back to original response structure
             await self._apply_guardrail_responses_to_output(
@@ -1202,6 +1228,35 @@ class AnthropicMessagesHandler(BaseTranslation):
         verbose_proxy_logger.debug("Anthropic Messages: Processed output response: %s", response)
 
         return response
+
+    @classmethod
+    def _apply_guardrail_tool_calls_to_output(
+        cls,
+        response_content: Sequence[object],
+        pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        returned_tool_calls: Sequence[object] | None,
+        guardrail_name: str | None,
+    ) -> None:
+        if returned_tool_calls is None or len(returned_tool_calls) != len(pre_guardrail_tool_calls):
+            return
+        post_guardrail_tool_calls: Final = _tool_call_shapes(returned_tool_calls)
+        tool_use_blocks: Final = tuple(
+            block
+            for block in response_content
+            if (fields := cls._output_block_fields(block)) is not None and _is_client_tool_use(fields[1])
+        )
+        rewrites: Final = tuple(
+            (block, after, _rewritten_tool_use_input(after.arguments))
+            for block, before, after in zip(tool_use_blocks, pre_guardrail_tool_calls, post_guardrail_tool_calls)
+            if before != after
+        )
+        applicable: Final = tuple(
+            (block, after, rewritten_input) for block, after, rewritten_input in rewrites if rewritten_input is not None
+        )
+        if len(tool_use_blocks) != len(pre_guardrail_tool_calls) or len(applicable) != len(rewrites):
+            raise unappliable_request_rewrite(guardrail_name)
+        for block, after, rewritten_input in applicable:
+            _write_back_output_tool_use(block, after, rewritten_input)
 
     async def process_output_streaming_response(
         self,
