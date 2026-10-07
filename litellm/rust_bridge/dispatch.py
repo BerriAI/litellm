@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Final, Generic, TypeAlias, TypeVar
 
 from litellm.analytics import track_async, track_sync
+from litellm.litellm_core_utils.payload_shapes import capture_result, native_call_arguments
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule, Rules
@@ -83,10 +84,16 @@ class PublicDispatch(Generic[RequestT]):
         request: Final = self.request(args, kwargs)
         if request is None or (self.bypass is not None and self.bypass(request)):
             return python(*args, **kwargs)
+
+        def invoke(hook: NativeT) -> ResultT:
+            arguments: Final = native_call_arguments(python, args, kwargs)
+            result: Final = native(hook, request, args, arguments)
+            return capture_result(result, arguments.get("litellm_call_id"))
+
         return runtime.run(
             self.context(request),
             binding=binding,
-            native=track_sync(lambda hook: native(hook, request, args, kwargs), self.route.value),
+            native=track_sync(invoke, self.route.value),
             python=lambda: python(*args, **kwargs),
             rules=selected_rules,
         )
@@ -116,10 +123,16 @@ class PublicDispatch(Generic[RequestT]):
         request: Final = self.request(args, kwargs)
         if request is None or (self.bypass is not None and self.bypass(request)):
             return await python(*args, **kwargs)
+
+        async def invoke(hook: NativeT) -> ResultT:
+            arguments: Final = native_call_arguments(python, args, kwargs)
+            result: Final = await native(hook, request, args, arguments)
+            return capture_result(result, arguments.get("litellm_call_id"))
+
         return await runtime.arun(
             self.context(request),
             binding=binding,
-            native=track_async(lambda hook: native(hook, request, args, kwargs), self.route.value),
+            native=track_async(invoke, self.route.value),
             python=lambda: python(*args, **kwargs),
             rules=selected_rules,
         )

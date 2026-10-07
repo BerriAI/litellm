@@ -25,6 +25,7 @@ mod processing;
 mod redaction;
 mod runtime;
 mod shape;
+mod shape_serde;
 
 pub use configuration::{DestinationConfig, DiagnosticPolicy, DiagnosticsConfig};
 pub use error::Error;

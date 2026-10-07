@@ -70,7 +70,14 @@ impl MessagesRoute {
         call: MessagesCall,
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
-        litellm_inference::diagnostic::call(async {
+        let received = litellm_tracing::payload::capture_id().is_none();
+        litellm_tracing::payload::capture(litellm_inference::diagnostic::call(async {
+            if received {
+                litellm_tracing::payload::record_serialized(
+                    litellm_tracing::payload::PayloadStage::RequestReceived,
+                    &call.body,
+                );
+            }
             let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
             litellm_inference::diagnostic::provider(
                 &prepared.body.model,
@@ -97,8 +104,26 @@ impl MessagesRoute {
                     source: source.clone(),
                 })
                 .await?;
-            Ok(cache.finish(output, &source).await)
-        })
+            let output = cache.finish(output, &source).await;
+            match output {
+                MessagesCallResponse::Complete(response) => {
+                    if !litellm_tracing::payload::host_normalizes_response() {
+                        litellm_tracing::payload::record_serialized(
+                            litellm_tracing::payload::PayloadStage::ResponseNormalized,
+                            &response,
+                        );
+                    }
+                    Ok(MessagesCallResponse::Complete(response))
+                }
+                MessagesCallResponse::Stream { head, chunks } => Ok(MessagesCallResponse::Stream {
+                    head,
+                    chunks: litellm_inference::payload::observe_sse(
+                        chunks,
+                        litellm_tracing::payload::PayloadStage::ResponseNormalized,
+                    ),
+                }),
+            }
+        }))
         .await
     }
 }

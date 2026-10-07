@@ -47,6 +47,10 @@ pub(super) async fn execute(
         model: context.model.clone(),
         provider: context.custom_llm_provider.clone(),
     };
+    litellm_tracing::payload::record(
+        litellm_tracing::payload::PayloadStage::RequestTransformed,
+        &body,
+    );
     let wire = interceptors
         .before_provider_request(
             WireRequest {
@@ -98,6 +102,10 @@ pub(super) async fn execute(
             })?;
 
             if !status.is_success() {
+                litellm_tracing::payload::record_json(
+                    litellm_tracing::payload::PayloadStage::ResponseReceived,
+                    &text,
+                );
                 return Err(Error::Transport(litellm_http::transport::Error::Http {
                     status: status.as_u16(),
                     body: truncate_error_body(&text),
@@ -115,11 +123,19 @@ pub(super) async fn execute(
                 .map_err(Error::post_call)?;
 
             let body: Value = serde_json::from_str(&text).map_err(|err| {
+                litellm_tracing::payload::record_json(
+                    litellm_tracing::payload::PayloadStage::ResponseReceived,
+                    &text,
+                );
                 Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
                     "chat completions response JSON",
                     err,
                 ))
             })?;
+            litellm_tracing::payload::record(
+                litellm_tracing::payload::PayloadStage::ResponseReceived,
+                &body,
+            );
             config
                 .transform_response(&model, ProviderChatResponseData { body })
                 .map_err(Error::from)

@@ -28,8 +28,10 @@ pub fn outbound_request(
     timeout: Option<Duration>,
 ) -> Result<OutboundRequest, litellm_http::Error> {
     let Authenticated { headers, signer } = authenticated;
-    match signer {
+    let request = match signer {
         None => OutboundRequest::json(url, headers, body, timeout),
         Some(signer) => OutboundRequest::signed_json(url, headers, body, timeout, &signer),
-    }
+    }?;
+    litellm_tracing::payload::record(litellm_tracing::payload::PayloadStage::RequestSent, body);
+    Ok(request)
 }
