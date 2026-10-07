@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final
@@ -25,7 +26,12 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionUsageBlock,
+)
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
@@ -90,6 +96,14 @@ class _OllamaGenerateResponse(TypedDict):
 
 
 _OLLAMA_GENERATE_RESPONSE: Final = TypeAdapter(_OllamaGenerateResponse)
+_JSON_CODE_FENCE: Final = re.compile(r"^```(?:json)?\s*(.*?)\s*(?:```)?$", re.DOTALL)
+_JSON_OBJECT_START: Final = re.compile(r"(?:```(?:json)?\s*)?\{")
+_JSON_OBJECT_PARTIAL_START: Final = re.compile(r"`{0,3}|```(?:j|js|jso|json)?\s*")
+
+
+def _strip_json_code_fence(text: str) -> str:
+    fenced: Final = _JSON_CODE_FENCE.match(text.strip())
+    return fenced.group(1) if fenced else text
 
 
 class OllamaConfig(BaseConfig):
@@ -319,7 +333,7 @@ class OllamaConfig(BaseConfig):
                 model_response.choices[0].finish_reason = "stop"
             else:
                 try:
-                    response_content: Final[object] = json.loads(response_text)
+                    response_content: Final[object] = json.loads(_strip_json_code_fence(response_text))
 
                     # Check if this is a function call format with name/arguments structure
                     if (
@@ -512,6 +526,50 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
         super().__init__(streaming_response, sync_stream, json_mode)
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
+        self.streamed_content: bool = False
+        self.held_content: str = ""
+        self.holding_json_object: bool = False
+
+    def _hold_json_object_start(self, content: str) -> str | None:
+        if self.streamed_content:
+            return content
+        self.held_content += content
+        if self.holding_json_object:
+            return None
+        candidate: Final = self.held_content.lstrip()
+        if _JSON_OBJECT_START.match(candidate):
+            self.holding_json_object = True
+            return None
+        if _JSON_OBJECT_PARTIAL_START.fullmatch(candidate):
+            return None
+        self.streamed_content = True
+        released: Final = self.held_content
+        self.held_content = ""
+        return released
+
+    def _flush_held_content(self, usage: ChatCompletionUsageBlock | None) -> GenericStreamingChunk:
+        held: Final = self.held_content
+        self.held_content = ""
+        try:
+            parsed: Final[object] = json.loads(_strip_json_code_fence(held))
+        except json.JSONDecodeError:
+            return GenericStreamingChunk(text=held, is_finished=True, finish_reason="stop", usage=usage)
+        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+            return GenericStreamingChunk(
+                text="",
+                tool_use=ChatCompletionToolCallChunk(
+                    id=f"call_{uuid.uuid4()}",
+                    type="function",
+                    function=ChatCompletionToolCallFunctionChunk(
+                        name=parsed["name"], arguments=json.dumps(parsed["arguments"])
+                    ),
+                    index=0,
+                ),
+                is_finished=True,
+                finish_reason="tool_calls",
+                usage=usage,
+            )
+        return GenericStreamingChunk(text=held, is_finished=True, finish_reason="stop", usage=usage)
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         return self.chunk_parser(json.loads(str_line))
@@ -538,6 +596,8 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         completion_tokens=eval_count,
                         total_tokens=prompt_eval_count + eval_count,
                     )
+                if self.held_content:
+                    return self._flush_held_content(usage)
                 return GenericStreamingChunk(
                     text=text,
                     is_finished=is_finished,
@@ -559,7 +619,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     if self.started_reasoning_content and not self.finished_reasoning_content:
                         reasoning_content = text
                     else:
-                        content = text
+                        content = self._hold_json_object_start(text)
 
                 return ModelResponseStream(
                     choices=[

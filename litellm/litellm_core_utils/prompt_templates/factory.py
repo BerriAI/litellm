@@ -250,26 +250,18 @@ def ollama_pt(
             assistant_content_str += convert_content_list_to_str(messages[msg_i])
 
             tool_calls = messages[msg_i].get("tool_calls")
-            ollama_tool_calls = []
             if tool_calls:
-                for call in tool_calls:
-                    call_id: str = call["id"]
-                    function_name: str = call["function"]["name"]
-                    arguments = json.loads(call["function"]["arguments"])
-
-                    ollama_tool_calls.append(
+                if assistant_content_str:
+                    assistant_content_str += "\n"
+                assistant_content_str += "\n".join(
+                    json.dumps(
                         {
-                            "id": call_id,
-                            "type": "function",
-                            "function": {
-                                "name": function_name,
-                                "arguments": arguments,
-                            },
+                            "name": call["function"]["name"],
+                            "arguments": json.loads(call["function"]["arguments"]),
                         }
                     )
-
-            if ollama_tool_calls:
-                assistant_content_str += f"Tool Calls: {json.dumps(ollama_tool_calls, indent=2)}"
+                    for call in tool_calls
+                )
 
             msg_i += 1
 
