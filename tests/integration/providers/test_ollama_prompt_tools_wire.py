@@ -8,6 +8,9 @@ from typing import Final
 import anthropic
 import openai
 import pytest
+from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
+from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -55,7 +58,14 @@ _RESPONSES_TOOL: Final[dict[str, JsonValue]] = {
 _NO_CACHE: Final[dict[str, JsonValue]] = {"no-cache": True}
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _RAW_ANTHROPIC_EVENTS: Final = frozenset(
-    {"message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop"}
+    {
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    }
 )
 
 
@@ -186,6 +196,16 @@ def _async_anthropic_client(gateway: Gateway) -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0)
 
 
+def _stream_choices(chunks: Sequence[ChatCompletionChunk]) -> Iterator[ChunkChoice]:
+    for chunk in chunks:
+        yield from chunk.choices
+
+
+def _delta_tool_calls(choices: Sequence[ChunkChoice]) -> Iterator[ChoiceDeltaToolCall]:
+    for choice in choices:
+        yield from choice.delta.tool_calls or ()
+
+
 def _first_turn() -> list[dict[str, JsonValue]]:
     return [{"role": "user", "content": _QUESTION}]
 
@@ -197,7 +217,11 @@ def _second_turn(result: JsonValue = _RESULT) -> list[dict[str, JsonValue]]:
             "role": "assistant",
             "content": None,
             "tool_calls": [
-                {"id": _CALL_ID, "type": "function", "function": {"name": "get_weather", "arguments": json.dumps(_ARGUMENTS)}}
+                {
+                    "id": _CALL_ID,
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": json.dumps(_ARGUMENTS)},
+                }
             ],
         },
         {"role": "tool", "tool_call_id": _CALL_ID, "content": result},
@@ -207,7 +231,10 @@ def _second_turn(result: JsonValue = _RESULT) -> list[dict[str, JsonValue]]:
 def _anthropic_second_turn() -> list[dict[str, JsonValue]]:
     return [
         {"role": "user", "content": _QUESTION},
-        {"role": "assistant", "content": [{"type": "tool_use", "id": _CALL_ID, "name": "get_weather", "input": _ARGUMENTS}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": _CALL_ID, "name": "get_weather", "input": _ARGUMENTS}],
+        },
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": _CALL_ID, "content": _RESULT}]},
     ]
 
@@ -249,7 +276,8 @@ def test_openai_sdk_tool_request_reaches_ollama_as_an_instructed_prompt(gateway:
         assert call.type == "function"
         assert call.function.name == "get_weather"
         assert json.loads(call.function.arguments) == _ARGUMENTS
-        assert completion.usage is not None and (completion.usage.prompt_tokens, completion.usage.completion_tokens) == (30, 12)
+        assert completion.usage is not None
+        assert (completion.usage.prompt_tokens, completion.usage.completion_tokens) == (30, 12)
         body: Final = _only_generate(wire)
         assert body["stream"] is False
         prompt: Final = _prompt_of(body)
@@ -289,11 +317,12 @@ async def test_async_openai_sdk_stream_flushes_the_held_tool_call_once(gateway: 
         )
         chunks: Final = [chunk async for chunk in stream]
         assert {chunk.id for chunk in chunks} == {chunks[0].id}
-        deltas: Final = [call for chunk in chunks for choice in chunk.choices for call in (choice.delta.tool_calls or [])]
+        choices: Final = tuple(_stream_choices(chunks))
+        deltas: Final = tuple(_delta_tool_calls(choices))
         assert len(deltas) == 1, deltas
         assert deltas[0].function is not None and deltas[0].function.name == "get_weather"
         assert json.loads(deltas[0].function.arguments or "") == _ARGUMENTS
-        assert [choice.finish_reason for chunk in chunks for choice in chunk.choices if choice.finish_reason] == ["tool_calls"]
+        assert [choice.finish_reason for choice in choices if choice.finish_reason] == ["tool_calls"]
         usages: Final = [chunk.usage for chunk in chunks if chunk.usage is not None]
         assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == [(30, 12)]
         body: Final = _only_generate(wire)
@@ -314,9 +343,10 @@ async def test_async_openai_sdk_stream_answers_the_tool_result_in_plain_text(gat
             extra_body={"cache": _NO_CACHE},
         )
         chunks: Final = [chunk async for chunk in stream]
-        assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices) == _ANSWER
-        assert [call for chunk in chunks for choice in chunk.choices for call in (choice.delta.tool_calls or [])] == []
-        assert [choice.finish_reason for chunk in chunks for choice in chunk.choices if choice.finish_reason] == ["stop"]
+        choices: Final = tuple(_stream_choices(chunks))
+        assert "".join(choice.delta.content or "" for choice in choices) == _ANSWER
+        assert tuple(_delta_tool_calls(choices)) == ()
+        assert [choice.finish_reason for choice in choices if choice.finish_reason] == ["stop"]
         body: Final = _only_generate(wire)
         assert body["stream"] is True
         _assert_tool_turn(_prompt_of(body))
@@ -491,7 +521,8 @@ async def test_async_openai_sdk_responses_stream_answers_the_function_output_in_
         assert "".join(event.delta for event in events if event.type == "response.output_text.delta") == _ANSWER
         completed: Final = [event for event in events if event.type == "response.completed"]
         assert len(completed) == 1 and completed[0].response.output_text == _ANSWER
-        assert [event.type for event in events if event.type == "response.output_item.done"] == ["response.output_item.done"]
+        done_types: Final = [event.type for event in events if event.type == "response.output_item.done"]
+        assert done_types == ["response.output_item.done"]
         body: Final = _only_generate(wire)
         assert body["stream"] is True
         _assert_tool_turn(_prompt_of(body))
@@ -568,7 +599,9 @@ def test_ollama_model_not_found_reaches_the_caller_after_one_attempt(gateway: Ga
     reply: Final = Reply(status=404, body=json.dumps({"error": message}).encode())
     with _ollama_server(lambda _: reply) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
-        code, text = _post(gateway, "/v1/chat/completions", {"model": model, "messages": _first_turn(), "tools": [_WEATHER_TOOL]})
+        code, text = _post(
+            gateway, "/v1/chat/completions", {"model": model, "messages": _first_turn(), "tools": [_WEATHER_TOOL]}
+        )
         assert code == 404, text
         assert message in text, text
         _assert_instructed_once(_prompt_of(_only_generate(wire)), "get_weather")
@@ -585,7 +618,9 @@ def test_ollama_server_error_on_the_tool_result_turn_does_not_take_the_deploymen
 
     with _ollama_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
-        code, text = _post(gateway, "/v1/chat/completions", {"model": model, "messages": _second_turn(), "tools": [_WEATHER_TOOL]})
+        code, text = _post(
+            gateway, "/v1/chat/completions", {"model": model, "messages": _second_turn(), "tools": [_WEATHER_TOOL]}
+        )
         assert code == 500, text
         assert failure in text, text
         payload: Final = _post_chat(gateway, model, _second_turn(), tools=[_WEATHER_TOOL])
@@ -610,7 +645,9 @@ def test_ollama_server_error_on_the_tool_result_turn_does_not_take_the_deploymen
         ),
     ],
 )
-def test_tool_result_content_shapes_reach_the_prompt(gateway: Gateway, result: JsonValue, forwarded: str | None) -> None:
+def test_tool_result_content_shapes_reach_the_prompt(
+    gateway: Gateway, result: JsonValue, forwarded: str | None
+) -> None:
     with _ollama_server(lambda _: _generate_reply(_ANSWER)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         payload: Final = _post_chat(gateway, model, _second_turn(result), tools=[_WEATHER_TOOL])
@@ -673,7 +710,9 @@ def test_a_non_function_json_answer_is_returned_as_text(gateway: Gateway) -> Non
 def test_int_tool_result_content_fails_in_the_response_body_and_leaves_the_deployment_serving(gateway: Gateway) -> None:
     with _ollama_server(lambda _: _generate_reply(_ANSWER)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
-        code, text = _post(gateway, "/v1/chat/completions", {"model": model, "messages": _second_turn(22), "tools": [_WEATHER_TOOL]})
+        code, text = _post(
+            gateway, "/v1/chat/completions", {"model": model, "messages": _second_turn(22), "tools": [_WEATHER_TOOL]}
+        )
         assert code >= 400, text
         error: Final = _JSON_OBJECT.validate_json(text)["error"]
         assert isinstance(error, dict) and isinstance(error["message"], str) and error["message"], text

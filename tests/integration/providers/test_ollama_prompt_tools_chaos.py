@@ -339,15 +339,13 @@ async def test_dropped_ollama_connections_fail_their_callers_and_the_rest_keep_t
 
 
 def _chaos_config(wire: Wire, tmp_path: Path) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["model_list"] = [
-        {
-            "model_name": _CONFIG_MODEL,
-            "litellm_params": {"model": f"ollama/{_BACKEND}", "api_base": wire.url, "api_key": _API_KEY},
-        }
-    ]
+    base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    deployment: Final = {
+        "model_name": _CONFIG_MODEL,
+        "litellm_params": {"model": f"ollama/{_BACKEND}", "api_base": wire.url, "api_key": _API_KEY},
+    }
     path: Final = tmp_path / "ollama-prompt-tools-chaos.yaml"
-    path.write_text(yaml.safe_dump(config))
+    path.write_text(yaml.safe_dump({**base, "model_list": [deployment]}))
     return path
 
 
