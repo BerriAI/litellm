@@ -3854,7 +3854,7 @@ class TestMCPServerManager:
             _should_strip_caller_authorization(
                 mcp_server=oauth_delegate,
                 raw_headers={
-                    "x-litellm-api-key": "Bearer sk-1234",
+                    "x-litellm-api-key": "Bearer sk-9876",
                     "authorization": "Bearer upstream",
                 },
                 user_api_key_auth=UserAPIKeyAuth(user_id="alice", api_key=None),
@@ -9186,6 +9186,8 @@ class TestMCPServerTimestamps:
                 authorization_url="https://idp.example.com/authorize",
                 token_url="https://idp.example.com/token",
                 registration_url="https://idp.example.com/register",
+                issuer="https://idp.example.com",
+                authorization_response_iss_parameter_supported=True,
             )
 
         blipped = MCPServer(
@@ -9200,6 +9202,16 @@ class TestMCPServerTimestamps:
         assert blipped.authorization_url == "https://idp.example.com/authorize"
         assert blipped.token_url == "https://idp.example.com/token"
         assert blipped.registration_url == "https://idp.example.com/register"
+        assert blipped.issuer == "https://idp.example.com"
+        assert blipped.authorization_response_iss_parameter_supported is True
+        fallback = MCPServerManager._merge_discovered_oauth_metadata(
+            blipped, MCPOAuthMetadata(from_origin_fallback=True),
+        )
+        assert fallback.authorization_response_iss_parameter_supported is True
+        refreshed = MCPServerManager._merge_discovered_oauth_metadata(
+            fallback, MCPOAuthMetadata(discovered_issuer="https://idp.example.com"),
+        )
+        assert refreshed.authorization_response_iss_parameter_supported is False
 
         same_authorize = MCPServer(
             server_id="s1",
@@ -9316,8 +9328,8 @@ class TestMCPServerTimestamps:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import _issuer_matches
 
         assert _issuer_matches("https://mcp.slack.com", "https://mcp.slack.com")
-        assert _issuer_matches("https://MCP.slack.com/", "https://mcp.slack.com")
-        assert _issuer_matches("https://mcp.slack.com:443", "https://mcp.slack.com")
+        assert not _issuer_matches("https://MCP.slack.com/", "https://mcp.slack.com")
+        assert not _issuer_matches("https://mcp.slack.com:443", "https://mcp.slack.com")
         assert _issuer_matches("https://login.example.com/tenant/v2.0", "https://login.example.com/tenant/v2.0")
         assert not _issuer_matches("https://attacker.example.com", "https://mcp.slack.com")
         assert not _issuer_matches("https://login.example.com/other/v2.0", "https://login.example.com/tenant/v2.0")

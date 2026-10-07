@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use crate::{
+    SpendMatch,
     normalize::{CallKey, ObservationType},
     query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
 };
@@ -25,8 +26,12 @@ pub(super) struct Resolution<'a> {
     ownership: Ownership<'a>,
     spend: &'a [SpendRow],
     types: HashMap<&'a str, ObservationType>,
+    tool_failures: HashMap<&'a str, &'a TraceSpansRow>,
     pub(super) model_calls: Vec<usize>,
+    call_matches: HashMap<usize, CallMatch<'a>>,
 }
+
+pub(super) type CallMatch<'a> = (Option<Requests<'a>>, SpendMatch);
 
 impl<'a> Resolution<'a> {
     pub(super) fn new(rows: &'a [TraceSpansRow], spend: &'a [SpendRow]) -> Self {
@@ -35,7 +40,7 @@ impl<'a> Resolution<'a> {
         let types: HashMap<&str, ObservationType> = (0..rows.len())
             .map(|index| (graph.id(index), resolved_type(&graph, index, named_agents)))
             .collect();
-        let model_calls = (0..rows.len())
+        let model_calls: Vec<usize> = (0..rows.len())
             .filter(|index| {
                 types[graph.id(*index)] == ObservationType::Llm
                     && !graph
@@ -44,7 +49,7 @@ impl<'a> Resolution<'a> {
                         .any(|descendant| types[graph.id(descendant)] == ObservationType::Llm)
             })
             .collect();
-        Self {
+        let resolution = Self {
             ownership: Ownership {
                 team_id: &rows[0].team_id,
                 api_key_hash: &rows[0].api_key_hash,
@@ -53,12 +58,54 @@ impl<'a> Resolution<'a> {
             graph,
             spend,
             types,
+            tool_failures: rows
+                .iter()
+                .filter(|row| {
+                    row.framework == "claude-code"
+                        && row.name == "claude_code.tool_result"
+                        && !row.tool_call_id.is_empty()
+                        && row.status == crate::SpanStatus::Error
+                })
+                .map(|row| (row.tool_call_id.as_str(), row))
+                .collect(),
             model_calls,
+            call_matches: HashMap::new(),
+        };
+        let call_matches = resolution
+            .model_calls
+            .iter()
+            .map(|call| (*call, resolution.resolve_call_match(*call)))
+            .collect();
+        Self {
+            call_matches,
+            ..resolution
         }
     }
 
     pub(super) fn row(&self, index: usize) -> &'a TraceSpansRow {
         &self.graph.rows[index]
+    }
+
+    pub(super) fn status_source(&self, index: usize) -> &'a TraceSpansRow {
+        let row = self.row(index);
+        if row.framework != "claude-code"
+            || row.kind != ObservationType::Tool
+            || row.status == crate::SpanStatus::Error
+        {
+            return row;
+        }
+        self.graph
+            .children(index)
+            .into_iter()
+            .map(|child| self.row(child))
+            .find(|child| {
+                child.name == "claude_code.tool.execution"
+                    && !row.tool_call_id.is_empty()
+                    && child.tool_call_id == row.tool_call_id
+                    && child.status == crate::SpanStatus::Error
+            })
+            .or_else(|| self.tool_failures.get(row.tool_call_id.as_str()).copied())
+            .unwrap_or(row)
     }
 
     pub(super) fn kind(&self, index: usize) -> ObservationType {
@@ -85,7 +132,24 @@ impl<'a> Resolution<'a> {
         spend::requests(self.row(index), &self.ownership, self.spend)
     }
 
+    pub(super) fn call_match(&self, call: usize) -> Option<&CallMatch<'a>> {
+        self.call_matches.get(&call)
+    }
+
     pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
+        self.call_match(call)
+            .and_then(|(requests, _)| requests.clone())
+    }
+
+    fn resolve_call_match(&self, call: usize) -> CallMatch<'a> {
+        if let Some(requests) = self.resolve_call_requests(call) {
+            return (Some(requests), SpendMatch::Matched);
+        }
+        let evidence = self.requests(call);
+        (None, evidence.unmatched_reason())
+    }
+
+    fn resolve_call_requests(&self, call: usize) -> Option<Requests<'a>> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
             self.kind(*ancestor) == ObservationType::Llm
                 && self

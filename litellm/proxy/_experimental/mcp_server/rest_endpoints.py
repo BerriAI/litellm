@@ -570,9 +570,8 @@ if MCP_AVAILABLE:
             "alias": server.alias,
         }
         return [
-            ListMCPToolsRestAPIResponseObject(
-                **tool.model_dump(by_alias=True, exclude={"mcp_info"}),
-                mcp_info=enriched_mcp_info,
+            ListMCPToolsRestAPIResponseObject.model_validate(
+                {**tool.model_dump(by_alias=True, exclude={"mcp_info"}), "mcp_info": enriched_mcp_info}
             )
             for tool in tools
         ]

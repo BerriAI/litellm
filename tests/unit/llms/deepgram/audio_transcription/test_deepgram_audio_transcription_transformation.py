@@ -3,6 +3,7 @@ import os
 import pathlib
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 
@@ -525,3 +526,82 @@ def test_reconstruct_diarized_transcript_multiple_speaker_changes():
     assert "Hello" in result
     assert "back" in result
     assert "Thanks" in result
+
+
+def _deepgram_payload(alternative: dict[str, object], channel_fields: dict[str, object]) -> dict[str, object]:
+    return {
+        "metadata": {"duration": 2.5},
+        "results": {"channels": [{"alternatives": [alternative], **channel_fields}]},
+    }
+
+
+def _transform_deepgram_response(payload: object) -> TranscriptionResponse:
+    return DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(
+        httpx.Response(200, json=payload)
+    )
+
+
+@pytest.mark.parametrize(
+    ("channel_fields", "expected_language"),
+    [
+        ({}, "en"),
+        ({"detected_language": None}, "en"),
+        ({"detected_language": ""}, "en"),
+        ({"detected_language": "fr"}, "fr"),
+        ({"detected_language": "de", "language_confidence": 0.98}, "de"),
+        ({"detected_language": ["es", "en"]}, ["es", "en"]),
+    ],
+)
+def test_transform_response_reports_the_detected_language_or_english(
+    channel_fields: dict[str, object], expected_language: object
+):
+    response = _transform_deepgram_response(_deepgram_payload({"transcript": "bonjour"}, channel_fields))
+
+    assert response.text == "bonjour"
+    assert response["language"] == expected_language
+    assert response["duration"] == 2.5
+    assert "words" not in response
+
+
+@pytest.mark.parametrize(
+    ("words", "expected"),
+    [
+        ([], []),
+        ("", []),
+        ({}, []),
+        (
+            [{"word": "hello", "start": 0.0, "end": 0.5, "confidence": 0.9}],
+            [{"word": "hello", "start": 0.0, "end": 0.5}],
+        ),
+        (
+            [{"word": None, "start": "0.1", "end": [2]}, {"word": "b", "start": 1, "end": 2}],
+            [{"word": None, "start": "0.1", "end": [2]}, {"word": "b", "start": 1, "end": 2}],
+        ),
+    ],
+)
+def test_transform_response_maps_words_to_openai_word_timestamps(words: object, expected: list[dict[str, object]]):
+    payload = _deepgram_payload({"transcript": "hello", "words": words}, {})
+
+    response = _transform_deepgram_response(payload)
+
+    assert response["words"] == expected
+    assert response._hidden_params == payload
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        "not a list",
+        ["not an object"],
+        [{"word": "hello", "start": 0.0, "end": 0.5}, None],
+        [{"word": "hello", "start": 0.0, "end": 0.5}, ["nested"]],
+        [{"word": "hello", "start": 0.0}],
+    ],
+)
+def test_transform_response_wraps_malformed_words_with_the_raw_body(words: object):
+    raw_response = httpx.Response(200, json=_deepgram_payload({"transcript": "hello", "words": words}, {}))
+
+    with pytest.raises(ValueError, match="Error transforming Deepgram response: ") as exc_info:
+        DeepgramAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
+
+    assert str(exc_info.value).endswith(f"\nResponse: {raw_response.text}")

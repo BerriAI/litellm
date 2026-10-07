@@ -2,9 +2,10 @@ import json
 from datetime import datetime
 from typing import Annotated, Any, Final, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from typing_extensions import Self
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
@@ -27,7 +28,7 @@ def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, objec
 MCPInfo = Annotated[dict[str, Any], AfterValidator(_validate_mcp_protocol_metadata)]
 
 
-class MCPOAuthMetadata(BaseModel):
+class MCPOAuthMetadata(LiteLLMBaseModel):
     scopes: list[str] | None = None
     """Resource-driven scopes for the authorization request: the RFC 9728 protected-resource
     ``scopes_supported``, or the ``scope`` from the WWW-Authenticate 401 challenge when the resource
@@ -38,6 +39,7 @@ class MCPOAuthMetadata(BaseModel):
     authorization_url: str | None = None
     token_url: str | None = None
     registration_url: str | None = None
+    authorization_response_iss_parameter_supported: bool = False
     discovered_issuer: str | None = None
     """The ``issuer`` the authorization-server metadata document self-attests (RFC 8414). Persisted
     trust-on-first-use as the server's ``issuer`` when none is configured, so that later rebuilds
@@ -49,7 +51,7 @@ class MCPOAuthMetadata(BaseModel):
     usable in memory but must never be persisted as configuration."""
 
 
-class MCPOAuthIdentityBinding(BaseModel):
+class MCPOAuthIdentityBinding(LiteLLMBaseModel):
     """Per-server policy binding stored per-user OAuth credentials to the authenticated LiteLLM caller.
 
     When enabled for an interactive oauth2 server, the token relay validates the upstream OIDC
@@ -69,7 +71,7 @@ class MCPOAuthIdentityBinding(BaseModel):
     require_email_verified: bool = True
 
 
-class PinnedMCPTool(BaseModel):
+class PinnedMCPTool(LiteLLMBaseModel):
     """One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -86,7 +88,7 @@ def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
     return _PINNED_TOOLS.validate_python(decoded or None)
 
 
-class MCPServer(BaseModel):
+class MCPServer(LiteLLMBaseModel):
     server_id: str
     name: str
     alias: str | None = None
@@ -118,6 +120,9 @@ class MCPServer(BaseModel):
     client_secret: str | None = None
     issuer: str | None = None
     issuer_is_anchored: bool = False
+    authorization_response_iss_parameter_supported: bool = False
+    dcr_issuer: str | None = None
+    dcr_server_url: str | None = None
     scopes: list[str] | None = None
     authorization_url: str | None = None
     token_url: str | None = None
@@ -209,7 +214,7 @@ class MCPServer(BaseModel):
     dcr_bridge: bool | None = None
     per_server_oauth_discovery: bool = False
     is_byok: bool = False
-    byok_description: list[str] = []
+    byok_description: list[str] = Field(default=[])
     byok_api_key_help_url: str | None = None
     source_url: str | None = None
     created_at: datetime | None = None

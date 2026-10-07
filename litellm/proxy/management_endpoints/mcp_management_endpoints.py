@@ -131,11 +131,13 @@ if MCP_AVAILABLE:
             validate_tool_name,  # pyright: ignore[reportAssignmentType]
         )
     except ImportError:
-        from pydantic import BaseModel
+        from pydantic import Field
 
-        class _ToolNameValidationResult(BaseModel):
+        from litellm.types.llms.base import LiteLLMBaseModel
+
+        class _ToolNameValidationResult(LiteLLMBaseModel):
             is_valid: bool = True
-            warnings: list[str] = []
+            warnings: list[str] = Field(default=[])
 
         def validate_tool_name(name: str) -> _ToolNameValidationResult:
             return _ToolNameValidationResult()
@@ -157,13 +159,16 @@ if MCP_AVAILABLE:
         get_user_env_vars,
         get_user_env_vars_bulk,
         get_user_oauth_credential,
+        is_resubmitted_oauth_client,
         list_server_user_credentials,
         list_user_oauth_credentials,
         mcp_oauth_token_identity,
         merge_user_env_vars,
+        oauth_credentials_for_upstream_edit,
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
         set_mcp_server_pinned_tools,
+        stale_mcp_auth_fields,
         store_user_credential,
         store_user_oauth_credential,
         update_mcp_server,
@@ -530,6 +535,8 @@ if MCP_AVAILABLE:
         except Exception as e:
             verbose_proxy_logger.debug("Failed to write temporary MCP server to Redis cache: %s", e)
 
+    _CACHED_VALUE: Final = TypeAdapter(object)
+
     @with_service_target(MCP_SERVERS_TARGET)
     async def _get_temporary_mcp_server_from_redis(
         server_id: str,
@@ -547,8 +554,8 @@ if MCP_AVAILABLE:
             return None
 
         try:
-            cached_server: Final = await cache_backend.async_get_cache(
-                key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}"
+            cached_server: Final = _CACHED_VALUE.validate_python(
+                await cache_backend.async_get_cache(key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}")
             )
         except Exception as e:
             verbose_proxy_logger.debug("Failed reading temporary MCP server from Redis cache: %s", e)
@@ -870,6 +877,9 @@ if MCP_AVAILABLE:
         ("authentication_token", "auth_value"),
         ("client_id", "client_id"),
         ("client_secret", "client_secret"),
+        ("token_endpoint_auth_method", "token_endpoint_auth_method"),
+        ("dcr_issuer", "dcr_issuer"),
+        ("dcr_server_url", "dcr_server_url"),
         ("scopes", "scopes"),
         ("aws_access_key_id", "aws_access_key_id"),
         ("aws_secret_access_key", "aws_secret_access_key"),
@@ -890,30 +900,73 @@ if MCP_AVAILABLE:
             value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS and key != "scopes"
         )
 
+    def _oauth_session_changes_upstream(
+        payload: NewMCPServerRequest, existing: MCPServer | LiteLLM_MCPServerTable
+    ) -> bool:
+        return existing.auth_type == MCPAuth.oauth2 and (
+            payload.url != existing.url
+            or ("issuer" in payload.model_fields_set and (payload.issuer or None) != existing.issuer)
+            or (payload.auth_type is not None and payload.auth_type != existing.auth_type)
+        )
+
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
-        if not payload.server_id or _has_non_admin_config_credentials(payload.credentials):
+        if not payload.server_id:
             return payload
 
         existing_server: Final = global_mcp_server_manager.get_mcp_server_by_id(payload.server_id)
         if existing_server is None:
             return payload
-
-        inherited_credentials: dict[str, object] = {
+        upstream_changed: Final = _oauth_session_changes_upstream(payload, existing_server)
+        issuer_changed: Final = (
+            "issuer" in payload.model_fields_set and (payload.issuer or None) != existing_server.issuer
+        )
+        cleared: Final = (
+            stale_mcp_auth_fields(
+                payload.model_dump(exclude_unset=True),
+                lambda field: (
+                    getattr(existing_server, f"configured_{field}", None) or getattr(existing_server, field, None)
+                ),
+            )
+            if upstream_changed
+            else {}
+        )
+        resolved_payload: Final = (
+            payload.model_copy(update={**cleared, "oauth2_flow": payload.oauth2_flow}) if upstream_changed else payload
+        )
+        supplied: Final = dict(resolved_payload.credentials or {})
+        existing_credentials: Final[dict[str, object]] = {
             credential_key: value
             for server_attr, credential_key in _INHERITED_CREDENTIAL_FIELDS
             if (value := getattr(existing_server, server_attr, None))
         }
+        resubmitted_client: Final = is_resubmitted_oauth_client(supplied, existing_credentials)
+        if _has_non_admin_config_credentials(resolved_payload.credentials) and not (
+            upstream_changed and resubmitted_client
+        ):
+            return resolved_payload
+
+        bound_credentials: Final = (
+            oauth_credentials_for_upstream_edit(
+                {**existing_credentials, **supplied},
+                existing_server.issuer,
+                existing_server.url,
+                issuer_changed=issuer_changed
+                or (resolved_payload.auth_type or existing_server.auth_type) != existing_server.auth_type,
+            )
+            if upstream_changed
+            else existing_credentials
+        )
         # The gate above guarantees anything still supplied is admin config, which the admin just
         # typed, so it wins over the stored value.
-        inherited_credentials = {**inherited_credentials, **dict(payload.credentials or {})}
+        inherited_credentials: Final = bound_credentials if upstream_changed else {**bound_credentials, **supplied}
 
         if not inherited_credentials:
-            return payload
+            return resolved_payload.model_copy(update={"credentials": {}}) if upstream_changed else resolved_payload
 
         try:
-            return payload.model_copy(update={"credentials": inherited_credentials})
+            return resolved_payload.model_copy(update={"credentials": inherited_credentials})
         except AttributeError:
             pass
 
@@ -937,15 +990,20 @@ if MCP_AVAILABLE:
         supplied: Final = payload.server_id
         if not supplied:
             return str(uuid.uuid4())
-        if global_mcp_server_manager.get_mcp_server_by_id(supplied) is not None:
-            return supplied
+        registered: Final = global_mcp_server_manager.get_mcp_server_by_id(supplied)
+        if registered is not None:
+            return str(uuid.uuid4()) if _oauth_session_changes_upstream(payload, registered) else supplied
         prisma_client: Final = _get_prisma_client_or_none()
         if prisma_client is None:
             return supplied
         # A draft is another session's row, not a saved server, so re-supplying an id this
         # endpoint previously handed back must not let a later session adopt its configuration.
         existing: Final = await get_mcp_server(prisma_client, supplied)
-        if existing is None or existing.approval_status == MCPApprovalStatus.draft:
+        if (
+            existing is None
+            or existing.approval_status == MCPApprovalStatus.draft
+            or _oauth_session_changes_upstream(payload, existing)
+        ):
             return str(uuid.uuid4())
         return supplied
 

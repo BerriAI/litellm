@@ -4582,7 +4582,7 @@ class TestV1ResolvedOauth2Gate:
 
         headers = await rest_endpoints._get_user_oauth_extra_headers(
             server,
-            UserAPIKeyAuth(user_id="alice", api_key="sk-1234"),
+            UserAPIKeyAuth(user_id="alice", api_key="sk-9876"),
             prefetched_creds={"oauth2-srv": {"access_token": "stored-token"}},
         )
 

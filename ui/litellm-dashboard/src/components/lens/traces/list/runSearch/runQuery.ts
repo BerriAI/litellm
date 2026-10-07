@@ -4,7 +4,7 @@ import type { TraceSummary } from "../../types";
 import { previewText, traceAgentNames } from "../../utils";
 
 import { type ClientIndex, filterItems } from "@/components/shared/search/evaluate";
-import type { FieldSpec, QueryLanguage } from "@/components/shared/search/language";
+import { ALL_OPERATORS, type FieldSpec, type QueryLanguage } from "@/components/shared/search/language";
 
 const RUN_FIELDS = {
   name: { group: "Run attributes", icon: SquareChevronRight, suggestValues: true },
@@ -17,14 +17,16 @@ const RUN_FIELDS = {
 
 export type RunField = keyof typeof RUN_FIELDS;
 
-export const RUN_QUERY: QueryLanguage<RunField> = { fields: RUN_FIELDS };
+export const RUN_QUERY: QueryLanguage<RunField> = { fields: RUN_FIELDS, ops: ALL_OPERATORS };
+
+const runStatus = (run: TraceSummary): "ok" | "error" => (run.status === "error" ? "error" : "ok");
 
 /** Reads the run fields off a loaded page; free text searches trace id, input and name. */
 export const RUN_INDEX: ClientIndex<TraceSummary, RunField> = {
   read: {
     name: (run) => [run.name],
     agent: traceAgentNames,
-    status: (run) => [run.error_count > 0 ? "error" : "ok"],
+    status: (run) => [runStatus(run)],
     model: (run) => run.models,
     input: (run) => [previewText(run.input_preview)],
     trace_id: (run) => [run.trace_id],
@@ -32,5 +34,12 @@ export const RUN_INDEX: ClientIndex<TraceSummary, RunField> = {
   freeText: (run) => [run.trace_id, previewText(run.input_preview), run.name],
 };
 
-export const filterRuns = (runs: TraceSummary[], query: string): TraceSummary[] =>
-  filterItems(RUN_QUERY, RUN_INDEX, runs, query);
+export function filterRuns(
+  runs: TraceSummary[],
+  query: string,
+  filters: { agent: string; status: "all" | "ok" | "error" } = { agent: "", status: "all" },
+): TraceSummary[] {
+  const matchesAgent = (run: TraceSummary) => !filters.agent || traceAgentNames(run).includes(filters.agent);
+  const matchesStatus = (run: TraceSummary) => filters.status === "all" || runStatus(run) === filters.status;
+  return filterItems(RUN_QUERY, RUN_INDEX, runs, query).filter((run) => matchesAgent(run) && matchesStatus(run));
+}

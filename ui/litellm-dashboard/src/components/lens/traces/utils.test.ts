@@ -133,6 +133,51 @@ describe("buildVisibleTree / isFrameworkSpan", () => {
 });
 
 describe("buildTreeRows", () => {
+  it("preserves alternating model and tool calls instead of collecting nonadjacent siblings", () => {
+    const calls = Array.from({ length: 24 }, (_, index) =>
+      span({
+        span_id: `step-${index}`,
+        parent_span_id: "root",
+        start_offset_ms: index,
+        name: index % 2 === 0 ? "model" : "Bash",
+        type: index % 2 === 0 ? "llm" : "tool",
+      }),
+    );
+    const rows = buildTreeRows([span({ span_id: "root", type: "agent" }), ...calls.toReversed()], STATE);
+    expect(groups(rows)).toHaveLength(0);
+    expect(
+      spanRows(rows)
+        .slice(1)
+        .map((row) => row.span.span_id),
+    ).toEqual(calls.map((call) => call.span_id));
+  });
+
+  it("keeps separated repetitions independently expandable and reveals a selected later span", () => {
+    const calls = Array.from({ length: 13 }, (_, index) =>
+      span({
+        span_id: `step-${index}`,
+        parent_span_id: "root",
+        start_offset_ms: index,
+        name: index === 6 ? "model" : "Bash",
+        type: index === 6 ? "llm" : "tool",
+      }),
+    );
+    const spans = [span({ span_id: "root", type: "agent" }), ...calls];
+    const folded = buildTreeRows(spans, STATE);
+    expect(groups(folded).map((group) => group.members.map((member) => member.span_id))).toEqual([
+      calls.slice(0, 6).map((call) => call.span_id),
+      calls.slice(7).map((call) => call.span_id),
+    ]);
+    expect(groups(folded)[0].id).not.toBe(groups(folded)[1].id);
+    const revealed = buildTreeRows(spans, revealSpanInState(spans, STATE, "step-12"));
+    expect(groups(revealed).map((group) => group.expanded)).toEqual([false, true]);
+    expect(spanRows(revealed).map((row) => row.span.span_id)).toEqual([
+      "root",
+      "step-6",
+      ...calls.slice(7).map((call) => call.span_id),
+    ]);
+  });
+
   it("starts the tree at the root span", () => {
     const rows = buildTreeRows(research.spans, STATE);
     expect(rows[0]).toMatchObject({
@@ -202,6 +247,39 @@ describe("buildTreeRows", () => {
       return span(search);
     });
     expect(groups(buildTreeRows([parent, ...kids], STATE))).toHaveLength(0);
+  });
+
+  it("pages a later repeated group independently while an earlier group stays collapsed", () => {
+    const calls = Array.from({ length: 61 }, (_, index) =>
+      span({
+        span_id: `step-${index}`,
+        parent_span_id: "root",
+        start_offset_ms: index,
+        name: index === 30 ? "model" : "Bash",
+        type: index === 30 ? "llm" : "tool",
+      }),
+    );
+    const spans = [span({ span_id: "root", type: "agent" }), ...calls];
+    const laterId = groupRowId("root", calls[31]);
+    const state = { ...STATE, expandedGroupIds: new Set([laterId]) };
+    const firstPage = buildTreeRows(spans, state);
+    expect(groups(firstPage).map((group) => group.expanded)).toEqual([false, true]);
+    expect(firstPage.filter((row) => row.kind === "load-more")).toEqual([
+      expect.objectContaining({ groupId: laterId, remaining: 10 }),
+    ]);
+    expect(spanRows(firstPage).map((row) => row.span.span_id)).toEqual([
+      "root",
+      "step-30",
+      ...calls.slice(31, 51).map((call) => call.span_id),
+    ]);
+    const nextPage = buildTreeRows(spans, { ...state, groupRevealCounts: { [laterId]: 40 } });
+    expect(groups(nextPage).map((group) => group.expanded)).toEqual([false, true]);
+    expect(nextPage.filter((row) => row.kind === "load-more")).toHaveLength(0);
+    expect(spanRows(nextPage).map((row) => row.span.span_id)).toEqual([
+      "root",
+      "step-30",
+      ...calls.slice(31).map((call) => call.span_id),
+    ]);
   });
 
   it("pages expanded groups 20 at a time with a load-more row", () => {
@@ -300,8 +378,40 @@ describe("payload helpers", () => {
     expect(
       parseMessages(JSON.stringify({ role: "assistant", content: [{ type: "text", text: "An execution record" }] })),
     ).toEqual([{ role: "assistant", content: "An execution record" }]);
+    expect(parseMessages(JSON.stringify({ role: "assistant", content: "hello", tool_calls: {} }))).toEqual([
+      { role: "assistant", content: "hello", tool_calls: [{ name: "Tool call", args: {} }] },
+    ]);
+    expect(
+      parseMessages(
+        JSON.stringify({ role: "assistant", content: "hello", tool_calls: [{ name: "lookup", args: "42" }] }),
+      ),
+    ).toEqual([{ role: "assistant", content: "hello", tool_calls: [{ name: "lookup", args: "42" }] }]);
     expect(parseMessages('[{"role":"assistant","tool_calls":[]}]')).toBeNull();
     expect(parseMessages('[{"role":"user","content":42}]')).toBeNull();
+  });
+
+  it("preserves conversation text and incomplete calls beside valid function calls", () => {
+    const incomplete = { id: "pending", function: { arguments: '{"path":"README.md"}' } };
+    const tool_calls = [incomplete, { function: { name: "read_file", arguments: '{"path":"AGENTS.md"}' } }, null];
+    expect(
+      parseMessages(
+        JSON.stringify([
+          { role: "user", content: "Read the project instructions" },
+          { role: "assistant", content: "Checking the files", tool_calls },
+        ]),
+      ),
+    ).toEqual([
+      { role: "user", content: "Read the project instructions" },
+      {
+        role: "assistant",
+        content: "Checking the files",
+        tool_calls: [
+          { name: "Tool call", args: incomplete },
+          { name: "read_file", args: { path: "AGENTS.md" } },
+          { name: "Tool call", args: null },
+        ],
+      },
+    ]);
   });
 
   it("reads LangChain's serialized messages with their roles, names and tool calls", () => {

@@ -58,9 +58,8 @@ impl SnapshotKey {
     }
 }
 
-/// How long a read result stays reusable: traces still receiving spans, or read with spend
-/// unavailable, are re-read after `LIVE_TTL`; traces quiet for `SETTLED_AFTER_MS` are kept for
-/// `SETTLED_TTL`.
+/// Native sessions can resume without a terminal record, so their reads retain `LIVE_TTL`.
+/// Other traces with known spend settle after `SETTLED_AFTER_MS` of inactivity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Freshness {
     Live,
@@ -69,6 +68,12 @@ pub enum Freshness {
 
 impl Freshness {
     pub fn of(rows: &[TraceSpansRow], spend_known: bool, snapshot_ms: u64) -> Self {
+        if rows
+            .iter()
+            .any(|row| matches!(row.framework.as_str(), "claude-code" | "claude-agent-sdk"))
+        {
+            return Self::Live;
+        }
         let last_end_ms = rows
             .iter()
             .map(|row| row.start_ns.saturating_add_unsigned(row.duration_ns) / 1_000_000)
@@ -298,6 +303,7 @@ mod tests {
     fn row(span_id: &str) -> TraceSpansRow {
         TraceSpansRow {
             trace_id: String::new(),
+            original_trace_id: String::new(),
             span_id: span_id.into(),
             parent_span_id: String::new(),
             name: "run".into(),
@@ -390,6 +396,20 @@ mod tests {
         assert_eq!(
             Freshness::of(&[row("root")], spend_known, snapshot_ms),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::claude_code("claude-code")]
+    #[case::claude_agent_sdk("claude-agent-sdk")]
+    fn idle_native_sessions_remain_live(#[case] framework: &str) {
+        let native = TraceSpansRow {
+            framework: framework.into(),
+            ..row("native")
+        };
+        assert_eq!(
+            Freshness::of(&[row("root"), native], true, LAST_END_MS + SETTLED_AFTER_MS),
+            Freshness::Live
         );
     }
 }

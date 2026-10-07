@@ -100,7 +100,7 @@ from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_toke
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import DecisionsResponse, DecisionsUsage
-from litellm.types.llms.base import CachedTokensDetails
+from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
@@ -278,7 +278,7 @@ def _get_additional_costs(
 
     try:
         config_class = None
-        if custom_llm_provider == "azure_ai":
+        if custom_llm_provider in ("azure_ai", "azure"):
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
             config_class = AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
@@ -326,7 +326,7 @@ class OCRPricing(TypedDict, total=False):
     annotation_cost_per_page: ReadOnly[float | None]
 
 
-_WALL_CLOCK_PRICED_MODES: Final = frozenset({"chat", "completion", "embedding", "responses"})
+_WALL_CLOCK_PRICED_MODES: Final = frozenset({"audio_transcription", "chat", "completion", "embedding", "responses"})
 
 
 def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
@@ -346,6 +346,7 @@ def _per_second_pricing_cost(
     model: str,
     custom_llm_provider: str | None,
     response_time_ms: float | None,
+    audio_seconds: float = 0.0,
 ) -> tuple[float, float] | None:
     try:
         model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
@@ -366,7 +367,11 @@ def _per_second_pricing_cost(
     if resolved_cost_per_second is None:
         return None
 
-    seconds: Final = (response_time_ms or 0.0) / 1000
+    seconds: Final = (
+        audio_seconds
+        if audio_seconds > 0 and model_info.get("mode") == "audio_transcription"
+        else (response_time_ms or 0.0) / 1000
+    )
     verbose_logger.debug(
         "For model=%s - cost_per_second: %s; response time: %s",
         model,
@@ -667,6 +672,7 @@ def cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             response_time_ms=response_time_ms,
+            audio_seconds=audio_transcription_file_duration,
         )
     ) is not None:
         return per_second_cost
@@ -1569,6 +1575,7 @@ def completion_cost(
                         optional_params=optional_params,
                         call_type=call_type,
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+                        vertex_location=vertex_location,
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -1811,7 +1818,7 @@ def completion_cost(
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
-                if custom_llm_provider == "azure_ai" and not azure_ai_is_model_router_name(model):
+                if custom_llm_provider in ("azure_ai", "azure") and not azure_ai_is_model_router_name(model):
                     model_for_additional_costs = request_model_for_cost
                     if completion_response is not None:
                         hidden_params = getattr(completion_response, "_hidden_params", None) or {}
@@ -2561,6 +2568,20 @@ def _batch_rate(
     return fallback if rate is None else rate
 
 
+def _batch_or_half(batch_rate: float | None, standard_rate: float | None, default: float = 0.0) -> float:
+    if batch_rate is not None:
+        return batch_rate
+    if standard_rate is not None:
+        return standard_rate / 2
+    return default
+
+
+def _completion_image_tokens(usage: Usage) -> int:
+    details: Final = usage.completion_tokens_details
+    image_tokens: Final = (details.image_tokens or 0) if details is not None else 0
+    return min(image_tokens, usage.completion_tokens)
+
+
 def batch_cost_calculator(
     usage: Usage,
     model: str,
@@ -2600,13 +2621,14 @@ def batch_cost_calculator(
             "output_cost_per_token",
         )
     ):
-        # model_info was provided (e.g. deployment metadata with only id/db_model)
-        # but carries no pricing fields. Fall back to the global pricing table so
-        # that standard model pricing is used instead of silently returning $0.
+        deployment_info: Final = model_info
         try:
             global_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
             if global_info:
-                model_info = global_info
+                model_info = {
+                    **global_info,
+                    **{key: value for key, value in deployment_info.items() if value is not None},
+                }
         except Exception:
             pass
 
@@ -2640,12 +2662,15 @@ def batch_cost_calculator(
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
         total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
-    if batch_rates.output is not None:
-        total_completion_cost = usage.completion_tokens * batch_rates.output
-    elif output_cost_per_token:
-        total_completion_cost = (
-            usage.completion_tokens * (output_cost_per_token) / 2
-        )  # batch cost is usually half of the regular token cost
+    text_rate: Final = _batch_or_half(batch_rates.output, output_cost_per_token)
+    image_rate: Final = _batch_or_half(
+        model_info.get("output_cost_per_image_token_batches"),
+        model_info.get("output_cost_per_image_token"),
+        default=text_rate,
+    )
+    image_tokens: Final = _completion_image_tokens(usage)
+    text_tokens: Final = usage.completion_tokens - image_tokens
+    total_completion_cost = text_tokens * text_rate + image_tokens * image_rate
 
     uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency)
     if uplift != 1.0:
@@ -2832,12 +2857,12 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
 _RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete"})
 
 
-class _ResponsesWsEventResponse(BaseModel):
+class _ResponsesWsEventResponse(LiteLLMBaseModel):
     usage: Mapping[str, object] | None = None
     service_tier: str | None = None
 
 
-class _ResponsesWsEvent(BaseModel):
+class _ResponsesWsEvent(LiteLLMBaseModel):
     type: str = ""
     response: _ResponsesWsEventResponse | None = None
 

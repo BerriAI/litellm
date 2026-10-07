@@ -14,7 +14,7 @@ load_dotenv()
 
 async def generate_key(session, models=[]):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {
         "models": models,
         "duration": None,
@@ -73,7 +73,7 @@ async def test_get_models_multiple_tests():
 
 
 async def add_models(
-    session, model_id="123", model_name="azure-gpt-3.5", key="sk-1234", team_id=None
+    session, model_id="123", model_name="azure-gpt-3.5", key=os.environ["LITELLM_MASTER_KEY"], team_id=None
 ):
     url = "http://0.0.0.0:4000/model/new"
     headers = {
@@ -216,7 +216,7 @@ async def test_get_specific_model():
         )
 
 
-async def delete_model(session, model_id="123", key="sk-1234"):
+async def delete_model(session, model_id="123", key=os.environ["LITELLM_MASTER_KEY"]):
     """
     Make sure only models user has access to are returned
     """
@@ -296,10 +296,10 @@ async def test_model_group_info_e2e():
     Test /model/group/info endpoint
     """
     async with aiohttp.ClientSession() as session:
-        models = await get_models(session=session, key="sk-1234")
+        models = await get_models(session=session, key=os.environ["LITELLM_MASTER_KEY"])
         print(models)
 
-        model_group_info = await get_model_group_info(session=session, key="sk-1234")
+        model_group_info = await get_model_group_info(session=session, key=os.environ["LITELLM_MASTER_KEY"])
         print(model_group_info)
 
         model_groups: Final = [m["model_group"] for m in model_group_info["data"]]

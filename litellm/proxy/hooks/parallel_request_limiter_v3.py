@@ -3081,7 +3081,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Resolve the agent_id from either the API key or request metadata.
         Key-level agent_id takes precedence over metadata/header-supplied agent_id.
         """
-        key_agent_id: Final = getattr(user_api_key_dict, "agent_id", None)
+        key_agent_id: Final[str | None] = getattr(user_api_key_dict, "agent_id", None)
         if key_agent_id:
             return key_agent_id
         metadata: Final = data.get("metadata") or {}
@@ -4253,7 +4253,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return pipeline_operations
 
     def _get_total_tokens_from_usage(
-        self, usage: Any | None, rate_limit_type: Literal["output", "input", "total"]
+        self, usage: object | None, rate_limit_type: Literal["output", "input", "total"]
     ) -> int:
         """
         Get total tokens from response usage for rate limiting.

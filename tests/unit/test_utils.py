@@ -69,6 +69,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     _check_provider_match,
     _get_potential_model_names,
+    _is_litellm_router_call,
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
@@ -664,6 +665,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
+        "output_cost_per_image_token_batches",
         "input_cost_per_video_token",
         "output_cost_per_video_token",
         "input_cost_per_audio_per_second",
@@ -902,6 +904,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_image_2K": {"type": "number"},
                 "output_cost_per_image_4K": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
+                "output_cost_per_image_token_batches": {"type": "number"},
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
@@ -2218,7 +2221,7 @@ def test_block_key_hashing_logic():
 
     # Test cases: (input_key, should_be_hashed, expected_output)
     test_cases = [
-        ("sk-1234567890abcdef", True, hash_token("sk-1234567890abcdef")),
+        ("sk-9876567890abcdef", True, hash_token("sk-9876567890abcdef")),
         ("sk-test-key", True, hash_token("sk-test-key")),
         ("abc123", False, "abc123"),  # Should not be hashed
         ("hashed_key_123", False, "hashed_key_123"),  # Should not be hashed
@@ -4755,6 +4758,158 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
     assert success_kwargs["stream"] is True
 
 
+@pytest.mark.parametrize(
+    "kwargs, is_async, expected",
+    [
+        ({"metadata": {"model_group": "g"}}, False, True),
+        ({"metadata": {"model_group": "g"}}, True, True),
+        ({"litellm_metadata": {"model_group": "g"}}, False, False),
+        ({"litellm_metadata": {"model_group": "g"}}, True, True),
+        ({}, False, False),
+        ({}, True, False),
+        ({"metadata": None}, False, False),
+        ({"metadata": None}, True, False),
+    ],
+)
+def test_is_litellm_router_call_is_async_aware(
+    kwargs: Mapping[str, object], is_async: bool, expected: bool
+) -> None:
+    assert _is_litellm_router_call(kwargs, is_async=is_async) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+async def test_router_aresponses_does_not_run_sdk_retries(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    model_list: Final = [
+        {
+            "model_name": "responses-retry",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-test",
+                "api_base": "https://responses-retry.local/v1",
+                "num_retries": 2,
+            },
+        }
+    ]
+    router: Final = litellm.Router(
+        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-retry.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                await router.aresponses(model="responses-retry", input="hi", stream=stream)
+
+        assert upstream.call_count == 3
+    finally:
+        router.discard()
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def test_router_responses_keeps_sdk_retries_for_sync_router_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    model_list: Final = [
+        {
+            "model_name": "responses-retry",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-test",
+                "api_base": "https://responses-retry.local/v1",
+                "num_retries": 2,
+            },
+        }
+    ]
+    router: Final = litellm.Router(
+        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-retry.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                router.responses(model="responses-retry", input="hi")
+
+        assert upstream.call_count == 3
+    finally:
+        router.discard()
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+async def test_aresponses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-direct.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                await litellm.aresponses(
+                    model="openai/gpt-4o-mini",
+                    input="hi",
+                    api_base="https://responses-direct.local/v1",
+                    api_key="k",
+                    num_retries=2,
+                )
+
+        assert upstream.call_count == 3
+    finally:
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def test_responses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-sync.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                litellm.responses(
+                    model="openai/gpt-4o-mini",
+                    input="hi",
+                    api_base="https://responses-sync.local/v1",
+                    api_key="k",
+                    num_retries=2,
+                )
+
+        assert upstream.call_count == 3
+    finally:
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
 @pytest.mark.asyncio
 async def test_wrapper_async_replays_cached_converted_chat_stream_as_stream(
     monkeypatch: pytest.MonkeyPatch,
@@ -6558,3 +6713,67 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+@pytest.mark.asyncio
+async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chat over the Responses bridge exits two @client wrappers with one logging object. Issue
+    #44500: both exits enqueued a success handler, and on a large prompt the first one yielded to
+    the worker-thread base64 offload before it marked ``has_logged_async_success``, so the second
+    passed the check too and the request was logged and billed twice. The schedule step claims the
+    log for the object synchronously, so only the inner provider-shaped result is ever logged."""
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.utils import _dispatch_success_logging
+
+    class CountingLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.logged_results: list[object] = []
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            if kwargs["litellm_call_id"] == "bridge-call-id":
+                self.logged_results.append(response_obj)
+
+    counting_logger: Final = CountingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [counting_logger])
+    real_truncate: Final = litellm_logging.truncate_base64_in_messages_async
+
+    async def yielding_truncate(messages):
+        await asyncio.sleep(0)
+        return await real_truncate(messages)
+
+    monkeypatch.setattr(litellm_logging, "truncate_base64_in_messages_async", yielding_truncate)
+
+    messages: Final = [{"role": "user", "content": "hello"}]
+    logging_obj: Final = Logging(
+        model="gpt-5.6-luna",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp(),
+        litellm_call_id="bridge-call-id",
+        function_id="bridge-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="gpt-5.6-luna", custom_llm_provider="openai", input=messages
+    )
+    inner_result: Final = ModelResponse(id="inner")
+    outer_result: Final = ModelResponse(id="outer")
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    for result in (inner_result, outer_result):
+        _dispatch_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=now,
+            end_time=now,
+            is_completion_with_fallbacks=False,
+            is_litellm_internal_call=False,
+        )
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert len(counting_logger.logged_results) == 1, counting_logger.logged_results
+    assert counting_logger.logged_results[0] is inner_result
