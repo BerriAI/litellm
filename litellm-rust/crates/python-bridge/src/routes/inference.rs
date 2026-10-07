@@ -1,13 +1,12 @@
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_python::{from_py, lookup, to_py};
-use litellm_http::transport::Error as TransportError;
 use litellm_inference::RouteError;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, route_error_to_pyerr},
+    errors::route_error_to_pyerr,
     marshal::{RouteOptions, optional_timeout, python_timeout_seconds},
 };
 
@@ -128,16 +127,7 @@ impl InferenceHost {
         {
             return Ok(original);
         }
-        let native = match error {
-            RouteError::Transport(TransportError::Http { status, body }) => {
-                let error = RustUpstreamError::new_err((status, body));
-                error
-                    .value(py)
-                    .setattr("headers", Vec::<(String, String)>::new())?;
-                error
-            }
-            other => route_error_to_pyerr(other),
-        };
+        let native = route_error_to_pyerr(error);
         let mapped = py
             .import(self.module)?
             .getattr("map_failure")?

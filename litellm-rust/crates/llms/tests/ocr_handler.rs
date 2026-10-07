@@ -71,7 +71,7 @@ async fn an_oversized_error_keeps_its_status_and_a_bounded_body_without_draining
     .await
     .unwrap_err();
 
-    let Error::Transport(litellm_http::transport::Error::Http { status, body }) = error else {
+    let Error::Transport(litellm_http::transport::Error::Http { status, body, .. }) = error else {
         panic!("unexpected error: {error}");
     };
     assert_eq!(status, 429);

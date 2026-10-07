@@ -251,6 +251,11 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(
     assert_eq!(
         error,
         Error::Transport(litellm_http::transport::Error::Http {
+            request_url: Some(format!(
+                "{}{}",
+                upstream.uri(),
+                only_request(&upstream).await.url.path()
+            )),
             status: 429,
             body: body.into()
         })
@@ -378,6 +383,11 @@ async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall)
     assert_eq!(
         error,
         Error::Transport(litellm_http::transport::Error::Http {
+            request_url: Some(format!(
+                "{}{}",
+                upstream.uri(),
+                only_request(&upstream).await.url.path()
+            )),
             status: 429,
             body: "slow down".into(),
         })

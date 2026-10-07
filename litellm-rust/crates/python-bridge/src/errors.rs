@@ -21,11 +21,27 @@ pyo3::create_exception!(
 
 pub(crate) fn route_error_to_pyerr(error: RouteError) -> PyErr {
     match error {
-        RouteError::Transport(TransportError::Http { status, body }) => {
-            RustUpstreamError::new_err((status, body))
-        }
+        RouteError::Transport(TransportError::Http {
+            status,
+            body,
+            request_url,
+        }) => Python::attach(|py| upstream_error(py, status, body, Vec::new(), request_url))
+            .unwrap_or_else(|error| error),
         other => by_fault(other.is_request(), other.to_string()),
     }
+}
+
+pub(crate) fn upstream_error(
+    py: Python<'_>,
+    status: u16,
+    body: String,
+    headers: Vec<(String, String)>,
+    request_url: Option<String>,
+) -> PyResult<PyErr> {
+    let error = RustUpstreamError::new_err((status, body));
+    error.value(py).setattr("headers", headers)?;
+    error.value(py).setattr("request_url", request_url)?;
+    Ok(error)
 }
 
 /// A request the caller got wrong is a `ValueError`; anything else is a `RuntimeError`.
@@ -59,15 +75,25 @@ mod tests {
     }
 
     #[rstest::rstest]
-    fn transport_status_survives_python_mapping() {
+    fn transport_status_and_url_survive_python_mapping() {
         Python::initialize();
         Python::attach(|py| {
             let upstream = route_error_to_pyerr(
                 TransportError::Http {
+                    request_url: Some("https://upstream.invalid/v1/responses".into()),
                     status: 429,
                     body: "slow down".into(),
                 }
                 .into(),
+            );
+            assert_eq!(
+                upstream
+                    .value(py)
+                    .getattr("request_url")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "https://upstream.invalid/v1/responses"
             );
             assert!(upstream.is_instance_of::<RustUpstreamError>(py));
             assert_eq!(

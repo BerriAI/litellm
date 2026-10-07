@@ -2,6 +2,7 @@
 pub enum Error {
     #[error("upstream OCR error ({status}): {body}")]
     Provider {
+        request_url: Option<String>,
         status: u16,
         body: String,
         headers: Vec<(String, String)>,

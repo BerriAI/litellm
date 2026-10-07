@@ -93,11 +93,13 @@ fn map_media_error(error: MediaError) -> Error {
         MediaError::MissingRedirectLocation => Error::MissingRedirectLocation,
         MediaError::InvalidRedirect => Error::InvalidRedirect,
         MediaError::Http(status) => TransportError::Http {
+            request_url: None,
             status,
             body: "OCR document download failed".into(),
         }
         .into(),
         MediaError::Timeout => TransportError::Http {
+            request_url: None,
             status: 408,
             body: "OCR document download timed out".into(),
         }
