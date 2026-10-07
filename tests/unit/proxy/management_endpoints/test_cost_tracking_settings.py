@@ -58,7 +58,7 @@ class TestCostTrackingSettings:
             # Make request
             response = client.get(
                 "/config/cost_discount_config",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response
@@ -97,7 +97,7 @@ class TestCostTrackingSettings:
             # Make request
             response = client.get(
                 "/config/cost_discount_config",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response
@@ -146,7 +146,7 @@ class TestCostTrackingSettings:
             response = client.patch(
                 "/config/cost_discount_config",
                 json=test_discount_config,
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response
@@ -199,7 +199,7 @@ class TestCostTrackingSettings:
             response = client.patch(
                 "/config/cost_discount_config",
                 json=test_discount_config,
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response - should fail with 400
@@ -240,7 +240,7 @@ class TestCostTrackingSettings:
             response = client.patch(
                 "/config/cost_discount_config",
                 json=test_discount_config,
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response - should fail with 400
@@ -280,7 +280,7 @@ class TestCostTrackingSettings:
             response = client.patch(
                 "/config/cost_discount_config",
                 json=test_discount_config,
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
             # Verify response - should fail with 500
@@ -696,7 +696,7 @@ class TestBlockRequestsForModelsWithoutPricing:
         with patch.object(litellm, "block_requests_for_models_without_pricing", True):
             response = client.get(
                 "/config/block_requests_for_models_without_pricing",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
         assert response.status_code == 200
@@ -716,7 +716,7 @@ class TestBlockRequestsForModelsWithoutPricing:
         ):
             response = client.patch(
                 "/config/block_requests_for_models_without_pricing",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
                 json={"enabled": True},
             )
 
@@ -778,7 +778,7 @@ class TestBlockRequestsForModelsWithoutPricing:
         ):
             response = client.patch(
                 "/config/block_requests_for_models_without_pricing",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
                 json={"enabled": True},
             )
 
@@ -1202,7 +1202,7 @@ class TestCostEstimateRequestTokenSubsets:
     def test_the_endpoint_answers_422_when_cache_tokens_exceed_input_tokens(self):
         response = client.post(
             "/cost/estimate",
-            headers={"Authorization": "Bearer sk-1234"},
+            headers={"Authorization": "Bearer sk-9876"},
             json={"model": AN_ALIAS, "input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 8000},
         )
 

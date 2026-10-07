@@ -45,7 +45,7 @@ from litellm.constants import (
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
     is_azure_body_model_inference_endpoint,
@@ -914,7 +914,9 @@ async def anthropic_proxy_route(
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
-    auth_header: Final = AnthropicModelInfo.get_auth_header(anthropic_api_key or None)
+    auth_header: Final = await AnthropicModelInfo.aget_auth_header(
+        anthropic_api_key or None, allow_workload_identity=True
+    )
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
@@ -1862,13 +1864,13 @@ def _resolve_vertex_model_from_router(
         if not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
-        litellm_params: Final = deployment.get("litellm_params", {})
+        litellm_params: Final[Mapping[str, object]] = cast(Mapping[str, object], deployment.get("litellm_params", {}))
         model_info: Final = deployment.get("model_info")
         deployment_model_info: Final = model_info if isinstance(model_info, Mapping) else None
 
         # Always override with router config values (they take precedence over URL values)
-        config_vertex_project: Final = litellm_params.get("vertex_project")
-        config_vertex_location: Final = litellm_params.get("vertex_location")
+        config_vertex_project: Final = cast(str | None, litellm_params.get("vertex_project"))
+        config_vertex_location: Final = cast(str | None, litellm_params.get("vertex_location"))
         if config_vertex_project:
             vertex_project = config_vertex_project
         if config_vertex_location:
@@ -1876,7 +1878,7 @@ def _resolve_vertex_model_from_router(
 
         # Get the actual Vertex AI model name by stripping the provider prefix
         # e.g., "vertex_ai/gemini-2.0-flash-exp" -> "gemini-2.0-flash-exp"
-        model_from_config: Final = litellm_params.get("model", "")
+        model_from_config: Final = cast(str, litellm_params.get("model", ""))
         if model_from_config:
             # get_llm_provider returns (model, custom_llm_provider, dynamic_api_key, api_base)
             # For "vertex_ai/gemini-2.0-flash-exp" it returns:
@@ -2338,7 +2340,7 @@ async def azure_proxy_route(
                     base_target_url=base_target_url,
                     api_key=None,
                     custom_llm_provider=litellm.LlmProviders.AZURE_AI,
-                    extra_headers=cast(dict, extra_headers),
+                    extra_headers=extra_headers,
                 )
 
     body_model_group_relay: Final = await _relay_azure_body_model_group(
@@ -2645,9 +2647,20 @@ def _upstream_headers_for_anthropic_route(
     caller_headers: Final = _caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC
     )
-    if proxy_auth_header is None and _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
-        raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
-    return MappingProxyType({**caller_headers, **(proxy_auth_header or {})})
+    if proxy_auth_header is None:
+        if _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
+            raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
+        return caller_headers
+    forwarded: Final = MappingProxyType(
+        {name: value for name, value in caller_headers.items() if name not in _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS}
+    )
+    caller_beta, credential_beta = caller_headers.get("anthropic-beta"), proxy_auth_header.get("anthropic-beta")
+    merged_beta: Final = (
+        {"anthropic-beta": merge_anthropic_beta_headers(caller_beta, credential_beta)}
+        if caller_beta and credential_beta
+        else {}
+    )
+    return MappingProxyType({**forwarded, **proxy_auth_header, **merged_beta})
 
 
 def _upstream_headers_for_bedrock_agent_runtime_route(

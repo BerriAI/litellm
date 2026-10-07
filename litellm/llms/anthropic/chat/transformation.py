@@ -3,7 +3,7 @@ import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -296,6 +296,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
+    _workload_identity_eligible: ClassVar[bool] = True
+
     max_tokens: int | None = None
     stop_sequences: list | None = None
     temperature: int | None = None
@@ -314,7 +316,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         metadata: dict | None = None,
         system: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -2680,8 +2682,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
 
-        model_response._hidden_params = {
-            **model_response._hidden_params,
+        model_response.hidden_params = {
+            **model_response.hidden_params,
             "additional_headers": process_anthropic_headers(dict(raw_response.headers)),
             "provider_specific_fields": provider_specific_fields,
         }

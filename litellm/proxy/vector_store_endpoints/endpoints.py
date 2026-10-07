@@ -561,7 +561,7 @@ async def index_create(
     ```bash
     curl -L -X POST 'http://0.0.0.0:4000/v1/indexes' \
         -H 'Content-Type: application/json' \
-        -H 'Authorization: Bearer sk-1234' \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -d '{
             "index_name": "dall-e-3",
             "litellm_params": {
@@ -622,7 +622,7 @@ async def index_list(
 
     ```bash
     curl -L -X GET 'http://0.0.0.0:4000/v1/indexes' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -638,5 +638,5 @@ async def index_list(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
-    indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(prisma_client)
+    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(prisma_client)
     return IndexListResponse(data=indexes)

@@ -110,6 +110,6 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                         cached_result = await litellm.cache.cache.async_get_cache(cache_key, *args, **kwargs)
                     if cached_result is not None:
                         await self.in_memory_cache.async_set_cache(cache_key, cached_result, ttl=60)
-                return litellm.cache._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                return litellm.cache.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             return None

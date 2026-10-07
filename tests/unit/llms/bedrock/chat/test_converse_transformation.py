@@ -5769,15 +5769,20 @@ def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():
         pytest.param("global.openai.gpt-6-astra", False, id="openai-family-implicit-caching-only"),
         pytest.param("openai.gpt-oss-120b-1:0", False, id="openai-gpt-oss"),
         pytest.param("us.openai.gpt-99-unmapped", False, id="unmapped-openai-family-still-suppressed"),
+        pytest.param("us.moonshotai.kimi-k3", False, id="kimi-k3-prices-cached-tokens-but-rejects-cachepoint"),
+        pytest.param("global.moonshotai.kimi-k3", False, id="kimi-k3-global-profile"),
+        pytest.param("us-east-1/us.moonshotai.kimi-k3", False, id="kimi-k3-regional-route-resolves-through-profile"),
     ],
 )
 def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model, expects_cache_points, monkeypatch):
     """Bedrock rejects cachePoint blocks for models without prompt caching support
-    ("You invoked an unsupported model or your request did not allow prompt caching"),
-    and clients like Claude Code attach cache_control to every request, so a map-known
-    model without the capability must not receive them. Unmapped ids (application
-    inference profile ARNs, models newer than the map) keep emitting so existing
-    caching setups never silently degrade."""
+    ("You invoked an unsupported model or your request did not allow prompt caching")
+    and for models that price cached tokens yet take the marker only on their native
+    endpoints ("This model doesn't support the cachePoint field", Kimi K3), and clients
+    like Claude Code attach cache_control to every request, so a map-known model without
+    the capability must not receive them on system, message, or tool blocks. Unmapped ids
+    (application inference profile ARNs, models newer than the map) keep emitting so
+    existing caching setups never silently degrade."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -5787,14 +5792,25 @@ def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model,
             {"role": "system", "content": [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]},
             {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]},
         ],
-        optional_params={},
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        },
         litellm_params={},
         headers={},
     )
 
-    assert ("cachePoint" in json.dumps(body)) is expects_cache_points
+    assert ("cachePoint" in json.dumps(body["system"])) is expects_cache_points
+    assert ("cachePoint" in json.dumps(body["messages"])) is expects_cache_points
+    assert ("cachePoint" in json.dumps(body["toolConfig"])) is expects_cache_points
     assert body["system"][0]["text"] == "sys"
     assert body["messages"][0]["content"][0]["text"] == "hi"
+    assert body["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
 
 
 def test_tool_config_cachepoint_not_placed_or_credited_for_model_without_prompt_caching(monkeypatch):
@@ -5931,6 +5947,67 @@ def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools(
 
     # finish_reason must be "stop", not "tool_calls"
     assert result.choices[0].finish_reason == "stop"
+
+
+def test_transform_response_json_mode_truncated_tool_call_keeps_length_finish_reason():
+    """
+    When json_mode filters out the synthetic json_tool_call but Bedrock
+    stopped on max_tokens, finish_reason must stay "length", not be
+    downgraded to "stop" — otherwise truncated structured output looks
+    completed.
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_001",
+                            "name": "json_tool_call",
+                            "input": {"a": "cut"},
+                        }
+                    }
+                ],
+            }
+        },
+        "stopReason": "max_tokens",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 60,
+            "totalTokens": 70,
+        },
+    }
+
+    class MockResponse:
+        def json(self) -> dict[str, object]:
+            return response_json
+
+        @property
+        def text(self) -> str:
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params={"json_mode": True},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    assert result.choices[0].finish_reason == "length"
 
 
 def test_transform_response_citations_content_maps_to_annotations():

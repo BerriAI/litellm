@@ -36,6 +36,13 @@ fn received<T: JsonSchema>() -> Schema {
         .into_root_schema_for::<T>()
 }
 
+fn requested<T: JsonSchema>() -> Schema {
+    SchemaSettings::draft2020_12()
+        .for_deserialize()
+        .into_generator()
+        .into_root_schema_for::<T>()
+}
+
 fn emitted<T: JsonSchema>() -> Schema {
     SchemaSettings::draft2020_12()
         .for_serialize()
@@ -57,4 +64,36 @@ pub fn schemas() -> BTreeMap<&'static str, Schema> {
         ("SpanDetail", emitted::<crate::SpanDetail>()),
         ("SpanErrorPage", emitted::<crate::SpanErrorPage>()),
     ])
+}
+
+pub fn request_schemas() -> BTreeMap<&'static str, Schema> {
+    BTreeMap::from([
+        (
+            "TraceListRequest",
+            requested::<crate::request::TraceListRequest>(),
+        ),
+        (
+            "TraceDetailRequest",
+            requested::<crate::request::TraceDetailRequest>(),
+        ),
+        (
+            "TraceSpanRequest",
+            requested::<crate::request::TraceSpanRequest>(),
+        ),
+        (
+            "TraceErrorPageRequest",
+            requested::<crate::request::TraceErrorPageRequest>(),
+        ),
+        (
+            "TraceQueryRequest",
+            requested::<crate::request::TraceQueryRequest>(),
+        ),
+    ])
+}
+
+pub fn response_schemas() -> BTreeMap<&'static str, Schema> {
+    BTreeMap::from([(
+        "TraceSQLResponse",
+        emitted::<crate::response::TraceSQLResponse>(),
+    )])
 }

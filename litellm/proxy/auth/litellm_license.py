@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
 AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
 LICENSE_ALL_FEATURES: Final = "*"
 AUTO_ROUTER_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
+_LICENSE_VERDICT: Final = TypeAdapter(object)
 
 
 class LicenseCheck:
@@ -31,7 +33,7 @@ class LicenseCheck:
 
     def __init__(self) -> None:
         self.license_str = os.getenv("LITELLM_LICENSE", None)
-        verbose_proxy_logger.debug("License Str value - %s", self.license_str)
+        verbose_proxy_logger.debug("License configured: %s", self.license_str is not None)
         self.http_handler = HTTPHandler(timeout=NON_LLM_CONNECTION_TIMEOUT)
         self._premium_check_logged = False
         self.public_key = None
@@ -57,9 +59,8 @@ class LicenseCheck:
 
     def _verify(self, license_str: str) -> bool:
         verbose_proxy_logger.debug(
-            "litellm.proxy.auth.litellm_license.py::_verify - Checking license against %s/verify_license - %s",
+            "litellm.proxy.auth.litellm_license.py::_verify - Checking license against %s/verify_license",
             self.base_url,
-            license_str,
         )
         url: Final = f"{self.base_url}/verify_license/{license_str}"
 
@@ -79,21 +80,20 @@ class LicenseCheck:
             if response is None:
                 raise Exception("No response from license server")
 
-            response_json: Final = response.json()
-
-            premium: Final = response_json["verify"]
+            premium: Final = _LICENSE_VERDICT.validate_python(response.json()["verify"])
 
             assert isinstance(premium, bool)
 
             verbose_proxy_logger.debug(
-                "litellm.proxy.auth.litellm_license.py::_verify - License=%s is premium=%s", license_str, premium
+                "litellm.proxy.auth.litellm_license.py::_verify - License is premium=%s", premium
             )
             return premium
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License=%s via api. - %s",
-                license_str,
-                e,
+            verbose_proxy_logger.error(
+                "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify license via api. "
+                "error_type=%s status_code=%s",
+                type(e).__name__,
+                e.response.status_code if isinstance(e, httpx.HTTPStatusError) else None,
             )
             return False
 
@@ -105,8 +105,8 @@ class LicenseCheck:
         try:
             if not self._premium_check_logged:
                 verbose_proxy_logger.debug(
-                    "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License=%s",
-                    self.license_str,
+                    "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - License configured: %s",
+                    self.license_str is not None,
                 )
 
             if self.license_str is None:
@@ -114,8 +114,8 @@ class LicenseCheck:
 
             if not self._premium_check_logged:
                 verbose_proxy_logger.debug(
-                    "litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - %s",
-                    self.license_str,
+                    "litellm.proxy.auth.litellm_license.py::is_premium() - License configured after refresh: %s",
+                    self.license_str is not None,
                 )
                 self._premium_check_logged = True
 
@@ -202,9 +202,6 @@ class LicenseCheck:
             # Decode and parse the data
             license_data: Final = json.loads(message.decode())
 
-            # debug information provided in license data
-            verbose_proxy_logger.debug("License data: %s", license_data)
-
             # Check expiration date
             expiration_date: Final = datetime.strptime(license_data["expiration_date"], "%Y-%m-%d")
             if expiration_date < datetime.now():
@@ -218,7 +215,8 @@ class LicenseCheck:
         except Exception as e:
             self.airgapped_license_data = None
             verbose_proxy_logger.debug(
-                "litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - Unable to verify License locally. - %s",
-                e,
+                "litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - "
+                "Unable to verify license locally. error_type=%s",
+                type(e).__name__,
             )
             return False

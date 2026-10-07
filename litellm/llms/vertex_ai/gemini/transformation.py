@@ -4,7 +4,6 @@ Transformation logic from OpenAI format to Gemini format.
 Why separate file? Make it easy to see how transformation works
 """
 
-import json
 import os
 import re
 from collections.abc import Mapping
@@ -18,14 +17,14 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _get_image_mime_type_from_url,
+    get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    _get_thought_signature_from_tool,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
+    get_thought_signature_from_tool,
     response_schema_prompt,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
@@ -66,7 +65,7 @@ from ..common_utils import (
 # Typed as Any to avoid introducing a module-load-time cyclic import to
 # vertex_llm_base. The instance is lazily constructed by _get_vertex_base()
 # the first time GCS metadata needs to be fetched.
-_GCS_METADATA_VERTEX_BASE: Any | None = None
+_GCS_METADATA_VERTEX_BASE: object | None = None
 # Shared sync client for GCS JSON API metadata reads so proxy/SSL settings
 # from litellm's HTTP stack apply (see Greptile review on PR #27278).
 _GCS_METADATA_HTTP_HANDLER: HTTPHandler | None = None
@@ -571,7 +570,7 @@ def _process_gemini_media(
                 file_data = cast(FileDataType, {"file_uri": image_url})
             part = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
-        elif "https://" in image_url and (image_type := format or _get_image_mime_type_from_url(image_url)) is not None:
+        elif "https://" in image_url and (image_type := format or get_image_mime_type_from_url(image_url)) is not None:
             file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
@@ -659,13 +658,13 @@ def _collect_tool_call_thought_signatures(
         for tool in tool_calls:
             if not isinstance(tool, dict):
                 continue
-            signature = _get_thought_signature_from_tool(tool)
+            signature = get_thought_signature_from_tool(tool)
             if signature:
                 signatures += (signature,)
 
     function_call: Final = assistant_msg.get("function_call")
     if isinstance(function_call, dict):
-        signature = _get_thought_signature_from_tool({"function": function_call})
+        signature = get_thought_signature_from_tool({"function": function_call})
         if signature:
             signatures += (signature,)
 
@@ -881,29 +880,8 @@ def _gemini_convert_messages_with_history(
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)
                 _message_content = assistant_msg.get("content", None)
                 reasoning_content = assistant_msg.get("reasoning_content", None)
-                thinking_blocks = assistant_msg.get("thinking_blocks")
                 if reasoning_content is not None:
                     assistant_content.append(PartType(thought=True, text=reasoning_content))
-                if thinking_blocks is not None:
-                    for block in thinking_blocks:
-                        if block["type"] == "thinking":
-                            block_thinking_str = block.get("thinking")
-                            block_signature = block.get("signature")
-                            if block_thinking_str is not None and block_signature is not None:
-                                try:
-                                    assistant_content.append(
-                                        PartType(
-                                            thoughtSignature=block_signature,
-                                            **json.loads(block_thinking_str),
-                                        )
-                                    )
-                                except Exception:
-                                    assistant_content.append(
-                                        PartType(
-                                            thoughtSignature=block_signature,
-                                            text=block_thinking_str,
-                                        )
-                                    )
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:
@@ -1323,7 +1301,7 @@ def _vertex_inlines(media: RemoteMedia) -> bool:
     if media.url.startswith(GEMINI_FILES_API_URI_PREFIX):
         return False
     return media.url.startswith("http://") or (
-        _explicit_mime_type(media.fields) is None and _get_image_mime_type_from_url(media.url) is None
+        _explicit_mime_type(media.fields) is None and get_image_mime_type_from_url(media.url) is None
     )
 
 

@@ -59,7 +59,7 @@ def _resolve_provider_model(model: str, custom_llm_provider: str | None) -> tupl
             model=model,
             llm_provider=provider,
         )
-    upstream_model: Final = model.removeprefix(f"{provider}/") if model.startswith(f"{provider}/") else model
+    upstream_model: Final = model.removeprefix(f"{provider}/")
     if not upstream_model:
         raise litellm.BadRequestError(
             message="A model name is required for the Decisions API",
@@ -206,7 +206,7 @@ def _parse_response(
     response.raise_for_status()
     payload: Final[object] = _DECISIONS_PAYLOAD_ADAPTER.validate_json(response.content)
     result: Final = _DECISIONS_RESPONSE_ADAPTER.validate_python(prepared.config.unwrap_response(payload))
-    result._hidden_params.update(
+    result.hidden_params.update(
         {
             "model": f"{prepared.provider}/{prepared.upstream_model}",
             "custom_llm_provider": prepared.provider,

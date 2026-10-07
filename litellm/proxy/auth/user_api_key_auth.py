@@ -13,7 +13,7 @@ import re
 import secrets
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Final, NamedTuple, Protocol, Union, cast
+from typing import Final, NamedTuple, Protocol, Union, cast
 
 import fastapi
 import orjson
@@ -82,6 +82,7 @@ from litellm.proxy.auth.auth_object_prefetch import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    fallback_target_model_name,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
@@ -146,7 +147,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
@@ -215,7 +216,7 @@ def _get_model_from_request_context(
     request_data: dict,
     route: str,
     request: Request | None,
-    llm_router: Any | None = None,
+    llm_router: litellm.Router | None = None,
     team_id: str | None = None,
 ) -> str | list[str] | None:
     return get_model_from_request(
@@ -505,7 +506,7 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("bearer ", "")
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
-        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
         match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
         if match:
@@ -520,8 +521,8 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
 
 
 def _routing_selector_matches_claim(
-    selector_value: Any | None,
-    claim_value: Any | None,
+    selector_value: object,
+    claim_value: object,
     *,
     split_space_delimited: bool = False,
 ) -> bool:
@@ -601,7 +602,7 @@ def _get_bearer_token(
         api_key = api_key.replace("bearer ", "")
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
-        # Format: AWS4-HMAC-SHA256 Credential=Bearer sk-12345/date/region/service/aws4_request, SignedHeaders=..., Signature=...
+        # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
         match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
         if match:
@@ -661,7 +662,7 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     # ``websocket.url``, which Starlette reconstructs from the (poisonable)
     # Host header. Carry the ASGI scope's path / root_path so the lookup
     # never reaches the fallback.
-    synthetic_scope: Final[dict[str, Any]] = {
+    synthetic_scope: Final[dict[str, object]] = {
         "type": "http",
         "method": "GET",
         "query_string": ws_scope.get("query_string", b""),
@@ -1037,7 +1038,7 @@ async def _auto_register_jwt_mapping(
 
     try:
         async with db_span("auto_register_jwt_mapping", "LiteLLM_JWTKeyMapping"):
-            await prisma_client.db.litellm_jwtkeymapping.create(
+            await JWTKeyMappingRepository(prisma_client).table.create(
                 data={
                     "jwt_issuer": jwt_issuer or "",
                     "jwt_claim_name": virtual_key_claim_field,
@@ -1571,7 +1572,6 @@ async def _user_api_key_auth_builder(
             route=route,
             request=request,
         )
-        # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name: Final = general_settings.get("litellm_key_header_name")
         if custom_litellm_key_header_name is not None:
             api_key = get_api_key_from_custom_header(
@@ -2386,7 +2386,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         include={"litellm_budget_table": True},
                     )
                     if _db_member is not None:
-                        team_member_info = LiteLLM_TeamMembership(**_db_member.model_dump())
+                        team_member_info = LiteLLM_TeamMembership.model_validate(_db_member.model_dump())
                         await user_api_key_cache.async_set_cache(
                             key=_cache_key,
                             value=team_member_info,
@@ -3063,6 +3063,9 @@ async def _run_centralized_common_checks(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
+            object_permission_id=(
+                user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
+            ),
         )
 
     if project_object is not None:
@@ -3211,7 +3214,7 @@ async def _reserve_budget_after_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request_data: dict,
     route: str,
-    llm_router: Any | None,
+    llm_router: litellm.Router | None,
     team_object: LiteLLM_TeamTableCachedObj | None,
     user_object: LiteLLM_UserTable | None,
     prisma_client: PrismaClient | None,
@@ -3257,7 +3260,7 @@ def _should_skip_budget_checks(
     request_data: dict,
     route: str,
     request: Request | None,
-    llm_router: Any | None,
+    llm_router: litellm.Router | None,
     team_id: str | None = None,
 ) -> bool:
     model: Final = _get_model_from_request_context(
@@ -3760,7 +3763,7 @@ async def _enforce_key_and_fallback_model_access(
     route: str,
     request: Request | None,
     llm_model_list: list | None,
-    llm_router: Any | None,
+    llm_router: litellm.Router | None,
 ) -> None:
     """
     Key-level model allowlist and client fallbacks (same as standard auth).
@@ -3796,7 +3799,7 @@ async def _enforce_key_and_fallback_model_access(
         fallback_names: Final = tuple(
             name
             for target in iter_request_fallback_targets(request_data)
-            if (name := _fallback_target_model_name(target)) is not None
+            if (name := fallback_target_model_name(target)) is not None
         )
 
         for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
@@ -3811,16 +3814,6 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
                 user_model=None,
             )
-
-
-def _fallback_target_model_name(target: object) -> str | None:
-    if isinstance(target, str):
-        return target
-    if isinstance(target, dict):
-        model: Final = target.get("model")
-        if isinstance(model, str):
-            return model
-    return None
 
 
 async def _run_post_custom_auth_checks(

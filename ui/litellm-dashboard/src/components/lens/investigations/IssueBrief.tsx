@@ -51,7 +51,7 @@ export function IssueBrief({ title, brief }: { title: string; brief: IssueBrief 
             className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs font-medium hover:bg-muted"
           >
             {copied === agent.name ? (
-              <Check className="size-3.5 text-emerald-600" />
+              <Check className="size-3.5 text-success" />
             ) : (
               <img src={agent.logo} alt="" aria-hidden className="size-3.5" />
             )}
