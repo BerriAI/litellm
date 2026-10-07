@@ -11,7 +11,6 @@ from httpx import Request, Response
 import litellm
 import litellm.integrations.datadog.datadog as datadog_module
 from litellm.integrations.datadog.datadog import DataDogLogger
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_env,
     get_datadog_hostname,
@@ -133,11 +132,6 @@ def datadog_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DD_BASE_URL", raising=False)
     monkeypatch.setattr(litellm, "datadog_params", None)
     monkeypatch.setattr(litellm, "datadog_use_v1", False)
-
-
-@pytest.fixture
-async def drained_logging_worker() -> None:
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.clear_queue(), timeout=10)
 
 
 @pytest.fixture

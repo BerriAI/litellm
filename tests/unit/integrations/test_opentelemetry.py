@@ -7067,7 +7067,7 @@ async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
         litellm.turn_off_message_logging = False
 
 
-@pytest.mark.usefixtures("unset_global_tracer_provider")
+@pytest.mark.usefixtures("unset_global_tracer_provider", "drained_logging_worker")
 @pytest.mark.asyncio
 async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
     """

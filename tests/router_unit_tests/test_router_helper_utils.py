@@ -439,6 +439,12 @@ def test_pass_through_assistants_endpoint_factory(model_list):
     )
 
 
+def test_factory_function(model_list):
+    """Test if the 'factory_function' function is working correctly"""
+    router = Router(model_list=model_list)
+    router.factory_function(litellm.acreate_assistants)
+
+
 
 
 

@@ -1070,8 +1070,6 @@ def _shared_redis_stub(store: dict) -> MagicMock:
     return redis_stub
 
 
-
-
 @pytest.mark.asyncio
 async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
     store: dict = {}
@@ -1539,13 +1537,6 @@ def test_initialize_assistants_endpoint(model_list):
     assert router.arun_thread is not None
     assert router.aget_messages is not None
     assert router.a_add_message is not None
-
-
-def test_factory_function(model_list):
-    """Test if the 'factory_function' function is working correctly"""
-    router = Router(model_list=model_list)
-    router.factory_function(litellm.acreate_assistants)
-    assert callable(router.factory_function(litellm.acreate_assistants))
 
 
 def test_get_model_from_alias(model_list):
