@@ -5,9 +5,17 @@ qa_dir=$(mktemp -d)
 cluster=lens-install-ci
 forward_pids=()
 cleanup() {
+  local status=$?
+  if (( status != 0 )); then
+    for log in "$qa_dir"/*-forward.log; do
+      if [[ -f "$log" ]]; then cat "$log" >&2; fi
+    done
+    if [[ -n "${namespace:-}" ]]; then diagnose || true; fi
+  fi
   for pid in "${forward_pids[@]}"; do kill "$pid" 2>/dev/null || true; done
-  kind delete cluster --name "$cluster"
+  kind delete cluster --name "$cluster" || true
   rm -rf "$qa_dir"
+  return "$status"
 }
 trap cleanup EXIT
 umask 077
@@ -39,8 +47,28 @@ saved_trace() {
 
 diagnose() {
   kubectl -n "$namespace" get pods
+  kubectl -n "$namespace" get services,endpoints
   kubectl -n "$namespace" get events --sort-by=.lastTimestamp | tail -30
   kubectl -n "$namespace" logs --all-containers -l app.kubernetes.io/instance=lens --tail=50 || true
+  return 1
+}
+
+forward() {
+  local service=$1 local_port=$2 remote_port=$3
+  local log="$qa_dir/$service-forward.log"
+  kubectl -n "$namespace" port-forward --address 127.0.0.1 --pod-running-timeout=30s \
+    "service/$service" "$local_port:$remote_port" > "$log" 2>&1 &
+  local pid=$!
+  forward_pids+=("$pid")
+  for attempt in $(seq 1 150); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      cat "$log" >&2
+      return 1
+    fi
+    if rg -q "^Forwarding from 127\\.0\\.0\\.1:$local_port ->" "$log"; then return 0; fi
+    sleep 0.2
+  done
+  cat "$log" >&2
   return 1
 }
 
@@ -173,10 +201,8 @@ YAML
   install=(helm upgrade --install lens "helm/$chart" -n "$namespace" \
     -f "$qa_dir/common.yaml" -f "$qa_dir/chart.yaml" --wait --timeout 8m)
   "${install[@]}" || diagnose
-  kubectl -n "$namespace" port-forward "service/$control" "14418:$control_port" > "$qa_dir/control-forward.log" 2>&1 &
-  forward_pids+=("$!")
-  kubectl -n "$namespace" port-forward service/lens-lens-worker 14419:4318 > "$qa_dir/lens-forward.log" 2>&1 &
-  forward_pids+=("$!")
+  forward "$control" 14418 "$control_port"
+  forward lens-lens-worker 14419 4318
   for attempt in $(seq 1 30); do
     if api /lens/service > "$qa_dir/status.json" && jq -e '.connected and .status.storage_ready' "$qa_dir/status.json"; then break; fi
     sleep 1
@@ -202,8 +228,7 @@ YAML
   kubectl -n "$namespace" rollout restart "deployment/$control" deployment/lens-lens-worker
   kubectl -n "$namespace" rollout status "deployment/$control" --timeout=180s
   kubectl -n "$namespace" rollout status deployment/lens-lens-worker --timeout=180s
-  kubectl -n "$namespace" port-forward "service/$control" "14418:$control_port" > "$qa_dir/control-forward.log" 2>&1 &
-  forward_pids+=("$!")
+  forward "$control" 14418 "$control_port"
   saved_trace
   printf '%s: fresh install, direct ingestion, custom database, upgrade, and restart passed\n' "$chart"
   for pid in "${forward_pids[@]}"; do kill "$pid"; wait "$pid" 2>/dev/null || true; done
