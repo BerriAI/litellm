@@ -463,7 +463,11 @@ def test_read_failures_carry_a_code_per_kind_without_exposing_database_details(
     assert (retry_after == str(TRACE_READ_RETRY_AFTER_SECONDS)) == (status == 503), retry_after
 
 
-@pytest.mark.parametrize("query", ("page_size=0", "page_size=501", "cursor=" + "x" * 513))
+@pytest.mark.parametrize(
+    "query",
+    ("page_size=0", "page_size=501", "cursor=" + "x" * 513),
+    ids=("zero-page-size", "oversized-page-size", "oversized-cursor"),
+)
 def test_trace_page_rejects_unbounded_parameters(client: TestClient, receiver: MagicMock, query: str) -> None:
     response: Final = client.get(f"/v1/traces/t1?{query}")
     assert response.status_code == 422

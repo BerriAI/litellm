@@ -2,13 +2,6 @@ name: Lens installation smoke
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - helm/**
-      - deploy/lens/**
-      - litellm-rust/crates/lens/**
-      - tests/e2e/migrations/lens_helm_smoke.sh
-      - .github/workflows/lens-install-smoke.yml
 
 permissions:
   contents: read
@@ -18,9 +11,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  helm-install:
-    runs-on: ubuntu-latest
-    timeout-minutes: 75
+  build-images:
+    runs-on: ubuntu-latest-16-cores
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -35,6 +28,38 @@ jobs:
             -f Dockerfile -t lens-ci-monolith:v0.0.0-lens-ci .
           docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci \
             -f deploy/lens/Dockerfile -t lens-ci-worker:v0.0.0-lens-ci .
+      - name: Save the matching release images
+        run: |
+          images=()
+          for component in gateway backend ui migrations monolith worker; do
+            images+=("lens-ci-$component:v0.0.0-lens-ci")
+          done
+          docker save "${images[@]}" | gzip -1 > "$RUNNER_TEMP/lens-install-images.tar.gz"
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: lens-install-images-${{ github.sha }}
+          path: ${{ runner.temp }}/lens-install-images.tar.gz
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+          overwrite: true
+
+  helm-install:
+    needs: build-images
+    runs-on: ubuntu-latest-16-cores
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: lens-install-images-${{ github.sha }}
+          path: ${{ runner.temp }}
+      - name: Load the matching release images
+        run: |
+          gzip -dc "$RUNNER_TEMP/lens-install-images.tar.gz" | docker load
+          rm "$RUNNER_TEMP/lens-install-images.tar.gz"
       - name: Install pinned Kubernetes test tools
         run: |
           curl --fail --location --output "$RUNNER_TEMP/kind" \
