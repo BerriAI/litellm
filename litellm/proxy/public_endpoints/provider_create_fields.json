@@ -3145,7 +3145,7 @@
   },
   {
     "provider": "APIMODELS",
-    "provider_display_name": "APIMODELS",
+    "provider_display_name": "apimodels.app",
     "litellm_provider": "apimodels",
     "credential_fields": [
       {
@@ -3169,7 +3169,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "apimodels/gpt-5.6-luna"
+    "default_model_placeholder": "apimodels/claude-opus-5-5"
   },
   {
     "provider": "Snowflake",
