@@ -581,6 +581,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_sp
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.lens.dataset_endpoints import router as lens_dataset_router
 from litellm.proxy.lens.endpoints import router as lens_router
+from litellm.proxy.lens.feedback_endpoints import router as lens_feedback_router
 from litellm.proxy.lens.repository import WriterDatabase
 from litellm.proxy.lens.signal_repository import SignalRepository
 from litellm.proxy.lens.signals import (
@@ -20188,6 +20189,7 @@ app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(lens_dataset_router)
+app.include_router(lens_feedback_router)
 app.include_router(lens_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
