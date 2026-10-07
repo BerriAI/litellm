@@ -93,6 +93,4 @@ print(build())
 
 
 def test_deferred_first_use_build_leaves_caller_locals_snapshot_untouched() -> None:
-    # video_generation forwards its locals() snapshot as request params; a frame-walking rebuild
-    # used to sync later locals (including the snapshot itself) into it
     assert _run_probe(_CALLER_LOCALS_PROBE, "true") == "[]"
