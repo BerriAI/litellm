@@ -313,6 +313,40 @@ async def test_enforced_cache_hit_avoids_credential_read_and_rejects_changed_pol
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("with_redis", [False, True])
+async def test_runtime_store_cannot_recache_a_revoked_in_flight_read(
+    monkeypatch: pytest.MonkeyPatch, with_redis: bool
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import per_user_oauth_store as module
+
+    read_completed = asyncio.Event()
+    resume = asyncio.Event()
+    credential = {"access_token": "revoked-token"}
+
+    async def read(user_id: str, server_id: str) -> dict[str, str] | None:
+        captured = credential.copy() if credential else None
+        if captured is not None:
+            read_completed.set()
+            await resume.wait()
+        return captured
+
+    coordinator = AsyncMock() if with_redis else None
+    monkeypatch.setattr(module, "runtime_refresh_coordinator", lambda: coordinator)
+    monkeypatch.setattr(module, "_read_credential", read)
+    store = module.build_per_user_oauth_token_store(lambda _: None)
+    pending = asyncio.create_task(store.fetch("alice", "srv"))
+    await read_completed.wait()
+    credential.clear()
+    await store.invalidate("alice", "srv")
+    resume.set()
+    assert (await pending).access_token == "revoked-token"
+    assert await store.fetch("alice", "srv") is None
+    assert await store.fetch("alice", "srv") is None
+
+
+@pytest.mark.asyncio
 async def test_expired_unverified_credential_never_reaches_refresh(monkeypatch):
     from unittest.mock import AsyncMock
 

@@ -2,9 +2,9 @@
 
 Assembles ``Cached(Refreshing(V2PerUserTokenStore))`` and replaces ``V1PerUserTokenStore`` in the
 resolver. The runtime collaborators (DB, HTTP, the shared cache, Redis) are LiteLLM globals not ready
-at import time, so the chain is built lazily on first use. When Redis is wired it uses the
-cross-replica path (DualCache-backed cache + ``SET NX PX`` coordinator); otherwise it falls back to
-the foundation's in-process defaults (correct for a single replica). The DB read/refresh-grant/persist
+at import time, so the chain is built lazily on first use. Token reads stay database-authoritative
+so another replica's disconnect takes effect without waiting for a cache TTL. Redis still provides
+the cross-replica refresh coordinator. The DB read/refresh-grant/persist
 collaborators acquire their globals per call, mirroring v1's lazy-import pattern.
 """
 
@@ -20,10 +20,6 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import creden
 from litellm.proxy._experimental.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
 )
-from litellm.proxy._experimental.mcp_server.outbound_credentials.dual_cache_token_backend import (
-    AsyncCache,
-    DualCacheTokenCacheBackend,
-)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     CachedOAuthTokenStore,
     InvalidatableOAuthTokenStore,
@@ -35,9 +31,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.runtime_refresh_coordinator import (
     runtime_refresh_coordinator,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.token_cache_codec import (
-    OAuthTokenCacheCodec,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.v2_token_store import (
     V2PerUserTokenStore,
@@ -51,6 +44,17 @@ _DEFAULT_TTL_SECONDS: Final = 300.0
 
 ServerLookup = Callable[[str], "MCPServer | None"]
 StoreBuilder = Callable[[ServerLookup], tuple[InvalidatableOAuthTokenStore, bool]]
+
+
+class _NoopTokenCacheBackend:
+    async def get(self, user_id: str, server_id: str) -> OAuthToken | None:
+        return None
+
+    async def set(self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float) -> None:
+        pass
+
+    async def delete(self, user_id: str, server_id: str) -> None:
+        pass
 
 
 async def _read_credential(user_id: str, server_id: str) -> Mapping[str, object] | None:
@@ -123,27 +127,10 @@ def _redis_cache_is_available() -> bool:
 
 
 def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, RefreshCoordinator | None, bool]:
-    """The cross-replica cache + coordinator when Redis is wired, else ``(None, None, False)`` so the
-    foundation's in-process defaults are used (a single replica needs no shared cache or lock).
-    """
-    from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: PLC0415
-        decrypt_value_helper,
-        encrypt_value_helper,
-    )
-    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
-
+    """Retain refresh coordination without caching revocable credentials."""
     coordinator: Final = runtime_refresh_coordinator()
-    if coordinator is None:
-        return None, None, False
-    codec: Final = OAuthTokenCacheCodec(
-        encrypt_value_helper,
-        lambda blob: decrypt_value_helper(blob, "mcp_per_user_token", exception_type="debug"),
-    )
-    # user_api_key_cache satisfies the AsyncCache slice (DualCache types ttl via **kwargs) - an
-    # untyped-boundary cast.
-    cache: Final[AsyncCache] = user_api_key_cache  # pyright: ignore
-    backend: Final = DualCacheTokenCacheBackend(cache, codec)
-    return backend, coordinator, True
+    # Invalidation cannot fence a peer's completed read or its deferred Redis write.
+    return _NoopTokenCacheBackend(), coordinator, coordinator is not None
 
 
 async def _read_bound_credential(
