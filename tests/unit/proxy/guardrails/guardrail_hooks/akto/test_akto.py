@@ -1517,11 +1517,12 @@ def test_the_configured_chunk_rate_reaches_the_guardrail(configured):
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, g)
 
 
-def test_zero_settings_fall_back_to_the_defaults_instead_of_dropping_the_guardrail():
+@pytest.mark.parametrize("value", [0, -1])
+def test_non_positive_settings_fall_back_to_the_defaults_instead_of_dropping_the_guardrail(value):
     import litellm
 
-    zeros = {"guardrail_timeout": 0, "file_guardrail_timeout": 0, "streaming_sampling_rate": 0}
-    g = guardrail_initializer_registry["akto"](_akto_params(**zeros), {"guardrail_name": "akto"})
+    settings = {"guardrail_timeout": value, "file_guardrail_timeout": value, "streaming_sampling_rate": value}
+    g = guardrail_initializer_registry["akto"](_akto_params(**settings), {"guardrail_name": "akto"})
     try:
         assert (g.guardrail_timeout, g.file_guardrail_timeout, g.streaming_sampling_rate) == (5, 10, 5)
     finally:

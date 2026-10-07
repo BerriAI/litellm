@@ -143,6 +143,11 @@ def as_mapping(value: object) -> Mapping[str, object]:
 ALLOW: Final = AktoVerdict.model_validate({"allowed": True})
 
 
+def normalize_positive_setting(value: int | None, default: int) -> int:
+    """Unset, zero and negative settings use the default, since none of them can work."""
+    return value if value is not None and value > 0 else default
+
+
 def streaming_sampling_rate_from(litellm_params: LitellmParams) -> int | None:
     """Read from optional_params, or a top-level key that LitellmParams keeps as an extra."""
     nested: Final = litellm_params.optional_params
@@ -294,9 +299,13 @@ class AktoGuardrail(CustomGuardrail):
         self.akto_vxlan_id = akto_vxlan_id or os.environ.get("AKTO_VXLAN_ID", "0")
         self.context_source: Literal["ENDPOINT", "AGENTIC"] = context_source or DEFAULT_CONTEXT_SOURCE
         self.akto_metadata: Mapping[str, object] = akto_metadata or EMPTY
-        self.streaming_sampling_rate: int = streaming_sampling_rate or DEFAULT_STREAMING_SAMPLING_RATE
-        self.guardrail_timeout = guardrail_timeout or DEFAULT_GUARDRAIL_TIMEOUT
-        self.file_guardrail_timeout = file_guardrail_timeout or DEFAULT_FILE_GUARDRAIL_TIMEOUT
+        self.streaming_sampling_rate: int = normalize_positive_setting(
+            streaming_sampling_rate, DEFAULT_STREAMING_SAMPLING_RATE
+        )
+        self.guardrail_timeout: int = normalize_positive_setting(guardrail_timeout, DEFAULT_GUARDRAIL_TIMEOUT)
+        self.file_guardrail_timeout: int = normalize_positive_setting(
+            file_guardrail_timeout, DEFAULT_FILE_GUARDRAIL_TIMEOUT
+        )
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
 
         init_kwargs: Final[_CustomGuardrailKwargs] = {
