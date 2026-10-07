@@ -176,6 +176,16 @@ wait_for_proxy() {
   die "proxy not ready after ${startup_timeout}s; see $log_dir/proxy.log"
 }
 
+wait_for_lens() {
+  local lens_pid="$1"
+  for _ in $(seq 1 "$startup_timeout"); do
+    kill -0 "$lens_pid" 2>/dev/null || die "Lens exited; see $log_dir/worker.log"
+    curl -fsS --max-time "$readiness_request_timeout" "http://127.0.0.1:$lens_port/health/ready" >/dev/null 2>&1 && return
+    sleep 1
+  done
+  die "Lens not ready after ${startup_timeout}s; see $log_dir/worker.log"
+}
+
 wait_for_ui() {
   local ui_pid="$1"
   echo "lens-dev: waiting for the UI (log: $log_dir/ui.log)"
@@ -275,7 +285,7 @@ parse_args() {
 }
 
 main() {
-  local config_file exports proxy_pid ui_pid pid key_hint
+  local config_file exports proxy_pid ui_pid lens_pid pid key_hint
   parse_args "$@"
   if [ -n "${LENS_DEV_CONFIG:-}" ]; then
     [ -f "$LENS_DEV_CONFIG" ] || die "LENS_DEV_CONFIG not found: $LENS_DEV_CONFIG"
@@ -353,15 +363,16 @@ main() {
   wait_for_ui "$ui_pid"
   wait_for_proxy "$proxy_pid"
   ensure_worker_token
-  if [ -n "$seed_profile" ] || [ -n "$seed_logs_profile" ]; then seed_data; fi
-
   LITELLM_RELEASE_TAG="$source_release_tag" \
     LITELLM_MODE=PRODUCTION LITELLM_URL="$proxy_url" LENS_WORKER_TOKEN="$(cat "$token_file")" \
     LITELLM_LENS_SERVICE_TOKEN="$service_key" LITELLM_LENS_LISTEN="127.0.0.1:$lens_port" \
     CLICKHOUSE_URL="$clickhouse_url" CLICKHOUSE_DATABASE=litellm \
     "$repo_root/litellm-rust/target/debug/litellm-lens" \
     < /dev/null > "$log_dir/worker.log" 2>&1 &
-  pids+=("$!")
+  lens_pid=$!
+  pids+=("$lens_pid")
+  wait_for_lens "$lens_pid"
+  if [ -n "$seed_profile" ] || [ -n "$seed_logs_profile" ]; then seed_data; fi
 
   key_hint="password in $key_file"
   [ -z "${LENS_DEV_MASTER_KEY:-}" ] || key_hint="password from LENS_DEV_MASTER_KEY"

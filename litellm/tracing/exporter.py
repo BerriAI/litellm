@@ -5,10 +5,10 @@ from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
 from io import BytesIO
 from typing import Final
-from typing_extensions import TypeIs
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypeIs
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import spend_log_row_from_payload
@@ -23,11 +23,15 @@ SHUTDOWN_SECONDS: Final = 3.0
 _PAYLOAD: Final = TypeAdapter(SpendLogPayload)
 
 
-def _is_mapping(value: object) -> TypeIs[Mapping[object, object]]:
+def _is_mapping(
+    value: object,
+) -> TypeIs[Mapping[object, object]]:  # guard-ok: bounds arbitrary callback mappings before validation
     return isinstance(value, Mapping)
 
 
-def _is_sequence(value: object) -> TypeIs[Sequence[object]]:
+def _is_sequence(
+    value: object,
+) -> TypeIs[Sequence[object]]:  # guard-ok: bounds arbitrary callback sequences before validation
     return isinstance(value, (tuple, list))
 
 
@@ -144,7 +148,7 @@ class LensExporter(CustomLogger):
         size = 2  # rebind-ok: count bytes in a bounded batch without copying records
         records: Final[deque[bytes]] = deque()  # mutable-ok: finite batch drained from the queue
         while self.queue and size + len(self.queue[0]) + 1 <= MAX_BATCH_BYTES:
-            record = self.queue.popleft()  # rebind-ok: drain each record into the bounded batch
+            record: Final = self.queue.popleft()
             size += len(record) + 1
             records.append(record)
         return tuple(records)

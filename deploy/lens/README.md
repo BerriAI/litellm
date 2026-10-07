@@ -194,26 +194,7 @@ For local fixture data, run `make lens-dev ARGS=--seed`. Use `make lens-dev ARGS
 
 Seeds append fresh IDs on every invocation and spread copies over recent timestamps. Restarts without `SEED` do not add data. Lens excludes activity received in the last two minutes, so wait two minutes after seeding before checking investigation previews. `LENS_DEV_SEED_COPIES` overrides total copies. Large seeds test data volume and pagination, rather than concurrent ingestion throughput or review accuracy. They can use substantial disk space; adjust `--copies` for your machine. Seeding expects the generated local tracing configuration. The old `run_tracing_proxy_local.sh --seed` command forwards to Lens dev, using its ports and saved master key
 
-Local ingestion limits are explicit and configurable. Set OTLP and ClickHouse variables before starting the proxy and seeder so both processes use the same settings. Invalid, zero and negative values fail instead of silently falling back. Changing these limits does not require rebuilding Rust
-
-| Environment variable | Default | Controls |
-| --- | --- | --- |
-| `LENS_DEV_SEED_COPIES` | 1 default, 2000 large | Total fixture copies |
-| `LENS_DEV_SEED_TIMEOUT_SECONDS` | 120 | Seeder HTTP timeout |
-| `OTLP_MAX_BODY_BYTES` | 16777216 | HTTP body and decompressed payload bytes |
-| `OTLP_MAX_CONCURRENT_INGESTS` | 2 | Concurrent proxy ingestion requests |
-| `OTLP_MAX_ATTRIBUTE_VALUE_BYTES` | 65536 | Stored attribute/content bytes |
-| `OTLP_MAX_DECODE_DEPTH` | 32 | Nested decode depth |
-| `OTLP_MAX_DECODE_NODES` | 65536 | JSON values or protobuf fields per export |
-| `OTLP_MAX_SPANS` | 4096 | Spans per export |
-| `OTLP_MAX_ATTRIBUTES` | 256 | Attributes per resource, scope, span, event or link |
-| `OTLP_MAX_EVENTS` | 256 | Events per span |
-| `OTLP_MAX_LINKS` | 256 | Links per span |
-| `OTLP_MAX_DECODED_SPAN_BYTES` | 16777216 | Decoded span allocation budget |
-| `CLICKHOUSE_TRACE_MAX_INSERT_BYTES` | 67108864 | Encoded trace or spend insert bytes |
-| `CLICKHOUSE_INSERT_TIMEOUT_SECONDS` | 30 | ClickHouse insert HTTP timeout |
-
-The wire parsers also enforce their library recursion limits (128 levels for JSON, 100 for protobuf). Raising the configured depth does not remove those parser limits.
+The Rust receiver bounds each upload and its decompressed body to 16 MiB and permits two ingestion requests at once per replica. Exporters should split large batches and retry backpressure. `LENS_DEV_SEED_COPIES` and `LENS_DEV_SEED_TIMEOUT_SECONDS` control the seeder; the receiver's limits are compiled into the service
 
 ## Quality evaluation
 
@@ -252,7 +233,7 @@ The hourly development pipeline pins all component images to the same selected c
 
 ## Worker dependencies
 
-The worker uses the same digest-pinned Wolfi base and Python version as the component images. Python dependencies and their hashes are locked in `deploy/lens/requirements.lock`. To update them, edit `deploy/lens/requirements.in`, then run `uv pip compile --universal --python-version 3.13 --generate-hashes --no-emit-index-url deploy/lens/requirements.in -o deploy/lens/requirements.lock`. The image installs only the locked wheels with hash verification. CI builds and scans both native architectures
+The service builds from the workspace Cargo.lock with a pinned Rust toolchain and a digest-pinned Wolfi runtime. It has no Python package dependencies. CPython and libseccomp support the confined calculation tool. CI builds, runs, and scans native amd64 and arm64 images
 
 ## Python analysis boundary
 
@@ -262,14 +243,14 @@ The native worker image builds a syscall policy with libseccomp and includes the
 
 Python execution requires a native Linux worker with Landlock ABI 3 or later and seccomp filtering. Build the image for the host architecture. Missing policy files, an incompatible kernel, or an unsupported host such as a macOS source worker returns a clear tool error. There is no unrestricted execution fallback. Keep the container's non-root user, dropped capabilities, no-new-privileges setting, read-only root and writable temporary mount
 
-The worker permits two Python children at once across all investigations. Set `LENS_PYTHON_CONCURRENCY` to a positive integer to change this worker-wide pool. Queued calls consume no child process or scratch directory; cancelling a queued call does not start it. Model, read and search concurrency are separate
+The worker permits two Python children at once across all investigations. Queued calls consume no child process or scratch directory; cancelling a queued call does not start it. Model, read and search concurrency are separate
 
 | Per-call resource | Default |
 | --- | --- |
 | Elapsed execution time | 60 seconds |
 | CPU time | 30 seconds |
 | Process address space | 512 MiB |
-| Captured stdout or stderr | 8 MiB per stream |
+| Captured stdout or stderr | 4 MiB per stream |
 | Individual scratch file size | 16 MiB |
 | Monitored scratch storage | 64 MiB |
 | Monitored scratch entries | 2,048 |
@@ -283,12 +264,11 @@ Results include `stdout`, `stderr`, `exit_code`, `error` and `output_complete`. 
 This is a process boundary sharing the worker's Linux kernel. The checked-in smoke test verifies useful Python operations, filesystem and process restrictions, raw syscall attempts, resource failures, mapping accounting, cleanup and cancellation in the actual image. Run it on the deployment's native architecture and kernel:
 
 ```bash
-docker build --build-arg LITELLM_RELEASE_TAG=lens-python-test \
-  -f deploy/lens/Dockerfile -t lens-worker:python-test .
-docker run --rm --pull never --read-only --cap-drop ALL \
+docker build --target smoke --build-arg LITELLM_RELEASE_TAG=lens-python-test \
+  -f deploy/lens/Dockerfile -t lens-worker:smoke .
+docker run --rm --read-only --cap-drop ALL \
   --security-opt no-new-privileges --network none \
-  --tmpfs /tmp:rw,noexec,nosuid,size=1g --entrypoint python -i \
-  lens-worker:python-test - < tests/proxy_behavior/lens/worker_python_smoke.py
+  --tmpfs /tmp:rw,noexec,nosuid,size=1g lens-worker:smoke
 ```
 
-The same checks can run through pytest by setting `LENS_TEST_WORKER_IMAGE` to an already-built native image. The worker image CI runs the standalone smoke without adding pytest to the production image
+The smoke target runs the Rust sandbox integration tests. The production image contains neither Cargo nor the test executable
