@@ -16,6 +16,9 @@ class HiddenParamsModelView(MutableMapping[str, object]):
         self._hidden_params = hidden_params
 
     def __getitem__(self, key: str) -> object:
+        fields: Final = self._fields()
+        if key not in fields:
+            raise KeyError(key)
         try:
             return cast(object, getattr(self._hidden_params, key))
         except AttributeError as error:
@@ -25,18 +28,22 @@ class HiddenParamsModelView(MutableMapping[str, object]):
         setattr(self._hidden_params, key, value)
 
     def __delitem__(self, key: str) -> None:
+        fields: Final = self._fields()
+        if key not in fields:
+            raise KeyError(key)
         try:
             delattr(self._hidden_params, key)
         except AttributeError as error:
             raise KeyError(key) from error
 
     def __iter__(self) -> Iterator[str]:
-        fields: Final = cast(dict[str, object], self._hidden_params.model_dump())
-        return iter(fields)
+        return iter(self._fields())
 
     def __len__(self) -> int:
-        fields: Final = cast(dict[str, object], self._hidden_params.model_dump())
-        return len(fields)
+        return len(self._fields())
+
+    def _fields(self) -> dict[str, object]:
+        return cast(dict[str, object], self._hidden_params.model_dump(exclude_unset=True))
 
 
 def _get_hidden_params_storage(obj: object) -> object | None:

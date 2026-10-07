@@ -156,6 +156,44 @@ def test_get_or_create_hidden_params_wraps_hidden_params_storage() -> None:
     assert "headers" not in tuple(hidden_params)
 
 
+def test_hidden_params_model_view_excludes_unset_fields() -> None:
+    class PlainResponse:
+        pass
+
+    storage: Final = HiddenParams()
+    response: Final = PlainResponse()
+    setattr(response, HIDDEN_PARAMS_ATTR, storage)
+    view: Final = get_or_create_hidden_params(response)
+
+    assert not view
+    assert list(view) == []
+    assert "response_cost" not in view
+    assert "_response_ms" not in view
+    assert view.get("model_id", "d") == "d"
+    assert "_response_ms" not in storage.model_dump(exclude_unset=True)
+
+    with pytest.raises(KeyError, match="response_cost"):
+        del view["response_cost"]
+
+    view["model_id"] = "m"
+    view["extra"] = 1
+
+    assert "model_id" in view
+    assert "extra" in view
+    assert set(view) == {"model_id", "extra"}
+    assert storage.model_id == "m"
+    assert storage.extra == 1
+
+    fallback_response: Final = PlainResponse()
+    setattr(fallback_response, HIDDEN_PARAMS_ATTR, HiddenParams())
+    fallback_view: Final = get_or_create_hidden_params(fallback_response)
+    merged_after_fallback: Final = {**fallback_view, **{"model_id": "m1"}}
+    merged_before_fallback: Final = {**{"model_id": "m1"}, **fallback_view}
+
+    assert merged_after_fallback == {"model_id": "m1"}
+    assert merged_before_fallback == {"model_id": "m1"}
+
+
 def test_openai_text_completion_conversion_preserves_hidden_params_storage() -> None:
     source: Final = TextCompletionResponse(
         id="cmpl-test",
