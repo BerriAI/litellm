@@ -1,7 +1,7 @@
 "use client";
 
 import { getCoreRowModel, useReactTable, type ColumnDef, type TableOptions } from "@tanstack/react-table";
-import { ArrowDown, ChevronRight } from "lucide-react";
+import { ArrowDown, ChevronRight, Plus } from "lucide-react";
 import { createContext, useContext, useEffect } from "react";
 import { useInView } from "react-intersection-observer";
 
@@ -119,7 +119,9 @@ function InputCell({ run }: { run: TraceSummary }) {
           Partial totals
         </span>
       )}
-      <span className="hidden shrink-0 font-mono text-xs text-muted-foreground 2xl:inline">{run.trace_id}</span>
+      <span className="hidden max-w-32 min-w-0 shrink-[100] truncate font-mono text-xs text-muted-foreground 2xl:inline">
+        {run.trace_id}
+      </span>
     </div>
   );
 }
@@ -135,24 +137,24 @@ function FindingCount({ run }: { run: TraceSummary }) {
 
 function SignalsHeader() {
   const { configured, onSetUp } = useContext(SignalSetupContext);
-  if (configured) return <>Signals</>;
+  if (configured || !onSetUp) return <>Signals</>;
   return (
     <span className="inline-flex items-center gap-2 whitespace-nowrap">
       Signals
-      {onSetUp ? (
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onSetUp();
-          }}
-          className="rounded-sm font-medium tracking-normal text-destructive normal-case outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
-        >
-          Set up signals
-        </button>
-      ) : (
-        <span className="font-normal tracking-normal text-muted-foreground/70 normal-case">Not set up</span>
-      )}
+      <Button
+        type="button"
+        variant="outline"
+        size="xs"
+        aria-label="Set up signals"
+        onClick={(event) => {
+          event.stopPropagation();
+          onSetUp();
+        }}
+        className="h-5 rounded-full px-2 font-medium tracking-normal normal-case"
+      >
+        <Plus />
+        Set up
+      </Button>
     </span>
   );
 }

@@ -215,49 +215,45 @@ function SignalForm({ saved }: { saved: SignalConfig }) {
             <FieldError>{problems.threshold}</FieldError>
           </div>
         </div>
-      </SettingsCard>
-      <SettingsCard className="space-y-4">
-        <div>
-          <h3 className="text-sm font-medium">What to flag</h3>
-          <p className="text-xs text-muted-foreground">Each signal is a yes or no question about the whole run</p>
+        <div className="space-y-4 border-t border-border pt-4">
+          <WatchPicker
+            label="Flag runs where"
+            options={SIGNAL_LIBRARY}
+            selected={picked}
+            onChange={pick}
+            onAddCustom={addRow}
+            addDisabled={draft.rows.length >= MAX_SIGNALS}
+          />
+          {custom.length > 0 && (
+            <ul aria-label="Custom signals" className="space-y-2">
+              {custom.map((row) => (
+                <SignalFields
+                  key={row.key}
+                  row={row}
+                  problems={problems.rows.get(row.key)}
+                  onChange={(changed) => setRows(draft.rows.map((other) => (other.key === row.key ? changed : other)))}
+                  onRemove={() => setRows(draft.rows.filter((other) => other.key !== row.key))}
+                />
+              ))}
+            </ul>
+          )}
+          {draft.rows.length === 0 && (
+            <p className="text-xs text-muted-foreground">Pick at least one signal to flag traces</p>
+          )}
+          <FieldError>{problems.signals}</FieldError>
         </div>
-        <WatchPicker
-          label="Flag runs where"
-          options={SIGNAL_LIBRARY}
-          selected={picked}
-          onChange={pick}
-          onAddCustom={addRow}
-          addDisabled={draft.rows.length >= MAX_SIGNALS}
-        />
-        {custom.length > 0 && (
-          <ul aria-label="Custom signals" className="space-y-2">
-            {custom.map((row) => (
-              <SignalFields
-                key={row.key}
-                row={row}
-                problems={problems.rows.get(row.key)}
-                onChange={(changed) => setRows(draft.rows.map((other) => (other.key === row.key ? changed : other)))}
-                onRemove={() => setRows(draft.rows.filter((other) => other.key !== row.key))}
-              />
-            ))}
-          </ul>
-        )}
-        {draft.rows.length === 0 && (
-          <p className="text-xs text-muted-foreground">Pick at least one signal to flag traces</p>
-        )}
-        <FieldError>{problems.signals}</FieldError>
+        <div className="flex items-center justify-end gap-3 border-t border-border pt-4">
+          {save.error && (
+            <p role="alert" className="text-sm text-destructive">
+              Could not save signals: {save.error.message}
+            </p>
+          )}
+          {save.isSuccess && !dirty && <p className="text-xs text-muted-foreground">Saved</p>}
+          <Button disabled={!dirty || problems.any || save.isPending} onClick={() => save.mutate(next)}>
+            {save.isPending ? "Saving…" : "Save signals"}
+          </Button>
+        </div>
       </SettingsCard>
-      <div className="flex items-center justify-end gap-3">
-        {save.error && (
-          <p role="alert" className="text-sm text-destructive">
-            Could not save signals: {save.error.message}
-          </p>
-        )}
-        {save.isSuccess && !dirty && <p className="text-xs text-muted-foreground">Saved</p>}
-        <Button disabled={!dirty || problems.any || save.isPending} onClick={() => save.mutate(next)}>
-          {save.isPending ? "Saving…" : "Save signals"}
-        </Button>
-      </div>
     </>
   );
 }
