@@ -581,8 +581,16 @@ def setup_and_teardown():
     loop.close()
     asyncio.set_event_loop(None)
 
-def _make_router(model_list: list, **kwargs) -> Router:
-    return Router(model_list=model_list, **kwargs)
+def _make_router(
+    model_list: list,
+    allowed_fails: int | None = None,
+    allowed_fails_policy: AllowedFailsPolicy | None = None,
+) -> Router:
+    return Router(
+        model_list=model_list,
+        allowed_fails=allowed_fails,
+        allowed_fails_policy=allowed_fails_policy,
+    )
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestDeploymentLevelAllowedFails:

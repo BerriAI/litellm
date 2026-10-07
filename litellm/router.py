@@ -66,6 +66,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    KUBERNETES_POD_ROUTING_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
@@ -965,6 +966,7 @@ class Router:
         fallback_access_check: FallbackAccessCheck | None = None,
         fallback_budget_check: FallbackBudgetCheck | None = None,
         auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
+        kubernetes_pod_discovery: KubernetesPodDiscovery | None = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -1074,7 +1076,9 @@ class Router:
         cache_config: Final[dict[str, Any]] = {}
 
         self.client_ttl = client_ttl
-        self.kubernetes_pod_discovery: Final = KubernetesPodDiscovery()
+        self.kubernetes_pod_discovery: Final = (
+            kubernetes_pod_discovery if kubernetes_pod_discovery is not None else KubernetesPodDiscovery()
+        )
         if redis_url is not None or (redis_host is not None and redis_port is not None):
             cache_type = "redis"
 
@@ -1372,7 +1376,8 @@ class Router:
         """
         Returns a list of valid arguments for the Router.__init__ method.
         """
-        arg_spec: Final = inspect.getfullargspec(Router.__init__)
+        router_init: Final[Callable[..., None]] = Router.__init__
+        arg_spec: Final = inspect.getfullargspec(router_init)
         valid_args: Final = arg_spec.args + arg_spec.kwonlyargs
         if "self" in valid_args:
             valid_args.remove("self")
@@ -4157,6 +4162,7 @@ class Router:
         metadata_variable_name: Final = get_router_metadata_variable_name(
             function_name=function_name,
         )
+        routing: Final = deployment.get(KUBERNETES_POD_ROUTING_KEY)
 
         kwargs.setdefault(metadata_variable_name, {}).update(
             {
@@ -4164,8 +4170,16 @@ class Router:
                 "model_info": model_info,
                 "api_base": deployment_api_base,
                 "deployment_model_name": deployment_model_name,
+                KUBERNETES_POD_ROUTING_KEY: routing,
             }
         )
+        other_bucket: Final = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
+        other_bucket_metadata: Final = kwargs.get(other_bucket)
+        if isinstance(other_bucket_metadata, Mapping) and KUBERNETES_POD_ROUTING_KEY in other_bucket_metadata:
+            kwargs[other_bucket] = {  # rebind-ok: this method updates the router's request kwargs in place
+                **other_bucket_metadata,
+                KUBERNETES_POD_ROUTING_KEY: routing,
+            }
 
         # A retry/fallback reuses this same kwargs dict for the next deployment.
         # Refund and clear any reservation the previous deployment attempt left
