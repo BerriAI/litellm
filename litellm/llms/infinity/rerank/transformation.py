@@ -31,12 +31,16 @@ class _InfinityRerankUsage(TypedDict, extra_items=ReadOnly[int]):
     """The token counters Infinity reports in the ``usage`` block of a rerank response."""
 
 
+class _InfinityRerankDocument(TypedDict):
+    text: ReadOnly[str]
+
+
 class _InfinityRerankResult(TypedDict):
     """One scored document in an Infinity ``/v1/rerank`` response."""
 
     index: ReadOnly[int]
     relevance_score: ReadOnly[float]
-    document: ReadOnly[str]
+    document: ReadOnly[str | _InfinityRerankDocument]
 
 
 class _InfinityRerankResponse(TypedDict):
@@ -104,8 +108,6 @@ class InfinityRerankConfig(CohereRerankConfig):
     ) -> RerankResponse:
         """
         Transform Infinity rerank response
-
-        No transformation required, Infinity follows Cohere API response format
         """
         try:
             raw_response_json: Final = _parse_rerank_response(raw_response)
@@ -129,8 +131,10 @@ class InfinityRerankConfig(CohereRerankConfig):
                     index=result.get("index"),
                     relevance_score=result.get("relevance_score"),
                 )
-                if result.get("document"):
-                    _rerank_response["document"] = RerankResponseDocument(text=result.get("document"))
+                if document := result.get("document"):
+                    _rerank_response["document"] = RerankResponseDocument(
+                        text=document.get("text") if isinstance(document, Mapping) else document
+                    )
                 cohere_results.append(_rerank_response)
         if cohere_results is None:
             raise ValueError(f"No results found in the response={raw_response_json}")
