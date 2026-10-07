@@ -659,7 +659,14 @@ class VertexPassthroughLoggingHandler:
                 continue
             all_openai_chunks.append(parsed_chunk)
 
-        complete_streaming_response: Final = litellm.stream_chunk_builder(chunks=all_openai_chunks)
+        # With the logging object the builder leaves pricing to the logger,
+        # which honours the deployment's custom pricing; without it the
+        # builder stamps a cost priced by model name alone, which the logger
+        # then reuses as already calculated.
+        complete_streaming_response: Final = litellm.stream_chunk_builder(
+            chunks=all_openai_chunks,
+            logging_obj=litellm_logging_obj,
+        )
 
         return complete_streaming_response
 
