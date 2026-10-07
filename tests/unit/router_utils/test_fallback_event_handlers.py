@@ -9,6 +9,8 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils import get_llm_provider_logic
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.utils import Usage
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import(
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -127,6 +129,82 @@ class RecordingRouter:
     async def async_function_with_fallbacks(self, *args, **kwargs):
         self.received_kwargs = kwargs
         return StreamingWrapper()
+
+
+def _request_logging_obj() -> Logging:
+    return Logging(
+        model="primary-model",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="fallback-hop",
+        function_id="fallback-hop",
+    )
+
+
+class StashRecordingRouter(FakeRouter):
+    def __init__(self) -> None:
+        self.stash_when_hop_opened: list[object] = []
+
+    async def async_function_with_fallbacks(self, *args, **kwargs):
+        self.stash_when_hop_opened.append(kwargs["litellm_logging_obj"].model_call_details.get("combined_usage_object"))
+        return StreamingWrapper()
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_partial_usage():
+    """A stream the failed attempt dropped stashed the usage it consumed on the request's logging object. The
+    hop that replaces it logs its own usage, so the stash is gone by the time the hop opens."""
+    router = StashRecordingRouter()
+    logging_obj = _request_logging_obj()
+    logging_obj.record_partial_usage_for_failure(Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53), 0.01)
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["fallback-model"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("stream dropped before content"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert router.stash_when_hop_opened == [None]
+    assert "response_cost" not in logging_obj.model_call_details
+
+
+class HopLoggingItsOwnFailureRouter(AlwaysFailRouter):
+    async def async_function_with_fallbacks(self, *args, **kwargs):
+        kwargs["litellm_logging_obj"].model_call_details["has_logged_async_failure"] = True
+        raise RuntimeError("fallback model also failed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_already_logged", [False, True])
+async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_logged: bool):
+    """The manual cooldown stands in for the failure callbacks the logging object blocks once a failure has
+    been logged. A hop whose own failure was the first one logged already ran them, so only a hop that failed
+    with the flag already set gets the manual cooldown."""
+    logging_obj = _request_logging_obj()
+    if failure_already_logged:
+        logging_obj.model_call_details["has_logged_async_failure"] = True
+
+    with (
+        patch("litellm.router_utils.fallback_event_handlers._trigger_cooldown_for_failed_deployment") as trigger,
+        pytest.raises(RuntimeError),
+    ):
+        await run_async_fallback(
+            litellm_router=HopLoggingItsOwnFailureRouter(),
+            fallback_model_group=["fallback-model"],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("stream dropped before content"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert trigger.call_count == (1 if failure_already_logged else 0)
 
 
 @pytest.mark.asyncio
