@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, cast
 
 import litellm
@@ -35,12 +36,6 @@ def init_guardrails_v2(
             )
         except (ValueError, TypeError) as init_error:
             if _is_default_on(guardrail):
-                # A default_on guardrail runs on every request. Starting without it is
-                # fail-open: every request reaches the provider carrying whatever this
-                # guardrail was configured to block or redact, and the only sign is one
-                # log line at startup. That is the case for a config written for a newer
-                # LiteLLM (a guardrail type this release does not know) as much as for a
-                # bad parameter, so the proxy stops here instead.
                 raise ValueError(
                     f"Guardrail '{guardrail.get('guardrail_name')}' is default_on and could not be "
                     f"initialized, so the proxy will not start without it: {init_error}"
@@ -60,12 +55,28 @@ def init_guardrails_v2(
     _populate_router_guardrail_list(guardrail_list=guardrail_list)
 
 
-def _is_default_on(guardrail: dict) -> bool:
-    """Whether a config entry asks to run on every request (`litellm_params.default_on`)."""
-    litellm_params = guardrail.get("litellm_params")
-    if isinstance(litellm_params, dict):
-        return litellm_params.get("default_on") is True
-    return getattr(litellm_params, "default_on", None) is True
+_TRUE_WORDS: Final = frozenset({"true", "1", "yes", "on", "t", "y"})
+
+
+def _is_default_on(guardrail: Mapping[str, object]) -> bool:
+    """Whether a config entry asks to run on every request (`litellm_params.default_on`).
+
+    Read from the raw config, before `LitellmParams` has parsed it, so the same values
+    pydantic would accept as true (`true`, `"true"`, `1`, `"yes"`) count as true here.
+    """
+    litellm_params: Final = guardrail.get("litellm_params")
+    value: Final = (
+        litellm_params.get("default_on")
+        if isinstance(litellm_params, Mapping)
+        else getattr(litellm_params, "default_on", None)
+    )
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUE_WORDS
+    return False
 
 
 def _populate_router_guardrail_list(guardrail_list: list[Guardrail]) -> None:

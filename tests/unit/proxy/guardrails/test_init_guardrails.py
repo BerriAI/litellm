@@ -399,6 +399,31 @@ def test_init_guardrails_v2_stops_boot_when_a_default_on_guardrail_cannot_be_ini
         init_guardrails_v2(all_guardrails=all_guardrails)
 
 
+@pytest.mark.parametrize("default_on", [True, "true", "True", 1, "1", "yes"])
+def test_default_on_is_read_the_way_litellm_params_would_parse_it(default_on):
+    """The config value reaches this check raw, before LitellmParams parses it. Every spelling
+    pydantic accepts as true must stop the boot too; `default_on: "true"` from a YAML string
+    is as required as `default_on: true`."""
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "pii-redaction",
+            "litellm_params": {
+                "guardrail": "a_guardrail_type_this_release_does_not_know",
+                "mode": "pre_call",
+                "default_on": default_on,
+            },
+        },
+    ]
+
+    with pytest.raises(ValueError, match="is default_on and could not be initialized"):
+        init_guardrails_v2(all_guardrails=all_guardrails)
+
+
 def test_init_guardrails_v2_still_skips_an_optional_guardrail_it_cannot_initialize():
     """
     The skip (#34940) stays for guardrails that are not default_on: nothing runs them
