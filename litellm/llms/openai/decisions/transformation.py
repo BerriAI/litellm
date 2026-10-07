@@ -19,6 +19,9 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
     def get_default_api_base(self) -> str | None:
         return "https://api.openai.com"
 
+    def resolve_api_base(self, api_base: str | None) -> str | None:
+        return api_base or litellm.api_base or self._first_secret(self.api_base_env) or self.get_default_api_base()
+
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or litellm.api_key or litellm.openai_key or self._first_secret(self.api_key_env)
 

@@ -244,6 +244,20 @@ async def test_openai_decisions_fall_back_to_the_global_openai_key(
 
 
 @pytest.mark.asyncio
+async def test_openai_decisions_honor_the_global_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route: Final = respx_mock.post("https://gateway.example.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", "https://gateway.example.com/v1")
+
+    await litellm.adecisions(model="openai/gpt-6-luna", input=_INPUT, questions=_predicate(), api_key="caller-key")
+
+    assert route.called
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("label", "input_value", "questions"),
     (
