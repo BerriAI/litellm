@@ -1974,6 +1974,12 @@ async def _sync_user_role_from_jwt_role_map(
         )
 
 
+def _login_role_from_db(user_info: LiteLLM_UserTable | NewUserResponse | None) -> str:
+    if user_info is None or user_info.user_role is None:
+        return LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+    return user_info.user_role
+
+
 def apply_user_info_values_to_sso_user_defined_values(
     user_info: LiteLLM_UserTable | NewUserResponse | None,
     user_defined_values: SSOUserDefinedValues | None,
@@ -1993,12 +1999,8 @@ def apply_user_info_values_to_sso_user_defined_values(
         verbose_proxy_logger.info("Using SSO role: %s (DB role was: %s)", sso_role, db_role)
     else:
         # SSO didn't provide a valid role, fall back to DB role or default
-        if user_info is None or user_info.user_role is None:
-            user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            verbose_proxy_logger.debug("No SSO or DB role found, using default: INTERNAL_USER_VIEW_ONLY")
-        else:
-            user_defined_values["user_role"] = user_info.user_role
-            verbose_proxy_logger.debug("Using DB role: %s", user_info.user_role)
+        user_defined_values["user_role"] = _login_role_from_db(user_info)
+        verbose_proxy_logger.debug("Using DB role or the view-only default: %s", user_defined_values["user_role"])
 
     # Preserve the user's existing models from the database
     if user_info is not None and hasattr(user_info, "models") and user_info.models:
@@ -2367,7 +2369,7 @@ async def _complete_cli_sso_callback_session(
 
     flow["session_data"] = {
         "user_id": cast(str, user_info.user_id),
-        "user_role": user_info.user_role,
+        "user_role": _login_role_from_db(user_info),
         "models": user_info.models if hasattr(user_info, "models") else [],
         "user_email": user_email,
         "teams": resolved_teams,

@@ -10,6 +10,7 @@ import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -52,6 +53,7 @@ COMPLETE_FORM_ACTION: Final = re.compile(r'action="([^"]+/sso/cli/complete/[^"]+
 class Idp:
     wire: Wire
     token_outage: threading.Event
+    subject: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +70,7 @@ class DeviceGrant:
     verification_uri: str
 
 
-def _idp_reply(request: Request, token_outage: threading.Event) -> Reply:
+def _idp_reply(request: Request, token_outage: threading.Event, subject: str) -> Reply:
     target: Final = urlparse(request.target)
     if target.path == "/authorize":
         query: Final = parse_qs(target.query)
@@ -90,7 +92,9 @@ def _idp_reply(request: Request, token_outage: threading.Event) -> Reply:
     if target.path == "/userinfo":
         if not request.headers.get("authorization", "").startswith("Bearer idp-access-"):
             return Reply(status=401, body=b'{"error": "invalid_token"}')
-        return Reply(body=json.dumps({"sub": SUBJECT, "preferred_username": SUBJECT, "email": SUBJECT_EMAIL}).encode())
+        return Reply(
+            body=json.dumps({"sub": subject, "preferred_username": subject, "email": f"{subject}@example.com"}).encode()
+        )
     return Reply(status=404, body=b'{"error": "not_found"}')
 
 
@@ -114,11 +118,17 @@ def _gateway_enabled_config(directory: Path) -> Path:
     return config
 
 
+@contextmanager
+def _fake_idp(subject: str) -> Iterator[Idp]:
+    outage: Final = threading.Event()
+    with wire_server(lambda request: _idp_reply(request, outage, subject)) as wire:
+        yield Idp(wire, outage, subject)
+
+
 @pytest.fixture(scope="module")
 def idp() -> Iterator[Idp]:
-    outage: Final = threading.Event()
-    with wire_server(lambda request: _idp_reply(request, outage)) as wire:
-        yield Idp(wire, outage)
+    with _fake_idp(SUBJECT) as fake:
+        yield fake
 
 
 @pytest.fixture(scope="module")
@@ -201,11 +211,11 @@ def _sign_in(proxy: Gateway, idp: Idp, browser: httpx.Client, session: CliSessio
     assert done.status_code == 200 and CLI_SUCCESS_PAGE_TITLE in done.text, f"{done.status_code} {done.text}"
 
 
-def _ready_key(proxy: Gateway, session: CliSession) -> str:
+def _ready_key(proxy: Gateway, session: CliSession, *, subject: str = SUBJECT) -> str:
     ready: Final = _poll(proxy, session)
     assert ready.status_code == 200, f"{ready.status_code} {ready.text}"
     body: Final = JSON_OBJECT.validate_json(ready.content)
-    assert body["status"] == "ready" and body["user_id"] == SUBJECT, ready.text
+    assert body["status"] == "ready" and body["user_id"] == subject, ready.text
     return string_value(body["key"])
 
 
@@ -511,3 +521,27 @@ def test_flag_values_that_do_not_disable_keep_the_gates_open(idp: Idp, tmp_path:
         for method, path in (("GET", "/sso/saml/login"), ("POST", "/sso/saml/callback")):
             saml: Final = proxy.client.request(method, path)
             assert DISABLED_PAGE_TITLE not in saml.text and saml.status_code != 200, f"{path}: {saml.status_code}"
+
+
+def test_lite_login_completes_for_a_user_created_without_a_role_on_one_worker(
+    provider: SharedProvider, tmp_path: Path
+) -> None:
+    subject: Final = f"cli-sso-no-role-{uuid.uuid4().hex[:12]}"
+    with (
+        _fake_idp(subject) as idp,
+        gateway_from_environment() as rig,
+        owned_proxy_process(
+            rig,
+            tmp_path,
+            {"DISABLE_ADMIN_UI": "true", **_sso_environment(idp.wire.url)},
+            remove_environment=("PROXY_BASE_URL",),
+            workers=1,
+        ) as owned,
+    ):
+        proxy: Final = owned.gateway
+        created: Final = proxy.post("/user/new", {"user_id": subject, "user_email": f"{subject}@example.com"})
+        assert created["user_id"] == subject and created["user_role"] is None, created
+        session: Final = _start_lite_login(proxy)
+        with _browser() as browser:
+            _sign_in(proxy, idp, browser, session)
+        _send_message(proxy, provider, _ready_key(proxy, session, subject=subject))
