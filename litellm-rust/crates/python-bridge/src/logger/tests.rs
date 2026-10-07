@@ -41,7 +41,7 @@ impl Machine for DiagnosticMachine {
 
 #[pyfunction]
 fn machine_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-    let mut machine = super::LoggedMachine::new(DiagnosticMachine);
+    let mut machine = super::LoggedMachine::new(DiagnosticMachine, None);
     let mut future = Box::pin(async move {
         machine
             .resume()

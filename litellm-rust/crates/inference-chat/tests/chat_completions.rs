@@ -383,7 +383,7 @@ async fn completed_chat_records_route_and_resolved_provider(
         .await
         .unwrap();
     let summaries = traces.summaries("litellm.route");
-    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries.len(), 1, "records: {:?}", traces.records());
     assert_eq!(summaries[0]["route"], "chat_completions");
     assert_eq!(summaries[0]["model"], model);
     assert_eq!(summaries[0]["provider"], "anthropic");

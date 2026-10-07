@@ -139,6 +139,9 @@ impl LegacyCallbacks for PythonLogger {
     ) -> PyResult<()> {
         let additional = PyDict::new(py);
         additional.set_item("complete_input_dict", body)?;
+        if self.native_payload_shapes {
+            additional.set_item("_litellm_payload_native", true)?;
+        }
         additional.set_item("headers", headers)?;
         additional.set_item("api_base", url)?;
         Logging::PreCall.call(py, (self.object(py), input, api_key, &additional))?;
@@ -155,6 +158,9 @@ impl LegacyCallbacks for PythonLogger {
     ) -> PyResult<()> {
         let additional = PyDict::new(py);
         additional.set_item("complete_input_dict", body)?;
+        if self.native_payload_shapes {
+            additional.set_item("_litellm_payload_native", true)?;
+        }
         additional.set_item("headers", headers)?;
         Logging::PostCall.call(
             py,

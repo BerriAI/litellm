@@ -1388,7 +1388,10 @@ class Logging(LiteLLMLoggingBaseClass):
     def pre_call(self, input, api_key, model=None, additional_args={}):
         from litellm.litellm_core_utils.payload_shapes import record_shape
 
-        record_shape("provider.request.transformed", additional_args.get("complete_input_dict"), self.litellm_call_id)
+        if not additional_args.get("_litellm_payload_native", False):
+            record_shape(
+                "provider.request.transformed", additional_args.get("complete_input_dict"), self.litellm_call_id
+            )
         # Log the exact input to the LLM API
         try:
             self._pre_call(
@@ -1596,7 +1599,8 @@ class Logging(LiteLLMLoggingBaseClass):
     def post_call(self, original_response, input=None, api_key=None, additional_args={}):
         from litellm.litellm_core_utils.payload_shapes import record_shape
 
-        record_shape("provider.response.received", original_response, self.litellm_call_id, raw_json=True)
+        if not additional_args.get("_litellm_payload_native", False):
+            record_shape("provider.response.received", original_response, self.litellm_call_id, raw_json=True)
         # Log the exact result from the LLM API, for streaming - log the type of response received
         if isinstance(original_response, dict):
             original_response = json.dumps(original_response, default=str)

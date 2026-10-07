@@ -30,6 +30,10 @@ pub struct PayloadShape {
 }
 
 impl PayloadShape {
+    pub fn extract_serialized(value: &impl serde::Serialize, limits: ShapeLimits) -> Self {
+        Self::extract_source(&crate::shape_serde::Serialized(value), limits)
+    }
+
     pub fn merge(&mut self, other: Self, limits: ShapeLimits) {
         let paths: BTreeSet<_> = self
             .field_paths
@@ -130,6 +134,12 @@ impl ShapeSource for Value {
             Value::Array(items) => items.iter().all(|child| visitor.item(child)),
             _ => true,
         }
+    }
+}
+
+impl ShapeSource for serde_json::Map<String, Value> {
+    fn visit(&self, visitor: &mut ShapeVisitor<'_>) -> bool {
+        self.iter().all(|(key, child)| visitor.field(key, child))
     }
 }
 

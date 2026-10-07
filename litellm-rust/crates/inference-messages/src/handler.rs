@@ -64,13 +64,18 @@ impl MessagesRoute {
             model: request_context.model.clone(),
             provider: request_context.custom_llm_provider.clone(),
         };
+        let body = serde_json::to_value(&body).map_err(serialize_failure)?;
+        litellm_tracing::payload::record(
+            litellm_tracing::payload::PayloadStage::RequestTransformed,
+            &body,
+        );
         let wire = context
             .interceptors
             .before_provider_request(
                 WireRequest {
                     url,
                     headers: authenticated.headers,
-                    body: serde_json::to_value(&body).map_err(serialize_failure)?,
+                    body,
                 },
                 request_context,
             )
@@ -176,6 +181,10 @@ async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
     match response.text().await {
         Ok(text) => {
+            litellm_tracing::payload::record_json(
+                litellm_tracing::payload::PayloadStage::ResponseReceived,
+                &text,
+            );
             log_error_body(status, &text);
             Error::Transport(TransportError::Http {
                 status,
@@ -191,6 +200,10 @@ fn decode_response(
     model: &str,
     text: &str,
 ) -> Result<MessagesResponse, Error> {
+    litellm_tracing::payload::record_json(
+        litellm_tracing::payload::PayloadStage::ResponseReceived,
+        text,
+    );
     let response = serde_json::from_str(text).map_err(|err| {
         Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
             "messages response JSON",
@@ -223,6 +236,14 @@ fn streaming_response(
         .boxed(),
         Some(decode) => decoded_chunks(response, decode, provider),
     };
+    let chunks = if decoder.is_none() {
+        litellm_inference::payload::observe_sse(
+            chunks,
+            litellm_tracing::payload::PayloadStage::ResponseReceived,
+        )
+    } else {
+        chunks
+    };
     MessagesCallResponse::Stream {
         head: super::route::MessagesStreamHead { headers },
         chunks,
@@ -239,6 +260,10 @@ fn decoded_chunks(
         .inspect_ok(move |chunk| log_chunk(provider, "provider_response", chunk))
         .map_err(std::io::Error::other)
         .boxed();
+    let bytes = litellm_inference::payload::observe_sse(
+        bytes,
+        litellm_tracing::payload::PayloadStage::ResponseReceived,
+    );
     futures_util::stream::try_unfold(decode(bytes), move |mut events| async move {
         let Some(event) = events.try_next().await? else {
             return Ok(None);

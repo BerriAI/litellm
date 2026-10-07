@@ -79,10 +79,15 @@ where
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
 {
+    let capture_id = arguments
+        .bind(py)
+        .get_item("litellm_call_id")?
+        .and_then(|value| value.extract::<String>().ok());
     litellm_host_python::run_call(
         py,
         move |py, arguments, request| {
-            start(py, arguments, request).map(crate::logger::LoggedMachine::new)
+            start(py, arguments, request)
+                .map(|machine| crate::logger::LoggedMachine::new(machine, capture_id))
         },
         host,
         HookChain::new()

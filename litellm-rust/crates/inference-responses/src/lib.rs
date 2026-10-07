@@ -76,10 +76,40 @@ impl ResponsesRoute {
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
-        litellm_inference::diagnostic::call(async {
-            self.run_provider(call, cache_options, interceptors, observers)
-                .await
-        })
+        let received = litellm_tracing::payload::capture_id().is_none();
+        litellm_tracing::payload::capture(litellm_inference::diagnostic::call(async {
+            if received {
+                litellm_tracing::payload::record(
+                    litellm_tracing::payload::PayloadStage::RequestReceived,
+                    &litellm_inference::payload::JsonRequest {
+                        input_name: "input",
+                        input: &call.input,
+                        parameters: &call.optional_params,
+                    },
+                );
+            }
+            match self
+                .run_provider(call, cache_options, interceptors, observers)
+                .await?
+            {
+                ResponsesOutput::Complete(response) => {
+                    if !litellm_tracing::payload::host_normalizes_response() {
+                        litellm_tracing::payload::record_serialized(
+                            litellm_tracing::payload::PayloadStage::ResponseNormalized,
+                            &response,
+                        );
+                    }
+                    Ok(ResponsesOutput::Complete(response))
+                }
+                ResponsesOutput::Stream { head, chunks } => Ok(ResponsesOutput::Stream {
+                    head,
+                    chunks: litellm_inference::payload::observe_sse(
+                        chunks,
+                        litellm_tracing::payload::PayloadStage::ResponseNormalized,
+                    ),
+                }),
+            }
+        }))
         .await
     }
 

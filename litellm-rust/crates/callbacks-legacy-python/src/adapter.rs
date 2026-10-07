@@ -358,7 +358,11 @@ impl LegacyLogging {
             &self.start,
             self.asynchronous,
         )?;
-        self.logger = Some(result.logger()?);
+        self.logger = Some(
+            result
+                .logger()?
+                .with_native_payload_shapes(!matches!(self.operation, LoggingOperation::Ocr)),
+        );
         self.call.set_kwargs(result.kwargs()?);
         if self.runs_deployment_hooks() {
             return Ok(HookStep::Await(

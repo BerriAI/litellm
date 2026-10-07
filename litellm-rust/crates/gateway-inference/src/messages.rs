@@ -41,6 +41,22 @@ async fn handle(
     headers: &HeaderMap,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
+    litellm_tracing::payload::capture(async {
+        litellm_tracing::payload::record(
+            litellm_tracing::payload::PayloadStage::RequestReceived,
+            &body,
+        );
+        handle_inner(gateway, identity, headers, body).await
+    })
+    .await
+}
+
+async fn handle_inner(
+    gateway: &Gateway,
+    identity: &AuthenticatedRequest,
+    headers: &HeaderMap,
+    body: Map<String, Value>,
+) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;

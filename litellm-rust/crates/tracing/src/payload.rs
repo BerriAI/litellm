@@ -89,26 +89,31 @@ pub(crate) fn project(record: &mut crate::Record) {
     });
 }
 
-pub async fn capture<F: std::future::Future>(future: F) -> F::Output {
-    if !enabled() {
-        return future.await;
+pub fn capture<F: std::future::Future>(
+    future: F,
+) -> impl std::future::Future<Output = F::Output> + use<F> {
+    let future = Box::pin(future);
+    async move {
+        if !enabled() {
+            return future.await;
+        }
+        let mut fields = crate::CONTEXT.with(|fields| fields.borrow().as_ref().clone());
+        let id = fields
+            .get("_payload_capture_id")
+            .or_else(|| fields.get("trace_id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 128)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("{:032x}", rand::random::<u128>()));
+        fields.insert("_payload_capture_id".to_owned(), id.into());
+        crate::Logger::current()
+            .with_fields(fields)
+            .instrument(future)
+            .await
     }
-    let mut fields = crate::CONTEXT.with(|fields| fields.borrow().as_ref().clone());
-    let id = fields
-        .get("_payload_capture_id")
-        .or_else(|| fields.get("trace_id"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|id| !id.is_empty() && id.len() <= 128)
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("{:032x}", rand::random::<u128>()));
-    fields.insert("_payload_capture_id".to_owned(), id.into());
-    crate::Logger::current()
-        .with_fields(fields)
-        .instrument(future)
-        .await
 }
 
-pub fn record(stage: PayloadStage, value: &serde_json::Value) {
+pub fn record(stage: PayloadStage, value: &impl crate::ShapeSource) {
     if !enabled() {
         return;
     }
@@ -122,7 +127,7 @@ pub fn record(stage: PayloadStage, value: &serde_json::Value) {
     if let Some(capture_id) = id {
         PayloadEvent {
             stage,
-            shape: PayloadShape::extract(value, ShapeLimits::default()),
+            shape: PayloadShape::extract_source(value, ShapeLimits::default()),
             capture_id,
             outcome: None,
         }
@@ -131,9 +136,74 @@ pub fn record(stage: PayloadStage, value: &serde_json::Value) {
 }
 
 pub fn record_serialized(stage: PayloadStage, value: &impl Serialize) {
-    if enabled()
-        && let Ok(value) = serde_json::to_value(value)
-    {
-        record(stage, &value);
+    if !enabled() {
+        return;
+    }
+    if let Some(capture_id) = capture_id() {
+        PayloadEvent {
+            stage,
+            shape: PayloadShape::extract_serialized(value, ShapeLimits::default()),
+            capture_id,
+            outcome: None,
+        }
+        .emit();
+    }
+}
+
+pub fn capture_id() -> Option<String> {
+    crate::CONTEXT.with(|fields| {
+        fields
+            .borrow()
+            .get("_payload_capture_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    })
+}
+
+pub fn host_normalizes_response() -> bool {
+    crate::CONTEXT.with(|fields| {
+        fields
+            .borrow()
+            .get("_payload_host_response")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    })
+}
+
+pub fn host_logger(logger: crate::Logger, capture_id: String) -> crate::Logger {
+    if !logger.scope(enabled) {
+        return logger;
+    }
+    let mut fields = logger.fields.as_ref().clone();
+    fields.insert("_payload_capture_id".into(), capture_id.into());
+    fields.insert("_payload_host_response".into(), true.into());
+    logger.with_fields(fields)
+}
+
+pub fn record_json(stage: PayloadStage, body: &str) {
+    if !enabled() {
+        return;
+    }
+    let shape = if body.len() > 1_048_576 {
+        PayloadShape {
+            field_paths: vec![],
+            truncated: true,
+        }
+    } else {
+        serde_json::from_str::<serde_json::Value>(body)
+            .map(|value| PayloadShape::extract(&value, ShapeLimits::default()))
+            .unwrap_or(PayloadShape {
+                field_paths: vec![],
+                truncated: true,
+            })
+    };
+    if let Some(capture_id) = capture_id() {
+        PayloadEvent {
+            stage,
+            shape,
+            capture_id,
+            outcome: None,
+        }
+        .emit();
     }
 }

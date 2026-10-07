@@ -3864,6 +3864,7 @@ dependencies = [
  "litellm-llms-types",
  "litellm-router",
  "litellm-secrets",
+ "litellm-tracing",
  "rstest",
  "serde",
  "serde_json",
