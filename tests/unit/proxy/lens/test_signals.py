@@ -144,13 +144,13 @@ class PagedSignalStorage(SignalStorage):
 
 
 class PagedSampleStorage(SignalStorage):
-    def __init__(self, pages: tuple[tuple[ExecutionRow, ...], ...]) -> None:
+    def __init__(self, pages: tuple[tuple[ExecutionRow, ...], ...], initial_cursor: str = "") -> None:
         super().__init__()
         self.pages: Final = pages
         self.cursors: Final[asyncio.Queue[str]] = asyncio.Queue()
         self.page_by_cursor: Final = MappingProxyType(
             {
-                "": 0,
+                initial_cursor: 0,
                 **{page[-1].selection_key: index + 1 for index, page in enumerate(pages[:-1])},
             }
         )
@@ -737,6 +737,78 @@ async def test_signal_tick_resumes_after_ten_pages_and_resets_after_a_short_page
         lambda: NOW,
     )
     assert short_cursor == ""
+
+
+@pytest.mark.asyncio
+async def test_signal_tick_resumes_a_partially_consumed_page() -> None:
+    config: Final = SignalConfig(model="decision")
+    page: Final = tuple(
+        ExecutionRow(
+            source="traces",
+            trace_id=f"trace-{index}",
+            team_id="",
+            name=f"trace-{index}",
+            start_time="",
+            span_count=1,
+            root_seen=1,
+            eligible=100,
+            selected=100,
+            selection_key=f"cursor-{index}",
+        )
+        for index in range(100)
+    )
+    initial_rows: Final = tuple(stored_trace(CURRENT_CONFIG_KEY, trace_id=f"trace-{index}") for index in range(20))
+    resume_cursor: Final = "resume-page"
+    storage: Final = PagedSampleStorage((page, ()), initial_cursor=resume_cursor)
+
+    async def decide(
+        *,
+        model: str,
+        state: DecisionState,
+        questions: DecisionQuestions,
+        timeout: float,
+        metadata: Mapping[str, object],
+    ) -> object:
+        return {
+            "answers": {
+                "user_frustration": {"type": "noul", "noul": 0.9},
+                "missing_capability": {"type": "noul", "noul": 0.6},
+                "repeated_request": {"type": "noul", "noul": 0.2},
+            }
+        }
+
+    first_database: Final = SignalDatabase(config, stored_rows=initial_rows)
+    first_cursor: Final = await run_signal_tick(
+        storage,
+        SignalRepository(first_database),
+        decide,
+        lambda: NOW,
+        cursor=resume_cursor,
+    )
+    first_claims: Final = tuple(first_database.claims.get_nowait() for _ in range(first_database.claims.qsize()))
+
+    classified_first_rows: Final = tuple(
+        stored_trace(CURRENT_CONFIG_KEY, trace_id=trace_id) for trace_id in first_claims
+    )
+    second_database: Final = SignalDatabase(config, stored_rows=(*initial_rows, *classified_first_rows))
+    second_cursor: Final = await run_signal_tick(
+        storage,
+        SignalRepository(second_database),
+        decide,
+        lambda: NOW,
+        cursor=first_cursor,
+    )
+    second_claims: Final = tuple(second_database.claims.get_nowait() for _ in range(second_database.claims.qsize()))
+    sample_cursors: Final = tuple(storage.cursors.get_nowait() for _ in range(storage.cursors.qsize()))
+    expected_eligible: Final = frozenset(f"trace-{index}" for index in range(20, 100))
+
+    assert first_cursor == resume_cursor
+    assert second_cursor == ""
+    assert len(first_claims) == 50
+    assert len(second_claims) == 30
+    assert frozenset(first_claims).isdisjoint(second_claims)
+    assert frozenset(first_claims) | frozenset(second_claims) == expected_eligible
+    assert sample_cursors == (resume_cursor, resume_cursor, page[-1].selection_key)
 
 
 @pytest.mark.asyncio

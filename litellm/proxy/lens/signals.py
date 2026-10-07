@@ -430,13 +430,14 @@ class _SignalScan:
         self.finished: bool = False
 
     async def _read_page(self, start: int, end: int) -> tuple[tuple[Execution, ...], str | None]:
+        page_cursor: Final = self.cursor
         sample: Final = await self.reader.sample(
             self.scope,
             ActivitySelection(source="traces"),
             start,
             end,
             page_size=SIGNAL_PAGE_SIZE,
-            cursor=self.cursor,
+            cursor=page_cursor,
         )
         identities: Final = tuple(
             TraceIdentity(trace_id=trace.trace_id, trace_ref=trace.trace_ref) for trace in sample.executions
@@ -444,12 +445,14 @@ class _SignalScan:
         existing_rows: Final = await self.repository.traces(identities)
         existing: Final = MappingProxyType({signal_identity(row): row for row in existing_rows})
         remaining: Final = self.limit - len(self.executions)
-        eligible: Final = tuple(
+        all_eligible: Final = tuple(
             execution
             for execution in sample.executions
             if candidate(execution, existing.get(signal_identity(execution)), self.config.key(), self.now)
-        )[:remaining]
-        return eligible, sample.next_cursor
+        )
+        eligible: Final = all_eligible[:remaining]
+        next_cursor: Final = page_cursor if len(all_eligible) > remaining else sample.next_cursor
+        return eligible, next_cursor
 
     async def run(self) -> tuple[tuple[Execution, ...], str]:
         start: Final = int((self.now - timedelta(hours=24)).timestamp() * 1000)
