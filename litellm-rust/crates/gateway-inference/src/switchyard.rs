@@ -4,11 +4,18 @@ use std::{
 };
 
 use async_trait::async_trait;
-use axum::http::HeaderMap;
-use litellm_cache_response::CachePolicy;
+use axum::{
+    Json,
+    http::HeaderMap,
+    response::{IntoResponse, Response as HttpResponse},
+};
+use litellm_cache_response::{CacheOptions, CachePolicy, ScopedCache};
 use litellm_config::Model;
+use litellm_host::call::CallOutput;
 use litellm_inference::RouteError;
 use litellm_inference_chat::ChatCompletionsRoute;
+use litellm_inference_messages::MessagesRoute;
+use litellm_inference_responses::ResponsesRoute;
 use litellm_http::transport::Error as TransportError;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -25,8 +32,8 @@ use switchyard_translation::{
 };
 
 use crate::{
-    Error, ModelRouter, SwitchyardConfigError, caching::CacheHeaders,
-    chat_completions::provider_request,
+    Deployment, Error, Gateway, ModelRouter, SwitchyardConfigError, caching::CacheHeaders,
+    chat_completions, messages, responses,
 };
 
 const SWITCHYARD_MODEL: &str = "switchyard/algorithm";
@@ -37,7 +44,7 @@ pub(crate) struct Routes(HashMap<String, Route>);
 impl Routes {
     pub(crate) fn from_models(
         model_list: &[Model],
-        deployments: Arc<ModelRouter>,
+        deployments: &ModelRouter,
     ) -> Result<Self, SwitchyardConfigError> {
         let mut routes = HashMap::new();
         let mut seen = HashSet::new();
@@ -61,16 +68,16 @@ impl Routes {
                 .ok_or_else(|| invalid(model, "switchyard_config is required"))?;
             let config = AlgorithmSpec::deserialize(config)
                 .map_err(|error| invalid(model, error.to_string()))?;
-            let targets = targets(model, &config, &deployments)?;
+            let targets = targets(model, &config, model_list, deployments)?;
             let (algorithm, runtime_models) = config
-                .build_with_runtime_models(&model.model_name, &targets)
+                .build_with_runtime_models(&model.model_name, &targets.models)
                 .map_err(|error| invalid(model, error.to_string()))?;
             routes.insert(
                 model.model_name.clone(),
                 Route {
                     algorithm,
                     runtime_models: Arc::new(runtime_models),
-                    deployments: Arc::clone(&deployments),
+                    targets: Arc::new(targets.by_model),
                 },
             );
         }
@@ -85,38 +92,39 @@ impl Routes {
 pub(crate) struct Route {
     algorithm: Arc<dyn Algorithm>,
     runtime_models: Arc<RuntimeModels>,
-    deployments: Arc<ModelRouter>,
+    targets: Arc<HashMap<ModelId, Target>>,
 }
 
 impl Route {
     pub(crate) async fn execute(
         &self,
-        route: ChatCompletionsRoute,
-        cache_policy: CachePolicy,
+        gateway: &Gateway,
+        cache_options: CacheOptions,
+        wire_format: WireFormat,
         body: Map<String, Value>,
         headers: HeaderMap,
-    ) -> Result<(Value, HeaderMap), Error> {
-        let llm_request = decode_request(WireFormat::OpenAiChat, &Value::Object(body))
+    ) -> Result<HttpResponse, Error> {
+        let llm_request = decode_request(wire_format, &Value::Object(body))
             .map_err(|error| Error::InvalidBody(error.to_string()))?;
-        // Reject unsupported streaming before a classifier or judge can make a model call.
+        // Switchyard routes currently support buffered calls only.
         if llm_request.stream {
             return Err(Error::Route(RouteError::Unsupported("streaming")));
         }
         let extensions = llm_request.extensions.clone();
         let mut metadata = Metadata::from_headers(&headers);
         metadata.http_headers = Some(headers);
-        metadata.wire_format = Some(WireFormat::OpenAiChat);
+        metadata.wire_format = None;
         let request = Request {
             llm_request,
             raw_request: None,
             metadata: Some(metadata),
         };
         let client = Arc::new(LiteLlmClient {
-            route,
-            deployments: Arc::clone(&self.deployments),
-            cache_policy,
+            routes: ProviderRoutes::new(gateway, &cache_options),
+            targets: Arc::clone(&self.targets),
+            cache_policy: cache_options.policy,
         });
-        let (_, response) = switchyard_llm_client::run(
+        let (selected_model, response) = switchyard_llm_client::run(
             Arc::clone(&self.algorithm),
             ClientRouter::single(client),
             request,
@@ -125,6 +133,7 @@ impl Route {
         )
         .await
         .map_err(map_libsy_error)?;
+        let served_model = response.served_model().cloned().unwrap_or(selected_model);
         let upstream_headers = response.upstream_headers;
         let response = response
             .llm_response
@@ -133,18 +142,48 @@ impl Route {
             .map_err(map_client_error)?;
         let body = encode_aggregated_response_with_extensions(
             &response,
-            WireFormat::OpenAiChat,
-            None,
+            wire_format,
+            Some(served_model.as_str()),
             &extensions,
         )
         .map_err(|error| Error::Internal(error.to_string()))?;
-        Ok((body, upstream_headers))
+        let mut response = Json(body).into_response();
+        response.headers_mut().extend(upstream_headers);
+        Ok(response)
+    }
+}
+
+struct Target {
+    deployment: Deployment,
+    wire_format: WireFormat,
+}
+
+struct ProviderRoutes {
+    chat: ChatCompletionsRoute,
+    responses: ResponsesRoute,
+    messages: MessagesRoute,
+}
+
+impl ProviderRoutes {
+    fn new(gateway: &Gateway, options: &CacheOptions) -> Self {
+        let mut routes = Self {
+            chat: gateway.chat_completions.clone(),
+            responses: gateway.responses.clone(),
+            messages: gateway.messages.clone(),
+        };
+        if let Some(cache) = &gateway.cache {
+            let scoped = || ScopedCache::new(Arc::clone(cache), options.scope.clone());
+            routes.chat = routes.chat.with_cache(scoped());
+            routes.responses = routes.responses.with_cache(scoped());
+            routes.messages = routes.messages.with_cache(scoped());
+        }
+        routes
     }
 }
 
 struct LiteLlmClient {
-    route: ChatCompletionsRoute,
-    deployments: Arc<ModelRouter>,
+    routes: ProviderRoutes,
+    targets: Arc<HashMap<ModelId, Target>>,
     cache_policy: CachePolicy,
 }
 
@@ -156,67 +195,169 @@ impl RoutedLlmClient for LiteLlmClient {
                 message: "routed request has no model".to_string(),
             });
         };
-        let deployment =
-            self.deployments
-                .get(model)
-                .ok_or_else(|| LlmClientError::Configuration {
-                    message: format!("unknown LiteLLM deployment {model}"),
-                })?;
+        let target = self
+            .targets
+            .get(model)
+            .ok_or_else(|| LlmClientError::Configuration {
+                message: format!("unknown LiteLLM deployment {model}"),
+            })?;
         let Request {
             llm_request,
             metadata,
             ..
         } = request;
-        let Value::Object(body) = encode_request(&llm_request, WireFormat::OpenAiChat)
+        let Value::Object(body) = encode_request(&llm_request, target.wire_format)
             .map_err(|error| LlmClientError::RequestEncoding(error.to_string()))?
         else {
-            return Err(LlmClientError::RequestEncoding(
-                "OpenAI Chat request is not an object".to_string(),
-            ));
+            return Err(LlmClientError::RequestEncoding(format!(
+                "{} request is not an object",
+                target.wire_format
+            )));
         };
         let cache_headers = CacheHeaders::default();
-        let response = self
-            .route
-            .execute(
-                provider_request(deployment, body),
-                &cache_headers,
-                self.cache_policy,
-            )
-            .await
-            .map_err(map_route_error)?;
-        let body = serde_json::to_value(response)
-            .map_err(|error| LlmClientError::ResponseTranslation(error.to_string()))?;
-        let response = decode_aggregated_response(&body, WireFormat::OpenAiChat)
-            .map_err(|error| LlmClientError::ResponseTranslation(error.to_string()))?;
+        let response = match target.wire_format {
+            WireFormat::OpenAiChat => {
+                let response = self
+                    .routes
+                    .chat
+                    .execute(
+                        chat_completions::provider_request(&target.deployment, body),
+                        &cache_headers,
+                        self.cache_policy,
+                    )
+                    .await
+                    .map_err(map_route_error)?;
+                decode_complete(response, target.wire_format)?
+            }
+            WireFormat::OpenAiResponses => {
+                let response = self
+                    .routes
+                    .responses
+                    .execute(
+                        responses::provider_request(&target.deployment, body),
+                        &cache_headers,
+                        self.cache_policy,
+                    )
+                    .await
+                    .map_err(map_route_error)?;
+                decode_output(response, target.wire_format)?
+            }
+            WireFormat::AnthropicMessages => {
+                let empty_headers = HeaderMap::new();
+                let headers = metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.http_headers.as_ref())
+                    .unwrap_or(&empty_headers);
+                let call = messages::provider_request(&target.deployment, body, headers)
+                    .map_err(map_route_error)?;
+                let response = self
+                    .routes
+                    .messages
+                    .execute(call, &cache_headers, self.cache_policy)
+                    .await
+                    .map_err(map_route_error)?;
+                decode_output(response, target.wire_format)?
+            }
+        };
         Ok(Response {
-            llm_response: LlmResponse::Agg(response),
+            llm_response: response,
             metadata,
             upstream_headers: cache_headers.headers(),
         })
     }
 }
 
+fn decode_complete(
+    response: impl serde::Serialize,
+    wire_format: WireFormat,
+) -> Result<LlmResponse, LlmClientError> {
+    let body = serde_json::to_value(response)
+        .map_err(|error| LlmClientError::ResponseTranslation(error.to_string()))?;
+    decode_aggregated_response(&body, wire_format)
+        .map(LlmResponse::Agg)
+        .map_err(|error| LlmClientError::ResponseTranslation(error.to_string()))
+}
+
+fn decode_output<T, H>(
+    response: CallOutput<T, H, bytes::Bytes, RouteError>,
+    wire_format: WireFormat,
+) -> Result<LlmResponse, LlmClientError>
+where
+    T: serde::Serialize,
+{
+    match response {
+        CallOutput::Complete(response) => decode_complete(response, wire_format),
+        CallOutput::Stream { .. } => Err(LlmClientError::ResponseTranslation(
+            "LiteLLM streamed a response for a buffered Switchyard call".to_string(),
+        )),
+    }
+}
+
+struct Targets {
+    models: BTreeMap<String, ModelId>,
+    by_model: HashMap<ModelId, Target>,
+}
+
 fn targets(
     route: &Model,
     config: &AlgorithmSpec,
+    model_list: &[Model],
     deployments: &ModelRouter,
-) -> Result<BTreeMap<String, ModelId>, SwitchyardConfigError> {
-    config
-        .callable_target_names()
-        .into_iter()
-        .map(|target| {
-            let deployment = deployments
-                .get(target)
-                .ok_or_else(|| invalid(route, format!("target {target:?} is not configured")))?;
-            if deployment.model == SWITCHYARD_MODEL {
-                return Err(invalid(
-                    route,
-                    format!("target {target:?} is another Switchyard route"),
-                ));
-            }
-            Ok((target.to_string(), ModelId::from(target)))
-        })
-        .collect()
+) -> Result<Targets, SwitchyardConfigError> {
+    let mut models = BTreeMap::new();
+    let mut by_model = HashMap::new();
+    for target in config.callable_target_names() {
+        let configured = model_list
+            .iter()
+            .rev()
+            .find(|model| model.model_name == target)
+            .ok_or_else(|| invalid(route, format!("target {target:?} is not configured")))?;
+        let deployment = deployments
+            .get(target)
+            .ok_or_else(|| invalid(route, format!("target {target:?} is not configured")))?;
+        if deployment.model == SWITCHYARD_MODEL {
+            return Err(invalid(
+                route,
+                format!("target {target:?} is another Switchyard route"),
+            ));
+        }
+        let model = ModelId::from(target);
+        models.insert(target.to_string(), model.clone());
+        by_model.insert(
+            model,
+            Target {
+                deployment: deployment.clone(),
+                wire_format: target_wire_format(route, configured)?,
+            },
+        );
+    }
+    Ok(Targets { models, by_model })
+}
+
+// Caller format and target execution format are independent, so each target declares its own.
+fn target_wire_format(route: &Model, target: &Model) -> Result<WireFormat, SwitchyardConfigError> {
+    let value = target
+        .litellm_params
+        .extra
+        .get("switchyard_wire_format")
+        .ok_or_else(|| {
+            invalid(
+                route,
+                format!(
+                    "target {:?} requires switchyard_wire_format",
+                    target.model_name
+                ),
+            )
+        })?;
+    WireFormat::deserialize(value).map_err(|error| {
+        invalid(
+            route,
+            format!(
+                "target {:?} has invalid switchyard_wire_format: {error}",
+                target.model_name,
+            ),
+        )
+    })
 }
 
 fn invalid(model: &Model, message: impl Into<String>) -> SwitchyardConfigError {
@@ -307,5 +448,17 @@ mod tests {
             map_client_error(map_route_error(error)),
             Error::Route(RouteError::Auth(_))
         ));
+    }
+
+    #[test]
+    fn targets_require_an_explicit_wire_format() {
+        let config = litellm_config::Config::from_yaml(
+            "model_list:\n  - model_name: target\n    litellm_params: { model: upstream }\n  - model_name: route\n    litellm_params: { model: switchyard/algorithm }\n",
+        )
+        .expect("config");
+
+        let error = target_wire_format(&config.model_list[1], &config.model_list[0])
+            .expect_err("ambiguous target format");
+        assert!(error.reason.contains("requires switchyard_wire_format"));
     }
 }

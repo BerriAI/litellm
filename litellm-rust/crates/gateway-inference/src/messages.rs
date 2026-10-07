@@ -14,6 +14,8 @@ use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
+#[cfg(feature = "switchyard")]
+use switchyard_protocol::WireFormat;
 
 use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
 
@@ -34,7 +36,7 @@ pub async fn create(
     body: Result<JsonObject, Error>,
 ) -> impl IntoResponse {
     let result = match body {
-        Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
+        Ok(JsonObject(body)) => handle(&gateway, &identity, headers, body).await,
         Err(error) => Err(error),
     };
     result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
@@ -43,12 +45,29 @@ pub async fn create(
 async fn handle(
     gateway: &Gateway,
     identity: &AuthenticatedRequest,
-    headers: &HeaderMap,
+    headers: HeaderMap,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
+    #[cfg(feature = "switchyard")]
+    let switchyard_route = body
+        .get("model")
+        .and_then(Value::as_str)
+        .and_then(|model| gateway.switchyard_routes.get(model));
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    #[cfg(feature = "switchyard")]
+    if let Some(switchyard_route) = switchyard_route {
+        return switchyard_route
+            .execute(
+                gateway,
+                cache_options,
+                WireFormat::AnthropicMessages,
+                body,
+                headers,
+            )
+            .await;
+    }
     let route = gateway.messages.clone();
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
@@ -58,7 +77,7 @@ async fn handle(
         None => route,
     };
 
-    let call = project(deployment, body, headers)?;
+    let call = provider_request(deployment, body, &headers)?;
     let machine = route.machine(call, cache_options.policy);
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
@@ -67,18 +86,14 @@ async fn handle(
     Ok(headers.apply(response))
 }
 
-fn project(
+pub(crate) fn provider_request(
     deployment: &Deployment,
-    body: Map<String, Value>,
+    mut body: Map<String, Value>,
     headers: &HeaderMap,
-) -> Result<MessagesCall, Error> {
-    let body = body
-        .into_iter()
-        .map(|(name, value)| match name.as_str() {
-            "model" => (name, Value::from(deployment.model.as_str())),
-            _ => (name, value),
-        })
-        .collect();
+) -> Result<MessagesCall, litellm_inference::RouteError> {
+    if let Some(model) = body.get_mut("model") {
+        *model = Value::from(deployment.model.as_str());
+    }
     Ok(MessagesCall {
         body: messages_body(body)?,
         api_key: deployment.api_key.clone(),

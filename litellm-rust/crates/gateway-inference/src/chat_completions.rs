@@ -10,6 +10,8 @@ use axum::{
 };
 use litellm_inference_chat::types::{ChatCompletionsCall, ChatCompletionsRequest};
 use serde_json::{Map, Value};
+#[cfg(feature = "switchyard")]
+use switchyard_protocol::WireFormat;
 
 use crate::{Deployment, Error, Gateway, JsonObject, request};
 
@@ -67,6 +69,18 @@ async fn handle(
         .and_then(Value::as_str)
         .and_then(|model| gateway.switchyard_routes.get(model));
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    #[cfg(feature = "switchyard")]
+    if let Some(switchyard_route) = switchyard_route {
+        return switchyard_route
+            .execute(
+                gateway,
+                cache_options,
+                WireFormat::OpenAiChat,
+                body,
+                inbound_headers,
+            )
+            .await;
+    }
     let route = gateway.chat_completions.clone();
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
@@ -75,16 +89,6 @@ async fn handle(
         )),
         None => route,
     };
-
-    #[cfg(feature = "switchyard")]
-    if let Some(switchyard_route) = switchyard_route {
-        let (body, upstream_headers) = switchyard_route
-            .execute(route, cache_options.policy, body, inbound_headers)
-            .await?;
-        let mut response = Json(body).into_response();
-        response.headers_mut().extend(upstream_headers);
-        return Ok(response);
-    }
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve_unary(
         route.machine(

@@ -101,8 +101,7 @@ impl Gateway {
         mut self,
         models: &[litellm_config::Model],
     ) -> Result<Self, SwitchyardConfigError> {
-        self.switchyard_routes =
-            switchyard::Routes::from_models(models, Arc::new(self.models.clone()))?;
+        self.switchyard_routes = switchyard::Routes::from_models(models, &self.models)?;
         Ok(self)
     }
 }
