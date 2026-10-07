@@ -7275,7 +7275,7 @@ def _queue_key(max_parallel_requests: int = 1, raw_key: str = "sk-queue", **queu
 
 
 def _queue_handler(clock: _QueueClock) -> tuple[_PROXY_MaxParallelRequestsHandler, DualCache]:
-    cache = DualCache()
+    cache: Final = DualCache()
     return (
         _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), queue_clock=clock),
         cache,
@@ -7301,25 +7301,25 @@ async def _finish(handler: _PROXY_MaxParallelRequestsHandler, key: UserAPIKeyAut
 
 
 def _in_flight(handler: _PROXY_MaxParallelRequestsHandler, cache: DualCache, key: UserAPIKeyAuth) -> int:
-    counter_key = f"{{api_key:{key.api_key}}}:max_parallel_requests"
+    counter_key: Final = f"{{api_key:{key.api_key}}}:max_parallel_requests"
     return handler._gauge_in_flight_from_cache_value(cache.in_memory_cache.get_cache(key=counter_key))
 
 
 @pytest.mark.asyncio
 async def test_queued_request_waits_for_a_slot_and_is_admitted_when_one_frees():
-    clock = _QueueClock(advance_time=False)
+    clock: Final = _QueueClock(advance_time=False)
     handler, cache = _queue_handler(clock)
-    key = _queue_key()
-    first = await _admit_in_own_stash(handler, cache, key)
+    key: Final = _queue_key()
+    first: Final = await _admit_in_own_stash(handler, cache, key)
 
-    waiter = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    waiter: Final = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
     for _ in range(5):
         await asyncio.sleep(0)
     assert not waiter.done()
     assert _in_flight(handler, cache, key) == 1
 
     await _finish(handler, key, first)
-    second = await asyncio.wait_for(waiter, timeout=1)
+    second: Final = await asyncio.wait_for(waiter, timeout=1)
 
     assert second.parallel_slot is not None
     assert _in_flight(handler, cache, key) == 1
@@ -7328,11 +7328,11 @@ async def test_queued_request_waits_for_a_slot_and_is_admitted_when_one_frees():
 
 @pytest.mark.asyncio
 async def test_queue_waiter_that_loses_the_race_waits_for_the_next_release():
-    clock = _QueueClock(advance_time=False)
+    clock: Final = _QueueClock(advance_time=False)
     handler, cache = _queue_handler(clock)
-    key = _queue_key()
+    key: Final = _queue_key()
     await _admit_in_own_stash(handler, cache, key)
-    waiter = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    waiter: Final = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
     for _ in range(5):
         await asyncio.sleep(0)
 
@@ -7350,15 +7350,15 @@ async def test_queue_waiter_that_loses_the_race_waits_for_the_next_release():
 @pytest.mark.asyncio
 async def test_queue_admits_every_waiter_when_several_slots_free_together():
     handler, cache = _queue_handler(_QueueClock(advance_time=False))
-    key = _queue_key(max_parallel_requests=2)
-    running = [await _admit_in_own_stash(handler, cache, key) for _ in range(2)]
-    waiters = [asyncio.create_task(_admit_in_own_stash(handler, cache, key)) for _ in range(2)]
+    key: Final = _queue_key(max_parallel_requests=2)
+    running: Final = [await _admit_in_own_stash(handler, cache, key) for _ in range(2)]
+    waiters: Final = [asyncio.create_task(_admit_in_own_stash(handler, cache, key)) for _ in range(2)]
     for _ in range(5):
         await asyncio.sleep(0)
 
     for stash in running:
         await _finish(handler, key, stash)
-    admitted = await asyncio.wait_for(asyncio.gather(*waiters), timeout=1)
+    admitted: Final = await asyncio.wait_for(asyncio.gather(*waiters), timeout=1)
 
     assert all(stash.parallel_slot is not None for stash in admitted)
     assert _in_flight(handler, cache, key) == 2
@@ -7366,13 +7366,13 @@ async def test_queue_admits_every_waiter_when_several_slots_free_together():
 
 @pytest.mark.asyncio
 async def test_queue_release_of_one_key_does_not_wake_waiters_of_another_key():
-    clock = _QueueClock(advance_time=False)
+    clock: Final = _QueueClock(advance_time=False)
     handler, cache = _queue_handler(clock)
     key_a, key_b = _queue_key(raw_key="sk-queue-a"), _queue_key(raw_key="sk-queue-b")
-    first_a = await _admit_in_own_stash(handler, cache, key_a)
+    first_a: Final = await _admit_in_own_stash(handler, cache, key_a)
     await _admit_in_own_stash(handler, cache, key_b)
-    waiter_a = asyncio.create_task(_admit_in_own_stash(handler, cache, key_a))
-    waiter_b = asyncio.create_task(_admit_in_own_stash(handler, cache, key_b))
+    waiter_a: Final = asyncio.create_task(_admit_in_own_stash(handler, cache, key_a))
+    waiter_b: Final = asyncio.create_task(_admit_in_own_stash(handler, cache, key_b))
     for _ in range(5):
         await asyncio.sleep(0)
 
@@ -7410,23 +7410,23 @@ class _ReleaseWhenLaterWaiterPollsClock(_QueueClock):
         self._first_turn = self._first_turn or released
         if released is not self._first_turn and self.release is not None:
             release, self.release = self.release, None
-            waiter_stash = _request_stash.get()
+            waiter_stash: Final = _request_stash.get()
             await release()
             _request_stash.set(waiter_stash)
 
 
 @pytest.mark.asyncio
 async def test_queue_admits_waiters_in_arrival_order():
-    clock = _ReleaseWhenLaterWaiterPollsClock()
+    clock: Final = _ReleaseWhenLaterWaiterPollsClock()
     handler, cache = _queue_handler(clock)
-    key = _queue_key(max_parallel_requests_queue_timeout=5)
-    first = await _admit_in_own_stash(handler, cache, key)
-    earlier = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    key: Final = _queue_key(max_parallel_requests_queue_timeout=5)
+    first: Final = await _admit_in_own_stash(handler, cache, key)
+    earlier: Final = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
     await asyncio.sleep(0)
     clock.release = lambda: _finish(handler, key, first)
-    later = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    later: Final = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
 
-    results = await asyncio.wait_for(asyncio.gather(earlier, later, return_exceptions=True), timeout=5)
+    results: Final = await asyncio.wait_for(asyncio.gather(earlier, later, return_exceptions=True), timeout=5)
 
     assert isinstance(results[0], RequestRateLimiterStash)
     assert isinstance(results[1], HTTPException)
@@ -7434,10 +7434,10 @@ async def test_queue_admits_waiters_in_arrival_order():
 
 @pytest.mark.asyncio
 async def test_slot_freed_after_the_queue_deadline_does_not_admit_the_waiter():
-    clock = _ReleaseDuringWaitClock()
+    clock: Final = _ReleaseDuringWaitClock()
     handler, cache = _queue_handler(clock)
-    key = _queue_key(max_parallel_requests_queue_timeout=0.25)
-    first = await _admit_in_own_stash(handler, cache, key)
+    key: Final = _queue_key(max_parallel_requests_queue_timeout=0.25)
+    first: Final = await _admit_in_own_stash(handler, cache, key)
     clock.on_wait = lambda: _finish(handler, key, first)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -7450,7 +7450,7 @@ async def test_slot_freed_after_the_queue_deadline_does_not_admit_the_waiter():
 @pytest.mark.asyncio
 async def test_queued_request_gets_429_after_the_queue_timeout_without_taking_a_slot():
     handler, cache = _queue_handler(_QueueClock())
-    key = _queue_key(max_parallel_requests_queue_timeout=30)
+    key: Final = _queue_key(max_parallel_requests_queue_timeout=30)
     await _admit_in_own_stash(handler, cache, key)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -7466,7 +7466,7 @@ async def test_queued_request_gets_429_after_the_queue_timeout_without_taking_a_
 @pytest.mark.asyncio
 async def test_queue_timeout_defaults_to_sixty_seconds():
     handler, cache = _queue_handler(_QueueClock())
-    key = _queue_key()
+    key: Final = _queue_key()
     await _admit_in_own_stash(handler, cache, key)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -7477,13 +7477,13 @@ async def test_queue_timeout_defaults_to_sixty_seconds():
 
 @pytest.mark.asyncio
 async def test_request_beyond_max_queued_is_rejected_at_once():
-    clock = _QueueClock(advance_time=False)
+    clock: Final = _QueueClock(advance_time=False)
     handler, cache = _queue_handler(clock)
-    key = _queue_key(max_parallel_requests_max_queued=1)
+    key: Final = _queue_key(max_parallel_requests_max_queued=1)
     await _admit_in_own_stash(handler, cache, key)
-    waiter = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    waiter: Final = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
     await asyncio.sleep(0)
-    time_before = clock.now_seconds
+    time_before: Final = clock.now_seconds
 
     with pytest.raises(HTTPException) as exc_info:
         await asyncio.wait_for(_admit_in_own_stash(handler, cache, key), timeout=1)
@@ -7498,9 +7498,9 @@ async def test_request_beyond_max_queued_is_rejected_at_once():
 @pytest.mark.asyncio
 async def test_cancelled_waiter_leaves_the_queue_and_holds_no_slot():
     handler, cache = _queue_handler(_QueueClock(advance_time=False))
-    key = _queue_key()
+    key: Final = _queue_key()
     await _admit_in_own_stash(handler, cache, key)
-    waiter = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    waiter: Final = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
     await asyncio.sleep(0)
     assert sum(len(w) for w in handler._parallel_queue_waiters.values()) == 1
 
@@ -7514,7 +7514,7 @@ async def test_cancelled_waiter_leaves_the_queue_and_holds_no_slot():
 
 @pytest.mark.asyncio
 async def test_reject_mode_and_keys_without_settings_still_429_at_once():
-    clock = _QueueClock()
+    clock: Final = _QueueClock()
     handler, cache = _queue_handler(clock)
     for metadata in ({}, {"max_parallel_requests_mode": "reject"}):
         _request_stash.set(None)
@@ -7552,18 +7552,18 @@ async def test_queue_retries_ask_redis_even_when_the_local_mirror_looks_full():
 
     from litellm.caching.redis_cache import RedisCache
 
-    redis = _ScriptedAcquireRedis([[0, 1]])
-    cache = DualCache(redis_cache=cast(RedisCache, redis))
-    handler = _PROXY_MaxParallelRequestsHandler(
+    redis: Final = _ScriptedAcquireRedis([[0, 1]])
+    cache: Final = DualCache(redis_cache=cast(RedisCache, redis))
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(cache), queue_clock=_QueueClock()
     )
-    key = _queue_key()
-    stale_mirror_says_full = 1
+    key: Final = _queue_key()
+    stale_mirror_says_full: Final = 1
     await cache.async_set_cache(
         key=f"{{api_key:{key.api_key}}}:max_parallel_requests", value=stale_mirror_says_full, local_only=True
     )
 
-    stash = await _admit_in_own_stash(handler, cache, key)
+    stash: Final = await _admit_in_own_stash(handler, cache, key)
 
     assert stash.parallel_slot is not None
     assert redis.acquire_calls == [(f"{{api_key:{key.api_key}}}:max_parallel_requests",)]
@@ -7588,5 +7588,5 @@ def test_parallel_queue_policy_reads_key_metadata_within_operator_ceilings(
 ):
     from litellm.proxy.hooks.parallel_request_limiter_v3 import parallel_queue_policy
 
-    policy = parallel_queue_policy(metadata, max_timeout_seconds=120.0, max_queue_depth=50)
+    policy: Final = parallel_queue_policy(metadata, max_timeout_seconds=120.0, max_queue_depth=50)
     assert (None if policy is None else (policy.timeout_seconds, policy.max_queued)) == expected
