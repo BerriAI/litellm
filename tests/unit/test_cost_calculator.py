@@ -1,14 +1,17 @@
 import datetime
+import json
 import time
 from collections.abc import Mapping
-from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
-from typing import Final, cast
+from typing import Final, Literal, cast
 
+import httpx
 import pytest
+from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
 import litellm
+from litellm import TranscriptionResponse
 from litellm.cost_calculator import (
     BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
@@ -18,15 +21,23 @@ from litellm.cost_calculator import (
     cost_per_token,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
+    select_model_name_for_cost_calc,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    convert_to_model_response_object,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
+from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
+from litellm.llms.vertex_ai.cost_calculator import cost_per_character
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
-    CacheCreationTokenDetails,
     CallTypes,
+    ChatCompletionAudioResponse,
     Choices,
     CompletionTokensDetailsWrapper,
     EmbeddingResponse,
@@ -38,6 +49,7 @@ from litellm.types.utils import (
     Message,
     ModelInfo,
     ModelResponse,
+    PromptTokensDetails,
     PromptTokensDetailsWrapper,
     Usage,
 )
@@ -189,7 +201,9 @@ def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
     assert optional_params["aws_session_token"] == "session-secret"
 
 
-def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
 
@@ -236,10 +250,6 @@ def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(
     assert "goog-secret" not in str(logging_obj.model_call_details["standard_logging_object"])
     assert logging_obj.model_call_details["response_cost"] is not None
     assert logging_obj.optional_params["extra_headers"] == {"x-goog-api-key": "goog-secret"}
-
-
-
-
 
 
 def test_realtime_stream_combines_text_and_audio_token_details():
@@ -1356,8 +1366,6 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     print(f"Cost with cache: {cost_with_cache}")
 
 
-
-
 def test_gemini_25_explicit_caching_cost_direct_usage():
     """
     Test that Gemini 2.5 models correctly calculate costs with explicit caching.
@@ -1992,8 +2000,6 @@ def test_cost_margin_with_discount(monkeypatch):
     print(f"  - Base cost: ${base_cost:.6f}")
     print(f"  - Cost with 5% discount + 10% margin: ${cost_with_both:.6f}")
     print(f"  - Expected: ${expected_cost:.6f}")
-
-
 
 
 def test_completion_cost_extracts_service_tier_from_response(_local_model_cost_map):
@@ -2745,8 +2751,6 @@ def test_gemini_without_cache_tokens_details():
     print("✅ Gemini without cacheTokensDetails works correctly")
 
 
-
-
 def test_additional_costs_only_for_azure_ai(_local_model_cost_map):
     """
     Test that _get_additional_costs is only called for azure_ai provider.
@@ -3291,9 +3295,7 @@ def test_cost_per_token_resolves_per_second_rate_precedence(
 
     model: Final = "test-chat-per-second-rate-precedence"
     entry: Final = {**pricing_fields, "litellm_provider": "together_ai", "mode": "chat"}
-    litellm.register_model(
-        model_cost={model: entry}
-    )
+    litellm.register_model(model_cost={model: entry})
 
     assert cost_per_token(
         model=model,
@@ -4061,7 +4063,10 @@ def test_completion_cost_region_without_its_own_row_prices_mantle_claude_from_th
             custom_llm_provider="bedrock_mantle",
             region_name="us-east-1",
         ) == pytest.approx(expected), deployment
-    assert litellm.get_model_info(f"bedrock_mantle/us-east-1/{model}", "bedrock_mantle")["key"] == f"bedrock_mantle/{model}"
+    assert (
+        litellm.get_model_info(f"bedrock_mantle/us-east-1/{model}", "bedrock_mantle")["key"]
+        == f"bedrock_mantle/{model}"
+    )
 
 
 @pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])
@@ -4985,9 +4990,7 @@ def test_xai_batch_tier_discounts_the_long_context_rate_like_the_flat_batch_rate
         assert info[f"{prefix}_above_200k_tokens_batches"] < info[f"{prefix}_above_200k_tokens"]
 
 
-@pytest.mark.parametrize(
-    ("prompt_tokens", "tier"), [(200_000, "_above_200k_tokens_batches"), (199_999, "_batches")]
-)
+@pytest.mark.parametrize(("prompt_tokens", "tier"), [(200_000, "_above_200k_tokens_batches"), (199_999, "_batches")])
 def test_xai_batch_cost_calculator_bills_the_200k_batch_tier_inclusively(
     _local_model_cost_map: None, prompt_tokens: int, tier: str
 ) -> None:
@@ -5839,3 +5842,942 @@ def test_completion_cost_bills_base_when_gemini_serves_on_demand(
     )
 
     assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
+
+
+def test_custom_pricing_as_completion_cost_param() -> None:
+    response: Final = ModelResponse(
+        model="ft:gpt-3.5-turbo:custom",
+        usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
+    )
+    cost: Final = completion_cost(
+        completion_response=response,
+        custom_cost_per_token={
+            "input_cost_per_token": 1000,
+            "output_cost_per_token": 20,
+        },
+    )
+
+    assert cost == pytest.approx(21 * 1000 + 17 * 20)
+
+
+def test_cost_ft_gpt_35(_local_model_cost_map: None) -> None:
+    model: Final = "ft:gpt-3.5-turbo:my-org:custom_suffix:id"
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
+    )
+    cost: Final = completion_cost(
+        completion_response=response,
+        custom_llm_provider="openai",
+    )
+    model_info: Final = litellm.get_model_info("ft:gpt-3.5-turbo")
+    expected_cost: Final = (
+        model_info["input_cost_per_token"] * response.usage.prompt_tokens
+        + model_info["output_cost_per_token"] * response.usage.completion_tokens
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_cost_azure_gpt_35(_local_model_cost_map: None) -> None:
+    response: Final = ModelResponse(
+        model="azure/gpt-35-turbo",
+        usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
+    )
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="azure/chatgpt-deployment-2",
+    )
+    model_info: Final = litellm.get_model_info(
+        "azure/gpt-35-turbo",
+        custom_llm_provider="azure",
+    )
+    expected_cost: Final = (
+        model_info["input_cost_per_token"] * response.usage.prompt_tokens
+        + model_info["output_cost_per_token"] * response.usage.completion_tokens
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_cost_bedrock_pricing_actual_calls(
+    _local_model_cost_map: None,
+) -> None:
+    model: Final = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    messages: Final = [{"role": "user", "content": "Hey, how's it going?"}]
+    response: Final = litellm.completion(
+        model=model,
+        messages=messages,
+        mock_response="hello cool one",
+    )
+    cost: Final = completion_cost(
+        model=f"bedrock/{model}",
+        completion_response=response,
+        messages=messages,
+    )
+
+    assert cost > 0
+
+
+def test_whisper_openai(
+    _local_model_cost_map: None,
+) -> None:
+    transcription: Final = TranscriptionResponse(
+        text="Four score and seven years ago, our fathers brought forth a new nation."
+    )
+    duration: Final = 3
+    setattr(transcription, "duration", duration)
+    transcription._hidden_params = {
+        "model": "whisper-1",
+        "custom_llm_provider": "openai",
+        "optional_params": {},
+        "model_id": None,
+    }
+
+    cost: Final = completion_cost(
+        model="whisper-1",
+        completion_response=transcription,
+    )
+    model_info: Final = litellm.get_model_info("whisper-1")
+    expected_cost: Final = model_info["output_cost_per_second"] * duration
+
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_whisper_azure(
+    _local_model_cost_map: None,
+) -> None:
+    transcription: Final = TranscriptionResponse(
+        text="Four score and seven years ago, our fathers brought forth a new nation."
+    )
+    duration: Final = 3
+    setattr(transcription, "duration", duration)
+    transcription._hidden_params = {
+        "model": "whisper-1",
+        "custom_llm_provider": "azure",
+        "optional_params": {},
+        "model_id": None,
+    }
+
+    cost: Final = completion_cost(
+        model="azure/azure-whisper",
+        completion_response=transcription,
+    )
+    model_info: Final = litellm.get_model_info("whisper-1")
+    expected_cost: Final = model_info["output_cost_per_second"] * duration
+
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_gpt_image_2_azure_cost_tracking(_local_model_cost_map: None) -> None:
+    response_data: Final = {
+        "created": 1758585600,
+        "data": [{"b64_json": "iVBORw0KGgo=", "revised_prompt": None, "url": None}],
+        "output_format": "png",
+        "quality": "low",
+        "size": "1024x1024",
+        "usage": {
+            "input_tokens": 12,
+            "input_tokens_details": {"image_tokens": 0, "text_tokens": 12},
+            "output_tokens": 196,
+            "output_tokens_details": {"image_tokens": 196, "text_tokens": 0},
+            "total_tokens": 208,
+        },
+    }
+    response: Final = convert_to_model_response_object(
+        response_object=response_data,
+        model_response_object=litellm.ImageResponse(),
+        response_type="image_generation",
+        hidden_params={"model": "gpt-image-2", "custom_llm_provider": "azure"},
+    )
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="azure/my-gpt-image-2-deployment",
+        custom_llm_provider="azure",
+        base_model="gpt-image-2",
+        call_type="image_generation",
+    )
+    pricing: Final = litellm.model_cost["azure/gpt-image-2"]
+    expected_cost: Final = pricing["input_cost_per_token"] * 12 + pricing["output_cost_per_image_token"] * 196
+
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_replicate_llama3_cost_tracking(_local_model_cost_map: None) -> None:
+    model: Final = "replicate/meta/meta-llama-3-8b-instruct"
+    pricing: Final = {
+        "input_cost_per_token": 0.00000005,
+        "output_cost_per_token": 0.00000025,
+        "litellm_provider": "replicate",
+    }
+    litellm.register_model(model_cost={model: pricing})
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=48, completion_tokens=31, total_tokens=79),
+    )
+    cost: Final = completion_cost(
+        completion_response=response,
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+    expected_cost: Final = (
+        pricing["input_cost_per_token"] * response.usage.prompt_tokens
+        + pricing["output_cost_per_token"] * response.usage.completion_tokens
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize("is_streaming", [True, False])
+def test_groq_response_cost_tracking(
+    is_streaming: bool,
+    _local_model_cost_map: None,
+) -> None:
+    response: Final = ModelResponse(
+        model="llama3-70b-8192",
+        usage=Usage(prompt_tokens=17, completion_tokens=46, total_tokens=63),
+    )
+    response._hidden_params["custom_llm_provider"] = "groq"
+    response_cost: Final = response_cost_calculator(
+        response_object=response,
+        model="groq/openai/gpt-oss-120b",
+        custom_llm_provider="groq",
+        call_type=CallTypes.acompletion.value,
+        optional_params={},
+    )
+
+    assert isinstance(response_cost, float)
+    assert response_cost > 0
+
+
+def test_together_ai_qwen_completion_cost() -> None:
+    category: Final = get_model_params_and_category(
+        model_name="qwen/Qwen2-72B-Instruct",
+        call_type=CallTypes.completion,
+    )
+
+    assert category == "together-ai-41.1b-80b"
+
+
+@pytest.mark.parametrize("provider", ["gemini"])
+def test_gemini_completion_cost(
+    provider: Literal["gemini"],
+    _local_model_cost_map: None,
+) -> None:
+    model: Final = "gemini-3.8-flash"
+    prompt_tokens: Final = 128.0
+    completion_tokens: Final = 228.0
+    model_info: Final = litellm.get_model_info(
+        model=model,
+        custom_llm_provider=provider,
+    )
+    expected_input_cost: Final = prompt_tokens * model_info["input_cost_per_token"]
+    expected_output_cost: Final = completion_tokens * model_info["output_cost_per_token"]
+    actual_costs: Final = cost_per_token(
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        custom_llm_provider=provider,
+    )
+
+    assert actual_costs[0] == pytest.approx(expected_input_cost)
+    assert actual_costs[1] == pytest.approx(expected_output_cost)
+
+
+def test_vertex_ai_completion_cost(_local_model_cost_map: None) -> None:
+    model: Final = "gemini-3.8-flash"
+    prompt_tokens: Final = 100
+    model_info: Final = litellm.get_model_info(model=model)
+    actual_costs: Final = cost_per_token(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=0,
+    )
+
+    assert actual_costs[0] == pytest.approx(prompt_tokens * model_info["input_cost_per_token"])
+
+
+def test_vertex_ai_medlm_completion_cost(_local_model_cost_map: None) -> None:
+    messages: Final = [{"role": "user", "content": "Test MedLM completion cost."}]
+    medium_cost: Final = completion_cost(
+        model="vertex_ai/medlm-medium",
+        messages=messages,
+        custom_llm_provider="vertex_ai",
+    )
+    large_cost: Final = completion_cost(
+        model="vertex_ai/medlm-large",
+        messages=messages,
+    )
+
+    assert medium_cost > 0
+    assert large_cost > 0
+
+
+def test_vertex_ai_embedding_completion_cost(
+    _local_model_cost_map: None,
+) -> None:
+    text: Final = "The quick brown fox jumps over the lazy dog."
+    input_tokens: Final = litellm.token_counter(
+        model="vertex_ai/text-embedding-004",
+        text=text,
+    )
+    model_info: Final = litellm.get_model_info(model="vertex_ai/text-embedding-004")
+    actual_costs: Final = cost_per_token(
+        model="text-embedding-004",
+        custom_llm_provider="vertex_ai",
+        prompt_tokens=input_tokens,
+        call_type="aembedding",
+    )
+
+    assert actual_costs[0] == pytest.approx(input_tokens * model_info["input_cost_per_token"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_cost_hidden_params(
+    sync_mode: bool,
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "return_response_headers", True)
+    messages: Final = [{"role": "user", "content": "Hey, how's it going?"}]
+    response: Final = (
+        litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            mock_response="Hello world",
+        )
+        if sync_mode
+        else await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            mock_response="Hello world",
+        )
+    )
+
+    assert "response_cost" in response._hidden_params
+    assert isinstance(response._hidden_params["response_cost"], float)
+
+
+def test_vertex_ai_gemini_predict_cost(_local_model_cost_map: None) -> None:
+    predictive_cost: Final = completion_cost(
+        model="gemini-3.8-flash",
+        messages=[{"role": "user", "content": "Hey, hows it going???"}],
+    )
+
+    assert predictive_cost > 0
+
+
+@pytest.mark.parametrize("usage", ["litellm_usage", "openai_usage"])
+def test_vertex_ai_mistral_predict_cost(
+    usage: Literal["litellm_usage", "openai_usage"],
+    _local_model_cost_map: None,
+) -> None:
+    response_usage: Final = (
+        Usage(prompt_tokens=32, completion_tokens=55, total_tokens=87)
+        if usage == "litellm_usage"
+        else CompletionUsage(prompt_tokens=32, completion_tokens=55, total_tokens=87)
+    )
+    response: Final = ModelResponse(
+        id="26c0ef045020429d9c5c9b078c01e564",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="Hello",
+                    role="assistant",
+                    tool_calls=None,
+                    function_call=None,
+                ),
+            )
+        ],
+        model="vertex_ai/mistral-large",
+        usage=response_usage,
+    )
+    predictive_cost: Final = completion_cost(
+        completion_response=response,
+        model="mistral-large@2407",
+        messages=[{"role": "user", "content": "Hey, hows it going???"}],
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert predictive_cost > 0
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"],
+)
+def test_completion_cost_tts(
+    model: Literal["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"],
+    _local_model_cost_map: None,
+) -> None:
+    cost: Final = completion_cost(
+        model=model,
+        prompt="the quick brown fox jumped over the lazy dogs",
+        call_type="speech",
+    )
+
+    assert cost > 0
+
+
+def test_completion_cost_anthropic(_local_model_cost_map: None) -> None:
+    model: Final = "claude-haiku-4-5"
+    prompt_tokens: Final = 21
+    completion_tokens: Final = 20
+    model_info: Final = litellm.get_model_info(
+        model=model,
+        custom_llm_provider="anthropic",
+    )
+    actual_costs: Final = cost_per_token(
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        custom_llm_provider="anthropic",
+    )
+
+    assert actual_costs[0] == pytest.approx(prompt_tokens * model_info["input_cost_per_token"])
+    assert actual_costs[1] == pytest.approx(completion_tokens * model_info["output_cost_per_token"])
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("claude-sonnet-4-6", "anthropic"),
+        ("claude-haiku-4-5", "anthropic"),
+    ],
+)
+def test_completion_cost_prompt_caching(
+    model: Literal["claude-sonnet-4-6", "claude-haiku-4-5"],
+    custom_llm_provider: Literal["anthropic"],
+    _local_model_cost_map: None,
+) -> None:
+    response_with_cache_creation: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=114,
+            total_tokens=124,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=0),
+            cache_creation_input_tokens=100,
+            cache_read_input_tokens=0,
+        ),
+    )
+    response_with_cache_read: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=114,
+            total_tokens=134,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=100),
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=100,
+        ),
+    )
+    model_info: Final = litellm.get_model_info(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
+    cost_with_cache_creation: Final = completion_cost(
+        model=model,
+        completion_response=response_with_cache_creation,
+    )
+    cost_with_cache_read: Final = completion_cost(
+        model=model,
+        completion_response=response_with_cache_read,
+    )
+    expected_cost: Final = (
+        14 * model_info["input_cost_per_token"]
+        + 100 * model_info["cache_creation_input_token_cost"]
+        + 10 * model_info["output_cost_per_token"]
+    )
+
+    assert cost_with_cache_creation == pytest.approx(expected_cost)
+    assert cost_with_cache_creation > cost_with_cache_read
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "databricks/databricks-bge-large-en",
+        "databricks/databricks-gte-large-en",
+    ],
+)
+def test_completion_cost_databricks_embedding(
+    model: Literal[
+        "databricks/databricks-bge-large-en",
+        "databricks/databricks-gte-large-en",
+    ],
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "DATABRICKS_API_BASE",
+        "https://my.workspace.cloud.databricks.com/serving-endpoints",
+    )
+    monkeypatch.setenv("DATABRICKS_API_KEY", "databricks-test-key")
+    response_data: Final = {
+        "object": "list",
+        "model": model.split("/")[1],
+        "data": [
+            {
+                "index": 0,
+                "object": "embedding",
+                "embedding": [0.06768798828125, -0.01291656494140625],
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8,
+            "completion_tokens": 0,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(200, json=response_data))
+    with httpx.Client(transport=transport) as http_client:
+        handler: Final = HTTPHandler(client=http_client)
+        response: Final = litellm.embedding(
+            model=model,
+            input=["hey, how's it going?"],
+            client=handler,
+        )
+
+    cost: Final = completion_cost(completion_response=response)
+
+    assert cost > 0
+
+
+@pytest.mark.parametrize(
+    ("model_name", "expected_model"),
+    [
+        (
+            "fireworks_ai/llama-v3p1-70b-instruct",
+            "fireworks-ai-above-16b",
+        )
+    ],
+)
+def test_get_model_params_fireworks_ai(
+    model_name: Literal["fireworks_ai/llama-v3p1-70b-instruct"],
+    expected_model: Literal["fireworks-ai-above-16b"],
+) -> None:
+    pricing_model: Final = get_base_model_for_pricing(model_name=model_name)
+
+    assert pricing_model == expected_model
+
+
+def test_cost_openai_prompt_caching(_local_model_cost_map: None) -> None:
+    model: Final = "gpt-4o-2024-08-06"
+    response_without_cache: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=14,
+            completion_tokens=10,
+            total_tokens=24,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=0),
+        ),
+    )
+    response_with_cache: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=14,
+            completion_tokens=10,
+            total_tokens=24,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=14),
+        ),
+    )
+    model_info: Final = litellm.get_model_info(
+        model=model,
+        custom_llm_provider="openai",
+    )
+    cost_without_cache: Final = completion_cost(
+        model=model,
+        completion_response=response_without_cache,
+    )
+    cost_with_cache: Final = completion_cost(
+        model=model,
+        completion_response=response_with_cache,
+    )
+    expected_cached_cost: Final = (
+        10 * model_info["output_cost_per_token"] + 14 * model_info["cache_read_input_token_cost"]
+    )
+
+    assert cost_with_cache == pytest.approx(expected_cached_cost)
+    assert cost_without_cache > cost_with_cache
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["cohere/rerank-english-v3.0", "azure_ai/cohere-rerank-v3-english"],
+)
+def test_completion_cost_azure_ai_rerank(
+    model: Literal[
+        "cohere/rerank-english-v3.0",
+        "azure_ai/cohere-rerank-v3-english",
+    ],
+    _local_model_cost_map: None,
+) -> None:
+    response: Final = RerankResponse(
+        results=[],
+        meta={"billed_units": {"search_units": 1}},
+    )
+    cost: Final = completion_cost(
+        model=model,
+        completion_response=response,
+        call_type="arerank",
+    )
+    model_info: Final = litellm.get_model_info(model=model)
+    expected_cost: Final = model_info["input_cost_per_query"] * response.meta["billed_units"]["search_units"]
+
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_together_ai_embedding_completion_cost(
+    _local_model_cost_map: None,
+) -> None:
+    response: Final = EmbeddingResponse(
+        model="togethercomputer/m2-bert-80M-8k-retrieval",
+        data=[
+            {
+                "index": 0,
+                "object": "embedding",
+                "embedding": [0.1, 0.2],
+            }
+        ],
+        usage=Usage(prompt_tokens=8, completion_tokens=0, total_tokens=8),
+    )
+    cost: Final = completion_cost(
+        completion_response=response,
+        custom_llm_provider="together_ai",
+        call_type="embedding",
+    )
+
+    assert cost > 0
+
+
+def test_completion_cost_params(_local_model_cost_map: None) -> None:
+    beta_provider_cost: Final = cost_per_token(
+        model="vertex_ai/gemini-3.8-flash",
+        prompt_tokens=1000,
+        completion_tokens=1000,
+        custom_llm_provider="vertex_ai_beta",
+    )
+    vertex_provider_cost: Final = cost_per_token(
+        model="gemini-3.8-flash",
+        prompt_tokens=1000,
+        completion_tokens=1000,
+        custom_llm_provider="vertex_ai",
+    )
+    default_provider_cost: Final = cost_per_token(
+        model="vertex_ai/gemini-3.8-flash",
+        prompt_tokens=1000,
+        completion_tokens=1000,
+    )
+
+    assert beta_provider_cost == vertex_provider_cost
+    assert beta_provider_cost == default_provider_cost
+
+
+def test_completion_cost_params_2(_local_model_cost_map: None) -> None:
+    model: Final = "vertex_ai/gemini-3.8-flash"
+    prompt_tokens: Final = 1000
+    completion_tokens: Final = 1000
+    actual_costs: Final = cost_per_token(
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+    model_info: Final = litellm.get_model_info(model="gemini-3.8-flash")
+
+    assert actual_costs[0] == pytest.approx(model_info["input_cost_per_token"] * prompt_tokens)
+    assert actual_costs[1] == pytest.approx(model_info["output_cost_per_token"] * completion_tokens)
+
+
+def test_completion_cost_params_gemini_3(
+    _local_model_cost_map: None,
+) -> None:
+    usage: Final = Usage(
+        prompt_tokens=100,
+        completion_tokens=200,
+        total_tokens=300,
+    )
+    actual_costs: Final = cost_per_character(
+        model="gemini-3.8-flash",
+        custom_llm_provider="vertex_ai",
+        prompt_characters=None,
+        completion_characters=3,
+        usage=usage,
+    )
+    model_info: Final = litellm.get_model_info(
+        model="gemini-3.8-flash",
+        custom_llm_provider="vertex_ai",
+    )
+    expected_costs: Final = (
+        usage.prompt_tokens * model_info["input_cost_per_token"],
+        usage.completion_tokens * model_info["output_cost_per_token"],
+    )
+
+    assert actual_costs[0] == pytest.approx(expected_costs[0])
+    assert actual_costs[1] == pytest.approx(expected_costs[1])
+
+
+@pytest.mark.parametrize("stream", [False])
+def test_test_completion_cost_gpt4o_audio_output_from_model(
+    stream: bool,
+    _local_model_cost_map: None,
+) -> None:
+    model: Final = "gpt-audio-1.5"
+    audio: Final = ChatCompletionAudioResponse(
+        id="audio-response",
+        data="",
+        expires_at=0,
+        transcript="Yes.",
+    )
+    usage: Final = Usage(
+        completion_tokens=34,
+        prompt_tokens=16,
+        total_tokens=50,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            text_tokens=6,
+            audio_tokens=28,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=16,
+            audio_tokens=0,
+        ),
+    )
+    response: Final = ModelResponse(
+        id="chatcmpl-audio-test",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content=None,
+                    role="assistant",
+                    audio=audio,
+                ),
+            )
+        ],
+        model=model,
+        usage=usage,
+    )
+    model_info: Final = litellm.get_model_info(model=model)
+    expected_cost: Final = (
+        model_info["input_cost_per_audio_token"] * 0
+        + model_info["input_cost_per_token"] * 16
+        + model_info["output_cost_per_audio_token"] * 28
+        + model_info["output_cost_per_token"] * 6
+    )
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
+    ("response_model", "custom_llm_provider"),
+    [
+        ("anthropic.claude-3-5-sonnet-20240620-v1:0", "bedrock"),
+        ("azure_ai/Meta-Llama-3.1-70B-Instruct", "azure_ai"),
+    ],
+)
+def test_completion_cost_model_response_cost(
+    response_model: Literal[
+        "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "azure_ai/Meta-Llama-3.1-70B-Instruct",
+    ],
+    custom_llm_provider: Literal["bedrock", "azure_ai"],
+    _local_model_cost_map: None,
+) -> None:
+    response: Final = ModelResponse(
+        model=response_model,
+        usage=Usage(prompt_tokens=16, completion_tokens=32, total_tokens=48),
+    )
+    cost: Final = completion_cost(
+        completion_response=response,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert cost > 0
+
+
+def test_select_model_name_for_cost_calc() -> None:
+    response: Final = ModelResponse(
+        model="azure_ai/mistral-large",
+        usage=Usage(prompt_tokens=16, completion_tokens=32, total_tokens=48),
+    )
+    model_name: Final = select_model_name_for_cost_calc(
+        model="Mistral-large-nmefg",
+        completion_response=response,
+        base_model=None,
+        custom_pricing=None,
+    )
+
+    assert model_name == "azure_ai/mistral-large"
+
+
+def test_cost_calculator_with_base_model(_local_model_cost_map: None) -> None:
+    messages: Final = [{"role": "user", "content": "Hello, how are you?"}]
+    response: Final = litellm.completion(
+        model="bedrock/random-model",
+        messages=messages,
+        base_model="bedrock/anthropic.claude-sonnet-5",
+        mock_response="Hello, how are you?",
+    )
+
+    assert response.model == "random-model"
+    assert response._hidden_params["response_cost"] > 0
+
+
+@pytest.mark.parametrize(
+    "base_model_arg",
+    ["litellm_param", "model_info"],
+)
+def test_cost_calculator_with_base_model_with_router(
+    base_model_arg: Literal["litellm_param", "model_info"],
+    _local_model_cost_map: None,
+) -> None:
+    model_item: Final = (
+        {
+            "model_name": "random-model",
+            "litellm_params": {
+                "model": "bedrock/random-model",
+                "base_model": "bedrock/anthropic.claude-sonnet-5",
+            },
+        }
+        if base_model_arg == "litellm_param"
+        else {
+            "model_name": "random-model",
+            "litellm_params": {"model": "bedrock/random-model"},
+            "model_info": {"base_model": "bedrock/anthropic.claude-sonnet-5"},
+        }
+    )
+    router: Final = litellm.Router(model_list=[model_item])
+    response: Final = router.completion(
+        model="random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+    )
+
+    assert response.model == "random-model"
+    assert response._hidden_params["response_cost"] > 0
+
+
+@pytest.mark.parametrize(
+    "base_model_arg",
+    ["litellm_param", "model_info"],
+)
+def test_cost_calculator_with_base_model_with_router_embedding(
+    base_model_arg: Literal["litellm_param", "model_info"],
+    _local_model_cost_map: None,
+) -> None:
+    model_item: Final = (
+        {
+            "model_name": "random-model",
+            "litellm_params": {
+                "model": "bedrock/random-model",
+                "base_model": "cohere.embed-english-v3",
+            },
+        }
+        if base_model_arg == "litellm_param"
+        else {
+            "model_name": "random-model",
+            "litellm_params": {"model": "bedrock/random-model"},
+            "model_info": {"base_model": "cohere.embed-english-v3"},
+        }
+    )
+    router: Final = litellm.Router(model_list=[model_item])
+    response: Final = router.embedding(
+        model="random-model",
+        input="Hello, how are you?",
+        mock_response=[1, 2, 3],
+    )
+
+    assert response.model == "random-model"
+    assert response._hidden_params["response_cost"] > 0
+
+
+def test_cost_calculator_with_custom_pricing() -> None:
+    response: Final = litellm.completion(
+        model="bedrock/random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+        input_cost_per_token=0.0000008,
+        output_cost_per_token=0.0000032,
+    )
+
+    assert response.model == "random-model"
+    assert response._hidden_params["response_cost"] > 0
+
+
+@pytest.mark.parametrize(
+    "custom_pricing",
+    ["litellm_params", "model_info"],
+)
+@pytest.mark.asyncio
+async def test_cost_calculator_with_custom_pricing_router(
+    custom_pricing: Literal["litellm_params", "model_info"],
+) -> None:
+    model_item: Final = (
+        {
+            "model_name": "random-model",
+            "litellm_params": {
+                "model": "openai/my-fake-model",
+                "api_key": "my-fake-key",
+                "api_base": "https://my-fake-endpoint.com/v1",
+                "input_cost_per_token": 0.0000008,
+                "output_cost_per_token": 0.0000032,
+            },
+        }
+        if custom_pricing == "litellm_params"
+        else {
+            "model_name": "random-model",
+            "litellm_params": {
+                "model": "openai/my-fake-model",
+                "api_key": "my-fake-key",
+                "api_base": "https://my-fake-endpoint.com/v1",
+            },
+            "model_info": {
+                "input_cost_per_token": 0.0000008,
+                "output_cost_per_token": 0.0000032,
+            },
+        }
+    )
+    router: Final = litellm.Router(model_list=[model_item])
+    response: Final = await router.acompletion(
+        model="random-model",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="Hello, how are you?",
+    )
+
+    assert response._hidden_params["response_cost"] > 0
+
+
+def test_json_valid_model_cost_map(_local_model_cost_map: None) -> None:
+    model_cost_map: Final = litellm.get_model_cost_map(url="")
+    serialized_cost_map: Final = json.dumps(model_cost_map)
+
+    assert json.loads(serialized_cost_map) == model_cost_map
+
+
+def test_batch_cost_calculator(_local_model_cost_map: None) -> None:
+    model: Final = "gpt-4o-mini-2024-07-18"
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=20, completion_tokens=278, total_tokens=298),
+    )
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=None,
+    )
+    model_info: Final = litellm.get_model_info(
+        model=model,
+        custom_llm_provider="openai",
+    )
+    expected_cost: Final = 20 * model_info["input_cost_per_token"] + 278 * model_info["output_cost_per_token"]
+
+    assert cost == pytest.approx(expected_cost)

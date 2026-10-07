@@ -18,18 +18,24 @@ import pytest
 import respx
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
+from litellm import Choices, Message, ModelResponse, completion_cost
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+    _is_bedrock_agent_runtime_route,
+    router as llm_passthrough_router,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -38,6 +44,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     SafeRouteAdder,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
+    _update_metadata_with_tags_in_header,
     _with_trace_context,
     chat_completion_pass_through_endpoint,
     create_pass_through_route,
@@ -57,10 +64,22 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
+from litellm.utils import Usage
 from tests._master_key import MASTER_KEY
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
+PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
+    {
+        "/comprehendmedical": frozenset({"POST"}),
+        "/comprehendmedical/{operation}": frozenset({"POST"}),
+        "/transcribe": frozenset({"POST"}),
+        "/transcribe/{operation}": frozenset({"POST"}),
+        "/tinyfish/{endpoint:path}": frozenset({"GET", "POST"}),
+        "/laya/v1/systemone": frozenset({"POST"}),
+        "/bespoke/v1/systemone": frozenset({"POST"}),
+    }
+)
 
 
 def test_with_trace_context_without_opentelemetry(monkeypatch: pytest.MonkeyPatch):
@@ -8441,6 +8460,168 @@ def test_update_pass_through_route_updates_registry():
                 del _registered_pass_through_routes[route_key]
 
     asyncio.run(_async_test())
+
+
+def test_update_metadata_with_tags_in_header_no_tags() -> None:
+    request: Final = Request(
+        {
+            "type": "http",
+            "headers": [],
+            "method": "POST",
+            "path": "/",
+            "query_string": b"",
+        }
+    )
+
+    result: Final = _update_metadata_with_tags_in_header(
+        request=request,
+        metadata={"existing": "value"},
+    )
+
+    assert result == {"existing": "value"}
+    assert "tags" not in result
+
+
+def test_update_metadata_with_tags_in_header_with_tags() -> None:
+    request: Final = Request(
+        {
+            "type": "http",
+            "headers": [(b"tags", b"tag1,tag2,tag3")],
+            "method": "POST",
+            "path": "/",
+            "query_string": b"",
+        }
+    )
+
+    result: Final = _update_metadata_with_tags_in_header(
+        request=request,
+        metadata={"existing": "value"},
+    )
+
+    assert result == {"existing": "value", "tags": ["tag1", "tag2", "tag3"]}
+
+
+def test_get_response_headers_filters_excluded_custom_headers() -> None:
+    upstream_headers: Final = httpx.Headers(
+        MappingProxyType(
+            {
+                "content-type": "application/json",
+                "x-amzn-requestid": "req-123",
+                "content-length": "999",
+            }
+        )
+    )
+    custom_headers: Final = MappingProxyType(
+        {
+            "x-litellm-version": "test-version",
+            "content-length": "0",
+            "server": "test-server",
+        }
+    )
+
+    result: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+        headers=upstream_headers,
+        litellm_call_id="call-123",
+        custom_headers=custom_headers,
+    )
+
+    assert result["content-type"] == "application/json"
+    assert result["x-amzn-requestid"] == "req-123"
+    assert result["x-litellm-version"] == "test-version"
+    assert result["x-litellm-call-id"] == "call-123"
+    assert "content-length" not in result
+    assert "server" not in result
+
+
+def test_pass_through_routes_support_all_methods() -> None:
+    expected_methods: Final = frozenset({"GET", "POST", "PUT", "DELETE", "PATCH"})
+
+    def check_router_methods(router: APIRouter) -> None:
+        for route in router.routes:
+            if not isinstance(route, APIRoute):
+                continue
+            path: Final = route.path
+            methods: Final = frozenset(route.methods or ())
+            allowed: Final = PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES.get(path, expected_methods)
+            assert methods == allowed, (
+                f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
+            )
+
+    check_router_methods(llm_passthrough_router)
+
+
+def test_protocol_constrained_pass_through_exemptions_are_not_stale() -> None:
+    registered_paths: Final = frozenset(
+        route.path for route in llm_passthrough_router.routes if isinstance(route, APIRoute)
+    )
+    unmatched: Final = frozenset(PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES) - registered_paths
+
+    assert not unmatched, f"Exempted pass-through routes no longer exist: {sorted(unmatched)}"
+
+
+def test_is_bedrock_agent_runtime_route() -> None:
+    assert _is_bedrock_agent_runtime_route("/knowledgebases/kb-123/retrieve")
+    assert _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve")
+    assert not _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply")
+    assert not _is_bedrock_agent_runtime_route("/model/example/converse")
+    assert not _is_bedrock_agent_runtime_route("/some/random/endpoint")
+
+
+def test_custom_pricing_used_in_cost_calculation() -> None:
+    resp: Final = ModelResponse(
+        id="chatcmpl-test-123",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="This is a test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1234567890,
+        model="gpt-5.5",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    standard_cost: Final = completion_cost(
+        completion_response=resp,
+        model="gpt-5.5",
+    )
+    custom_input_price: Final = 0.0001
+    custom_output_price: Final = 0.0002
+
+    custom_cost: Final = completion_cost(
+        completion_response=resp,
+        custom_cost_per_token=MappingProxyType(
+            {
+                "input_cost_per_token": custom_input_price,
+                "output_cost_per_token": custom_output_price,
+            }
+        ),
+    )
+    expected_custom_cost: Final = (100 * custom_input_price) + (50 * custom_output_price)
+
+    assert round(custom_cost, 10) == round(expected_custom_cost, 10)
+    assert custom_cost != standard_cost
+
+    cache_cost: Final = completion_cost(
+        completion_response=resp,
+        custom_cost_per_token=MappingProxyType(
+            {
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+                "cache_read_input_token_cost": 0.000005,
+                "input_cost_per_token_batches": 0.000003,
+                "output_cost_per_token_batches": 0.000004,
+            }
+        ),
+    )
+
+    assert isinstance(cache_cost, (int, float))
+    assert cache_cost >= 0
+
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 def test_update_subpath_route_updates_registry():

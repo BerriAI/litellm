@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
@@ -1867,3 +1868,102 @@ def test_listed_router_request_is_sent_to_the_router_resource_and_billed_at_the_
     assert handler.request_body["model"] == f"accounts/fireworks/routers/{router}"
     assert expected_cost > 0
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_map_openai_params_tool_choice() -> None:
+    config: Final = FireworksAIConfig()
+    assert config.map_openai_params({"tool_choice": "required"}, {}, "some_model", drop_params=False) == {
+        "tool_choice": "any"
+    }
+    assert config.map_openai_params({"tool_choice": "auto"}, {}, "some_model", drop_params=False) == {
+        "tool_choice": "auto"
+    }
+    assert config.map_openai_params({"some_other_param": "value"}, {}, "some_model", drop_params=False) == {}
+    assert config.map_openai_params({"tool_choice": None}, {}, "some_model", drop_params=False) == {
+        "tool_choice": None
+    }
+
+
+def test_map_response_format() -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "schema": {
+                "properties": {"result": {"type": "boolean"}},
+                "required": ["result"],
+                "type": "object",
+            },
+            "name": "BooleanResponse",
+            "strict": True,
+        },
+    }
+
+    assert (
+        FireworksAIConfig().map_openai_params(
+            {"response_format": response_format}, {}, "some_model", drop_params=False
+        )
+        == {"response_format": response_format}
+    )
+
+
+def test_get_supported_openai_params_transcription_returns_none() -> None:
+    assert (
+        get_supported_openai_params(
+            model="fireworks_ai/accounts/fireworks/models/whisper-v3",
+            custom_llm_provider="fireworks_ai",
+            request_type="transcription",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "content, expected_url",
+    [
+        ({"image_url": "http://example.com/image.png"}, "http://example.com/image.png"),
+        (
+            {"image_url": {"url": "http://example.com/image.png"}},
+            {"url": "http://example.com/image.png"},
+        ),
+        ({"image_url": "data:image/png;base64,iVBORw0KGgo="}, "data:image/png;base64,iVBORw0KGgo="),
+        (
+            {"image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ=="}},
+            {"url": "data:image/jpeg;base64,/9j/4AAQ=="},
+        ),
+        ({"image_url": "Data:image/png;base64,iVBORw0KGgo="}, "Data:image/png;base64,iVBORw0KGgo="),
+    ],
+)
+def test_transform_inline_no_longer_added(content: dict[str, object], expected_url: object) -> None:
+    messages: Final = [{"role": "user", "content": [{"type": "image_url", **content}]}]
+
+    result: Final = FireworksAIConfig()._transform_messages_helper(
+        messages=messages,
+        model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
+        litellm_params={},
+    )
+
+    assert result == messages
+    assert result[0]["content"][0]["image_url"] == expected_url
+
+
+@pytest.mark.parametrize("is_disabled", [True, False])
+def test_global_disable_flag_no_longer_adds_transform_inline(
+    is_disabled: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_add_transform_inline_image_block", is_disabled)
+    url: Final = "http://example.com/image.png"
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": url}],
+        }
+    ]
+
+    result: Final = FireworksAIConfig()._transform_messages_helper(
+        messages=messages,
+        model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
+        litellm_params={},
+    )
+
+    assert result == messages
+    assert result[0]["content"][0]["image_url"] == url

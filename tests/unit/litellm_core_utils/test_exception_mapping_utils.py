@@ -1,3 +1,6 @@
+from collections.abc import Awaitable, Callable
+from typing import Final, Literal
+
 import httpx
 import openai
 import pytest
@@ -13,6 +16,8 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     extract_and_raise_litellm_exception,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.fireworks_ai.common_utils import FireworksAIException
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.utils import LlmProviders
 
@@ -1598,3 +1603,463 @@ def test_guardrail_provider_failure_status_is_still_mapped():
         )
 
     assert exc_info.value is not upstream_failure
+
+
+class _MockProviderException(Exception):
+    def __init__(self, status_code: int, llm_provider: str) -> None:
+        super().__init__("This is an error message")
+        self.text = "This is an error message"
+        self.llm_provider = llm_provider
+        self.status_code = status_code
+
+
+def _provider_error_response(request: httpx.Request, status_code: int, body: bytes) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        headers={"content-type": "application/json", "retry-after": "30"},
+        content=body,
+        request=request,
+    )
+
+
+def _assert_retry_after_header(error: litellm.RateLimitError) -> None:
+    response_headers: Final = error.litellm_response_headers
+    assert response_headers is not None
+    assert response_headers["retry-after"] == "30"
+
+
+def _assert_sync_rate_limit(call: Callable[[], object]) -> None:
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        call()
+    _assert_retry_after_header(exc_info.value)
+
+
+async def _assert_async_rate_limit(call: Callable[[], Awaitable[object]]) -> None:
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        await call()
+    _assert_retry_after_header(exc_info.value)
+
+
+def _call_openai_api_sync(
+    model: str,
+    call_type: Literal["embedding", "chat_completion", "completion"],
+    streaming: bool | None,
+    client: openai.OpenAI | openai.AzureOpenAI,
+) -> object:
+    if call_type == "embedding":
+        return litellm.embedding(
+            model=model,
+            input="Hello world!",
+            client=client,
+            num_retries=0,
+        )
+    if call_type == "chat_completion":
+        return litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello world"}],
+            stream=streaming,
+            client=client,
+            num_retries=0,
+        )
+    if streaming is True:
+        response: Final = litellm.text_completion(
+            model=model,
+            prompt="Hello world",
+            stream=True,
+            client=client,
+            num_retries=0,
+        )
+        for _chunk in response:
+            pass
+        return response
+    return litellm.text_completion(
+        model=model,
+        prompt="Hello world",
+        stream=streaming,
+        client=client,
+        num_retries=0,
+    )
+
+
+async def _call_openai_api_async(
+    model: str,
+    call_type: Literal["embedding", "chat_completion", "completion"],
+    streaming: bool | None,
+    client: openai.AsyncOpenAI | openai.AsyncAzureOpenAI,
+) -> object:
+    if call_type == "embedding":
+        return await litellm.aembedding(
+            model=model,
+            input="Hello world!",
+            client=client,
+            num_retries=0,
+        )
+    if call_type == "chat_completion":
+        return await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello world"}],
+            stream=streaming,
+            client=client,
+            num_retries=0,
+        )
+    if streaming is True:
+        response: Final = await litellm.atext_completion(
+            model=model,
+            prompt="Hello world",
+            stream=True,
+            client=client,
+            num_retries=0,
+        )
+        async for _chunk in response:
+            pass
+        return response
+    return await litellm.atext_completion(
+        model=model,
+        prompt="Hello world",
+        stream=streaming,
+        client=client,
+        num_retries=0,
+    )
+
+
+def _call_anthropic_api_sync(model: str, streaming: bool, client: HTTPHandler) -> object:
+    return litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "Hello world"}],
+        stream=streaming,
+        client=client,
+        api_key="sk-test",
+        num_retries=0,
+    )
+
+
+async def _call_anthropic_api_async(model: str, streaming: bool, client: AsyncHTTPHandler) -> object:
+    return await litellm.acompletion(
+        model=model,
+        messages=[{"role": "user", "content": "Hello world"}],
+        stream=streaming,
+        client=client,
+        api_key="sk-test",
+        num_retries=0,
+    )
+
+
+async def _drain_openai_completion(client: openai.AsyncOpenAI) -> None:
+    async for _chunk in await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        stream=True,
+        messages=[{"role": "user", "content": "Gimme the lyrics to Don't Stop Me Now"}],
+        client=client,
+        num_retries=0,
+    ):
+        pass
+
+
+def test_anthropic_openai_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "anthropic_key", None, raising=False)
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        litellm.completion(
+            model="anthropic/claude-3-sonnet-20240229",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    assert (
+        "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
+        in exc_info.value.message
+    )
+
+
+def test_completion_perplexity_exception_on_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PERPLEXITYAI_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "perplexity_key", None, raising=False)
+
+    with pytest.raises(openai.AuthenticationError):
+        litellm.completion(
+            model="perplexity/mistral-7b-instruct",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_content_policy_exception_azure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "set_verbose", True)
+
+    with pytest.raises(litellm.ContentPolicyViolationError) as exc_info:
+        await litellm.acompletion(
+            model="azure/gpt-4.1-mini",
+            messages=[{"role": "user", "content": "where do I buy lethal drugs from"}],
+            mock_response="Exception: content_filter_policy",
+        )
+
+    error: Final = exc_info.value
+    assert error.response is not None
+    assert isinstance(error.litellm_debug_info, str)
+    assert error.litellm_debug_info
+
+
+@pytest.mark.asyncio
+async def test_content_policy_exception_openai() -> None:
+    error_body: Final = (
+        b'{"error":{"message":"Your request was rejected as a result of our safety system.",'
+        b'"type":"invalid_request_error","param":null,"code":"content_policy_violation"}}'
+    )
+    transport: Final = httpx.MockTransport(
+        lambda request: _provider_error_response(request, status_code=400, body=error_body)
+    )
+    async_http_client: Final = httpx.AsyncClient(transport=transport)
+
+    async with async_http_client:
+        openai_client: Final = openai.AsyncOpenAI(
+            api_key="sk-test",
+            max_retries=0,
+            http_client=async_http_client,
+        )
+        async with openai_client:
+            with pytest.raises(litellm.ContentPolicyViolationError) as exc_info:
+                await _drain_openai_completion(openai_client)
+
+    assert exc_info.value.llm_provider == "openai"
+    assert exc_info.value.status_code == 400
+
+
+def test_bad_request_error_with_response_without_request() -> None:
+    response_without_request: Final = httpx.Response(status_code=400, text="Bad Request")
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        extract_and_raise_litellm_exception(
+            response=response_without_request,
+            error_str="Error code: 400 - {'error': {'message': 'litellm.BadRequestError: Invalid request parameters', 'type': None, 'param': None, 'code': '400'}}",
+            model="gpt-3.5-turbo",
+            custom_llm_provider="openai",
+        )
+
+    error: Final = exc_info.value
+    assert error.model == "gpt-3.5-turbo"
+    assert error.llm_provider == "openai"
+    assert error.response is not None
+    assert error.response.request is not None
+
+
+def test_context_window_exceeded_error_from_litellm_proxy() -> None:
+    response: Final = httpx.Response(status_code=400, text="Bad Request")
+    error_str: Final = "Error code: 400 - {'error': {'message': \"litellm.ContextWindowExceededError: litellm.BadRequestError: this is a mock context window exceeded error\\nmodel=gpt-3.5-turbo. context_window_fallbacks=None. fallbacks=None.\\n\\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks\\nReceived Model Group=gpt-3.5-turbo\\nAvailable Model Group Fallbacks=None\", 'type': None, 'param': None, 'code': '400'}}"
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        extract_and_raise_litellm_exception(
+            response=response,
+            error_str=error_str,
+            model="gpt-3.5-turbo",
+            custom_llm_provider="litellm_proxy",
+        )
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ("predibase", "vertex_ai_beta", "anthropic", "databricks", "watsonx", "fireworks_ai"),
+)
+def test_exception_mapping(provider: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "set_verbose", True)
+
+    for status_code, expected_exception in (
+        (400, litellm.BadRequestError),
+        (401, litellm.AuthenticationError),
+        (404, litellm.NotFoundError),
+        (408, litellm.Timeout),
+        (429, litellm.RateLimitError),
+        (500, litellm.InternalServerError),
+        (503, litellm.ServiceUnavailableError),
+    ):
+        with pytest.raises(expected_exception):
+            litellm.completion(
+                model=f"{provider}/test-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response=_MockProviderException(status_code=status_code, llm_provider=provider),
+            )
+
+
+def test_exceptions_base_class() -> None:
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        raise litellm.RateLimitError(
+            message="BedrockException: Rate Limit Error",
+            model="model",
+            llm_provider="bedrock",
+        )
+
+    error: Final = exc_info.value
+    assert isinstance(error, litellm.RateLimitError)
+    assert error.code == "429"
+    assert error.type == "throttling_error"
+
+
+def test_fireworks_ai_exception_mapping() -> None:
+    for status_code, message, expected_exception in (
+        (
+            429,
+            "Rate limit exceeded. Please try again in 60 seconds.",
+            litellm.RateLimitError,
+        ),
+        (
+            400,
+            '{"error":{"object":"error","type":"invalid_request_error","message":"rate limit exceeded, please try again later"}}',
+            litellm.RateLimitError,
+        ),
+        (
+            400,
+            '{"error":{"type":"invalid_request_error","message":"Invalid parameter value"}}',
+            litellm.BadRequestError,
+        ),
+    ):
+        with pytest.raises(expected_exception):
+            litellm.completion(
+                model="fireworks_ai/llama-v3p1-70b-instruct",
+                messages=[{"role": "user", "content": "Hello"}],
+                mock_response=FireworksAIException(
+                    status_code=status_code,
+                    message=message,
+                    headers={},
+                ),
+            )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "provider, model, call_type, streaming",
+    [
+        ("openai", "text-embedding-ada-002", "embedding", None),
+        ("openai", "gpt-3.5-turbo", "chat_completion", False),
+        ("openai", "gpt-3.5-turbo", "chat_completion", True),
+        ("openai", "gpt-3.5-turbo-instruct", "completion", True),
+        ("azure", "azure/gpt-4.1-mini", "chat_completion", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_exception_with_headers(
+    sync_mode: bool,
+    provider: Literal["openai", "azure"],
+    model: str,
+    call_type: Literal["embedding", "chat_completion", "completion"],
+    streaming: bool | None,
+) -> None:
+    error_body: Final = b'{"error":{"message":"Too many requests","type":"rate_limit_error"}}'
+    transport: Final = httpx.MockTransport(
+        lambda request: _provider_error_response(request, status_code=429, body=error_body)
+    )
+
+    if sync_mode:
+        sync_http_client: Final = httpx.Client(transport=transport)
+        with sync_http_client:
+            if provider == "openai":
+                sync_openai_client: Final = openai.OpenAI(
+                    api_key="sk-test",
+                    max_retries=0,
+                    http_client=sync_http_client,
+                )
+                with sync_openai_client:
+                    _assert_sync_rate_limit(
+                        lambda: _call_openai_api_sync(model, call_type, streaming, sync_openai_client)
+                    )
+            else:
+                sync_azure_client: Final = openai.AzureOpenAI(
+                    api_key="sk-test",
+                    azure_endpoint="https://example.invalid",
+                    api_version=litellm.AZURE_DEFAULT_API_VERSION,
+                    max_retries=0,
+                    http_client=sync_http_client,
+                )
+                with sync_azure_client:
+                    _assert_sync_rate_limit(
+                        lambda: _call_openai_api_sync(model, call_type, streaming, sync_azure_client)
+                    )
+        return
+
+    async_http_client: Final = httpx.AsyncClient(transport=transport)
+    async with async_http_client:
+        if provider == "openai":
+            async_openai_client: Final = openai.AsyncOpenAI(
+                api_key="sk-test",
+                max_retries=0,
+                http_client=async_http_client,
+            )
+            async with async_openai_client:
+                await _assert_async_rate_limit(
+                    lambda: _call_openai_api_async(model, call_type, streaming, async_openai_client)
+                )
+        else:
+            async_azure_client: Final = openai.AsyncAzureOpenAI(
+                api_key="sk-test",
+                azure_endpoint="https://example.invalid",
+                api_version=litellm.AZURE_DEFAULT_API_VERSION,
+                max_retries=0,
+                http_client=async_http_client,
+            )
+            async with async_azure_client:
+                await _assert_async_rate_limit(
+                    lambda: _call_openai_api_async(model, call_type, streaming, async_azure_client)
+                )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize(
+    "provider, model, call_type",
+    [("anthropic", "claude-haiku-4-5-20251001", "chat_completion")],
+)
+@pytest.mark.asyncio
+async def test_exception_with_headers_httpx(
+    sync_mode: bool,
+    provider: str,
+    model: str,
+    call_type: str,
+    streaming: bool,
+) -> None:
+    assert provider == "anthropic"
+    assert call_type == "chat_completion"
+    error_body: Final = b'{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}'
+    transport: Final = httpx.MockTransport(
+        lambda request: _provider_error_response(request, status_code=429, body=error_body)
+    )
+
+    if sync_mode:
+        sync_http_client: Final = httpx.Client(transport=transport)
+        with sync_http_client:
+            sync_handler: Final = HTTPHandler(client=sync_http_client)
+            _assert_sync_rate_limit(
+                lambda: _call_anthropic_api_sync(model, streaming, sync_handler)
+            )
+        return
+
+    async_handler: Final = AsyncHTTPHandler(transport=transport)
+    try:
+        await _assert_async_rate_limit(lambda: _call_anthropic_api_async(model, streaming, async_handler))
+    finally:
+        await async_handler.close()
+
+
+def test_openai_gateway_timeout_error() -> None:
+    error_body: Final = b'{"error":{"message":"Gateway timeout","type":"server_error"}}'
+    transport: Final = httpx.MockTransport(
+        lambda request: _provider_error_response(request, status_code=504, body=error_body)
+    )
+    http_client: Final = httpx.Client(transport=transport)
+
+    with http_client:
+        openai_client: Final = openai.OpenAI(
+            api_key="sk-test",
+            max_retries=0,
+            http_client=http_client,
+        )
+        with openai_client:
+            with pytest.raises(litellm.Timeout) as exc_info:
+                litellm.completion(
+                    model="openai/gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": "Hello world"}],
+                    client=openai_client,
+                    num_retries=0,
+                )
+
+    assert exc_info.value.status_code == 504

@@ -16,7 +16,9 @@ import litellm
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.router import Router
 from litellm.types.utils import (
     Delta,
     ModelResponse,
@@ -1685,3 +1687,238 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
     assert "anthropic_beta" not in captured["body"]
     assert captured["anthropic-beta"].split(",").count("dangerous-tool-use-2026-09-03") == 1
     assert response["safeguard_results"] == safeguard_results
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_litellm_router_latency_metadata_tracking() -> None:
+    with patch("litellm.anthropic_messages") as mock_anthropic_messages:
+        mock_response: Final = {
+            "id": "msg_123456",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Here's a joke for you!"}],
+            "model": "claude-haiku-4-5-20251001",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+        }
+        mock_anthropic_messages.return_value = mock_response
+        mock_anthropic_messages.__name__ = "anthropic_messages"
+
+        model_group: Final = "claude-special-alias"
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": model_group,
+                    "litellm_params": {
+                        "model": "claude-haiku-4-5-20251001",
+                        "api_key": "test-api-key",
+                    },
+                }
+            ],
+            routing_strategy="latency-based-routing",
+        )
+        messages: Final = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+        response: Final = await router.aanthropic_messages(
+            messages=messages,
+            model=model_group,
+            max_tokens=100,
+            metadata={"user_id": "hello"},
+        )
+
+        assert response == mock_response
+        mock_anthropic_messages.assert_called_once()
+
+        call_kwargs: Final = mock_anthropic_messages.call_args.kwargs
+        assert "litellm_metadata" in call_kwargs
+        litellm_metadata: Final = call_kwargs["litellm_metadata"]
+        assert litellm_metadata is not None
+        assert isinstance(litellm_metadata, dict)
+        assert "_latency_per_deployment" in litellm_metadata
+        assert isinstance(litellm_metadata["_latency_per_deployment"], dict)
+        assert litellm_metadata["model_group"] == model_group
+        assert "deployment" in litellm_metadata
+        assert "model_info" in litellm_metadata
+        assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
+        assert call_kwargs["messages"] == messages
+        assert call_kwargs["max_tokens"] == 100
+        assert call_kwargs["metadata"] == {"user_id": "hello"}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_with_extra_headers() -> None:
+    api_key: Final = "test-api-key"
+    messages: Final = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+    extra_headers: Final = {"anthropic-version": "custom-version-for-test"}
+    mock_response: Final = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_123456",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "Why did the chicken cross the road? To get to the other side!",
+            }
+        ],
+        "model": "claude-haiku-4-5-20251001",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_client: Final = MagicMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        messages=messages,
+        api_key=api_key,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        client=mock_client,
+        provider_specific_header={
+            "custom_llm_provider": "anthropic",
+            "extra_headers": extra_headers,
+        },
+    )
+
+    mock_client.post.assert_called_once()
+    call_kwargs: Final = mock_client.post.call_args.kwargs
+    headers: Final = call_kwargs.get("headers", {})
+    for key, value in extra_headers.items():
+        assert key in headers
+        assert headers[key] == value
+    assert response == mock_response.json.return_value
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_with_thinking() -> None:
+    api_key: Final = "test-api-key"
+    messages: Final = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+    mock_response: Final = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_123456",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "text",
+                "text": "Why did the chicken cross the road? To get to the other side!",
+            }
+        ],
+        "model": "claude-haiku-4-5-20251001",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_client: Final = MagicMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        messages=messages,
+        api_key=api_key,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        client=mock_client,
+        thinking={"budget_tokens": 100},
+    )
+
+    mock_client.post.assert_called_once()
+    call_kwargs: Final = mock_client.post.call_args.kwargs
+    request_body: Final = json.loads(call_kwargs.get("data", {}))
+    assert request_body["max_tokens"] == 100
+    assert request_body["model"] == "claude-haiku-4-5-20251001"
+    assert request_body["messages"] == messages
+    assert request_body["thinking"] == {"budget_tokens": 100}
+    assert response == mock_response.json.return_value
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_bedrock_credentials_passthrough() -> None:
+    with patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials:
+        mock_credentials: Final = MagicMock()
+        mock_credentials.access_key = "mock_access_key"
+        mock_credentials.secret_key = "mock_secret_key"
+        mock_credentials.token = "mock_session_token"
+        mock_get_credentials.return_value = mock_credentials
+
+        with patch("botocore.auth.SigV4Auth.add_auth"):
+            with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+                mock_response: Final = MagicMock()
+                mock_response.raise_for_status = MagicMock()
+                mock_response.json.return_value = {
+                    "id": "msg_bedrock_123",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "This is a mock response"}],
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 10, "output_tokens": 20},
+                }
+                mock_post.return_value = mock_response
+                aws_params: Final = {
+                    "aws_access_key_id": "test_access_key",
+                    "aws_secret_access_key": "test_secret_key",
+                    "aws_session_token": "test_session_token",
+                    "aws_region_name": "us-west-2",
+                    "aws_role_name": "test_role_name",
+                    "aws_session_name": "test_session_name",
+                    "aws_profile_name": "test_profile",
+                    "aws_web_identity_token": "test_web_identity_token",
+                    "aws_sts_endpoint": "https://sts.test-region.amazonaws.com",
+                }
+
+                await litellm.anthropic.messages.acreate(
+                    messages=[{"role": "user", "content": "Hello, test credentials"}],
+                    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    max_tokens=100,
+                    **aws_params,
+                )
+
+                mock_get_credentials.assert_called_once()
+                call_args: Final = mock_get_credentials.call_args[1]
+                for param_name, param_value in aws_params.items():
+                    assert call_args[param_name] == param_value
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_bedrock_dynamic_region() -> None:
+    mock_response: Final = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_bedrock_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "This is a mock response"}],
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_client: Final = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    with (
+        patch("botocore.auth.SigV4Auth.add_auth"),
+        patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials,
+    ):
+        mock_credentials: Final = MagicMock()
+        mock_credentials.access_key = "test_access_key"
+        mock_credentials.secret_key = "test_secret_key"
+        mock_credentials.token = "test_session_token"
+        mock_get_credentials.return_value = mock_credentials
+        test_region: Final = "us-east-1"
+
+        response: Final = await litellm.anthropic.messages.acreate(
+            messages=[{"role": "user", "content": "Hello, test region"}],
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            max_tokens=100,
+            aws_region_name=test_region,
+            client=mock_client,
+        )
+
+        assert response == mock_response.json.return_value
+        mock_client.post.assert_called_once()
+        call_args: Final = mock_client.post.call_args
+        url: Final = call_args.kwargs.get("url", "")
+        assert f"bedrock-runtime.{test_region}.amazonaws.com" in url
+        mock_get_credentials.assert_called_once()
+        credentials_args: Final = mock_get_credentials.call_args.kwargs
+        assert credentials_args.get("aws_region_name") == test_region

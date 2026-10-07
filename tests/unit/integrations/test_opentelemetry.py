@@ -36,14 +36,19 @@ import requests
 from tests.unit.integrations.conftest import TlsSink, write_self_signed_cert
 import litellm
 from litellm.integrations import opentelemetry as otel_module
+from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
 from litellm.integrations.opentelemetry import (
+    LITELLM_REQUEST_SPAN_NAME,
     OpenTelemetry,
     OpenTelemetryConfig,
     OTELMetricAttributeFilter,
     OTELSemconvCategory,
+    RAW_REQUEST_SPAN_NAME,
     _normalize_team_metadata_keys,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy import proxy_server
+from litellm.proxy._types import SpanAttributes
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from collections.abc import AsyncIterator
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
@@ -6958,9 +6963,139 @@ def setup_and_teardown():
                 importlib.reload(litellm.proxy.proxy_server)
         except Exception as e:
             print(f"Error reloading litellm.proxy.proxy_server: {e}")
-        if hasattr(litellm, "in_memory_llm_clients_cache"):
-            litellm.in_memory_llm_clients_cache.flush_cache()
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+def validate_redacted_message_span_attributes(span: ReadableSpan) -> None:
+    required_attributes: Final = frozenset(
+        {
+            "gen_ai.request.model",
+            "gen_ai.system",
+            "llm.is_streaming",
+            "llm.request.type",
+            "gen_ai.response.id",
+            "gen_ai.response.model",
+            "gen_ai.usage.total_tokens",
+            "gen_ai.usage.output_tokens",
+            "gen_ai.usage.input_tokens",
+        }
+    )
+    span_attributes: Final = {name.value if isinstance(name, SpanAttributes) else str(name) for name in span.attributes}
+    assert required_attributes <= span_attributes
+    non_required_attributes: Final = span_attributes - required_attributes
+    assert all(
+        attribute.startswith(
+            (
+                "metadata.",
+                "hidden_params",
+                "gen_ai.cost.",
+                "gen_ai.operation.",
+                "gen_ai.request.",
+                "litellm.",
+            )
+        )
+        for attribute in non_required_attributes
+    )
+
+
+@pytest.mark.usefixtures("drain_logging_worker")
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize("global_redact", [True, False])
+async def test_awesome_otel_with_message_logging_off(
+    streaming: bool,
+    global_redact: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+    if global_redact:
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+        logger: Final = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console"),
+            tracer_provider=provider,
+        )
+    else:
+        logger = OpenTelemetry(
+            message_logging=False,
+            config=OpenTelemetryConfig(exporter="console"),
+            tracer_provider=provider,
+        )
+    manager: Final = litellm.logging_callback_manager
+
+    manager._reset_all_callbacks()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    try:
+        response: Final = await litellm.acompletion(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="hi",
+            stream=streaming,
+        )
+        if streaming:
+            async for _chunk in response:
+                pass
+
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+        spans: Final = exporter.get_finished_spans()
+        assert len(spans) == 1
+        validate_redacted_message_span_attributes(spans[0])
+    finally:
+        manager._reset_all_callbacks()
+        exporter.clear()
+
+
+@pytest.mark.usefixtures("drain_logging_worker")
+async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exporter: Final = InMemorySpanExporter()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+    logger: Final = ArizePhoenixLogger(
+        config=OpenTelemetryConfig(exporter=exporter),
+        callback_name="arize_phoenix",
+    )
+    manager: Final = litellm.logging_callback_manager
+    expected_span_names: Final = {
+        "litellm_proxy_request",
+        LITELLM_REQUEST_SPAN_NAME,
+        RAW_REQUEST_SPAN_NAME,
+    }
+
+    manager._reset_all_callbacks()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    try:
+        await litellm.acompletion(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": "ping"}],
+            mock_response="pong",
+            proxy_server_request={
+                "url": "/chat/completions",
+                "method": "POST",
+                "headers": {},
+            },
+        )
+
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+        spans: Final = exporter.get_finished_spans()
+        span_names: Final = {span.name for span in spans}
+        trace_ids: Final = {span.context.trace_id for span in spans}
+
+        assert expected_span_names <= span_names
+        assert len(trace_ids) == 1
+    finally:
+        manager._reset_all_callbacks()
+        exporter.clear()
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):

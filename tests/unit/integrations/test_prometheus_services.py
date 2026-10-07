@@ -1,15 +1,19 @@
 import json
 import time
+from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
+import litellm
 import pytest
 from fastapi.testclient import TestClient
 
+from litellm._service_logger import ServiceLogging
 from litellm.integrations.prometheus_services import (
     PrometheusServicesLogger,
     ServiceMetrics,
     ServiceTypes,
 )
+from litellm.types.services import ServiceLoggerPayload
 
 
 
@@ -160,3 +164,143 @@ def test_anthropic_wif_services_are_wired_into_the_registry():
         "litellm_anthropic_wif_cache_failed_requests",
         "litellm_anthropic_wif_cache_total_requests",
     }
+
+
+def test_init_prometheus() -> None:
+    prometheus_logger: Final = PrometheusServicesLogger(mock_testing=True)
+
+    assert prometheus_logger.mock_testing is True
+
+
+@pytest.mark.asyncio
+async def test_service_logger_db_monitoring(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    service_logger: Final = ServiceLogging()
+
+    with patch.object(
+        service_logger.prometheusServicesLogger,
+        "async_service_success_hook",
+        new_callable=AsyncMock,
+    ) as mock_prometheus_success:
+        await service_logger.async_service_success_hook(
+            service=ServiceTypes.DB,
+            duration=0.3,
+            call_type="query",
+            event_metadata={"query_type": "SELECT", "table": "api_keys"},
+        )
+
+        mock_prometheus_success.assert_called_once()
+        payload: Final = cast(
+            ServiceLoggerPayload,
+            mock_prometheus_success.call_args.kwargs["payload"],
+        )
+        assert payload.service == ServiceTypes.DB
+        assert payload.duration == 0.3
+        assert payload.call_type == "query"
+        assert payload.is_error is False
+
+
+@pytest.mark.asyncio
+async def test_service_logger_db_monitoring_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    service_logger: Final = ServiceLogging()
+
+    with patch.object(
+        service_logger.prometheusServicesLogger,
+        "async_service_failure_hook",
+        new_callable=AsyncMock,
+    ) as mock_prometheus_failure:
+        test_error: Final = Exception("Database connection failed")
+        await service_logger.async_service_failure_hook(
+            service=ServiceTypes.DB,
+            duration=0.3,
+            error=test_error,
+            call_type="query",
+            event_metadata={"query_type": "SELECT", "table": "api_keys"},
+        )
+
+        mock_prometheus_failure.assert_called_once()
+        payload: Final = cast(
+            ServiceLoggerPayload,
+            mock_prometheus_failure.call_args.kwargs["payload"],
+        )
+        assert payload.service == ServiceTypes.DB
+        assert payload.duration == 0.3
+        assert payload.call_type == "query"
+        assert payload.is_error is True
+        assert payload.error == "Database connection failed"
+
+
+def test_get_metric_existing() -> None:
+    prometheus_logger: Final = PrometheusServicesLogger()
+    histogram: Final = prometheus_logger.create_histogram(
+        service="test_service",
+        type_of_request="get_metric_existing",
+    )
+
+    retrieved_metric: Final = prometheus_logger._get_metric("litellm_test_service_get_metric_existing")
+    assert retrieved_metric is histogram
+    assert retrieved_metric is not None
+
+
+def test_get_metric_non_existing() -> None:
+    prometheus_logger: Final = PrometheusServicesLogger()
+
+    non_existent_metric: Final = prometheus_logger._get_metric("non_existent_metric")
+    assert non_existent_metric is None
+
+
+def test_create_histogram_new() -> None:
+    prometheus_logger: Final = PrometheusServicesLogger()
+
+    histogram: Final = prometheus_logger.create_histogram(
+        service="test_service",
+        type_of_request="histogram_new",
+    )
+
+    assert histogram is not None
+    assert prometheus_logger._get_metric("litellm_test_service_histogram_new") is histogram
+
+
+def test_create_histogram_existing() -> None:
+    prometheus_logger: Final = PrometheusServicesLogger()
+
+    first_histogram: Final = prometheus_logger.create_histogram(
+        service="test_service",
+        type_of_request="histogram_existing",
+    )
+    second_histogram: Final = prometheus_logger.create_histogram(
+        service="test_service",
+        type_of_request="histogram_existing",
+    )
+
+    assert second_histogram is first_histogram
+    assert prometheus_logger._get_metric("litellm_test_service_histogram_existing") is first_histogram
+
+
+def test_create_counter_new() -> None:
+    prometheus_logger: Final = PrometheusServicesLogger()
+
+    counter: Final = prometheus_logger.create_counter(
+        service="test_service",
+        type_of_request="counter_new",
+    )
+
+    assert counter is not None
+    assert prometheus_logger._get_metric("litellm_test_service_counter_new") is counter
+
+
+def test_create_counter_existing() -> None:
+    prometheus_logger: Final = PrometheusServicesLogger()
+
+    first_counter: Final = prometheus_logger.create_counter(
+        service="test_service",
+        type_of_request="counter_existing",
+    )
+    second_counter: Final = prometheus_logger.create_counter(
+        service="test_service",
+        type_of_request="counter_existing",
+    )
+
+    assert second_counter is first_counter
+    assert prometheus_logger._get_metric("litellm_test_service_counter_existing") is first_counter

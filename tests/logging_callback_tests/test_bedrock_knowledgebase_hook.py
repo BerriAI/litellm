@@ -1,31 +1,23 @@
-import io
 import os
 
 
 
-import asyncio
 import litellm
 import litellm.vector_stores.main
-import gzip
 import json
-import logging
-import time
-from typing import Optional, List
+from typing import Optional
 from unittest.mock import AsyncMock, patch, Mock
 
 import pytest
 
 import litellm
-from litellm import completion
-from litellm._logging import verbose_logger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     VectorStorePreCallHook,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import (
     StandardLoggingPayload,
-    StandardLoggingVectorStoreRequest,
 )
 from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
@@ -727,133 +719,8 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
 #             assert len(text_content) > 0
 
 
-@pytest.mark.asyncio
-async def test_e2e_bedrock_knowledgebase_retrieval_without_vector_store_registry(
-    setup_vector_store_registry,
-):
-    litellm.turn_on_debug()
-    client = AsyncHTTPHandler()
-    litellm.vector_store_registry = None
-
-    with patch.object(client, "post") as mock_post:
-        # Mock the response for the LLM call
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.headers = {"Content-Type": "application/json"}
-        # Provide proper JSON response content
-        mock_response.text = json.dumps(
-            {
-                "id": "msg_01ABC123",
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "LiteLLM is a library that simplifies LLM API access.",
-                    }
-                ],
-                "model": "claude-3.5-sonnet",
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 100, "output_tokens": 50},
-            }
-        )
-        mock_response.json = lambda: json.loads(mock_response.text)
-        mock_post.return_value = mock_response
-        try:
-            response = await litellm.acompletion(
-                model="anthropic/claude-3.5-sonnet",
-                messages=[{"role": "user", "content": "what is litellm?"}],
-                vector_store_ids=["T37J8R4WTM"],
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        # Verify the LLM request was made
-        mock_post.assert_called_once()
-
-        # Verify the request body
-        print("call args:", mock_post.call_args)
-        request_body = mock_post.call_args.kwargs["json"]
-        print("Request body:", json.dumps(request_body, indent=4, default=str))
-
-        # Assert content from the knowedge base was applied to the request
-
-        # 1. we should have 1 content block, the first is the user message
-        # There should only be one since there is no initialized vector store registry
-        content = request_body["messages"][0]["content"]
-        assert len(content) == 1
-        assert content[0]["type"] == "text"
 
 
-@pytest.mark.asyncio
-async def test_e2e_bedrock_knowledgebase_retrieval_with_vector_store_not_in_registry(
-    setup_vector_store_registry,
-):
-    """
-    No vector store request is made for vector store ids that are not in the registry
-
-    In this test newUnknownVectorStoreId is not in the registry, so no vector store request is made
-    """
-    litellm.turn_on_debug()
-    client = AsyncHTTPHandler()
-
-    if litellm.vector_store_registry is not None:
-        print("Registry iniitalized:", litellm.vector_store_registry.vector_stores)
-    else:
-        print("Registry is None")
-
-    with patch.object(client, "post") as mock_post:
-        # Mock the response for the LLM call
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.headers = {"Content-Type": "application/json"}
-        # Provide proper JSON response content
-        mock_response.text = json.dumps(
-            {
-                "id": "msg_01ABC123",
-                "type": "message",
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "LiteLLM is a library that simplifies LLM API access.",
-                    }
-                ],
-                "model": "claude-3.5-sonnet",
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 100, "output_tokens": 50},
-            }
-        )
-        mock_response.json = lambda: json.loads(mock_response.text)
-        mock_post.return_value = mock_response
-        try:
-            response = await litellm.acompletion(
-                model="anthropic/claude-3.5-sonnet",
-                messages=[{"role": "user", "content": "what is litellm?"}],
-                vector_store_ids=["newUnknownVectorStoreId"],
-                client=client,
-            )
-        except Exception as e:
-            print(f"Error: {e}")
-
-        # Verify the LLM request was made
-        mock_post.assert_called_once()
-
-        # Verify the request body
-        print("call args:", mock_post.call_args)
-        request_body = mock_post.call_args.kwargs["json"]
-        print("Request body:", json.dumps(request_body, indent=4, default=str))
-
-        # Assert content from the knowedge base was applied to the request
-
-        # 1. we should have 1 content block, the first is the user message
-        # There should only be one since there is no initialized vector store registry
-        content = request_body["messages"][0]["content"]
-        assert len(content) == 1
-        assert content[0]["type"] == "text"
 
 
 @pytest.mark.asyncio
@@ -869,8 +736,6 @@ async def test_provider_specific_fields_in_proxy_http_response(
     """
     from fastapi.testclient import TestClient
     from litellm.proxy.proxy_server import app, initialize
-    from litellm.proxy.utils import ProxyLogging
-    import litellm.proxy.proxy_server as proxy_server
     from unittest.mock import patch as mock_patch
 
     # Initialize proxy

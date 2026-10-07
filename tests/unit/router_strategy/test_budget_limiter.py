@@ -12,6 +12,7 @@ import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.types.utils import BudgetConfig
 
 
 @pytest.fixture
@@ -135,3 +136,58 @@ async def test_deployment_budget_tracked_when_provider_is_unresolvable(disable_b
     )
 
     assert await limiter.dual_cache.async_get_cache("deployment_spend:deployment-1:1d") == 0.25
+
+
+@pytest.mark.asyncio
+async def test_get_budget_config_for_provider():
+    """
+    Test the _get_budget_config_for_provider helper method
+    """
+    config = {
+        "openai": BudgetConfig(budget_duration="1d", max_budget=100),
+        "anthropic": BudgetConfig(budget_duration="7d", max_budget=500),
+    }
+
+    provider_budget = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config=config)
+
+    openai_config = provider_budget._get_budget_config_for_provider("openai")
+    assert openai_config is not None
+    assert openai_config.budget_duration == "1d"
+    assert openai_config.max_budget == 100
+
+    anthropic_config = provider_budget._get_budget_config_for_provider("anthropic")
+    assert anthropic_config is not None
+    assert anthropic_config.budget_duration == "7d"
+    assert anthropic_config.max_budget == 500
+
+    assert provider_budget._get_budget_config_for_provider("unknown") is None
+
+
+@pytest.mark.asyncio
+async def test_get_current_provider_spend():
+    """
+    Test _get_current_provider_spend helper method
+
+    Scenarios:
+    1. Provider with no budget config returns None
+    2. Provider with budget config but no spend returns 0.0
+    3. Provider with budget config and spend returns correct value
+    """
+    provider_budget = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={
+            "openai": BudgetConfig(time_period="1d", budget_limit=100),
+        },
+    )
+
+    spend = await provider_budget._get_current_provider_spend("anthropic")
+    assert spend is None
+
+    spend = await provider_budget._get_current_provider_spend("openai")
+    assert spend == 0.0
+
+    spend_key = "provider_spend:openai:1d"
+    await provider_budget.dual_cache.async_set_cache(key=spend_key, value=50.5)
+
+    spend = await provider_budget._get_current_provider_spend("openai")
+    assert spend == 50.5

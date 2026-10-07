@@ -1,7 +1,8 @@
+import asyncio
 import inspect
 import os
 import sys
-from typing import cast
+from typing import Final, cast
 
 import pytest
 from pydantic import BaseModel
@@ -16,13 +17,13 @@ from litellm.llms.ollama.chat.transformation import (
 )
 
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import get_optional_params
+from litellm.utils import get_llm_provider, get_optional_params
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock, patch
 
 import litellm
-from litellm.types.utils import Choices, Message, ModelResponse, ModelResponseStream
+from litellm.types.utils import Choices, EmbeddingResponse, Message, ModelResponse, ModelResponseStream
 
 
 class TestEvent(BaseModel):
@@ -989,3 +990,79 @@ class TestOllamaStreamingUsage:
         )
 
         assert result.usage is None
+
+
+def test_get_ollama_params() -> None:
+    converted_params: Final = get_optional_params(
+        custom_llm_provider="ollama",
+        model="llama2",
+        max_tokens=20,
+        temperature=0.5,
+        stream=True,
+    )
+    expected_params: Final = {
+        "num_predict": 20,
+        "stream": True,
+        "temperature": 0.5,
+    }
+
+    for key, expected_value in expected_params.items():
+        assert converted_params[key] == expected_value
+
+
+def test_get_ollama_model() -> None:
+    provider_result: Final = get_llm_provider("ollama/code-llama-22")
+
+    assert provider_result[1] == "ollama"
+    assert provider_result[0] == "code-llama-22"
+
+
+def test_ollama_json_mode() -> None:
+    converted_params: Final = get_optional_params(
+        custom_llm_provider="ollama",
+        model="llama2",
+        format="json",
+        temperature=0.5,
+    )
+
+    assert converted_params == {
+        "temperature": 0.5,
+        "format": "json",
+        "stream": False,
+    }
+
+
+@patch(
+    "litellm.llms.ollama.completion.handler.ollama_embeddings",
+    return_value=EmbeddingResponse(model="ollama/nomic-embed-text"),
+)
+def test_ollama_embeddings(mock_embeddings: MagicMock) -> None:
+    litellm.embedding(model="ollama/nomic-embed-text", input=["hello world"])
+
+    mock_embeddings.assert_called_once_with(
+        api_base="http://localhost:11434",
+        model="nomic-embed-text",
+        prompts=["hello world"],
+        optional_params=ANY,
+        logging_obj=ANY,
+        model_response=ANY,
+        encoding=ANY,
+    )
+
+
+@patch(
+    "litellm.llms.ollama.completion.handler.ollama_aembeddings",
+    return_value=EmbeddingResponse(model="ollama/nomic-embed-text"),
+)
+def test_ollama_aembeddings(mock_aembeddings: MagicMock) -> None:
+    asyncio.run(litellm.aembedding(model="ollama/nomic-embed-text", input=["hello world"]))
+
+    mock_aembeddings.assert_called_once_with(
+        api_base="http://localhost:11434",
+        model="nomic-embed-text",
+        prompts=["hello world"],
+        optional_params=ANY,
+        logging_obj=ANY,
+        model_response=ANY,
+        encoding=ANY,
+    )

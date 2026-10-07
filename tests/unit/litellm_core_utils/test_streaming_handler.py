@@ -1,30 +1,28 @@
+import asyncio
 import json
 import time
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
-
-import asyncio
-import traceback
-from typing import Final, Optional
 
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
-    AUDIO_ATTRIBUTE,
     CustomStreamWrapper,
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
 )
+from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
-    StandardLoggingPayload,
     StreamingChoices,
     Usage,
 )
@@ -4857,6 +4855,365 @@ async def test_async_fake_stream_final_chunk_carries_hidden_usage(logging_obj: L
     assert hidden_usage.prompt_tokens == 1234
     assert hidden_usage.completion_tokens == 7
     assert hidden_usage.total_tokens == 1241
+
+
+def _streaming_wrapper_for_unit_test(
+    model: str,
+    custom_llm_provider: str,
+    chunks: list[ModelResponseStream],
+) -> CustomStreamWrapper:
+    return CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=Logging(
+            model=model,
+            messages=[{"role": "user", "content": "unit test"}],
+            stream=True,
+            call_type="completion",
+            start_time=0.0,
+            litellm_call_id="unit-test-call",
+            function_id="unit-test-function",
+        ),
+    )
+
+
+def _unit_test_streaming_chunk(
+    content: str | None,
+    finish_reason: str | None = None,
+    role: str | None = "assistant",
+) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="unit-test-stream",
+        created=1,
+        model="unit-test-model",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=content, role=role),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+def test_completion_azure_stream_content_filter_no_delta() -> None:
+    response: Final = _streaming_wrapper_for_unit_test(
+        model="unit-test-model",
+        custom_llm_provider="azure",
+        chunks=[
+            _unit_test_streaming_chunk("This "),
+            _unit_test_streaming_chunk("is a dummy response."),
+            _unit_test_streaming_chunk(
+                None, finish_reason="content_filter", role=None
+            ),
+        ],
+    )
+
+    response_chunks: Final = tuple(response)
+    complete_response: Final = "".join(
+        chunk.choices[0].delta.content or "" for chunk in response_chunks
+    )
+
+    assert complete_response == "This is a dummy response."
+    assert response_chunks[-1].choices[0].finish_reason == "content_filter"
+
+
+@pytest.mark.parametrize("sync_mode", [True])
+def test_completion_gemini_stream_accumulated_json(
+    sync_mode: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_event: Final = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "Hello"}], "role": "model"},
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 1,
+                "candidatesTokenCount": 1,
+                "totalTokenCount": 2,
+            },
+        },
+        separators=(",", ":"),
+    )
+    second_event: Final = "data: " + json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": " world"}], "role": "model"},
+                    "finishReason": "STOP",
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 1,
+                "candidatesTokenCount": 2,
+                "totalTokenCount": 3,
+            },
+        },
+        separators=(",", ":"),
+    ) + "\n\n"
+    response_chunks: Final = (
+        first_event[:12],
+        first_event[12:] + "\n\n",
+        second_event[:24],
+        second_event[24:],
+    )
+    mock_response: Final = MagicMock(
+        status_code=200,
+        headers={"Content-Type": "text/event-stream"},
+        iter_lines=Mock(return_value=iter(response_chunks)),
+    )
+    client: Final = HTTPHandler(concurrent_limit=1)
+    mock_post: Final = Mock(return_value=mock_response)
+    monkeypatch.setattr(client, "post", mock_post)
+
+    response: Final = litellm.completion(
+        model="gemini/unit-test-model",
+        messages=[{"role": "user", "content": "Tell me a story"}],
+        stream=True,
+        api_key="unit-test-key",
+        client=client,
+    )
+    complete_response: Final = "".join(
+        chunk.choices[0].delta.content or "" for chunk in response
+    )
+
+    assert complete_response == "Hello world"
+    assert mock_post.call_count == 1
+
+
+def test_unit_test_custom_stream_wrapper() -> None:
+    response: Final = _streaming_wrapper_for_unit_test(
+        model="unit-test-model",
+        custom_llm_provider="cached_response",
+        chunks=[_unit_test_streaming_chunk("How are you?", finish_reason="stop")],
+    )
+
+    response_chunks: Final = tuple(response)
+
+    assert tuple(
+        chunk.choices[0].delta.content
+        for chunk in response_chunks
+        if chunk.choices[0].delta.content is not None
+    ) == ("How are you?",)
+    assert response_chunks[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    "loop_amount",
+    [
+        litellm.REPEATED_STREAMING_CHUNK_LIMIT + 1,
+        litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1,
+    ],
+)
+@pytest.mark.parametrize(
+    "chunk_value, expected_chunk_fail",
+    [("How are you?", True), ("{", False), ("", False), (None, False)],
+)
+def test_unit_test_custom_stream_wrapper_repeating_chunk(
+    loop_amount: int,
+    chunk_value: str | None,
+    expected_chunk_fail: bool,
+) -> None:
+    response: Final = _streaming_wrapper_for_unit_test(
+        model="unit-test-model",
+        custom_llm_provider="cached_response",
+        chunks=[
+            _unit_test_streaming_chunk(chunk_value, finish_reason="stop")
+            for _ in range(loop_amount)
+        ],
+    )
+
+    if loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT and expected_chunk_fail:
+        with pytest.raises(
+            (litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)
+        ):
+            tuple(response)
+        return
+
+    tuple(response)
+    assert response.received_finish_reason == "stop"
+
+
+def test_unit_test_gemini_streaming_content_filter() -> None:
+    response: Final = _streaming_wrapper_for_unit_test(
+        model="gemini/unit-test-model",
+        custom_llm_provider="gemini",
+        chunks=[
+            _unit_test_streaming_chunk("##"),
+            _unit_test_streaming_chunk(" Downsides of prompt hacking"),
+            _unit_test_streaming_chunk(None, finish_reason="content_filter", role=None),
+        ],
+    )
+
+    response_chunks: Final = tuple(response)
+
+    assert response_chunks[-1].choices[0].finish_reason == "content_filter"
+    assert tuple(
+        chunk.choices[0].delta.content
+        for chunk in response_chunks
+        if chunk.choices[0].delta.content is not None
+    ) == ("##", " Downsides of prompt hacking")
+
+
+def test_unit_test_custom_stream_wrapper_openai() -> None:
+    response: Final = _streaming_wrapper_for_unit_test(
+        model="unit-test-model",
+        custom_llm_provider="azure",
+        chunks=[_unit_test_streaming_chunk(None, finish_reason="content_filter", role=None)],
+    )
+
+    response_chunks: Final = tuple(response)
+
+    assert len(response_chunks) == 1
+    assert response_chunks[0].choices[0].delta.content is None
+    assert response_chunks[0].choices[0].finish_reason == "content_filter"
+
+
+def test_aamazing_unit_test_custom_stream_wrapper_n() -> None:
+    response: Final = _streaming_wrapper_for_unit_test(
+        model="unit-test-model",
+        custom_llm_provider="cached_response",
+        chunks=[
+            _unit_test_streaming_chunk("It"),
+            _unit_test_streaming_chunk(" is impossible"),
+            _unit_test_streaming_chunk(" even", finish_reason="stop"),
+        ],
+    )
+
+    response_chunks: Final = tuple(response)
+
+    assert tuple(
+        chunk.choices[0].delta.content
+        for chunk in response_chunks
+        if chunk.choices[0].delta.content is not None
+    ) == ("It", " is impossible", " even")
+    assert response_chunks[-1].choices[0].finish_reason == "stop"
+
+
+def test_unit_test_custom_stream_wrapper_function_call() -> None:
+    chunk: Final = ModelResponseStream.model_validate(
+        {
+            "id": "unit-test-stream",
+            "created": 1,
+            "model": "unit-test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": None,
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "function": {"arguments": "{}", "name": "unit_test"},
+                                "type": "function",
+                                "index": 0,
+                            }
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+    )
+    response: Final = _streaming_wrapper_for_unit_test(
+        model="unit-test-model",
+        custom_llm_provider="cached_response",
+        chunks=[chunk],
+    )
+
+    response_chunks: Final = tuple(response)
+
+    assert response_chunks[-1].choices[0].finish_reason == "tool_calls"
+    tool_calls: Final = response_chunks[0].choices[0].delta.tool_calls
+    assert tool_calls is not None
+    assert tool_calls[0].function.arguments == "{}"
+
+
+def test_unit_test_perplexity_citations_chunk() -> None:
+    chunk: Final = ModelResponseStream.model_validate(
+        {
+            "id": "unit-test-stream",
+            "model": "unit-test-model",
+            "created": 1,
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            "citations": ["https://example.test/source"],
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": None,
+                    "message": {"role": "assistant", "content": "B"},
+                    "delta": {"content": "B", "role": "assistant"},
+                }
+            ],
+        }
+    )
+    response: Final = _streaming_wrapper_for_unit_test(
+        model="unit-test-model",
+        custom_llm_provider="cached_response",
+        chunks=[chunk],
+    )
+
+    response_chunks: Final = tuple(response)
+
+    assert "citations" in response_chunks[0]
+
+
+def test_mock_response_iterator_tool_use() -> None:
+    response: Final = ModelResponse.model_validate(
+        {
+            "id": "unit-test-response",
+            "created": 1,
+            "model": "unit-test-model",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                    "message": {
+                        "content": None,
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "function": {"arguments": "{}", "name": "unit_test"},
+                                "id": "call_unit_test",
+                                "type": "function",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    response_iterator: Final = MockResponseIterator(model_response=response)
+    response_chunk: Final = response_iterator._chunk_parser(chunk_data=response)
+    tool_use: Final = response_chunk["tool_use"]
+
+    assert tool_use is not None
+    assert tool_use["id"] == "call_unit_test"
+    assert tool_use["function"]["name"] == "unit_test"
+    assert tool_use["function"]["arguments"] == "{}"
+
+
+def test_is_delta_empty(initialized_custom_stream_wrapper: CustomStreamWrapper) -> None:
+    empty_delta: Final = Delta(
+        content="",
+        role="assistant",
+        function_call=None,
+        tool_calls=None,
+        audio=None,
+    )
+    content_delta: Final = Delta(content="unit test", role="assistant")
+
+    assert initialized_custom_stream_wrapper.is_delta_empty(delta=empty_delta)
+    assert not initialized_custom_stream_wrapper.is_delta_empty(delta=content_delta)
 
 
 class TestStableStreamingResponseId:

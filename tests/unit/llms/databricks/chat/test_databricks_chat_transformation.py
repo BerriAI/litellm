@@ -1,30 +1,152 @@
 import json
-
-import pytest
-from fastapi.testclient import TestClient
-
+from collections.abc import Iterator
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+import respx
+from fastapi.testclient import TestClient
+
 import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.chat.transformation import (
     DatabricksChatResponseIterator,
     DatabricksConfig,
     _sanitize_empty_content,
 )
-from typing import Final
-import httpx
-import respx
+
+DATABRICKS_API_BASE: Final = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+DATABRICKS_API_KEY: Final = "dapimykey"
+DATABRICKS_CHAT_COMPLETIONS_URL: Final = f"{DATABRICKS_API_BASE}/chat/completions"
+DATABRICKS_EMBEDDINGS_URL: Final = f"{DATABRICKS_API_BASE}/embeddings"
 
 
 @pytest.fixture()
 def _use_local_model_cost_map(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+
+@pytest.fixture
+def _databricks_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+    monkeypatch.setattr(litellm, "sync_transport", None, raising=False)
+    yield
+    client_cache.flush_cache()
+
+
+def _databricks_chat_response(model: str, usage: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": "chatcmpl_3f78f09a-489c-4b8d-a587-f162c7497891",
+        "object": "chat.completion",
+        "created": 1726285449,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": usage,
+    }
+
+
+def _databricks_embedding_response() -> dict[str, object]:
+    return {
+        "object": "list",
+        "model": "bge-large-en-v1.5",
+        "data": [
+            {
+                "index": 0,
+                "object": "embedding",
+                "embedding": [
+                    0.06768798828125,
+                    -0.01291656494140625,
+                    -0.0501708984375,
+                    0.0245361328125,
+                    -0.030364990234375,
+                ],
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8,
+            "completion_tokens": 0,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+
+
+def _databricks_anthropic_cache_response(
+    cache_read_input_tokens: int,
+    cache_creation_input_tokens: int,
+) -> dict[str, object]:
+    usage: Final = {
+        "completion_tokens": 117,
+        "prompt_tokens": 1549,
+        "total_tokens": 1666,
+        "completion_tokens_details": None,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "cache_creation_tokens": cache_creation_input_tokens,
+        },
+        "cache_read_input_tokens": cache_read_input_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+    }
+    return _databricks_chat_response("claude-3-7-sonnet", usage)
+
+
+def _databricks_streaming_chat_chunks() -> tuple[str, ...]:
+    return (
+        json.dumps(
+            {
+                "id": "chatcmpl_8a7075d1-956e-4960-b3a6-892cd4649ff3",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [{"delta": {"role": "assistant", "content": "Hello"}, "finish_reason": None}],
+                "usage": {"prompt_tokens": 230, "completion_tokens": 1, "total_tokens": 231},
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl_8a7075d1-956e-4960-b3a6-892cd4649ff3",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [{"delta": {"content": " world"}, "finish_reason": None}],
+                "usage": {"prompt_tokens": 230, "completion_tokens": 1, "total_tokens": 231},
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl_8a7075d1-956e-4960-b3a6-892cd4649ff3",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [{"delta": {"content": "!"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 230, "completion_tokens": 1, "total_tokens": 231},
+            }
+        ),
+    )
+
+
+def _assert_databricks_request(request: httpx.Request, expected_url: str, api_key: str) -> None:
+    assert request.headers["Content-Type"] == "application/json"
+    assert request.headers["Authorization"] == f"Bearer {api_key}"
+    assert str(request.url) == expected_url
 
 
 def test_transform_choices():
@@ -893,3 +1015,592 @@ def test_chunk_parser_relays_the_served_service_tier():
 
     without_tier: Final = iterator.chunk_parser(_streaming_chunk())
     assert getattr(without_tier, "service_tier", None) is None
+
+
+def test_completions_with_sync_http_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    messages: Final = [{"role": "user", "content": "How are you?"}]
+    sync_handler: Final = HTTPHandler()
+    upstream: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_databricks_chat_response(
+                "dbrx-instruct-071224",
+                {"prompt_tokens": 230, "completion_tokens": 38, "total_tokens": 268},
+            ),
+        )
+    )
+
+    litellm.completion(
+        model="databricks/dbrx-instruct-071224",
+        messages=messages,
+        client=sync_handler,
+        temperature=0.5,
+        extraparam="testpassingextraparam",
+    )
+
+    assert upstream.call_count == 1
+    request: Final = upstream.calls[0].request
+    _assert_databricks_request(request, DATABRICKS_CHAT_COMPLETIONS_URL, DATABRICKS_API_KEY)
+    actual_data: Final = json.loads(request.content)
+    expected_data: Final = {
+        "model": "dbrx-instruct-071224",
+        "messages": messages,
+        "temperature": 0.5,
+        "extraparam": "testpassingextraparam",
+    }
+    assert actual_data == expected_data
+
+
+@pytest.mark.asyncio
+async def test_completions_with_async_http_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    messages: Final = [{"role": "user", "content": "How are you?"}]
+    async_handler: Final = AsyncHTTPHandler()
+    upstream: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_databricks_chat_response(
+                "dbrx-instruct-071224",
+                {"prompt_tokens": 230, "completion_tokens": 38, "total_tokens": 268},
+            ),
+        )
+    )
+
+    await litellm.acompletion(
+        model="databricks/dbrx-instruct-071224",
+        messages=messages,
+        client=async_handler,
+        temperature=0.5,
+        extraparam="testpassingextraparam",
+    )
+
+    assert upstream.call_count == 1
+    request: Final = upstream.calls[0].request
+    _assert_databricks_request(request, DATABRICKS_CHAT_COMPLETIONS_URL, DATABRICKS_API_KEY)
+    actual_data: Final = json.loads(request.content)
+    expected_data: Final = {
+        "model": "dbrx-instruct-071224",
+        "messages": messages,
+        "temperature": 0.5,
+        "extraparam": "testpassingextraparam",
+    }
+    assert actual_data == expected_data
+
+
+def test_completions_streaming_with_sync_http_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    messages: Final = [{"role": "user", "content": "How are you?"}]
+    sync_handler: Final = HTTPHandler()
+    stream_content: Final = "\n".join(_databricks_streaming_chat_chunks()).encode("utf-8")
+    upstream: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, content=stream_content)
+    )
+
+    response_stream: Final = litellm.completion(
+        model="databricks/dbrx-instruct-071224",
+        messages=messages,
+        client=sync_handler,
+        temperature=0.5,
+        extraparam="testpassingextraparam",
+        stream=True,
+    )
+    response: Final = list(response_stream)
+
+    assert "dbrx-instruct-071224" in str(response)
+    assert "chatcmpl" in str(response)
+    assert len(response) == 4
+    assert upstream.call_count == 1
+    request: Final = upstream.calls[0].request
+    _assert_databricks_request(request, DATABRICKS_CHAT_COMPLETIONS_URL, DATABRICKS_API_KEY)
+    actual_data: Final = json.loads(request.content)
+    expected_data: Final = {
+        "model": "dbrx-instruct-071224",
+        "messages": messages,
+        "temperature": 0.5,
+        "stream": True,
+        "extraparam": "testpassingextraparam",
+    }
+    assert actual_data == expected_data
+
+
+@pytest.mark.asyncio
+async def test_completions_streaming_with_async_http_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    messages: Final = [{"role": "user", "content": "How are you?"}]
+    async_handler: Final = AsyncHTTPHandler()
+    stream_content: Final = "\n".join(_databricks_streaming_chat_chunks()).encode("utf-8")
+    upstream: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, content=stream_content)
+    )
+
+    response_stream: Final = await litellm.acompletion(
+        model="databricks/dbrx-instruct-071224",
+        messages=messages,
+        client=async_handler,
+        temperature=0.5,
+        extraparam="testpassingextraparam",
+        stream=True,
+    )
+    response: Final = [item async for item in response_stream]
+
+    assert "dbrx-instruct-071224" in str(response)
+    assert "chatcmpl" in str(response)
+    assert len(response) == 4
+    assert upstream.call_count == 1
+    request: Final = upstream.calls[0].request
+    _assert_databricks_request(request, DATABRICKS_CHAT_COMPLETIONS_URL, DATABRICKS_API_KEY)
+    actual_data: Final = json.loads(request.content)
+    expected_data: Final = {
+        "model": "dbrx-instruct-071224",
+        "messages": messages,
+        "temperature": 0.5,
+        "stream": True,
+        "extraparam": "testpassingextraparam",
+    }
+    assert actual_data == expected_data
+
+
+def test_embeddings_with_sync_http_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    inputs: Final = ["Hello", "World"]
+    sync_handler: Final = HTTPHandler()
+    upstream: Final = respx_mock.post(DATABRICKS_EMBEDDINGS_URL).mock(
+        return_value=httpx.Response(200, json=_databricks_embedding_response())
+    )
+
+    response: Final = litellm.embedding(
+        model="databricks/bge-large-en-v1.5",
+        input=inputs,
+        client=sync_handler,
+        extraparam="testpassingextraparam",
+    )
+
+    assert response.to_dict() == _databricks_embedding_response()
+    assert upstream.call_count == 1
+    request: Final = upstream.calls[0].request
+    _assert_databricks_request(request, DATABRICKS_EMBEDDINGS_URL, DATABRICKS_API_KEY)
+    actual_data: Final = json.loads(request.content)
+    expected_data: Final = {
+        "model": "bge-large-en-v1.5",
+        "input": inputs,
+        "extraparam": "testpassingextraparam",
+    }
+    assert actual_data == expected_data
+
+
+@pytest.mark.asyncio
+async def test_embeddings_with_async_http_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    inputs: Final = ["Hello", "World"]
+    async_handler: Final = AsyncHTTPHandler()
+    upstream: Final = respx_mock.post(DATABRICKS_EMBEDDINGS_URL).mock(
+        return_value=httpx.Response(200, json=_databricks_embedding_response())
+    )
+
+    response: Final = await litellm.aembedding(
+        model="databricks/bge-large-en-v1.5",
+        input=inputs,
+        client=async_handler,
+        extraparam="testpassingextraparam",
+    )
+
+    assert response.to_dict() == _databricks_embedding_response()
+    assert upstream.call_count == 1
+    request: Final = upstream.calls[0].request
+    _assert_databricks_request(request, DATABRICKS_EMBEDDINGS_URL, DATABRICKS_API_KEY)
+    actual_data: Final = json.loads(request.content)
+    expected_data: Final = {
+        "model": "bge-large-en-v1.5",
+        "input": inputs,
+        "extraparam": "testpassingextraparam",
+    }
+    assert actual_data == expected_data
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_databricks_embeddings(
+    sync_mode: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    import openai
+
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    monkeypatch.setattr(litellm, "drop_params", True)
+    inputs: Final = ["good morning from litellm"]
+    instruction: Final = "Represent this sentence for searching relevant passages:"
+    upstream: Final = respx_mock.post(DATABRICKS_EMBEDDINGS_URL).mock(
+        return_value=httpx.Response(200, json=_databricks_embedding_response())
+    )
+
+    response: Final = (
+        litellm.embedding(
+            model="databricks/databricks-bge-large-en",
+            input=inputs,
+            instruction=instruction,
+            client=HTTPHandler(),
+        )
+        if sync_mode
+        else await litellm.aembedding(
+            model="databricks/databricks-bge-large-en",
+            input=inputs,
+            instruction=instruction,
+            client=AsyncHTTPHandler(),
+        )
+    )
+
+    openai.types.CreateEmbeddingResponse.model_validate(response.model_dump(), strict=True)
+    assert upstream.call_count == 1
+    request: Final = upstream.calls[0].request
+    _assert_databricks_request(request, DATABRICKS_EMBEDDINGS_URL, DATABRICKS_API_KEY)
+    actual_data: Final = json.loads(request.content)
+    expected_data: Final = {
+        "model": "databricks-bge-large-en",
+        "input": inputs,
+        "instruction": instruction,
+    }
+    assert actual_data == expected_data
+
+
+def test_completion_with_prompt_caching_anthropic_model_repeat(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    sync_handler: Final = HTTPHandler()
+    mock_text: Final = "example text" * 512
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant that explains the content of the given text.",
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": mock_text, "cache_control": {"type": "ephemeral"}}],
+        },
+    ]
+    upstream: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_databricks_anthropic_cache_response(1545, 0),
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="databricks/databricks-claude-3-7-sonnet",
+        messages=messages,
+        client=sync_handler,
+        temperature=0.5,
+        extraparam="testpassingextraparam",
+    )
+
+    assert upstream.call_count == 1
+    _assert_databricks_request(
+        upstream.calls[0].request,
+        DATABRICKS_CHAT_COMPLETIONS_URL,
+        DATABRICKS_API_KEY,
+    )
+    assert "claude-3-7-sonnet" in response["model"]
+    assert response["usage"]["cache_read_input_tokens"] == 1545
+    assert response["usage"]["cache_creation_input_tokens"] == 0
+    assert response["usage"]["prompt_tokens"] == 1549
+    assert response["usage"]["completion_tokens"] == 117
+    assert response["usage"]["total_tokens"] == 1666
+
+
+def test_completion_with_prompt_caching_nonanthropic_model(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    sync_handler: Final = HTTPHandler()
+    mock_text: Final = "example text" * 512
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant that explains the content of the given text.",
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": mock_text,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+    usage: Final = {
+        "prompt_tokens": 1638,
+        "completion_tokens": 500,
+        "total_tokens": 2138,
+        "completion_tokens_details": None,
+        "prompt_tokens_details": None,
+    }
+    upstream: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, json=_databricks_chat_response("gpt-oss-20b", usage))
+    )
+
+    response: Final = litellm.completion(
+        model="databricks/databricks-gpt-oss-20b",
+        messages=messages,
+        client=sync_handler,
+        temperature=0.5,
+        extraparam="testpassingextraparam",
+    )
+
+    assert upstream.call_count == 1
+    _assert_databricks_request(
+        upstream.calls[0].request,
+        DATABRICKS_CHAT_COMPLETIONS_URL,
+        DATABRICKS_API_KEY,
+    )
+    assert "gpt-oss-20b" in response["model"]
+    assert ("cache_read_input_tokens" not in response["usage"]) or response["usage"]["cache_read_input_tokens"] in [
+        0,
+        None,
+    ]
+    assert ("cache_creation_input_tokens" not in response["usage"]) or response["usage"][
+        "cache_creation_input_tokens"
+    ] in [0, None]
+    assert response["usage"]["prompt_tokens"] == 1638
+    assert response["usage"]["completion_tokens"] == 500
+    assert response["usage"]["total_tokens"] == 2138
+
+
+@pytest.mark.parametrize("model", ["databricks/databricks-claude-3-7-sonnet"])
+def test_databricks_anthropic_function_call_with_no_schema(
+    model: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    mock_response_data: Final = {
+        "id": "chatcmpl-abc123",
+        "object": "chat.completion",
+        "created": 1699896916,
+        "model": "databricks-claude-3-7-sonnet",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {"name": "get_current_weather", "arguments": "{}"},
+                        }
+                    ],
+                },
+                "logprobs": None,
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 10, "total_tokens": 60},
+    }
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in New York",
+            },
+        }
+    ]
+    messages: Final = [{"role": "user", "content": "What is the current temperature in New York?"}]
+    upstream: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, json=mock_response_data)
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",
+        client=HTTPHandler(),
+    )
+
+    assert upstream.call_count == 1
+    assert response.choices[0].message.tool_calls is not None
+    assert len(response.choices[0].message.tool_calls) == 1
+    assert response.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+
+
+def test_databricks_anthropic_user_string_content_cache_injection(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    sync_handler: Final = HTTPHandler()
+    mock_text: Final = "example text" * 512
+    messages: Final = [
+        {"role": "system", "content": "You are an expert summarizer."},
+        {"role": "user", "content": mock_text},
+    ]
+    cache_control_injection_points: Final = [{"location": "message", "role": "user"}]
+    upstream: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, json=_databricks_anthropic_cache_response(0, 1545))
+    )
+
+    response: Final = litellm.completion(
+        model="databricks/databricks-claude-3-7-sonnet",
+        messages=messages,
+        client=sync_handler,
+        temperature=0.5,
+        cache_control_injection_points=cache_control_injection_points,
+        extraparam="testpassingextraparam",
+    )
+
+    assert upstream.call_count == 1
+    _assert_databricks_request(
+        upstream.calls[0].request,
+        DATABRICKS_CHAT_COMPLETIONS_URL,
+        DATABRICKS_API_KEY,
+    )
+    assert "claude-3-7-sonnet" in response["model"]
+    assert response["usage"]["cache_read_input_tokens"] == 0
+    assert response["usage"]["cache_creation_input_tokens"] == 1545
+    assert response["usage"]["prompt_tokens"] == 1549
+    assert response["usage"]["completion_tokens"] == 117
+    assert response["usage"]["total_tokens"] == 1666
+
+
+def test_databricks_anthropic_system_string_content_cache_injection(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    sync_handler: Final = HTTPHandler()
+    mock_text: Final = "example text" * 512
+    messages: Final = [
+        {"role": "system", "content": mock_text},
+        {"role": "user", "content": "You are an expert summarizer."},
+    ]
+    cache_control_injection_points: Final = [{"location": "message", "role": "system"}]
+    upstream: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, json=_databricks_anthropic_cache_response(0, 1545))
+    )
+
+    response: Final = litellm.completion(
+        model="databricks/databricks-claude-3-7-sonnet",
+        messages=messages,
+        client=sync_handler,
+        temperature=0.5,
+        cache_control_injection_points=cache_control_injection_points,
+        extraparam="testpassingextraparam",
+    )
+
+    assert upstream.call_count == 1
+    _assert_databricks_request(
+        upstream.calls[0].request,
+        DATABRICKS_CHAT_COMPLETIONS_URL,
+        DATABRICKS_API_KEY,
+    )
+    assert "claude-3-7-sonnet" in response["model"]
+    assert response["usage"]["cache_read_input_tokens"] == 0
+    assert response["usage"]["cache_creation_input_tokens"] == 1545
+    assert response["usage"]["prompt_tokens"] == 1549
+    assert response["usage"]["completion_tokens"] == 117
+    assert response["usage"]["total_tokens"] == 1666
+
+
+def test_databricks_anthropic_system_string_content_cache_injection_not_enough_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    _databricks_httpx_transport: None,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    sync_handler: Final = HTTPHandler()
+    mock_text: Final = "example text" * 512
+    messages: Final = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant that explains the content of the given text.",
+        },
+        {"role": "user", "content": mock_text},
+    ]
+    cache_control_injection_points: Final = [{"location": "message", "role": "system"}]
+    upstream: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, json=_databricks_anthropic_cache_response(0, 0))
+    )
+
+    response: Final = litellm.completion(
+        model="databricks/databricks-claude-3-7-sonnet",
+        messages=messages,
+        client=sync_handler,
+        temperature=0.5,
+        cache_control_injection_points=cache_control_injection_points,
+        extraparam="testpassingextraparam",
+    )
+
+    assert upstream.call_count == 1
+    _assert_databricks_request(
+        upstream.calls[0].request,
+        DATABRICKS_CHAT_COMPLETIONS_URL,
+        DATABRICKS_API_KEY,
+    )
+    assert "claude-3-7-sonnet" in response["model"]
+    assert response["usage"]["cache_read_input_tokens"] == 0
+    assert response["usage"]["cache_creation_input_tokens"] == 0
+    assert response["usage"]["prompt_tokens"] == 1549
+    assert response["usage"]["completion_tokens"] == 117
+    assert response["usage"]["total_tokens"] == 1666

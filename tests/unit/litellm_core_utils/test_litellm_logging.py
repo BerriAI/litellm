@@ -43,6 +43,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
 from litellm.proxy.hooks.max_iterations_limiter import _PROXY_MaxIterationsHandler
+from litellm.router import Router
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
@@ -9200,6 +9201,44 @@ async def test_async_failure_handler_delivers_failure_payload_to_custom_logger()
     assert events.empty()
 
 
+def test_standard_logging_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    callback: Final = CustomLogger()
+    failure_event: Final = MagicMock()
+    monkeypatch.setattr(callback, "log_failure_event", failure_event)
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "test-api-key",
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.RateLimitError):
+        router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            num_retries=1,
+            mock_response="litellm.RateLimitError",
+        )
+
+    assert failure_event.call_count == 2
+    first_payload: Final = failure_event.call_args_list[0].kwargs["kwargs"]["standard_logging_object"]
+    second_payload: Final = failure_event.call_args_list[1].kwargs["kwargs"]["standard_logging_object"]
+    first_trace_id: Final = first_payload["trace_id"]
+    second_trace_id: Final = second_payload["trace_id"]
+    assert first_trace_id is not None
+    assert first_trace_id == second_trace_id
+
+
 def test_responses_completed_event_bills_the_served_service_tier():
     """The served service_tier on response.completed's inner ResponsesAPIResponse
     must reach the cost calculator, so a priority-served stream prices at the
@@ -10955,6 +10994,31 @@ def setup_logging():
         litellm_call_id="123",
         function_id="456",
     )
+
+
+@pytest.mark.parametrize("disable_no_log_param", [True, False])
+def test_litellm_logging_no_log_param(monkeypatch: pytest.MonkeyPatch, disable_no_log_param: bool) -> None:
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", disable_no_log_param)
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    litellm_call_id: Final = "my-unique-call-id"
+    logging_obj: Final = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id=litellm_call_id,
+        start_time=datetime_standard_logging(2025, 1, 1),
+        function_id="1234",
+    )
+
+    should_run: Final = logging_obj.should_run_callback(
+        callback="langfuse",
+        litellm_params={"no-log": True},
+        event_hook="success_handler",
+    )
+
+    assert should_run is disable_no_log_param
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_get_callback_name():

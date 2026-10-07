@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import importlib
 import json
 from collections.abc import Callable, Mapping
 from datetime import timezone
@@ -11,11 +12,14 @@ import pytest
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+import litellm.constants as litellm_constants
+import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
 from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    MAX_STRING_LENGTH_PROMPT_IN_DB,
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
@@ -517,6 +521,98 @@ def test_sanitize_request_body_for_spend_logs_payload_basic():
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
     }
     assert _sanitize_request_body_for_spend_logs_payload(request_body) == request_body
+
+
+def test_large_request_no_truncation_threshold() -> None:
+    start_pattern: Final = "START" * 250
+    middle_pattern: Final = "MIDDLE" * 200
+    end_pattern: Final = "END" * 250
+    large_content: Final = start_pattern + middle_pattern + end_pattern
+    request_body: Final = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized: Final = _sanitize_request_body_for_spend_logs_payload(request_body)
+    truncated_content: Final = sanitized["messages"][0]["content"]
+    expected_start_chars: Final = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars: Final = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+
+    assert truncated_content.startswith(large_content[:expected_start_chars])
+    assert truncated_content.endswith(large_content[-expected_end_chars:])
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+
+
+def test_small_request_no_truncation() -> None:
+    small_content: Final = "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB - 100)
+    request_body: Final = {
+        "messages": [{"role": "user", "content": small_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized: Final = _sanitize_request_body_for_spend_logs_payload(request_body)
+    sanitized_content: Final = sanitized["messages"][0]["content"]
+
+    assert sanitized_content == small_content
+    assert len(sanitized_content) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
+
+
+def test_configurable_string_length_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+    try:
+        importlib.reload(litellm_constants)
+        importlib.reload(spend_tracking_utils)
+
+        max_string_length: Final = litellm_constants.MAX_STRING_LENGTH_PROMPT_IN_DB
+        assert max_string_length == 1000
+
+        large_content: Final = "A" * 500 + "B" * 800 + "C" * 500
+        request_body: Final = {
+            "messages": [{"role": "user", "content": large_content}],
+            "model": "gpt-5.5",
+        }
+        sanitized: Final = spend_tracking_utils._sanitize_request_body_for_spend_logs_payload(request_body)
+        truncated_content: Final = sanitized["messages"][0]["content"]
+        expected_start: Final = int(max_string_length * 0.35)
+        expected_end: Final = int(max_string_length * 0.65)
+
+        assert truncated_content.startswith(large_content[:expected_start])
+        assert truncated_content.endswith(large_content[-expected_end:])
+        assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+        assert "skipped" in truncated_content
+        assert "800" in truncated_content
+    finally:
+        monkeypatch.undo()
+        importlib.reload(litellm_constants)
+        importlib.reload(spend_tracking_utils)
+
+
+def test_truncation_preserves_beginning_and_end() -> None:
+    beginning: Final = "BEGIN_" * 200
+    middle: Final = "MIDDLE_" * 300
+    end: Final = "_END" * 300
+    large_content: Final = beginning + middle + end
+    request_body: Final = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized: Final = _sanitize_request_body_for_spend_logs_payload(request_body)
+    truncated_content: Final = sanitized["messages"][0]["content"]
+    expected_start_chars: Final = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars: Final = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+    expected_beginning: Final = large_content[:expected_start_chars]
+    expected_end: Final = large_content[-expected_end_chars:]
+    total_chars: Final = len(large_content)
+    kept_chars: Final = expected_start_chars + expected_end_chars
+    expected_skipped: Final = total_chars - kept_chars
+
+    assert truncated_content.startswith(expected_beginning)
+    assert truncated_content.endswith(expected_end)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+    assert str(expected_skipped) in truncated_content
 
 
 def test_sanitize_request_body_for_spend_logs_payload_long_string():

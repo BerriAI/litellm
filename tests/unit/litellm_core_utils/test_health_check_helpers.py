@@ -1,6 +1,8 @@
 """Test health check helper functions"""
 
+import importlib
 import json
+import os
 import socket
 import struct
 import zlib
@@ -836,3 +838,404 @@ async def test_ahealth_check_without_mode_reports_the_real_failure(
     assert expected_error in result["error"], result["error"]
     assert "Missing `mode`" not in result["error"]
     assert "raw_request_typed_dict" in result
+
+def test_update_litellm_params_for_health_check():
+    """
+    Test if _update_litellm_params_for_health_check correctly:
+    1. Updates messages with a random message
+    2. Updates model name when health_check_model is provided
+    3. Updates voice when health_check_voice is provided for audio_speech mode
+    """
+    from litellm.proxy.health_check import _update_litellm_params_for_health_check
+
+    model_info = {"health_check_model": "gpt-5-mini"}
+    litellm_params = {
+        "model": "gpt-5.5",
+        "api_key": "fake_key",
+    }
+
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "messages" in updated_params
+    assert isinstance(updated_params["messages"], list)
+    assert updated_params["model"] == "gpt-5-mini"
+
+    model_info = {}
+    litellm_params = {
+        "model": "gpt-5.5",
+        "api_key": "fake_key",
+    }
+
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert "messages" in updated_params
+    assert isinstance(updated_params["messages"], list)
+    assert updated_params["model"] == "gpt-5.5"
+
+    model_info = {"mode": "audio_speech", "health_check_voice": "en-US-JennyNeural"}
+    litellm_params = {
+        "model": "gpt-5.5",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert "voice" in updated_params
+    assert updated_params["voice"] == "en-US-JennyNeural"
+
+    model_info = {"mode": "audio_speech"}
+    litellm_params = {
+        "model": "gpt-5.5",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert "voice" in updated_params
+    assert updated_params["voice"] == "alloy"
+
+    model_info = {"mode": "chat", "health_check_voice": "en-US-JennyNeural"}
+    litellm_params = {
+        "model": "gpt-5.5",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert "voice" not in updated_params
+
+    model_info = {}
+    litellm_params = {
+        "model": "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    litellm_params = {
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    litellm_params = {
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    litellm_params = {
+        "model": "openai/gpt-5.5",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "openai/gpt-5.5"
+
+    cris_prefixes = ["us.", "eu.", "apac.", "jp.", "au.", "us-gov.", "global."]
+    for prefix in cris_prefixes:
+        litellm_params = {
+            "model": f"bedrock/{prefix}anthropic.claude-3-haiku-20240307-v1:0",
+            "api_key": "fake_key",
+        }
+        updated_params = _update_litellm_params_for_health_check(
+            model_info, litellm_params
+        )
+        assert (
+            updated_params["model"] == f"{prefix}anthropic.claude-3-haiku-20240307-v1:0"
+        ), f"Failed to preserve CRIS prefix: {prefix}"
+
+    litellm_params = {
+        "model": "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
+
+    litellm_params = {
+        "model": "bedrock/us-gov-east-1/anthropic.claude-instant-v1",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "anthropic.claude-instant-v1"
+
+    litellm_params = {
+        "model": "bedrock/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert (
+        updated_params["model"]
+        == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
+    )
+
+    litellm_params = {
+        "model": "bedrock/deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert (
+        updated_params["model"]
+        == "deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz"
+    )
+
+    litellm_params = {
+        "model": "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert (
+        updated_params["model"]
+        == "converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    )
+
+    litellm_params = {
+        "model": "bedrock/invoke/us-west-2/anthropic.claude-instant-v1",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert updated_params["model"] == "invoke/anthropic.claude-instant-v1"
+
+    litellm_params = {
+        "model": "bedrock/arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert (
+        updated_params["model"]
+        == "arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc"
+    )
+
+    litellm_params = {
+        "model": "bedrock/us-west-2/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert (
+        updated_params["model"]
+        == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
+    )
+
+    litellm_params = {
+        "model": "bedrock/converse/us-west-2/eu.anthropic.claude-3-sonnet-20240229-v1:0",
+        "api_key": "fake_key",
+    }
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    assert (
+        updated_params["model"] == "converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
+    )
+
+@pytest.mark.asyncio
+async def test_perform_health_check_filters_by_model_id():
+    """
+    When model_id is passed, only that deployment is checked (not all deployments
+    that share the same model name).
+    """
+    from litellm.proxy.health_check import perform_health_check
+
+    model_list = [
+        {
+            "model_name": "gpt-5.5",
+            "model_info": {"id": "deployment-id-1"},
+            "litellm_params": {"model": "gpt-5.5", "api_key": "fake-key-1"},
+        },
+        {
+            "model_name": "gpt-5.5",
+            "model_info": {"id": "deployment-id-2"},
+            "litellm_params": {"model": "gpt-5.5", "api_key": "fake-key-2"},
+        },
+    ]
+
+    captured_list = []
+
+    async def mock_perform_health_check(m_list, details=True, **kwargs):
+        captured_list.append(m_list)
+        return (
+            [{"model": "gpt-5.5", "api_key": m_list[0]["litellm_params"]["api_key"]}],
+            [],
+            {},
+        )
+
+    with patch(
+        "litellm.proxy.health_check._perform_health_check",
+        side_effect=mock_perform_health_check,
+    ):
+        healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(
+            model_list=model_list, model_id="deployment-id-2", details=True
+        )
+
+    assert len(captured_list) == 1
+    assert len(captured_list[0]) == 1
+    assert (captured_list[0][0].get("model_info") or {}).get("id") == "deployment-id-2"
+    assert len(healthy_endpoints) == 1
+    assert healthy_endpoints[0]["api_key"] == "fake-key-2"
+
+@pytest.mark.asyncio
+async def test_perform_health_check_skip_disabled_background_models():
+    from litellm.proxy.health_check import perform_health_check
+
+    model_list = [
+        {
+            "model_name": "a",
+            "model_info": {"id": "id-a"},
+            "litellm_params": {"model": "m-a", "api_key": "k1"},
+        },
+        {
+            "model_name": "b",
+            "model_info": {
+                "id": "id-b",
+                "disable_background_health_check": True,
+            },
+            "litellm_params": {"model": "m-b", "api_key": "k2"},
+        },
+    ]
+    captured = []
+
+    async def mock_inner(m_list, details=True, **kwargs):
+        captured.append(list(m_list))
+        return [], [], {}
+
+    with patch(
+        "litellm.proxy.health_check._perform_health_check",
+        side_effect=mock_inner,
+    ):
+        await perform_health_check(
+            model_list=model_list,
+            health_check_skip_disabled_background_models=True,
+        )
+
+    assert len(captured) == 1
+    assert len(captured[0]) == 1
+    assert captured[0][0]["model_name"] == "a"
+
+@pytest.mark.asyncio
+async def test_perform_health_check_with_health_check_model():
+    """
+    Test if _perform_health_check correctly uses `health_check_model` when model=`openai/*`:
+    1. Verifies that health_check_model overrides the original model when model=`openai/*`
+    2. Ensures the health check is performed with the override model
+    """
+    from litellm.proxy.health_check import _perform_health_check
+
+    model_list = [
+        {
+            "litellm_params": {"model": "openai/*", "api_key": "fake-key"},
+            "model_info": {
+                "mode": "chat",
+                "health_check_model": "openai/gpt-5-mini",
+            },
+        }
+    ]
+
+    health_check_calls = []
+
+    async def mock_health_check(litellm_params, **kwargs):
+        health_check_calls.append(litellm_params["model"])
+        return {"status": "healthy"}
+
+    with patch("litellm.ahealth_check", side_effect=mock_health_check):
+        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(
+            model_list
+        )
+        print("health check calls: ", health_check_calls)
+
+        assert health_check_calls[0] == "openai/gpt-5-mini"
+        print("healthy endpoints: ", healthy_endpoints)
+        assert healthy_endpoints[0]["model"] == "openai/gpt-5-mini"
+        assert len(healthy_endpoints) == 1
+        assert len(unhealthy_endpoints) == 0
+
+@pytest.mark.asyncio
+async def test_image_generation_health_check_prompt(monkeypatch):
+    """Health checks should respect default and environment-configured prompts."""
+
+    import litellm.constants as litellm_constants
+    import litellm.proxy.health_check as health_check
+
+    original_prompt: Final[str | None] = os.environ.get("DEFAULT_HEALTH_CHECK_PROMPT")
+
+    def reload_modules():
+        reloaded_constants = importlib.reload(litellm_constants)
+        reloaded_health_check = importlib.reload(health_check)
+        return reloaded_constants, reloaded_health_check
+
+    async def run_health_check(health_check_module):
+        health_check_calls = []
+
+        async def mock_health_check(litellm_params, mode=None, prompt=None, input=None):
+            health_check_calls.append(
+                {
+                    "mode": mode,
+                    "prompt": prompt,
+                    "model": litellm_params.get("model"),
+                }
+            )
+            return {"status": "healthy"}
+
+        model_list = [
+            {
+                "litellm_params": {"model": "gpt-image-1", "api_key": "fake-key"},
+                "model_info": {
+                    "mode": "image_generation",
+                },
+            }
+        ]
+
+        with patch(
+            "litellm.proxy.health_check.litellm.ahealth_check",
+            side_effect=mock_health_check,
+        ):
+            await health_check_module._perform_health_check(model_list)
+
+        return health_check_calls
+
+    try:
+        monkeypatch.delenv("DEFAULT_HEALTH_CHECK_PROMPT", raising=False)
+        reloaded_constants, reloaded_health_check = reload_modules()
+        health_check_calls = await run_health_check(reloaded_health_check)
+
+        assert len(health_check_calls) == 1
+        assert (
+            health_check_calls[0]["prompt"]
+            == reloaded_constants.DEFAULT_HEALTH_CHECK_PROMPT
+        )
+
+        override_prompt = "environment override prompt"
+        monkeypatch.setenv("DEFAULT_HEALTH_CHECK_PROMPT", override_prompt)
+        _, reloaded_health_check = reload_modules()
+        health_check_calls = await run_health_check(reloaded_health_check)
+
+        assert len(health_check_calls) == 1
+        assert health_check_calls[0]["prompt"] == override_prompt
+    finally:
+        if original_prompt is None:
+            monkeypatch.delenv("DEFAULT_HEALTH_CHECK_PROMPT", raising=False)
+        else:
+            monkeypatch.setenv("DEFAULT_HEALTH_CHECK_PROMPT", original_prompt)
+        reload_modules()
+
+@pytest.mark.asyncio
+async def test_health_check_with_custom_llm_provider():
+    """
+    Test that ahealth_check correctly uses custom_llm_provider from model_params.
+
+    This test verifies the fix for the issue where the UI's "Test connect" button
+    failed with "LLM Provider NOT provided" error for OpenAI-compatible self-hosted
+    providers, even when a provider was selected in the dropdown.
+
+    The fix ensures that when custom_llm_provider is passed in model_params,
+    it's properly forwarded to get_llm_provider() to identify the correct provider.
+    """
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response._hidden_params = {"headers": {"x-ratelimit-remaining-tokens": "1000"}}
+
+    with patch("litellm.acompletion", return_value=mock_response):
+        response = await litellm.ahealth_check(
+            model_params={
+                "model": "deepseek-r1-distill-qwen-1.5B-q4",
+                "custom_llm_provider": "openai",
+                "api_base": "https://example.com/v1",
+                "api_key": "fake-key",
+            },
+            mode="chat",
+        )
+
+        assert "error" not in response
+        assert isinstance(response, dict)

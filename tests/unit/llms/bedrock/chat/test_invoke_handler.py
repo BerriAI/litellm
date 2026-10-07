@@ -7,12 +7,13 @@ import re
 import struct
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
 
 import litellm
+from litellm import AmazonInvokeConfig
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -24,12 +25,18 @@ from litellm.llms.bedrock.chat.invoke_handler import (
 )
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 from litellm.types.utils import ModelResponseStream
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
     slow_upstream_async_client,
     slow_upstream_sync_client,
 )
+
+
+@pytest.fixture
+def bedrock_transformer() -> AmazonInvokeConfig:
+    return AmazonInvokeConfig()
 
 
 def test_transform_thinking_blocks_with_redacted_content():
@@ -482,6 +489,88 @@ async def test_nova_invoke_stream_reports_bedrock_usage_and_finish_reason():
     assert usages[0].total_tokens == 12270
 
 
+def test_nova_invoke_remove_empty_system_messages():
+    input_request: Final = BedrockInvokeNovaRequest(
+        messages=[{"content": [{"text": "Hello"}], "role": "user"}],
+        system=[],
+        inferenceConfig={"temperature": 0.7},
+    )
+
+    litellm.AmazonInvokeNovaConfig()._remove_empty_system_messages(input_request)
+
+    assert "system" not in input_request
+    assert "messages" in input_request
+    assert "inferenceConfig" in input_request
+
+
+def test_nova_invoke_filter_allowed_fields():
+    request_data: Final = {
+        "messages": [{"content": [{"text": "Hello"}], "role": "user"}],
+        "system": [{"text": "System prompt"}],
+        "inferenceConfig": {"temperature": 0.7},
+        "additionalModelRequestFields": {"this": "should be removed"},
+        "additionalModelResponseFieldPaths": ["this", "should", "be", "removed"],
+    }
+
+    input_request: Final = BedrockInvokeNovaRequest(**request_data)
+
+    result: Final = litellm.AmazonInvokeNovaConfig()._filter_allowed_fields(input_request)
+
+    assert "additionalModelRequestFields" not in result
+    assert "additionalModelResponseFieldPaths" not in result
+    assert "messages" in result
+    assert "system" in result
+    assert "inferenceConfig" in result
+
+
+def test_nova_invoke_streaming_chunk_parsing():
+    decoder: Final = AWSEventStreamDecoder(model="bedrock/invoke/us.amazon.nova-micro-v1:0")
+
+    text_result: Final = decoder._chunk_parser(
+        {
+            "contentBlockDelta": {
+                "delta": {"text": "Hello, how can I help?"},
+                "contentBlockIndex": 0,
+            }
+        }
+    )
+    assert text_result.choices[0].delta.content == "Hello, how can I help?"
+    assert text_result.choices[0].index == 0
+    assert not text_result.choices[0].finish_reason
+    assert text_result.choices[0].delta.tool_calls is None
+
+    tool_start_result: Final = decoder._chunk_parser(
+        {
+            "contentBlockDelta": {
+                "start": {"toolUse": {"name": "get_weather", "toolUseId": "tool_1"}},
+                "contentBlockIndex": 1,
+            }
+        }
+    )
+    assert tool_start_result.choices[0].delta.content == ""
+    assert tool_start_result.choices[0].index == 0
+    assert tool_start_result.choices[0].delta.tool_calls is not None
+    assert tool_start_result.choices[0].delta.tool_calls[0].type == "function"
+    assert tool_start_result.choices[0].delta.tool_calls[0].function.name == "get_weather"
+    assert tool_start_result.choices[0].delta.tool_calls[0].id == "tool_1"
+
+    tool_args_result: Final = decoder._chunk_parser(
+        {
+            "contentBlockDelta": {
+                "delta": {"toolUse": {"input": '{"location": "New York"}'}},
+                "contentBlockIndex": 2,
+            }
+        }
+    )
+    assert tool_args_result.choices[0].delta.content == ""
+    assert tool_args_result.choices[0].index == 0
+    assert tool_args_result.choices[0].delta.tool_calls is not None
+    assert tool_args_result.choices[0].delta.tool_calls[0].function.arguments == '{"location": "New York"}'
+
+    stop_result: Final = decoder._chunk_parser({"contentBlockDelta": {"stopReason": "tool_use"}})
+    assert stop_result.choices[0].finish_reason == "tool_calls"
+
+
 @pytest.mark.asyncio
 async def test_converse_stream_still_emits_guardrail_trace_after_finish_reason():
     """Guardrail metadata events carry a trace payload alongside usage; that chunk must still reach the caller
@@ -725,8 +814,10 @@ def _event_stream_frame(event_type: str, payload: bytes) -> bytes:
     def header(name: str, value: str) -> bytes:
         return bytes([len(name)]) + name.encode() + bytes([7]) + struct.pack(">H", len(value)) + value.encode()
 
-    headers: Final = header(":event-type", event_type) + header(":content-type", "application/json") + header(
-        ":message-type", "event"
+    headers: Final = (
+        header(":event-type", event_type)
+        + header(":content-type", "application/json")
+        + header(":message-type", "event")
     )
     prelude: Final = struct.pack(">II", 12 + len(headers) + len(payload) + 4, len(headers))
     body: Final = prelude + struct.pack(">I", binascii.crc32(prelude)) + headers + payload
@@ -1151,3 +1242,166 @@ async def test_async_invoke_streaming_fails_at_the_request_timeout_not_the_upstr
 def test_sync_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
     with pytest.raises(litellm.Timeout):
         litellm.completion(client=slow_upstream_sync_client(), **_invoke_streaming_kwargs())
+
+
+def test_get_complete_url_basic(bedrock_transformer):
+    """Test basic URL construction for non-streaming request"""
+    url = bedrock_transformer.get_complete_url(
+        api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+        api_key=None,
+        model="anthropic.claude-v2",
+        optional_params={},
+        stream=False,
+        litellm_params={},
+    )
+    assert url == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/invoke"
+
+
+def test_get_complete_url_streaming(bedrock_transformer):
+    """Test URL construction for streaming request"""
+    url = bedrock_transformer.get_complete_url(
+        api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+        api_key=None,
+        model="anthropic.claude-v2",
+        optional_params={},
+        stream=True,
+        litellm_params={},
+    )
+    assert (
+        url == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/invoke-with-response-stream"
+    )
+
+
+def test_transform_request_invalid_provider(bedrock_transformer):
+    """Test request transformation with invalid provider"""
+    messages = [{"role": "user", "content": "Hello"}]
+    with pytest.raises(Exception, match="Bedrock Invoke HTTPX: Unknown provider=None") as exc_info:
+        bedrock_transformer.transform_request(
+            model="invalid.model", messages=messages, optional_params={}, litellm_params={}, headers={}
+        )
+    assert "Unknown provider" in str(exc_info.value)
+
+
+@patch("botocore.auth.SigV4Auth")
+@patch("botocore.awsrequest.AWSRequest")
+def test_sign_request_basic(mock_aws_request, mock_sigv4_auth, bedrock_transformer):
+    """Test basic request signing without extra headers"""
+    mock_credentials = Mock()
+    bedrock_transformer.get_credentials = Mock(return_value=mock_credentials)
+    mock_auth_instance = Mock()
+    mock_sigv4_auth.return_value = mock_auth_instance
+    mock_request = Mock()
+    mock_request.headers = {
+        "Authorization": "AWS4-HMAC-SHA256 Credential=...",
+        "X-Amz-Date": "20240101T000000Z",
+        "Content-Type": "application/json",
+    }
+    mock_aws_request.return_value = mock_request
+    headers = {}
+    optional_params = {"aws_region_name": "us-east-1"}
+    request_data = {"prompt": "Hello"}
+    api_base = "https://bedrock-runtime.us-east-1.amazonaws.com"
+    result, _ = bedrock_transformer.sign_request(
+        headers=headers, optional_params=optional_params, request_data=request_data, api_base=api_base
+    )
+    mock_sigv4_auth.assert_called_once_with(mock_credentials, "bedrock", "us-east-1")
+    mock_aws_request.assert_called_once_with(
+        method="POST", url=api_base, data='{"prompt": "Hello"}', headers={"Content-Type": "application/json"}
+    )
+    mock_auth_instance.add_auth.assert_called_once_with(mock_request)
+    assert result == mock_request.headers
+
+
+def test_transform_request_cohere_command(bedrock_transformer):
+    """Test request transformation for Cohere Command model"""
+    messages = [{"role": "user", "content": "Hello"}]
+    result = bedrock_transformer.transform_request(
+        model="cohere.command-r", messages=messages, optional_params={"max_tokens": 2048}, litellm_params={}, headers={}
+    )
+    print("transformed request for invoke cohere command=", json.dumps(result, indent=4))
+    expected_result = {"message": "Hello", "max_tokens": 2048, "chat_history": []}
+    assert result == expected_result
+
+
+def test_transform_request_ai21(bedrock_transformer):
+    """Test request transformation for AI21"""
+    messages = [{"role": "user", "content": "Hello"}]
+    result = bedrock_transformer.transform_request(
+        model="ai21.j2-ultra", messages=messages, optional_params={"max_tokens": 2048}, litellm_params={}, headers={}
+    )
+    print("transformed request for invoke ai21=", json.dumps(result, indent=4))
+    expected_result = {"prompt": "Hello", "max_tokens": 2048}
+    assert result == expected_result
+
+
+def test_transform_request_mistral(bedrock_transformer):
+    """Test request transformation for Mistral"""
+    messages = [{"role": "user", "content": "Hello"}]
+    result = bedrock_transformer.transform_request(
+        model="mistral.mistral-7b",
+        messages=messages,
+        optional_params={"max_tokens": 2048},
+        litellm_params={},
+        headers={},
+    )
+    print("transformed request for invoke mistral=", json.dumps(result, indent=4))
+    expected_result = {"prompt": "<s>[INST] Hello [/INST]\n", "max_tokens": 2048}
+    assert result == expected_result
+
+
+def test_transform_request_amazon_titan(bedrock_transformer):
+    """Test request transformation for Amazon Titan"""
+    messages = [{"role": "user", "content": "Hello"}]
+    result = bedrock_transformer.transform_request(
+        model="amazon.titan-text-express-v1",
+        messages=messages,
+        optional_params={"maxTokenCount": 2048},
+        litellm_params={},
+        headers={},
+    )
+    print("transformed request for invoke amazon titan=", json.dumps(result, indent=4))
+    expected_result = {"inputText": "\n\nUser: Hello\n\nBot: ", "textGenerationConfig": {"maxTokenCount": 2048}}
+    assert result == expected_result
+
+
+def test_filter_headers_for_aws_signature():
+    """Test that header filtering works correctly for AWS signature calculation"""
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    aws_llm = BaseAWSLLM()
+    test_headers = {
+        "Content-Type": "application/json",
+        "Host": "bedrock-runtime.us-east-1.amazonaws.com",
+        "x-amz-date": "20240101T120000Z",
+        "x-amz-security-token": "test-token",
+        "x-custom-header": "custom-value",
+        "x-litellm-user-id": "user123",
+        "x-forwarded-for": "192.168.1.1",
+        "authorization": "Bearer test-token",
+        "user-agent": "test-agent",
+        "x-envoy-expected-rq-timeout-ms": "300000",
+        "x-envoy-external-address": "10.105.1.156",
+    }
+    filtered_headers = aws_llm._filter_headers_for_aws_signature(test_headers)
+    expected_aws_headers = {
+        "Content-Type": "application/json",
+        "Host": "bedrock-runtime.us-east-1.amazonaws.com",
+        "x-amz-date": "20240101T120000Z",
+        "x-amz-security-token": "test-token",
+    }
+    assert filtered_headers == expected_aws_headers, f"Expected {expected_aws_headers}, got {filtered_headers}"
+    excluded_headers = [
+        "x-custom-header",
+        "x-litellm-user-id",
+        "x-forwarded-for",
+        "user-agent",
+        "x-envoy-expected-rq-timeout-ms",
+        "x-envoy-external-address",
+    ]
+    for header in excluded_headers:
+        assert header not in filtered_headers, f"Header {header} should not be in filtered headers"
+    empty_filtered = aws_llm._filter_headers_for_aws_signature({})
+    assert empty_filtered == {}
+    non_aws_headers = {"x-custom-trace": "trace-123", "x-user-context": "premium", "x-request-source": "mobile-app"}
+    filtered_non_aws = aws_llm._filter_headers_for_aws_signature(non_aws_headers)
+    assert filtered_non_aws == {}

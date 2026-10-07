@@ -4,7 +4,7 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 
 import base64
 import logging
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,10 +13,12 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
+    _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
     check_complete_credentials,
     custom_auth_common_checks_warning,
+    get_customer_user_header_from_mapping,
     log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
     get_end_user_id_from_request_body,
@@ -31,6 +33,8 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route_template,
     is_request_body_safe,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.router import Router
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 
@@ -4038,3 +4042,174 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
             )
             is True
         )
+
+
+@pytest.mark.parametrize(
+    "allowed_param, input_value, should_return_true",
+    [
+        ("api_base", {"api_base": "http://dummy.com"}, True),
+        (
+            {"api_base": "https://api.openai.com/v1"},
+            {"api_base": "https://api.openai.com/v1"},
+            True,
+        ),
+        (
+            {"api_base": "https://api.openai.com/v1"},
+            {"api_base": "https://api.anthropic.com/v1"},
+            False,
+        ),
+        (
+            {"api_base": "^https://litellm.*direct\\.fireworks\\.ai/v1$"},
+            {"api_base": "https://litellm-dev.direct.fireworks.ai/v1"},
+            True,
+        ),
+        (
+            {"api_base": "^https://litellm.*novice\\.fireworks\\.ai/v1$"},
+            {"api_base": "https://litellm-dev.direct.fireworks.ai/v1"},
+            False,
+        ),
+    ],
+)
+def test_configurable_clientside_parameters(
+    allowed_param: str | dict[str, str],
+    input_value: dict[str, str],
+    should_return_true: bool,
+):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "dummy-model",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "dummy-key",
+                    "configurable_clientside_auth_params": [allowed_param],
+                },
+            }
+        ]
+    )
+    response: Final = _allow_model_level_clientside_configurable_parameters(
+        model="dummy-model",
+        param="api_base",
+        request_body_value=input_value["api_base"],
+        llm_router=router,
+    )
+    assert response == should_return_true
+
+
+def test_get_customer_user_header_from_mapping_returns_customer_header_with_mixed_roles():
+    mappings: Final[list[dict[str, str]]] = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+    ]
+    assert get_customer_user_header_from_mapping(mappings) == ["x-openwebui-user-email"]
+
+
+def test_get_customer_user_header_from_mapping_no_customer_returns_none():
+    mappings: Final[list[dict[str, str]]] = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
+    ]
+    assert get_customer_user_header_from_mapping(mappings) is None
+
+    single_mapping: Final[dict[str, str]] = {
+        "header_name": "X-Only-Internal",
+        "litellm_user_role": "internal_user",
+    }
+    assert get_customer_user_header_from_mapping(single_mapping) is None
+
+
+def test_get_internal_user_header_from_mapping_returns_internal_header():
+    mappings: Final[list[dict[str, str]]] = [
+        {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
+    ]
+    assert LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings) == "X-OpenWebUI-User-Id"
+
+
+def test_get_internal_user_header_from_mapping_no_internal_returns_none():
+    mappings: Final[list[dict[str, str]]] = [
+        {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}
+    ]
+    assert LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings) is None
+
+    single_mapping: Final[dict[str, str]] = {
+        "header_name": "X-Only-Customer",
+        "litellm_user_role": "customer",
+    }
+    assert LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(single_mapping) is None
+
+
+@pytest.mark.parametrize(
+    "request_data, expected_model",
+    [
+        (
+            {"target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"},
+            ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"],
+        ),
+        ({"target_model_names": "gpt-3.5-turbo"}, "gpt-3.5-turbo"),
+        (
+            {"model": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"},
+            ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"],
+        ),
+        ({"model": "gpt-3.5-turbo"}, "gpt-3.5-turbo"),
+    ],
+)
+def test_get_model_from_request(
+    request_data: dict[str, str],
+    expected_model: str | list[str],
+):
+    assert get_model_from_request(request_data, "/v1/files") == expected_model
+
+
+@pytest.mark.parametrize(
+    "request_data, route, expected_model",
+    [
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+            "gemini-1.5-pro",
+        ),
+        (
+            {},
+            "/vertex_ai/v1beta1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.0-pro:streamGenerateContent",
+            "gemini-1.0-pro",
+        ),
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/asia-southeast1/publishers/google/models/gemini-2.0-flash:generateContent",
+            "gemini-2.0-flash",
+        ),
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro",
+            "gemini-pro",
+        ),
+        (
+            {"model": "gpt-4o"},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
+            "gpt-4o",
+        ),
+        ({}, "/openai/v1/chat/completions", None),
+        ({}, "/openai/deployments/my-deployment/chat/completions", "my-deployment"),
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent",
+            "gcp/google/gemini-2.5-flash",
+        ),
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/global/publishers/google/models/gcp/google/gemini-3-flash-preview:generateContent",
+            "gcp/google/gemini-3-flash-preview",
+        ),
+        (
+            {},
+            "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/custom/model:generateContent",
+            "custom/model",
+        ),
+    ],
+)
+def test_get_model_from_request_vertex_ai_passthrough(
+    request_data: dict[str, str],
+    route: str,
+    expected_model: str | None,
+):
+    assert get_model_from_request(request_data, route) == expected_model

@@ -1,5 +1,82 @@
+import json
+from collections.abc import Iterator
+from typing import Final
+
+import httpx
 import litellm
+import pytest
+import respx
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
+
+DEEPSEEK_API_BASE: Final = "https://api.deepseek.com/beta"
+DEEPSEEK_CHAT_COMPLETIONS_URL: Final = f"{DEEPSEEK_API_BASE}/chat/completions"
+DEEPSEEK_API_KEY: Final = "fake_api_key"
+
+
+@pytest.fixture
+def _deepseek_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+    monkeypatch.setattr(litellm, "sync_transport", None, raising=False)
+    yield
+    client_cache.flush_cache()
+
+
+def _deepseek_response(stream: bool) -> httpx.Response:
+    if stream:
+        chunks: Final = (
+            {
+                "id": "chatcmpl-deepseek",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "deepseek-reasoner",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "Hello!"},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-deepseek",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "deepseek-reasoner",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            },
+        )
+        body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+        return httpx.Response(200, content=body.encode(), headers={"content-type": "text/event-stream"})
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-deepseek",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "deepseek-reasoner",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello!"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+def _assert_deepseek_request(request: httpx.Request, messages: list[dict[str, str]], stream: bool) -> None:
+    assert str(request.url) == DEEPSEEK_CHAT_COMPLETIONS_URL
+    assert request.headers["Authorization"] == f"Bearer {DEEPSEEK_API_KEY}"
+    actual_data: Final = json.loads(request.content)
+    assert actual_data["model"] == "deepseek-reasoner"
+    assert actual_data["messages"] == messages
+    assert actual_data["stream"] is stream
 
 
 def _function_tool(name: str) -> dict:
@@ -564,3 +641,145 @@ class TestDeepSeekThinkingParams:
         assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
         assert "tool_choice" not in result
         assert result["parallel_tool_calls"] is True
+
+
+@pytest.mark.parametrize("stream", [True, False])
+def test_deepseek_mock_completion(
+    stream: bool,
+    respx_mock: respx.MockRouter,
+    _deepseek_httpx_transport: None,
+) -> None:
+    messages: Final = [{"role": "user", "content": "Hello, world!"}]
+    upstream: Final = respx_mock.post(DEEPSEEK_CHAT_COMPLETIONS_URL).mock(
+        return_value=_deepseek_response(stream)
+    )
+
+    response: Final = litellm.completion(
+        model="deepseek/deepseek-reasoner",
+        messages=messages,
+        api_base=DEEPSEEK_API_BASE,
+        api_key=DEEPSEEK_API_KEY,
+        stream=stream,
+    )
+
+    if stream:
+        chunks: Final = tuple(response)
+        assert chunks
+    else:
+        assert response is not None
+    assert upstream.call_count == 1
+    _assert_deepseek_request(upstream.calls[0].request, messages, stream)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_deepseek_provider_async_completion(
+    stream: bool,
+    respx_mock: respx.MockRouter,
+    _deepseek_httpx_transport: None,
+) -> None:
+    messages: Final = [{"role": "user", "content": "Hello, world!"}]
+    upstream: Final = respx_mock.post(DEEPSEEK_CHAT_COMPLETIONS_URL).mock(
+        return_value=_deepseek_response(stream)
+    )
+
+    response: Final = await litellm.acompletion(
+        custom_llm_provider="deepseek",
+        api_key=DEEPSEEK_API_KEY,
+        model="deepseek/deepseek-reasoner",
+        messages=messages,
+        stream=stream,
+    )
+
+    if stream:
+        chunks: Final = tuple([chunk async for chunk in response])
+        assert chunks
+    else:
+        assert response is not None
+    assert upstream.call_count == 1
+    _assert_deepseek_request(upstream.calls[0].request, messages, stream)
+
+
+def test_deepseek_fill_reasoning_content_multiturn() -> None:
+    config: Final = DeepSeekChatConfig()
+    messages_with_rc: Final = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi", "reasoning_content": "I thought about it"},
+        {"role": "user", "content": "Follow up"},
+    ]
+    result_with_rc: Final = config._fill_reasoning_content(messages_with_rc)
+    assert result_with_rc[1]["reasoning_content"] == "I thought about it"
+
+    messages_with_psf: Final = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": "Hi",
+            "provider_specific_fields": {"reasoning_content": "stored thinking"},
+        },
+        {"role": "user", "content": "Follow up"},
+    ]
+    result_with_psf: Final = config._fill_reasoning_content(messages_with_psf)
+    assert result_with_psf[1]["reasoning_content"] == "stored thinking"
+    assert "reasoning_content" not in result_with_psf[1].get("provider_specific_fields", {})
+
+    messages_without_rc: Final = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"},
+        {"role": "user", "content": "Follow up"},
+    ]
+    result_without_rc: Final = config._fill_reasoning_content(messages_without_rc)
+    assert result_without_rc[1]["reasoning_content"] == " "
+
+    messages_user_only: Final = [
+        {"role": "user", "content": "Hello"},
+        {"role": "system", "content": "You are helpful"},
+    ]
+    result_user_only: Final = config._fill_reasoning_content(messages_user_only)
+    assert "reasoning_content" not in result_user_only[0]
+    assert "reasoning_content" not in result_user_only[1]
+
+
+def test_deepseek_fill_reasoning_content_guard_in_transform_request() -> None:
+    config: Final = DeepSeekChatConfig()
+    reasoning_enabled_messages: Final = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"},
+        {"role": "user", "content": "Follow up"},
+    ]
+    reasoning_enabled: Final = config.transform_request(
+        model="deepseek-reasoner",
+        messages=reasoning_enabled_messages,
+        optional_params={"thinking": {"type": "enabled"}},
+        litellm_params={},
+        headers={},
+    )
+    assert reasoning_enabled["messages"][1].get("reasoning_content") == " "
+
+    no_thinking_messages: Final = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"},
+        {"role": "user", "content": "Follow up"},
+    ]
+    no_thinking: Final = config.transform_request(
+        model="deepseek-reasoner",
+        messages=no_thinking_messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert "reasoning_content" not in no_thinking["messages"][1]
+
+    non_reasoning_messages: Final = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi"},
+        {"role": "user", "content": "Follow up"},
+    ]
+    non_reasoning: Final = config.transform_request(
+        model="deepseek-chat",
+        messages=non_reasoning_messages,
+        optional_params={"thinking": {"type": "enabled"}},
+        litellm_params={},
+        headers={},
+    )
+    assert "reasoning_content" not in non_reasoning["messages"][1]

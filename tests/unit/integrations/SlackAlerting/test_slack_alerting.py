@@ -1,13 +1,16 @@
 import asyncio
 import datetime
+import io
 import json
+import os
 import time
 import unittest
-from typing import Final, List, Optional, Tuple
-from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from openai import APIError
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
@@ -15,10 +18,12 @@ import litellm
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import DualCache
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
-from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.integrations.SlackAlerting.slack_alerting import DeploymentMetrics, SlackAlerting
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import CallInfo, Litellm_EntityType
+from litellm.router import Router
 from litellm.types.integrations.slack_alerting import AlertQueueItem, AlertType, SlackAlertingCacheKeys
+from litellm.utils import get_api_base
 
 
 class TestSlackAlerting(unittest.TestCase):
@@ -609,3 +614,634 @@ async def test_daily_report_schedule_cache_calls_declare_their_key_family():
     assert result is True
     assert seen == [("get", "daily_report_schedule"), ("set", "daily_report_schedule")]
     assert current_service_target() is None
+
+
+@pytest.fixture
+def slack_alerting() -> SlackAlerting:
+    return SlackAlerting(
+        alerting_threshold=1, internal_usage_cache=DualCache(), alerting=["slack"]
+    )
+
+key_info: Final = CallInfo(
+    token="test_token",
+    spend=81,
+    soft_budget=80,
+    max_budget=100,
+    user_id="test@test.com",
+    user_email="test@test.com",
+    key_alias="test-key",
+    event_group=Litellm_EntityType.KEY,
+)
+
+team_info: Final = CallInfo(
+    token="test_token",
+    spend=160,
+    soft_budget=150,
+    max_budget=200,
+    team_id="team-123",
+    team_alias="engineering-team",
+    event_group=Litellm_EntityType.TEAM,
+)
+
+user_info: Final = CallInfo(
+    token="test_token",
+    spend=45,
+    soft_budget=40,
+    max_budget=50,
+    user_id="user123",
+    event_group=Litellm_EntityType.USER,
+)
+
+key_no_max_budget_info: Final = CallInfo(
+    token="test_token",
+    spend=90,
+    soft_budget=85,
+    user_id="dev@test.com",
+    user_email="dev@test.com",
+    key_alias="dev-key",
+    event_group=Litellm_EntityType.KEY,
+)
+
+@pytest.mark.parametrize(
+    "model, optional_params, expected_api_base",
+    [
+        ("openai/my-fake-model", {"api_base": "my-fake-api-base"}, "my-fake-api-base"),
+        ("gpt-5-mini", {}, "https://api.openai.com"),
+    ],
+)
+def test_get_api_base_unit_test(
+    model: str, optional_params: dict[str, str], expected_api_base: str
+) -> None:
+    api_base: Final = get_api_base(model=model, optional_params=optional_params)
+
+    assert api_base == expected_api_base
+
+
+def test_init() -> None:
+    slack_alerting: Final = SlackAlerting(
+        alerting_threshold=32,
+        alerting=["slack"],
+        alert_types=[AlertType.llm_exceptions],
+        internal_usage_cache=DualCache(),
+    )
+    assert slack_alerting.alerting_threshold == 32
+    assert slack_alerting.alerting == ["slack"]
+    assert slack_alerting.alert_types == ["llm_exceptions"]
+
+    slack_no_alerting: Final = SlackAlerting()
+    assert slack_no_alerting.alerting == []
+
+
+@pytest.mark.asyncio
+async def test_response_taking_too_long_callback(slack_alerting: SlackAlerting) -> None:
+    start_time: Final = datetime.datetime(2024, 1, 1)
+    end_time: Final = start_time + datetime.timedelta(seconds=301)
+    kwargs: Final = {"model": "test_model", "messages": "test_messages", "litellm_params": {}}
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.response_taking_too_long_callback(
+            kwargs, None, start_time, end_time
+        )
+        mock_send_alert.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_alerting_metadata(slack_alerting: SlackAlerting) -> None:
+    """
+    Test alerting_metadata is propogated correctly for response taking too long
+    """
+    start_time: Final = datetime.datetime(2024, 1, 1)
+    end_time: Final = start_time + datetime.timedelta(seconds=301)
+    kwargs: Final = {
+        "model": "test_model",
+        "messages": "test_messages",
+        "litellm_params": {"metadata": {"alerting_metadata": {"hello": "world"}}},
+    }
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+
+        await slack_alerting.response_taking_too_long_callback(
+            kwargs, None, start_time, end_time
+        )
+        mock_send_alert.assert_awaited_once()
+
+        assert "hello" in mock_send_alert.call_args[1]["alerting_metadata"]
+
+@pytest.mark.asyncio
+async def test_budget_alerts_crossed(slack_alerting: SlackAlerting) -> None:
+    user_max_budget: Final = 100
+    user_current_spend: Final = 101
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.budget_alerts(
+            "user_budget",
+            user_info=CallInfo(
+                token="",
+                spend=user_current_spend,
+                max_budget=user_max_budget,
+                event_group=Litellm_EntityType.USER,
+            ),
+        )
+        mock_send_alert.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_budget_alerts_crossed_again(slack_alerting: SlackAlerting) -> None:
+    user_max_budget: Final = 100
+    user_current_spend: Final = 101
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.budget_alerts(
+            "user_budget",
+            user_info=CallInfo(
+                token="",
+                spend=user_current_spend,
+                max_budget=user_max_budget,
+                event_group=Litellm_EntityType.USER,
+            ),
+        )
+        mock_send_alert.assert_awaited_once()
+        mock_send_alert.reset_mock()
+        await slack_alerting.budget_alerts(
+            "user_budget",
+            user_info=CallInfo(
+                token="",
+                spend=user_current_spend,
+                max_budget=user_max_budget,
+                event_group=Litellm_EntityType.USER,
+            ),
+        )
+        mock_send_alert.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_daily_reports_unit_test(slack_alerting: SlackAlerting) -> None:
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "test-gpt",
+                    "litellm_params": {"model": "gpt-5-mini"},
+                    "model_info": {"id": "1234"},
+                }
+            ]
+        )
+        deployment_metrics: Final = DeploymentMetrics(
+            id="1234",
+            failed_request=False,
+            latency_per_output_token=20.3,
+            updated_at=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+        )
+
+        updated_val = await slack_alerting.async_update_daily_reports(
+            deployment_metrics=deployment_metrics
+        )
+
+        assert updated_val == 1
+
+        await slack_alerting.send_daily_reports(router=router)
+
+        mock_send_alert.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_send_daily_reports_ignores_zero_values() -> None:
+    router: Final = MagicMock()
+    router.get_model_ids.return_value = ["model1", "model2", "model3"]
+
+    slack_alerting: Final = SlackAlerting(internal_usage_cache=MagicMock())
+    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(
+        return_value=[None, 0, 10, 0, 0, None]
+    )
+    slack_alerting.internal_usage_cache.async_set_cache_pipeline = AsyncMock()
+
+    router.get_model_info.side_effect = lambda x: {"litellm_params": {"model": x}}
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        result: Final = await slack_alerting.send_daily_reports(router)
+
+        mock_send_alert.assert_called_once()
+        message: Final = mock_send_alert.call_args[1]["message"]
+
+        assert "model3" in message
+        assert "model2" not in message
+        assert "model1" not in message
+
+    assert result == True
+
+@pytest.mark.asyncio
+async def test_send_daily_reports_all_zero_or_none() -> None:
+    router: Final = MagicMock()
+    router.get_model_ids.return_value = ["model1", "model2", "model3"]
+
+    slack_alerting: Final = SlackAlerting(internal_usage_cache=MagicMock())
+    slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(
+        return_value=[None, 0, None, 0, None, 0]
+    )
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        result: Final = await slack_alerting.send_daily_reports(router)
+
+        mock_send_alert.assert_not_called()
+
+    assert result == False
+
+@pytest.mark.parametrize(
+    "alerting_type",
+    [
+        "token_budget",
+        "user_budget",
+        "team_budget",
+        "organization_budget",
+        "proxy_budget",
+        "projected_limit_exceeded",
+    ],
+)
+@pytest.mark.asyncio
+async def test_send_token_budget_crossed_alerts(alerting_type: str) -> None:
+    slack_alerting: Final = SlackAlerting()
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        user_info_data: Final = {
+            "token": "sk-test-mock-token-606",
+            "spend": 86,
+            "max_budget": 100,
+            "user_id": "ishaan@berri.ai",
+            "user_email": "ishaan@berri.ai",
+            "key_alias": "my-test-key",
+            "projected_exceeded_date": "10/20/2024",
+            "projected_spend": 200,
+            "event_group": Litellm_EntityType.KEY,
+        }
+
+        user_info: Final = CallInfo(**user_info_data)
+
+        for _ in range(50):
+            await slack_alerting.budget_alerts(
+                type=alerting_type,
+                user_info=user_info,
+            )
+        mock_send_alert.assert_awaited_once()
+
+@pytest.mark.parametrize(
+    "alerting_type",
+    [
+        "token_budget",
+        "user_budget",
+        "team_budget",
+        "organization_budget",
+        "proxy_budget",
+        "projected_limit_exceeded",
+    ],
+)
+@pytest.mark.asyncio
+async def test_webhook_alerting(alerting_type: str) -> None:
+    slack_alerting: Final = SlackAlerting(alerting=["webhook"])
+
+    with patch.object(
+        slack_alerting, "send_webhook_alert", new=AsyncMock()
+    ) as mock_send_alert:
+        user_info_data: Final = {
+            "token": "sk-test-mock-token-606",
+            "spend": 1,
+            "max_budget": 0,
+            "user_id": "ishaan@berri.ai",
+            "user_email": "ishaan@berri.ai",
+            "key_alias": "my-test-key",
+            "projected_exceeded_date": "10/20/2024",
+            "projected_spend": 200,
+            "event_group": Litellm_EntityType.KEY,
+        }
+
+        user_info: Final = CallInfo(**user_info_data)
+        for _ in range(50):
+            await slack_alerting.budget_alerts(
+                type=alerting_type,
+                user_info=user_info,
+            )
+        mock_send_alert.assert_awaited_once()
+
+@pytest.mark.parametrize(
+    "model, api_base, llm_provider, vertex_project, vertex_location",
+    [
+        ("gpt-5-mini", None, "openai", None, None),
+        (
+            "azure/gpt-5-mini",
+            "https://openai-gpt-4-test-v-1.openai.azure.com",
+            "azure",
+            None,
+            None,
+        ),
+        ("gemini-3.8-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+    ],
+)
+@pytest.mark.parametrize("error_code", [500, 408, 400])
+@pytest.mark.asyncio
+async def test_outage_alerting_called(
+    model: str,
+    api_base: str | None,
+    llm_provider: str,
+    vertex_project: str | None,
+    vertex_location: str | None,
+    error_code: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    If call fails, outage alert is called
+
+    If multiple calls fail, outage alert is sent
+    """
+    slack_alerting: Final = SlackAlerting(alerting=["webhook"])
+
+    monkeypatch.setattr(litellm, "callbacks", [slack_alerting])
+
+    error_to_raise: APIError | None = None
+
+    if error_code == 400:
+        print("RAISING 400 ERROR CODE")
+        error_to_raise = litellm.BadRequestError(
+            message="this is a bad request",
+            model=model,
+            llm_provider=llm_provider,
+        )
+    elif error_code == 408:
+        print("RAISING 408 ERROR CODE")
+        error_to_raise = litellm.Timeout(
+            message="A timeout occurred", model=model, llm_provider=llm_provider
+        )
+    elif error_code == 500:
+        print("RAISING 500 ERROR CODE")
+        error_to_raise = litellm.ServiceUnavailableError(
+            message="API is unavailable",
+            model=model,
+            llm_provider=llm_provider,
+            response=httpx.Response(
+                status_code=503,
+                request=httpx.Request(
+                    method="completion",
+                    url="https://example.com",
+                ),
+            ),
+        )
+
+    assert error_to_raise is not None
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "model_info": {"id": "test-deployment"},
+                "litellm_params": {
+                    "model": model,
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
+                    "api_base": api_base,
+                    "vertex_location": vertex_location,
+                    "vertex_project": vertex_project,
+                },
+            }
+        ],
+        num_retries=0,
+        allowed_fails=100,
+    )
+
+    slack_alerting.update_values(llm_router=router)
+    with patch.object(
+        slack_alerting, "outage_alerts", new=AsyncMock()
+    ) as mock_outage_alert:
+        with pytest.raises(APIError):
+            await router.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": "Hey!"}],
+                mock_response=error_to_raise,
+            )
+
+        mock_outage_alert.assert_called_once()
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        for _ in range(6):
+            await slack_alerting.outage_alerts(
+                exception=error_to_raise,
+                deployment_id="test-deployment",
+            )
+        if error_code == 500 or error_code == 408:
+            mock_send_alert.assert_called_once()
+        else:
+            mock_send_alert.assert_not_called()
+
+@pytest.mark.parametrize(
+    "model, api_base, llm_provider, vertex_project, vertex_location",
+    [
+        ("gpt-5-mini", None, "openai", None, None),
+        (
+            "azure/gpt-5-mini",
+            "https://openai-gpt-4-test-v-1.openai.azure.com",
+            "azure",
+            None,
+            None,
+        ),
+        ("gemini-3.8-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+    ],
+)
+@pytest.mark.parametrize("error_code", [500, 408, 400])
+@pytest.mark.asyncio
+async def test_region_outage_alerting_called(
+    model: str,
+    api_base: str | None,
+    llm_provider: str,
+    vertex_project: str | None,
+    vertex_location: str | None,
+    error_code: int,
+) -> None:
+    """
+    If call fails, outage alert is called
+
+    If multiple calls fail, outage alert is sent
+    """
+    slack_alerting: Final = SlackAlerting(
+        alerting=["webhook"], alert_types=[AlertType.region_outage_alerts]
+    )
+
+    error_to_raise: APIError | None = None
+
+    if error_code == 400:
+        print("RAISING 400 ERROR CODE")
+        error_to_raise = litellm.BadRequestError(
+            message="this is a bad request",
+            model=model,
+            llm_provider=llm_provider,
+        )
+    elif error_code == 408:
+        print("RAISING 408 ERROR CODE")
+        error_to_raise = litellm.Timeout(
+            message="A timeout occurred", model=model, llm_provider=llm_provider
+        )
+    elif error_code == 500:
+        print("RAISING 500 ERROR CODE")
+        error_to_raise = litellm.ServiceUnavailableError(
+            message="API is unavailable",
+            model=model,
+            llm_provider=llm_provider,
+            response=httpx.Response(
+                status_code=503,
+                request=httpx.Request(
+                    method="completion",
+                    url="https://example.com",
+                ),
+            ),
+        )
+
+    assert error_to_raise is not None
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": model,
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
+                    "api_base": api_base,
+                    "vertex_location": vertex_location,
+                    "vertex_project": vertex_project,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": model,
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
+                    "api_base": api_base,
+                    "vertex_location": vertex_location,
+                    "vertex_project": "vertex_project-2",
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=0,
+        allowed_fails=100,
+    )
+
+    slack_alerting.update_values(llm_router=router)
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        for deployment_id in ("1", "2", "1", "2", "1", "2"):
+            await slack_alerting.region_outage_alerts(
+                exception=error_to_raise, deployment_id=deployment_id
+            )
+        if model == "gemini-3.8-flash" and (error_code == 500 or error_code == 408):
+            mock_send_alert.assert_called_once()
+        else:
+            mock_send_alert.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_print_alerting_payload_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Test if alerts are printed to verbose logger when log_to_console=True
+    """
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+    from litellm.integrations.SlackAlerting.batching_handler import send_to_webhook
+
+    log_stream: Final = io.StringIO()
+    handler: Final = logging.StreamHandler(log_stream)
+    previous_level: Final = verbose_proxy_logger.level
+    verbose_proxy_logger.addHandler(handler)
+    verbose_proxy_logger.setLevel(logging.WARNING)
+
+    slack_alerting: Final = SlackAlerting(
+        alerting_threshold=0.0000001,
+        alerting=["slack"],
+        alert_types=[AlertType.llm_exceptions],
+        internal_usage_cache=DualCache(),
+    )
+    slack_alerting.alerting_args.log_to_console = True
+
+    try:
+        with patch.object(slack_alerting.async_http_handler, "post", new=AsyncMock()):
+            await send_to_webhook(
+                slackAlertingInstance=slack_alerting,
+                item={
+                    "url": "https://example.com",
+                    "headers": {"Content-Type": "application/json"},
+                    "payload": {"text": "Test alert message"},
+                },
+                count=1,
+            )
+
+        assert "Test alert message" in log_stream.getvalue()
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(previous_level)
+        log_stream.close()
+
+@pytest.mark.asyncio
+async def test_soft_budget_alerts() -> None:
+    """
+    Test if soft budget alerts (warnings when approaching budget limit) work correctly
+    - Test alert is sent when spend reaches 80% of budget
+    """
+    slack_alerting: Final = SlackAlerting(alerting=["webhook"])
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        user_info: Final = CallInfo(
+            token="test_token",
+            spend=80,
+            soft_budget=80,
+            user_id="user@example.com",
+            user_email="user@example.com",
+            key_alias="test-key",
+            event_group=Litellm_EntityType.KEY,
+        )
+
+        await slack_alerting.budget_alerts(
+            type="soft_budget",
+            user_info=user_info,
+        )
+        mock_send_alert.assert_called_once()
+
+        alert_message: Final = mock_send_alert.call_args[1]["message"]
+
+        expected_message: Final = (
+            "Soft Budget Crossed: Total Soft Budget:`80.0`\n"
+            "\n"
+            "*spend:* `80.0`\n"
+            "*soft_budget:* `80.0`\n"
+            "*user_id:* `user@example.com`\n"
+            "*user_email:* `user@example.com`\n"
+            "*key_alias:* `test-key`\n"
+            "*event_group:* `key`\n"
+        )
+        assert alert_message == expected_message
+
+@pytest.mark.parametrize(
+    "entity_info",
+    [
+        key_info,
+        team_info,
+        user_info,
+        key_no_max_budget_info,
+    ],
+)
+@pytest.mark.asyncio
+async def test_soft_budget_alerts_webhook(entity_info: CallInfo) -> None:
+    """
+    Tests that soft budget alerts are triggered for different entity types.
+
+    Tests:
+    - Key with max budget
+    - Team
+    - User
+    - Key without max budget
+    """
+    slack_alerting: Final = SlackAlerting(alerting=["webhook"])
+
+    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
+        await slack_alerting.budget_alerts(
+            type="soft_budget",
+            user_info=entity_info,
+        )
+        mock_send_alert.assert_called_once()
+
+        call_args: Final = mock_send_alert.call_args[1]
+        logged_webhook_event: Final = call_args["user_info"]
+
+        assert logged_webhook_event.spend == entity_info.spend
+        assert logged_webhook_event.soft_budget == entity_info.soft_budget
+        assert logged_webhook_event.max_budget == entity_info.max_budget
+        assert logged_webhook_event.user_id == entity_info.user_id
+        assert logged_webhook_event.user_email == entity_info.user_email
+        assert logged_webhook_event.key_alias == entity_info.key_alias
+        assert logged_webhook_event.event_group == entity_info.event_group
