@@ -407,6 +407,24 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     expect(onFinish).not.toHaveBeenCalled();
   });
 
+  it("should label only rows whose current key is declared when the schema arrives after an edit", () => {
+    const onFinish = vi.fn();
+    const initialMetadata = [{ key: "cost_center", value: "1" }];
+    const { rerender } = render(<Harness onFinish={onFinish} initialMetadata={initialMetadata} schemaFields={[]} />);
+    fireEvent.change(screen.getByPlaceholderText("Key"), { target: { value: "region" } });
+
+    rerender(
+      <Harness
+        onFinish={onFinish}
+        initialMetadata={initialMetadata}
+        schemaFields={[{ key: "cost_center", label: "Cost Center" }]}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText("Key")).toHaveValue("region");
+    expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual(["Cost Center"]);
+  });
+
   it("should show a skeleton instead of the editor while the schema is loading", () => {
     render(<Harness onFinish={vi.fn()} schemaLoading />);
 

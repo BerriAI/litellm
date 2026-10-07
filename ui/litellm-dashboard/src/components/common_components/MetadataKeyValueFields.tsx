@@ -79,10 +79,6 @@ interface MetadataKeyValueFieldsProps<TFieldValues extends FieldValues> {
   schemaLoading?: boolean;
 }
 
-function pairKeyOf(field: object): string | undefined {
-  return "key" in field && typeof field.key === "string" ? field.key : undefined;
-}
-
 interface MetadataRowProps<TFieldValues extends FieldValues> {
   control: Control<TFieldValues>;
   name: FieldArrayPath<TFieldValues>;
@@ -151,13 +147,18 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
   const { fields, append, remove } = useFieldArray({ control, name });
   const seededRef = useRef(false);
   const schemaLabelsByKey = new Map(schemaFields.map((field) => [field.key, field.label || field.key]));
+  const schemaReady = !schemaLoading && schemaFields.length > 0;
+  const livePairs: readonly (Partial<MetadataPair> | undefined)[] =
+    getValues(name as unknown as FieldPath<TFieldValues>) ?? [];
   const [keysAtMount, setKeysAtMount] = useState<ReadonlyMap<string, string | undefined>>(() => new Map());
-  const unseenFields = fields.filter((field) => !keysAtMount.has(field.id));
-  if (unseenFields.length > 0) {
-    setKeysAtMount(new Map([...keysAtMount, ...unseenFields.map((field) => [field.id, pairKeyOf(field)] as const)]));
+  const unseenKeys = schemaReady
+    ? fields.flatMap((field, index) => (keysAtMount.has(field.id) ? [] : [[field.id, livePairs[index]?.key] as const]))
+    : [];
+  if (unseenKeys.length > 0) {
+    setKeysAtMount(new Map([...keysAtMount, ...unseenKeys]));
   }
-  const rowKeysAtMount = fields.map((field) =>
-    keysAtMount.has(field.id) ? keysAtMount.get(field.id) : pairKeyOf(field),
+  const rowKeysAtMount = fields.map((field, index) =>
+    keysAtMount.has(field.id) || !schemaReady ? keysAtMount.get(field.id) : livePairs[index]?.key,
   );
   const schemaLabelAt = (index: number): string | undefined => {
     const key = rowKeysAtMount[index];
