@@ -44638,6 +44638,13 @@ export interface components {
             /** Start */
             start?: string | null;
         };
+        /** RunSource */
+        RunSource: {
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+        };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
             /** Costcenter */
@@ -47885,6 +47892,7 @@ export interface components {
             resolution_limited?: boolean;
             /** Service */
             service: string;
+            source?: components["schemas"]["RunSource"] | null;
             /** Span Count */
             span_count: number;
             /** Spend */
