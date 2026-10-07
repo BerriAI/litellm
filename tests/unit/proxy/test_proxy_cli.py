@@ -71,7 +71,7 @@ class TestProxyInitializationHelpers:
     @patch("openai.OpenAI")
     @patch("click.echo")
     @patch("builtins.print")
-    def test_run_test_chat_completion(self, mock_print, mock_echo, mock_openai):
+    def test_run_test_chat_completion(self, mock_print, mock_echo, mock_openai):  # test-quality-ok: pins the string-URL passthrough to the client; the flag path is asserted at the HTTP boundary in the stub-server test below
         # Setup
         mock_client = MagicMock()
         mock_openai.return_value = mock_client
