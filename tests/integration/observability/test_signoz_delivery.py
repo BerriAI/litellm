@@ -394,7 +394,6 @@ class RigFactory:
                 "callbacks": ["signoz"],
                 "provider_url_destination_allowed_hosts": [self.tenant_sink.wire.url],
             },
-            "general_settings": {**object_value(loaded["general_settings"]), "disable_model_info_refresh": True},
         }
         path: Final = self.directory / f"signoz-{uuid.uuid4().hex}.yaml"
         path.write_text(yaml.safe_dump(config))
