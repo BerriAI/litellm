@@ -5,6 +5,8 @@ export type TracePage = paths["/v1/traces"]["get"]["responses"][200]["content"][
 export type SpanErrorPage =
   paths["/v1/traces/{trace_id}/spans/{span_id}/error"]["get"]["responses"][200]["content"]["application/json"];
 export type TraceListQuery = NonNullable<paths["/v1/traces"]["get"]["parameters"]["query"]>;
+export type TraceAgentsQuery = NonNullable<paths["/v1/traces/agents"]["get"]["parameters"]["query"]>;
+export type TraceAgentList = paths["/v1/traces/agents"]["get"]["responses"][200]["content"]["application/json"];
 export type TraceDetailQuery = NonNullable<paths["/v1/traces/{trace_id}"]["get"]["parameters"]["query"]>;
 export type SpanQuery = NonNullable<paths["/v1/traces/{trace_id}/spans/{span_id}"]["get"]["parameters"]["query"]>;
 export type SpanErrorQuery = NonNullable<
