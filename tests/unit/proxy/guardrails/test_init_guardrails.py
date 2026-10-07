@@ -424,6 +424,20 @@ def test_default_on_is_read_the_way_litellm_params_would_parse_it(default_on):
         init_guardrails_v2(all_guardrails=all_guardrails)
 
 
+def test_default_on_is_read_from_a_parsed_litellm_params_object_too():
+    """A config entry can arrive with `litellm_params` already parsed into a model, not a dict;
+    the attribute is read the same way. `None` and an unknown spelling count as not default_on."""
+    from litellm.proxy.guardrails.init_guardrails import _is_default_on
+    from litellm.types.guardrails import LitellmParams
+
+    parsed = LitellmParams(guardrail="presidio", mode="pre_call", default_on=True)
+    assert _is_default_on({"litellm_params": parsed}) is True
+    assert _is_default_on({"litellm_params": LitellmParams(guardrail="presidio", mode="pre_call")}) is False
+    assert _is_default_on({"litellm_params": {"default_on": None}}) is False
+    assert _is_default_on({"litellm_params": {"default_on": "sometimes"}}) is False
+    assert _is_default_on({}) is False
+
+
 def test_init_guardrails_v2_still_skips_an_optional_guardrail_it_cannot_initialize():
     """
     The skip (#34940) stays for guardrails that are not default_on: nothing runs them
