@@ -4567,7 +4567,7 @@ class Router:
                 _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
                 response_hidden_params: Final = get_hidden_params(_response)
                 if response_hidden_params is not None:
-                    additional_headers: Final = cast(
+                    additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
                         dict[str, object], response_hidden_params.setdefault("additional_headers", {})
                     )
                     additional_headers.update({"x-litellm-request-prioritization-used": True})
@@ -4631,7 +4631,7 @@ class Router:
                 _response: Final = await original_function(*args, **kwargs)
                 response_hidden_params: Final = get_hidden_params(_response)
                 if response_hidden_params is not None:
-                    additional_headers: Final = cast(
+                    additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
                         dict[str, object], response_hidden_params.setdefault("additional_headers", {})
                     )
                     additional_headers.update({"x-litellm-request-prioritization-used": True})

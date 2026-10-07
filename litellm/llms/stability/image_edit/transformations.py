@@ -301,16 +301,14 @@ class StabilityImageEditConfig(BaseImageEditConfig):
 
         if not hasattr(model_response, "_hidden_params"):
             model_response.hidden_params = {}
-        additional_headers: Final = cast(
+        additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
             dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
         )
         # Override: fetch model-cost from model_cost map based on the provided model name
         model_info: Final = get_model_info(model, custom_llm_provider="stability")
         cost_per_image: Final = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
-            additional_headers["llm_provider-x-litellm-response-cost"] = float(
-                cost_per_image
-            )
+            additional_headers["llm_provider-x-litellm-response-cost"] = float(cost_per_image)
         return model_response
 
     def use_multipart_form_data(self) -> bool:

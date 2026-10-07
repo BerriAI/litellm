@@ -6,7 +6,7 @@ import asyncio
 import os
 from collections.abc import Callable
 from datetime import datetime
-from typing import Final, cast
+from typing import Final
 
 import litellm
 from litellm import ModelResponse, Router
@@ -244,11 +244,11 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         try:
             if isinstance(response, ModelResponse):
-                model_id: Final = cast(str, response.hidden_params["model_id"])
+                model_id: Final = response.hidden_params["model_id"]
+                if not isinstance(model_id, str):
+                    return response
                 model_info: Final = self.llm_router.get_model_info(id=model_id)
-                assert model_info is not None, "Model info for model with id={} is None".format(
-                    model_id
-                )
+                assert model_info is not None, f"Model info for model with id={model_id} is None"
                 key_priority: Final[str | None] = user_api_key_dict.metadata.get("priority", None)
                 (
                     available_tpm,

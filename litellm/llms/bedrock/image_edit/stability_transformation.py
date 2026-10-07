@@ -336,7 +336,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
 
         if not hasattr(model_response, "_hidden_params"):
             model_response.hidden_params = {}
-        additional_headers: Final = cast(
+        additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
             dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
         )
 

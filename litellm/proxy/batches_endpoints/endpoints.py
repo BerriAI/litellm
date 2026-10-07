@@ -80,6 +80,11 @@ router: Final = APIRouter()
 _METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
+def _hidden_param_string(hidden_params: Mapping[str, object], key: str) -> str:
+    value: Final = hidden_params.get(key)
+    return value if isinstance(value, str) else ""
+
+
 def _request_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
     metadata: Final = data.get("litellm_metadata")
     if metadata is None:
@@ -499,9 +504,9 @@ async def create_batch(
 
         ### RESPONSE HEADERS ###
         hidden_params: Final = get_hidden_params(response) or {}
-        model_id: Final = cast(str, hidden_params.get("model_id") or "")
-        cache_key: Final = cast(str, hidden_params.get("cache_key") or "")
-        api_base: Final = cast(str, hidden_params.get("api_base") or "")
+        model_id: Final = _hidden_param_string(hidden_params, "model_id")
+        cache_key: Final = _hidden_param_string(hidden_params, "cache_key")
+        api_base: Final = _hidden_param_string(hidden_params, "api_base")
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -657,9 +662,9 @@ async def retrieve_batch(
             )
 
             hidden_params = get_hidden_params(response) or {}
-            model_id = cast(str, hidden_params.get("model_id") or "")
-            cache_key = cast(str, hidden_params.get("cache_key") or "")
-            api_base = cast(str, hidden_params.get("api_base") or "")
+            model_id = _hidden_param_string(hidden_params, "model_id")
+            cache_key = _hidden_param_string(hidden_params, "cache_key")
+            api_base = _hidden_param_string(hidden_params, "api_base")
 
             fastapi_response.headers.update(
                 ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -804,9 +809,9 @@ async def retrieve_batch(
 
         ### RESPONSE HEADERS ###
         hidden_params = get_hidden_params(response) or {}
-        model_id = cast(str, hidden_params.get("model_id") or "")
-        cache_key = cast(str, hidden_params.get("cache_key") or "")
-        api_base = cast(str, hidden_params.get("api_base") or "")
+        model_id = _hidden_param_string(hidden_params, "model_id")
+        cache_key = _hidden_param_string(hidden_params, "cache_key")
+        api_base = _hidden_param_string(hidden_params, "api_base")
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -988,9 +993,9 @@ async def list_batches(
 
         ### RESPONSE HEADERS ###
         hidden_params: Final = get_hidden_params(response) or {}
-        model_id: Final = cast(str, hidden_params.get("model_id") or "")
-        cache_key: Final = cast(str, hidden_params.get("cache_key") or "")
-        api_base: Final = cast(str, hidden_params.get("api_base") or "")
+        model_id: Final = _hidden_param_string(hidden_params, "model_id")
+        cache_key: Final = _hidden_param_string(hidden_params, "cache_key")
+        api_base: Final = _hidden_param_string(hidden_params, "api_base")
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -1231,9 +1236,9 @@ async def cancel_batch(
 
         ### RESPONSE HEADERS ###
         hidden_params: Final = get_hidden_params(response) or {}
-        model_id: Final = cast(str, hidden_params.get("model_id") or "")
-        cache_key: Final = cast(str, hidden_params.get("cache_key") or "")
-        api_base: Final = cast(str, hidden_params.get("api_base") or "")
+        model_id: Final = _hidden_param_string(hidden_params, "model_id")
+        cache_key: Final = _hidden_param_string(hidden_params, "cache_key")
+        api_base: Final = _hidden_param_string(hidden_params, "api_base")
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(

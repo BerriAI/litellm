@@ -335,14 +335,14 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             if cost is not None:
                 if not hasattr(model_response, "_hidden_params"):
                     model_response.hidden_params = {}
-                additional_headers: Final = cast(
+                additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
                     dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
                 )
                 additional_headers["llm_provider-x-litellm-response-cost"] = float(cost)
 
             cost_details: Final = usage_data.get("cost_details", {})
             if cost_details:
-                response_cost_details: Final = cast(
+                response_cost_details: Final = cast(  # cast-ok: provider cost details are stored as a mutable mapping
                     dict[str, object], model_response.hidden_params.setdefault("response_cost_details", {})
                 )
                 response_cost_details.update(cost_details)

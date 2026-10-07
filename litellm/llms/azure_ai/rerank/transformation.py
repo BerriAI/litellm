@@ -106,9 +106,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
             litellm_params=litellm_params,
         )
         azure_model_group: Final = rerank_response.hidden_params.get("llm_provider-azureml-model-group")
-        base_model: Final = self._get_base_model(
-            azure_model_group if isinstance(azure_model_group, str) else None
-        )
+        base_model: Final = self._get_base_model(azure_model_group if isinstance(azure_model_group, str) else None)
         rerank_response.hidden_params["model"] = base_model
         return rerank_response
 
