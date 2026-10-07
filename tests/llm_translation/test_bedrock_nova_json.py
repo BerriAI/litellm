@@ -14,7 +14,7 @@ class TestBedrockNovaJson(BaseLLMChatTest):
     test_tool_call_with_property_type_array = None
 
     def get_base_completion_call_args(self) -> dict:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         return {
             "model": "bedrock/converse/us.amazon.nova-micro-v1:0",
         }

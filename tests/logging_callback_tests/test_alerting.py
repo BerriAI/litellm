@@ -739,7 +739,7 @@ async def test_langfuse_trace_id():
     - Unit test for `_add_langfuse_trace_id_to_alert` function in slack_alerting.py
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+    from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 
     litellm.success_callback = ["langfuse"]
 
@@ -762,7 +762,7 @@ async def test_langfuse_trace_id():
 
     await asyncio.sleep(3)
 
-    assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
+    assert litellm_logging_obj.get_trace_id(service_name="langfuse") is not None
 
     slack_alerting = SlackAlerting(
         alerting_threshold=32,
@@ -771,7 +771,7 @@ async def test_langfuse_trace_id():
         internal_usage_cache=DualCache(),
     )
 
-    trace_url = await _add_langfuse_trace_id_to_alert(
+    trace_url = await add_langfuse_trace_id_to_alert(
         request_data={"litellm_logging_obj": litellm_logging_obj}
     )
 
@@ -779,7 +779,7 @@ async def test_langfuse_trace_id():
 
     returned_trace_id = trace_url.split("/")[-1]
 
-    assert returned_trace_id == litellm_logging_obj._get_trace_id(
+    assert returned_trace_id == litellm_logging_obj.get_trace_id(
         service_name="langfuse"
     )
 

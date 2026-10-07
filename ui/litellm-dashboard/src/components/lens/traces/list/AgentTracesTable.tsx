@@ -42,7 +42,34 @@ export const formatCost = (cost: number): string => {
   return `$${cost.toFixed(2)}`;
 };
 
-const firstLine = (text: string): string => text.split("\n")[0] ?? text;
+type RunCost = { label: string; partial: { short: string; long: string } | null };
+
+export const runCost = ({
+  spend,
+  priced_calls,
+  llm_calls,
+}: Pick<TraceSummary, "spend" | "priced_calls" | "llm_calls">): RunCost | null => {
+  if (spend == null || priced_calls === 0) return null;
+  if (priced_calls >= llm_calls) return { label: formatCost(spend), partial: null };
+  return {
+    label: `≥ ${formatCost(spend)}`,
+    partial: { short: `${priced_calls}/${llm_calls} priced`, long: `${priced_calls} of ${llm_calls} calls priced` },
+  };
+};
+
+function CostCell({ run }: { run: TraceSummary }) {
+  const cost = runCost(run);
+  if (!cost) return "—";
+  if (!cost.partial) return cost.label;
+  return (
+    <span className="inline-flex items-baseline gap-1.5" title={cost.partial.long}>
+      {cost.label}
+      <span className="text-xs text-muted-foreground">{cost.partial.short}</span>
+    </span>
+  );
+}
+
+const singleLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 
 const PREFETCH_MARGIN = "0px 0px 480px 0px";
@@ -69,7 +96,7 @@ function InputCell({ run }: { run: TraceSummary }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
       <span className="truncate text-foreground">
-        {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
+        {singleLine(previewText(run.input_preview)) || traceDisplayName(run)}
       </span>
       {run.resolution_limited && (
         <span
@@ -158,7 +185,7 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     id: "cost",
     size: 80,
     header: "Cost",
-    cell: ({ row }) => (row.original.spend == null ? "—" : formatCost(row.original.spend)),
+    cell: ({ row }) => <CostCell run={row.original} />,
     meta: { numeric: true, className: NUM },
   },
   {

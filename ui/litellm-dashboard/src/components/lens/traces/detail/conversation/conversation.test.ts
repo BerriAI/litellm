@@ -5,6 +5,7 @@ import {
   newConversationMessages,
   groupConversation,
   conversationWarnings,
+  pendingConversationBranches,
 } from "./conversation";
 import type { Span, SpanDetail, TraceMessage } from "../../types";
 import research from "../../__fixtures__/research_trace.json";
@@ -26,6 +27,74 @@ const detail = (span_id: string, input: unknown, output: unknown): SpanDetail =>
 });
 
 describe("trace conversation", () => {
+  it("keeps missing nested details pending through framework and native agent ancestors", () => {
+    const agent = {
+      ...root,
+      span_id: "agent",
+      parent_span_id: "root",
+      type: "tool",
+      name: "Agent",
+      framework: "claude-code",
+    };
+    const framework = { ...root, span_id: "framework", parent_span_id: "agent", type: "framework" };
+    const child = { ...root, span_id: "child", parent_span_id: "framework" };
+    const other = { ...root, span_id: "other", parent_span_id: "root" };
+    const spans = [root, agent, framework, child, other] as Span[];
+    const details = new Map(
+      spans.filter((span) => span !== child).map((span) => [span.span_id, detail(span.span_id, [], [])]),
+    );
+    expect([...pendingConversationBranches(spans, details, false)].toSorted()).toEqual([
+      "agent",
+      "child",
+      "framework",
+      "root",
+    ]);
+    const completeDetails = new Map([...details, [child.span_id, detail(child.span_id, [], [])]]);
+    expect(pendingConversationBranches(spans, completeDetails, false).size).toBe(0);
+  });
+
+  it.each(["child", "missing-parent"])("stops pending ancestry at cycles or missing parents (%s)", (parentId) => {
+    const agent = { ...root, span_id: "agent", parent_span_id: parentId };
+    const child = { ...root, span_id: "child", parent_span_id: "agent" };
+    const spans = [root, agent, child];
+    const details = new Map([
+      [root.span_id, detail(root.span_id, [], [])],
+      [agent.span_id, detail(agent.span_id, [], [])],
+    ]);
+    expect([...pendingConversationBranches(spans, details, false)].toSorted()).toEqual(["agent", "child"]);
+  });
+
+  it.each([false, true])("handles 20,000-level pending ancestry without overflowing (cycle: %s)", (cycle) => {
+    const rootParent = cycle ? "deep-19999" : null;
+    const chain = Array.from({ length: 20_000 }, (_, index) => ({
+      ...root,
+      span_id: `deep-${index}`,
+      parent_span_id: index === 0 ? rootParent : `deep-${index - 1}`,
+    }));
+    const spans = [...chain, root];
+    const details = new Map(
+      spans.filter((span) => span.span_id !== "deep-19999").map((span) => [span.span_id, detail(span.span_id, [], [])]),
+    );
+    const pending = pendingConversationBranches(spans, details, false);
+    expect(pending.size).toBe(chain.length);
+    expect(chain.every((span) => pending.has(span.span_id))).toBe(true);
+    expect(pending.has(root.span_id)).toBe(false);
+  });
+
+  it.each([
+    { boundary: 10, morePages: true, pending: true },
+    { boundary: 20, morePages: true, pending: true },
+    { boundary: 21, morePages: true, pending: false },
+    { boundary: 10, morePages: false, pending: false },
+  ])("only waits for pages that could contain later branch children (%j)", ({ boundary, morePages, pending }) => {
+    const agent = { ...root, span_id: "agent", parent_span_id: "root", start_offset_ms: 1, duration_ms: 5 };
+    const child = { ...agent, span_id: "child", parent_span_id: "agent", start_offset_ms: 2, duration_ms: 18 };
+    const other = { ...root, span_id: "other", parent_span_id: "root", start_offset_ms: boundary };
+    const spans = [root, agent, child, other];
+    const details = new Map(spans.map((span) => [span.span_id, detail(span.span_id, [], [])]));
+    expect(pendingConversationBranches(spans, details, morePages).has("agent")).toBe(pending);
+  });
+
   it.each(["reviewer", "__proto__", "constructor"])("keeps repeated agent name %s stable as steps load", (name) => {
     const first = { ...root, span_id: "first", name, start_offset_ms: 1 };
     const second = { ...first, span_id: "second", start_offset_ms: 2 };
@@ -612,6 +681,22 @@ describe("coding sessions", () => {
     expect(conversationWarnings(details, false)).toEqual([]);
     expect(conversationWarnings(details, true)).toHaveLength(1);
     details.set("reply", { ...detail("reply", [], "Hello"), attributes: { "event.name": "assistant_response" } });
+    expect(conversationWarnings(details, true)).toEqual([]);
+  });
+
+  it("still warns about missing replies when only a tool recorded output", () => {
+    const details = new Map([
+      ["llm", { ...detail("llm", [], []), output: "", attributes: { "span.type": "llm_request" } }],
+      ["read", { ...detail("read", {}, "file contents"), output: "file contents" }],
+    ]);
+    expect(conversationWarnings(details, true, new Set(["read"]))).toHaveLength(1);
+  });
+
+  it("does not warn about missing replies when another model call recorded the answer", () => {
+    const details = new Map([
+      ["llm", { ...detail("llm", [], []), output: "", attributes: { "span.type": "llm_request" } }],
+      ["answer", detail("answer", [], [answer])],
+    ]);
     expect(conversationWarnings(details, true)).toEqual([]);
   });
 });

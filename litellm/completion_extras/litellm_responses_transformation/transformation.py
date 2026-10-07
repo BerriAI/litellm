@@ -26,6 +26,7 @@ from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
+    with_prompt_cache_breakpoint,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
@@ -244,7 +245,7 @@ def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Cha
     name: Final = item.get("name") or ("custom_tool" if is_custom else "")
     function_chunk: Final = ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments)
     tool_call_dict: Final = _ChatToolCallDict(
-        id=LiteLLMCompletionResponsesConfig._tool_call_id_from_responses_item(item.get("id"), item.get("call_id")),
+        id=LiteLLMCompletionResponsesConfig.tool_call_id_from_responses_item(item.get("id"), item.get("call_id")),
         type="function",
         function=function_chunk,
         index=index,
@@ -525,7 +526,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
+                responses_api_request["reasoning"] = self.map_reasoning_effort(value)
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
 
@@ -983,7 +984,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         setattr(
             model_response,
             "usage",
-            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_response.usage),
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_response.usage),
         )
 
         model_response.id = _upstream_response_id(raw_response.id) or raw_response.id
@@ -1089,16 +1090,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Handle multimodal content
                     original_type = item.get("type")
                     if original_type == "text":
-                        converted = self._convert_content_str_to_input_text(item.get("text", ""), role)
+                        converted = with_prompt_cache_breakpoint(
+                            self._convert_content_str_to_input_text(item.get("text", ""), role),
+                            item.get("prompt_cache_breakpoint"),
+                        )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   text -> %s", converted)
                     elif original_type == "image_url":
                         # Map to responses API image format
-                        converted = cast(
-                            dict,
-                            self._convert_content_to_responses_format_image(
-                                cast(ChatCompletionImageObject, item), role
+                        converted = with_prompt_cache_breakpoint(
+                            cast(
+                                dict,
+                                self._convert_content_to_responses_format_image(
+                                    cast(ChatCompletionImageObject, item), role
+                                ),
                             ),
+                            item.get("prompt_cache_breakpoint"),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   image_url -> %s", converted)
@@ -1110,8 +1117,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   image -> %s", converted)
                         elif item_type == "file":
-                            converted = _input_file_from_file_value(
-                                cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                            converted = with_prompt_cache_breakpoint(
+                                _input_file_from_file_value(
+                                    cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                                ),
+                                item.get("prompt_cache_breakpoint"),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
@@ -1206,7 +1216,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def _map_reasoning_effort(self, reasoning_effort: object) -> Reasoning:
+    def map_reasoning_effort(self, reasoning_effort: object) -> Reasoning:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
             return Reasoning(
@@ -1224,6 +1234,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if auto_summary_enabled
             else Reasoning(effort=reasoning_effort)
         )
+
+    _map_reasoning_effort = map_reasoning_effort
 
     def _add_web_search_tool(
         self,
@@ -1626,7 +1638,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             if response_data.get("usage"):
                 from litellm.responses.utils import ResponseAPILoggingUtils
 
-                usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response_data.get("usage"))
+                usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response_data.get("usage"))
             provider_metadata: Final = _provider_metadata(response_data)
             served_service_tier: Final = response_data.get("service_tier")
             return ModelResponseStream(

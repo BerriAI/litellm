@@ -140,7 +140,7 @@ async def test_responses_streaming_stamps_completion_start_time_on_first_chunk()
         logging_obj.completion_start_time = completion_start_time
         logging_obj.model_call_details["completion_start_time"] = completion_start_time
 
-    logging_obj._update_completion_start_time.side_effect = _update
+    logging_obj.update_completion_start_time.side_effect = _update
 
     iterator = _make_iterator(
         sse_events=[
@@ -182,7 +182,7 @@ async def test_responses_streaming_does_not_reset_prior_completion_start_time():
     async for _ in iterator:
         pass
 
-    logging_obj._update_completion_start_time.assert_not_called()
+    logging_obj.update_completion_start_time.assert_not_called()
     assert logging_obj.completion_start_time == prior
 
 
@@ -628,7 +628,7 @@ def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypat
     )
     logging_obj = SimpleNamespace(
         model_call_details={"litellm_params": {}},
-        _llm_caching_handler=caching_handler,
+        llm_caching_handler=caching_handler,
     )
     iterator = ResponsesAPIStreamingIterator(
         response=httpx.Response(200),
@@ -646,7 +646,15 @@ def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypat
             status="completed",
             model="test-model",
             object="response",
-            output=[],
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_lit6184",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "cached", "annotations": []}],
+                }
+            ],
         ),
     )
     monkeypatch.setattr(litellm, "cache", _SlowWriteCache())
@@ -779,12 +787,12 @@ def test_stamp_responses_usage_cost_stamps_computed_cost():
 
     response = _responses_api_response_with_usage()
     logging_obj = Mock(spec=LiteLLMLoggingObj)
-    logging_obj._response_cost_calculator.return_value = 0.000704
+    logging_obj.response_cost_calculator.return_value = 0.000704
 
     _stamp_responses_usage_cost(response, logging_obj)
 
     assert getattr(response.usage, "cost", None) == pytest.approx(0.000704)
-    logging_obj._response_cost_calculator.assert_called_once_with(result=response)
+    logging_obj.response_cost_calculator.assert_called_once_with(result=response)
 
 
 def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
@@ -797,7 +805,7 @@ def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
     _stamp_responses_usage_cost(response, logging_obj)
 
     assert getattr(response.usage, "cost", None) == pytest.approx(0.5)
-    logging_obj._response_cost_calculator.assert_not_called()
+    logging_obj.response_cost_calculator.assert_not_called()
 
 
 def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
@@ -831,20 +839,20 @@ def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
     assert isinstance(response.usage, ResponseAPIUsage)
     assert response.usage.cost == pytest.approx(3e-05)
     assert response.usage.output_tokens_details.reasoning_tokens == 117
-    logging_obj._response_cost_calculator.assert_not_called()
+    logging_obj.response_cost_calculator.assert_not_called()
 
 
 def test_stamp_responses_usage_cost_computes_cost_for_dict_usage_without_cost():
     from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
     response = _unvalidated_response_with_dict_usage({"input_tokens": 29, "output_tokens": 120, "total_tokens": 149})
     logging_obj = Mock(spec=LiteLLMLoggingObj)
-    logging_obj._response_cost_calculator.return_value = 0.000704
+    logging_obj.response_cost_calculator.return_value = 0.000704
 
     _stamp_responses_usage_cost(response, logging_obj)
 
     assert isinstance(response.usage, ResponseAPIUsage)
     assert response.usage.cost == pytest.approx(0.000704)
-    logging_obj._response_cost_calculator.assert_called_once_with(result=response)
+    logging_obj.response_cost_calculator.assert_called_once_with(result=response)
 
 
 def test_stamp_responses_usage_cost_survives_calculator_failure():
@@ -852,7 +860,7 @@ def test_stamp_responses_usage_cost_survives_calculator_failure():
 
     response = _responses_api_response_with_usage()
     logging_obj = Mock(spec=LiteLLMLoggingObj)
-    logging_obj._response_cost_calculator.side_effect = RuntimeError("cost map unavailable")
+    logging_obj.response_cost_calculator.side_effect = RuntimeError("cost map unavailable")
 
     _stamp_responses_usage_cost(response, logging_obj)
 
@@ -1215,7 +1223,7 @@ async def test_completed_event_with_a_dict_response_is_typed_and_billed():
     config: Final = Mock(spec=BaseResponsesAPIConfig)
     config.transform_streaming_response.side_effect = _transform
     logging_obj: Final = _logging_obj_stub()
-    logging_obj._response_cost_calculator.return_value = 0.000704
+    logging_obj.response_cost_calculator.return_value = 0.000704
     iterator: Final = _make_iterator(
         sse_events=[
             _sse_event({"type": "response.output_text.delta", "delta": "hello world"}),
@@ -1237,7 +1245,7 @@ async def test_completed_event_with_a_dict_response_is_typed_and_billed():
     assert usage.input_tokens > 0
     assert usage.output_tokens > 0
     assert usage.cost == pytest.approx(0.000704)
-    logging_obj._response_cost_calculator.assert_any_call(result=completed_response)
+    logging_obj.response_cost_calculator.assert_any_call(result=completed_response)
 
 
 def test_billed_terminal_response_keeps_a_response_that_already_has_usage():
@@ -1261,6 +1269,25 @@ def test_billed_terminal_response_copies_when_estimating_and_leaves_the_original
     assert response.usage is None
 
 
+def test_persist_completed_response_to_cache_skips_a_response_without_output(monkeypatch):
+    logging_obj: Final = _logging_obj_stub()
+    caching_handler: Final = Mock()
+    caching_handler.request_kwargs = {"stream": True}
+    logging_obj.llm_caching_handler = caching_handler
+    iterator: Final = _make_iterator(sse_events=[], logging_obj=logging_obj)
+    iterator.completed_response = ResponseCompletedEvent.model_construct(
+        type="response.completed",
+        response=ResponsesAPIResponse.model_construct(id="resp_empty", output=[], usage=None),
+    )
+    cache: Final = Mock()
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    iterator._persist_completed_response_to_cache(is_async=False)
+
+    cache.add_cache.assert_not_called()
+    caching_handler.should_store_result_in_cache.assert_not_called()
+
+
 def test_persist_completed_response_to_cache_survives_an_unserializable_response(monkeypatch):
     bad_response: Final = ResponsesAPIResponse.model_construct(id="r", output=[object()], usage=None)
     with pytest.raises(PydanticSerializationError):
@@ -1269,7 +1296,7 @@ def test_persist_completed_response_to_cache_survives_an_unserializable_response
     logging_obj: Final = _logging_obj_stub()
     caching_handler: Final = Mock()
     caching_handler.request_kwargs = {"stream": True}
-    logging_obj._llm_caching_handler = caching_handler
+    logging_obj.llm_caching_handler = caching_handler
     iterator: Final = _make_iterator(sse_events=[], logging_obj=logging_obj)
     iterator.completed_response = ResponseCompletedEvent.model_construct(
         type="response.completed", response=bad_response
