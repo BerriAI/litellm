@@ -63,6 +63,7 @@ domain per the MCP spec's ``_meta`` key format so it cannot collide with spec-re
 class AggregateToolListing(NamedTuple):
     tools: list[MCPTool]
     outcomes: dict[str, ServerOutcome]
+    next_cursor: str | None = None
 
 
 def _iter_upstream_responses(exc: BaseException) -> Iterator[httpx.Response | httpx2.Response]:

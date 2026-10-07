@@ -8983,6 +8983,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Datasets */
+        get: operations["list_datasets_lens_datasets_get"];
+        put?: never;
+        /** Create Dataset */
+        post: operations["create_dataset_lens_datasets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/datasets/build": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build Dataset Cases */
+        post: operations["build_dataset_cases_lens_datasets_build_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/datasets/{dataset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Dataset */
+        get: operations["read_dataset_lens_datasets__dataset_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/datasets/{dataset_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Dataset */
+        get: operations["export_dataset_lens_datasets__dataset_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/datasets/{dataset_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save Revision */
+        post: operations["save_revision_lens_datasets__dataset_id__revisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/datasets/{dataset_id}/revisions/{revision}/cases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Eval Cases */
+        get: operations["eval_cases_lens_datasets__dataset_id__revisions__revision__cases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/preview/sample": {
         parameters: {
             query?: never;
@@ -24594,7 +24697,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24605,7 +24708,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24616,7 +24719,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24627,7 +24730,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24638,7 +24741,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24649,7 +24752,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -24660,7 +24763,7 @@ export interface paths {
          *
          *     Resolution order:
          *     1. Registered MCP server alias / name
-         *     2. Comma-separated list (short-circuits before any DB call)
+         *     2. Comma-separated list
          *     3. Toolset name (DB lookup, cached)
          *     4. MCP access group tag (DB lookup, cached)
          */
@@ -27652,6 +27755,23 @@ export interface components {
             /** Month */
             month: string;
         };
+        /** BuildRequest */
+        BuildRequest: {
+            /**
+             * Dataset Id
+             * @default
+             */
+            dataset_id: string;
+            /** Sources */
+            sources: (components["schemas"]["TraceSource"] | components["schemas"]["FindingSource"] | components["schemas"]["TextSource"])[];
+        };
+        /** BuildResult */
+        BuildResult: {
+            /** Cases */
+            cases: components["schemas"]["DatasetCase"][];
+            /** Skipped */
+            skipped: components["schemas"]["SkippedCase"][];
+        };
         /**
          * BulkDeleteUserRequest
          * @description Body of `POST /management/v1/users/bulk_delete`.
@@ -28453,6 +28573,34 @@ export interface components {
             start_date: string;
             /** Threshold */
             threshold: number;
+        };
+        /** CaseSource */
+        CaseSource: {
+            /**
+             * Finding Id
+             * @default
+             */
+            finding_id: string;
+            /**
+             * Lens Id
+             * @default
+             */
+            lens_id: string;
+            /**
+             * Span Id
+             * @default
+             */
+            span_id: string;
+            /**
+             * Trace Id
+             * @default
+             */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
         };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
@@ -31293,6 +31441,116 @@ export interface components {
              */
             total_tokens: number;
         };
+        /** Dataset */
+        Dataset: {
+            /** Agent Name */
+            agent_name: string;
+            /** Cases */
+            cases: components["schemas"]["DatasetCase"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Revision */
+            revision: number;
+            /** Team Id */
+            team_id: string;
+        };
+        /** DatasetCase */
+        DatasetCase: {
+            /**
+             * Agent Version
+             * @default
+             */
+            agent_version: string;
+            /**
+             * Expected
+             * @default
+             */
+            expected: string;
+            /** Id */
+            id: string;
+            /**
+             * Included
+             * @default true
+             */
+            included: boolean;
+            /** Messages */
+            messages: components["schemas"]["DatasetMessage"][];
+            /**
+             * Reply
+             * @default
+             */
+            reply: string;
+            source: components["schemas"]["CaseSource"];
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["DatasetToolCall"][];
+        };
+        /** DatasetCreate */
+        DatasetCreate: {
+            /**
+             * Agent Name
+             * @default
+             */
+            agent_name: string;
+            /** Name */
+            name: string;
+        };
+        /** DatasetMessage */
+        DatasetMessage: {
+            /** Content */
+            content: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "system" | "user" | "assistant" | "tool";
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["DatasetToolCall"][];
+        };
+        /** DatasetSummary */
+        DatasetSummary: {
+            /** Agent Name */
+            agent_name: string;
+            /** Case Count */
+            case_count: number;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** DatasetToolCall */
+        DatasetToolCall: {
+            /** Arguments */
+            arguments: string;
+            /** Name */
+            name: string;
+        };
         /**
          * DefaultInternalUserParams
          * @description Default parameters to apply when a new user signs in via SSO or is created on the /user/new API endpoint
@@ -31904,6 +32162,15 @@ export interface components {
             /** Updated At */
             updated_at?: number | null;
         };
+        /** EvalCases */
+        EvalCases: {
+            /** Cases */
+            cases: components["schemas"]["DatasetCase"][];
+            /** Dataset Id */
+            dataset_id: string;
+            /** Revision */
+            revision: number;
+        };
         /** Evidence */
         Evidence: {
             /** Execution Id */
@@ -32301,6 +32568,18 @@ export interface components {
             suggestion: string;
             /** Title */
             title: string;
+        };
+        /** FindingSource */
+        FindingSource: {
+            /** Finding Ids */
+            finding_ids: string[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "finding";
+            /** Lens Id */
+            lens_id: string;
         };
         /** FindingUpdate */
         FindingUpdate: {
@@ -44117,6 +44396,13 @@ export interface components {
             /** Execution Id */
             execution_id: string;
         };
+        /** RevisionSave */
+        RevisionSave: {
+            /** Base Revision */
+            base_revision: number;
+            /** Cases */
+            cases: components["schemas"]["DatasetCase"][];
+        };
         /**
          * RoleMappings
          * @description Configuration for mapping SSO groups to LiteLLM roles.
@@ -45271,6 +45557,15 @@ export interface components {
             type: "skill_reference";
             /** Version */
             version?: string;
+        };
+        /** SkippedCase */
+        SkippedCase: {
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "duplicate" | "no_content" | "too_large" | "over_limit" | "invalid";
+            source: components["schemas"]["CaseSource"];
         };
         /** Span */
         Span: {
@@ -46672,6 +46967,16 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** TextSource */
+        TextSource: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "text";
+            /** Text */
+            text: string;
+        };
         /** TierCohortStatistic */
         TierCohortStatistic: {
             /** Cohort */
@@ -47441,6 +47746,26 @@ export interface components {
             data: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
+        };
+        /** TraceSource */
+        TraceSource: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "trace";
+            /**
+             * Span Id
+             * @default
+             */
+            span_id: string;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
         };
         /** TraceSummary */
         TraceSummary: {
@@ -62528,6 +62853,225 @@ export interface operations {
                 };
                 content: {
                     "application/json": string[];
+                };
+            };
+        };
+    };
+    list_datasets_lens_datasets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetSummary"][];
+                };
+            };
+        };
+    };
+    create_dataset_lens_datasets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DatasetCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dataset"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    build_dataset_cases_lens_datasets_build_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_dataset_lens_datasets__dataset_id__get: {
+        parameters: {
+            query?: {
+                revision?: number | null;
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dataset"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_dataset_lens_datasets__dataset_id__export_get: {
+        parameters: {
+            query?: {
+                revision?: number | null;
+            };
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_revision_lens_datasets__dataset_id__revisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevisionSave"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dataset"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eval_cases_lens_datasets__dataset_id__revisions__revision__cases_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                dataset_id: string;
+                revision: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalCases"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

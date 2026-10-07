@@ -28,7 +28,7 @@ from openai.types.responses.function_tool import FunctionTool
 
 class TestAnthropicResponsesAPITest(BaseResponsesAPITest):
     def get_base_completion_call_args(self):
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         return {
             "model": "anthropic/claude-sonnet-4-5",
         }
@@ -53,7 +53,7 @@ class TestAnthropicResponsesAPITest(BaseResponsesAPITest):
 
 def test_multiturn_tool_calls():
     # Test streaming response with tools for Anthropic
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     shell_tool = dict(
         FunctionTool(
             type="function",

@@ -699,7 +699,7 @@ class BaseAnthropicMessagesStreamingIterator:
     async def _fire_detached_failure_hook(self, exc: Exception) -> None:
         from litellm._logging import verbose_proxy_logger
 
-        on_detached_failure: Final = getattr(self.litellm_logging_obj, "_on_detached_stream_failure", None)
+        on_detached_failure: Final = getattr(self.litellm_logging_obj, "on_detached_stream_failure", None)
         if on_detached_failure is None:
             return
         try:

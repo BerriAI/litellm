@@ -466,7 +466,7 @@ class MakeAgentsPublicRequest(LiteLLMBaseModel):
     agent_ids: list[str]
 
 
-def _normalize_a2a_jsonrpc_response(
+def normalize_a2a_jsonrpc_response(
     response_dict: Mapping[str, object],
     request_id: object | None = None,
 ) -> dict[str, object]:
@@ -494,6 +494,9 @@ def _normalize_a2a_jsonrpc_response(
             request_id if isinstance(request_id, (str, int)) and not isinstance(request_id, bool) else str(request_id)
         )
     return normalized
+
+
+_normalize_a2a_jsonrpc_response = normalize_a2a_jsonrpc_response
 
 
 class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
@@ -534,7 +537,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        response_dict: Final = _normalize_a2a_jsonrpc_response(
+        response_dict: Final = normalize_a2a_jsonrpc_response(
             response.model_dump(mode="json", exclude_none=True), request_id=request_id
         )
         return cls.model_validate(response_dict)
@@ -555,4 +558,4 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls.model_validate(_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))
+        return cls.model_validate(normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

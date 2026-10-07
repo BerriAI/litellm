@@ -69,7 +69,7 @@ function CostCell({ run }: { run: TraceSummary }) {
   );
 }
 
-const firstLine = (text: string): string => text.split("\n")[0] ?? text;
+const singleLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 
 const PREFETCH_MARGIN = "0px 0px 480px 0px";
@@ -96,7 +96,7 @@ function InputCell({ run }: { run: TraceSummary }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
       <span className="truncate text-foreground">
-        {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
+        {singleLine(previewText(run.input_preview)) || traceDisplayName(run)}
       </span>
       {run.resolution_limited && (
         <span

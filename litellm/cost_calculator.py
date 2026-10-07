@@ -29,13 +29,13 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
-    _generic_cost_per_character,
-    _get_regional_uplift_multiplier,
-    _get_service_tier_cost_key,
     calculate_cost_component,
+    generic_cost_per_character,
     generic_cost_per_token,
     get_batch_cost_rates,
     get_billable_input_tokens,
+    get_regional_uplift_multiplier,
+    get_service_tier_cost_key,
     get_token_type_cost_breakdown,
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
@@ -137,7 +137,7 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
-    _cached_get_model_info_helper,
+    cached_get_model_info_helper,
     token_counter,
 )
 
@@ -349,7 +349,7 @@ def _per_second_pricing_cost(
     audio_seconds: float = 0.0,
 ) -> tuple[float, float] | None:
     try:
-        model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
         return None
     if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
@@ -587,7 +587,7 @@ def cost_per_token(
                 raise ValueError(
                     f"prompt_characters must be provided for tts calls. prompt_characters={prompt_characters}, model={model}, custom_llm_provider={custom_llm_provider}, call_type={call_type}"
                 )
-            _prompt_cost, _completion_cost = _generic_cost_per_character(
+            _prompt_cost, _completion_cost = generic_cost_per_character(
                 model=model_without_prefix,
                 custom_llm_provider=custom_llm_provider,
                 prompt_characters=prompt_characters,
@@ -749,7 +749,7 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
@@ -818,7 +818,7 @@ def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
     )
 
 
-def _select_model_name_for_cost_calc(
+def select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
     base_model: str | None = None,
@@ -887,6 +887,9 @@ def _select_model_name_for_cost_calc(
         return_model = _strip_unregistered_leading_segments(f"{provider_prefix}/{return_model}", priced_region)
 
     return return_model
+
+
+_select_model_name_for_cost_calc = select_model_name_for_cost_calc
 
 
 def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:
@@ -1039,9 +1042,9 @@ def get_usage_object(
     elif (
         usage_obj is not None
         and (isinstance(usage_obj, dict) or isinstance(usage_obj, ResponseAPIUsage))
-        and ResponseAPILoggingUtils._is_response_api_usage(usage_obj)
+        and ResponseAPILoggingUtils.is_response_api_usage(usage_obj)
     ):
-        return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage_obj)
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
     elif TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj):
         return TranscriptionUsageObjectTransformation.transform_transcription_usage_object(
             cast(
@@ -1070,7 +1073,7 @@ def _is_known_usage_objects(usage_obj):
     )
 
 
-def _infer_call_type(call_type: CallTypesLiteral | None, completion_response: object) -> CallTypesLiteral | None:
+def infer_call_type(call_type: CallTypesLiteral | None, completion_response: object) -> CallTypesLiteral | None:
     if call_type is not None:
         return call_type
 
@@ -1095,6 +1098,9 @@ def _infer_call_type(call_type: CallTypesLiteral | None, completion_response: ob
         return "send_message"
 
     return call_type
+
+
+_infer_call_type = infer_call_type
 
 
 def _apply_cost_discount(
@@ -1369,7 +1375,7 @@ def completion_cost(
         - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
     """
     try:
-        call_type = _infer_call_type(call_type, completion_response) or "completion"
+        call_type = infer_call_type(call_type, completion_response) or "completion"
 
         if call_type == CallTypes.aresponses_websocket.value and isinstance(
             completion_response, LiteLLMRealtimeStreamLoggingObject
@@ -1438,7 +1444,7 @@ def completion_cost(
             )
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
-        selected_model: Final = _select_model_name_for_cost_calc(
+        selected_model: Final = select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
             custom_llm_provider=custom_llm_provider,
@@ -1492,10 +1498,8 @@ def completion_cost(
                             .calculate_usage(usage_object=_usage, reasoning_content=None)
                             .model_dump()
                         )
-                    elif ResponseAPILoggingUtils._is_response_api_usage(_usage):
-                        _usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                            _usage
-                        ).model_dump()
+                    elif ResponseAPILoggingUtils.is_response_api_usage(_usage):
+                        _usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_usage).model_dump()
                     elif TranscriptionUsageObjectTransformation.is_transcription_usage_object(_usage):
                         tr_usage = TranscriptionUsageObjectTransformation.transform_transcription_usage_object(
                             cast(
@@ -1568,7 +1572,7 @@ def completion_cost(
                             "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - %s",
                             e,
                         )
-                if CostCalculatorUtils._call_type_has_image_response(call_type) and isinstance(
+                if CostCalculatorUtils.call_type_has_image_response(call_type) and isinstance(
                     completion_response, ImageResponse
                 ):
                     ### IMAGE GENERATION COST CALCULATION ###
@@ -1638,7 +1642,7 @@ def completion_cost(
                         video_resolution=video_resolution,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
-                    prompt_characters = litellm.utils._count_characters(text=prompt)
+                    prompt_characters = litellm.utils.count_characters(text=prompt)
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
                     # Check _hidden_params first (duration stored there to
                     # avoid polluting the response body), then fall back to
@@ -1787,10 +1791,10 @@ def completion_cost(
                             data={"messages": messages}, call_type="completion"
                         )
 
-                        prompt_characters = litellm.utils._count_characters(text=prompt_string)
+                        prompt_characters = litellm.utils.count_characters(text=prompt_string)
                     if completion_response is not None and isinstance(completion_response, ModelResponse):
                         completion_string = litellm.utils.get_response_string(response_obj=completion_response)
-                        completion_characters = litellm.utils._count_characters(text=completion_string)
+                        completion_characters = litellm.utils.count_characters(text=completion_string)
 
                 # Get the original request model for router detection
                 request_model_for_cost = None
@@ -1953,7 +1957,7 @@ def get_response_cost_from_hidden_params(
     hidden_params: dict | BaseModel,
 ) -> float | None:
     if isinstance(hidden_params, BaseModel):
-        _hidden_params_dict = cast(BaseModel, hidden_params).model_dump()
+        _hidden_params_dict = hidden_params.model_dump()
     else:
         _hidden_params_dict = hidden_params
 
@@ -2139,7 +2143,7 @@ def pricing_entry_for_cost_calc(
     deployment_key: Final = router_model_id or model
     if deployment_entry is not None and deployment_key is not None:
         return deployment_key, deployment_entry
-    selected_model: Final = _select_model_name_for_cost_calc(
+    selected_model: Final = select_model_name_for_cost_calc(
         model=model,
         completion_response=completion_response,
         base_model=base_model,
@@ -2664,7 +2668,7 @@ def batch_cost_calculator(
         )  # batch cost is usually half of the regular token cost
 
         # Add cache read cost if applicable
-        cache_read_cost_key: Final = _get_service_tier_cost_key("cache_read_input_token_cost", None)
+        cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", None)
         total_prompt_cost += calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens) / 2
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
@@ -2679,7 +2683,7 @@ def batch_cost_calculator(
     text_tokens: Final = usage.completion_tokens - image_tokens
     total_completion_cost = text_tokens * text_rate + image_tokens * image_rate
 
-    uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency)
+    uplift: Final = get_regional_uplift_multiplier(model_info, data_residency)
     if uplift != 1.0:
         total_prompt_cost *= uplift
         total_completion_cost *= uplift
@@ -2834,7 +2838,7 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
         )
         usage_objects: Final[list[Usage]] = []
         for result in response_done_events:
-            usage_object = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage_object = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
                 result["response"].get("usage", {})
             )
             usage_objects.append(usage_object)
@@ -2892,9 +2896,7 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
         results: Sequence[Mapping[str, object]],
     ) -> tuple[Usage, ...]:
         return tuple(
-            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the realtime processor uses
-                response.usage
-            )
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage)
             for _, response in _billable_responses_ws_events(results)
             if response.usage is not None
         )

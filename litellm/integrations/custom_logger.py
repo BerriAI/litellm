@@ -991,7 +991,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             import litellm
             from litellm._logging import verbose_logger
 
-            all_callbacks: Final = litellm.logging_callback_manager._get_all_callbacks()
+            all_callbacks: Final = litellm.logging_callback_manager.get_all_callbacks()
 
             for callback_obj in all_callbacks:
                 if hasattr(callback_obj, "increment_callback_logging_failure"):

@@ -2976,7 +2976,7 @@ def test_ProxyConfig__add_deployment_pinned_row_follows_the_cost_map_across_relo
     assert ProxyConfig()._add_deployment(db_models=[pinned, typed]) == 2
 
     monkeypatch.setitem(litellm.model_cost["gpt-5.6"], "input_cost_per_token", 1e-06)
-    router._replay_model_cost_registrations()
+    router.replay_model_cost_registrations()
 
     assert litellm.model_cost.get("pinned-row", {}).get("input_cost_per_token") is None
     assert router.get_deployment(model_id="pinned-row").model_info.input_cost_per_token is None
@@ -3008,7 +3008,7 @@ def test_ProxyConfig__add_deployment_ptu_row_with_a_cost_map_copy_still_bills_ze
     )
 
     assert ProxyConfig()._add_deployment(db_models=[ptu]) == 1
-    router._replay_model_cost_registrations()
+    router.replay_model_cost_registrations()
 
     assert litellm.model_cost["ptu-row"]["input_cost_per_token"] == 0.0
     assert litellm.model_cost["ptu-row"]["output_cost_per_token"] == 0.0

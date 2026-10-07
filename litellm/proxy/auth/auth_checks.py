@@ -4592,7 +4592,7 @@ def _can_object_call_model(
         litellm.model_alias_map[model]
         if model in litellm.model_alias_map
         else (
-            llm_router._get_model_from_alias(model)
+            llm_router.get_model_from_alias(model)
             if llm_router is not None and model in llm_router.model_group_alias
             else None
         )
