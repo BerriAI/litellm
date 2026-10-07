@@ -11,10 +11,11 @@ models, matching the suite's no-raw-dicts rule.
 from __future__ import annotations
 
 import time
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TypeVar
+from itertools import chain, repeat
+from typing import Final, TypeVar
 from urllib.parse import urlencode
 
 from pydantic import BaseModel, ConfigDict
@@ -22,6 +23,7 @@ from websockets.sync.client import connect
 from websockets.sync.connection import Connection
 
 from e2e_config import unique_marker, ws_base_url
+from e2e_metadata import step
 from proxy_client import ProxyClient
 from models import LiteLLMParamsBody
 
@@ -164,6 +166,11 @@ class ResponseCreate(BaseModel):
     type: str = "response.create"
 
 
+class InputAudioBufferAppend(BaseModel):
+    type: str = "input_audio_buffer.append"
+    audio: str
+
+
 def user_message(text: str) -> ConversationItemCreate:
     return ConversationItemCreate(
         item=MessageItem(content=[InputTextContent(text=text)])
@@ -212,6 +219,12 @@ class ResponsePayload(BaseModel):
     model_config = ConfigDict(extra="allow")
     usage: dict[str, object] | None = None
     output: list[OutputItem] | None = None
+
+
+class TextDone(BaseModel):
+    type: str
+    response_id: str
+    text: str
 
 
 class ResponseDone(BaseModel):
@@ -318,6 +331,50 @@ class RealtimeSession:
         raise TimeoutError(
             f"no {stop_type!r} within {timeout}s; got {[e.type for e in collected]}"
         )
+
+
+    @step("Stream the spoken question as mic chunks, then silence until the turn goes idle")
+    def stream_and_collect(
+        self,
+        chunks: Sequence[InputAudioBufferAppend],
+        *,
+        tail: InputAudioBufferAppend,
+        interval: float,
+        idle: float,
+        timeout: float,
+    ) -> tuple[ReceivedEvent, ...]:
+        """Send `chunks`, then `tail` every `interval` seconds like a live mic, until
+        no event arrives for `idle` seconds or `timeout` elapses."""
+        return tuple(self._live_mic_events(chunks, tail=tail, interval=interval, idle=idle, timeout=timeout))
+
+    def _live_mic_events(
+        self,
+        chunks: Sequence[InputAudioBufferAppend],
+        *,
+        tail: InputAudioBufferAppend,
+        interval: float,
+        idle: float,
+        timeout: float,
+    ) -> Iterator[ReceivedEvent]:
+        start: Final = time.monotonic()
+        last_event = start  # rebind-ok: the idle timer restarts at every received event
+        for frame in chain(chunks, repeat(tail)):
+            if (now := time.monotonic()) - start >= timeout or now - last_event >= idle:
+                return
+            self.send(frame)
+            for event in self._events_until(now + interval):
+                last_event = time.monotonic()
+                yield event
+
+    def _events_until(self, deadline: float) -> Iterator[ReceivedEvent]:
+        while (remaining := deadline - time.monotonic()) > 0 and (text := self._recv_text(remaining)) is not None:
+            yield ReceivedEvent(type=ServerEnvelope.model_validate_json(text).type, payload=text)
+
+    def _recv_text(self, timeout: float) -> str | None:
+        try:
+            return as_text(self.connection.recv(timeout=timeout))
+        except TimeoutError:
+            return None
 
 
 @dataclass(frozen=True, slots=True)
