@@ -582,12 +582,7 @@ class PaymentRequiredError(BadRequestError):
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
     ) -> None:
-        response_is_valid: Final = (
-            response is not None
-            and isinstance(response, httpx.Response)
-            and hasattr(response, "_request")
-            and getattr(response, "_request", None) is not None
-        )
+        response_is_valid: Final = response is not None and getattr(response, "_request", None) is not None
         response_for_parent: Final = (
             response
             if response_is_valid
