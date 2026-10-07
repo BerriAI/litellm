@@ -139,9 +139,11 @@ pub async fn ocr<C: BaseOcrConfig>(
             })
             .collect();
         return match read_response_bytes(response, request.connection.max_response_bytes).await {
-            Err(Error::Transport(transport::Error::Http { status, body })) => {
-                Err(config.get_error_class(body, status, headers))
-            }
+            Err(Error::Transport(transport::Error::Http {
+                status,
+                body,
+                request_url,
+            })) => Err(config.get_error_class(body, status, headers, request_url)),
             Err(error) => Err(error),
             Ok(_) => unreachable!("non-success response produces an HTTP error"),
         };
@@ -173,6 +175,7 @@ pub async fn read_response_bytes(
     limit: usize,
 ) -> Result<Bytes, Error> {
     let status = response.status();
+    let request_url = (!status.is_success()).then(|| response.url().to_string());
     if status.is_success()
         && response
             .content_length()
@@ -193,6 +196,7 @@ pub async fn read_response_bytes(
     }
     if !status.is_success() {
         return Err(transport::Error::Http {
+            request_url,
             status: status.as_u16(),
             body: String::from_utf8_lossy(&bytes).into_owned(),
         }
@@ -204,6 +208,7 @@ pub async fn read_response_bytes(
 pub fn transport_error(error: reqwest::Error) -> Error {
     if error.is_timeout() {
         return Error::Transport(transport::Error::Http {
+            request_url: None,
             status: 408,
             body: "OCR request timed out".into(),
         });

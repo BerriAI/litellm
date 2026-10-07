@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 
 _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
+_REQUEST_URL: Final = TypeAdapter(str | None)
 _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
 
 
@@ -28,9 +29,10 @@ def _upstream_failure(error: Exception, api_base: str | None) -> Exception:
     try:
         status, body = _UPSTREAM_ARGS.validate_python(error.args)
         headers: Final = _UPSTREAM_HEADERS.validate_python(getattr(error, "headers", None))
+        request_url: Final = _REQUEST_URL.validate_python(getattr(error, "request_url", None))
     except ValidationError:
         return error
-    http_request: Final = httpx.Request("POST", api_base or "https://docs.litellm.ai/docs")
+    http_request: Final = httpx.Request("POST", request_url or api_base or "https://docs.litellm.ai/docs")
     return UpstreamFailure(
         httpx.Response(status, content=body.encode(), headers=headers, request=http_request),
         error,

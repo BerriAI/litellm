@@ -217,6 +217,7 @@ async def test_native_inference_provider_failure_is_terminal_and_shared_with_cal
     with pytest.raises(RateLimitError) as caught:
         await execute(route, asynchronous, recording_server, {"callbacks": [recorder]})
     assert getattr(caught.value, "status_code", None) == 429
+    assert str(caught.value.response.request.url) == recording_server.base_url + recording_server.requests[0].path
     assert len(recording_server.requests) == 1
     failure: Final = await recorder.wait_for_async("async_log_failure_event" if asynchronous else "log_failure_event")
     assert len(failure) == 1
@@ -381,3 +382,24 @@ async def test_native_chat_uses_bound_positional_parameters(
     body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
     assert body["temperature"] == arguments[3]
     assert body["max_tokens"] == supplied["max_tokens"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("source", ("base_url", "global", "environment"))
+async def test_native_failure_reports_the_resolved_endpoint(
+    route: Route, asynchronous: bool, source: str, recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recording_server.enqueue(ResponseSpec(body={"error": {"message": "rate limited"}}, status=429))
+    monkeypatch.setattr(litellm, "api_base", recording_server.base_url if source == "global" else None)
+    for name in ("OPENAI_BASE_URL", "OPENAI_API_BASE", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_BASE"):
+        monkeypatch.setenv(name, recording_server.base_url)
+    with pytest.raises(RateLimitError) as caught:
+        await execute(
+            route,
+            asynchronous,
+            recording_server,
+            {"api_base": None, **({"base_url": recording_server.base_url} if source == "base_url" else {})},
+        )
+    assert len(recording_server.requests) == 1
+    assert str(caught.value.response.request.url) == recording_server.base_url + recording_server.requests[0].path

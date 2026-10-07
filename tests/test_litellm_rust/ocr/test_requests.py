@@ -67,6 +67,8 @@ async def test_ocr_contract_provider_error_details(
         await call_native(ocr_server, asynchronous, num_retries=0)
     response: Final = caught.value.response
     assert isinstance(response, httpx.Response)
+    if ocr_backend:
+        assert str(response.request.url) == ocr_server.base_url + ocr_server.requests[0].path
     if preserved == "body":
         assert response.content == json.dumps(payload).encode()
     else:

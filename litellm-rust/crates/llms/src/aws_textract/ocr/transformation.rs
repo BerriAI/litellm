@@ -105,8 +105,9 @@ impl BaseOcrConfig for TextractDetectTextConfig {
         error_message: String,
         status_code: u16,
         headers: Vec<(String, String)>,
+        request_url: Option<String>,
     ) -> Error {
-        error_class(error_message, status_code, headers)
+        error_class(error_message, status_code, headers, request_url)
     }
 }
 
@@ -238,6 +239,7 @@ mod tests {
             r#"{"__type":"UnsupportedDocumentException","Message":"Request has unsupported document format"}"#.into(),
             400,
             Vec::new(),
+            None,
         );
 
         assert!(

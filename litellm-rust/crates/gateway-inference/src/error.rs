@@ -176,6 +176,7 @@ mod tests {
 
     fn upstream(status: u16, body: &str) -> Error {
         Error::Route(RouteError::Transport(TransportError::Http {
+            request_url: None,
             status,
             body: body.into(),
         }))
