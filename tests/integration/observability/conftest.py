@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import pytest
 import yaml
+from tests.integration._support.native.clickhouse import clickhouse_url as clickhouse_url
+from tests.integration._support.native.fixtures import recording_server as recording_server
 from integration._support.otlp_sink import SpanSinks, owned_sinks
 from integration._support.prometheus_series import CapRig, series_cap_rig
 from pydantic import JsonValue

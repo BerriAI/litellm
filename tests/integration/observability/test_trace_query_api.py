@@ -38,12 +38,8 @@ from scripts.seed_tracing_fixtures import (
 )
 from tests._support.recording_server import RecordingServer, ResponseSpec
 from tests.integration._support.native.clickhouse import clickhouse_service
-from tests.integration._support.native.clickhouse import clickhouse_url as clickhouse_url
 from tests.integration._support.native.fixtures import (
     isolate_ocr_test_state as isolate_ocr_test_state,
-)
-from tests.integration._support.native.fixtures import (
-    recording_server as recording_server,
 )
 
 

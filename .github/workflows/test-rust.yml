@@ -192,6 +192,16 @@ jobs:
 
       - name: Run the relocated Rust Python tests with the compiled extension
         run: make test-rust-extension
+        env:
+          # Mirrored so .github/scripts/assert_ci_coverage.py sees the pytest selection the Makefile target runs
+          RUST_PYTEST_SELECTION: >-
+            pytest tests/integration/sdk/native
+            tests/integration/observability/test_trace_query_api.py
+            tests/unit/rust_bridge/test_tokenizer.py
+            tests/unit/rust_bridge/test_token_counter.py
+            tests/unit/rust_bridge/trace/test_storage.py
+            tests/unit/_v2/cache/test_cache.py
+            tests/unit/llms/azure_ai/passthrough/test_azure_ai_passthrough_transformation.py
 
       - run: >-
           uv build --wheel --out-dir panic-dist
