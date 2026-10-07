@@ -1,4 +1,5 @@
 from typing import Final, cast
+from uuid import UUID
 
 import httpx
 from pydantic import TypeAdapter
@@ -97,7 +98,9 @@ def get_api_params(params: dict[str, object], model: str | None = None) -> Watso
         else params.pop("watsonx_region_name", params.pop("watsonx_region", None))
     )
 
-    project_id_param: Final = TypeAdapter(str | None).validate_python(project_id_value)
+    project_id_param: Final = TypeAdapter(str | None).validate_python(
+        str(project_id_value) if isinstance(project_id_value, UUID) else project_id_value
+    )
     region_name_param: Final = TypeAdapter(str | None).validate_python(resolved_region_name_value)
     space_id_param: Final = TypeAdapter(str | None).validate_python(space_id_value)
     project_id: Final = (
