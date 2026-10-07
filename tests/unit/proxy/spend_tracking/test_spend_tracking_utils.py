@@ -11,16 +11,9 @@ import pytest
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm.constants import (
-    LITELLM_TRUNCATED_PAYLOAD_FIELD,
-    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
-    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-    MAX_SPEND_LOG_MODEL_NAME_LENGTH,
-    REDACTED_BY_LITELM_STRING,
-    SESSION_ID_OMITTED_METADATA_KEY,
-    UNKNOWN_MODEL_SPEND_LOG_MODEL,
-)
+import litellm.constants as litellm_constants
+import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
@@ -517,6 +510,165 @@ def test_sanitize_request_body_for_spend_logs_payload_basic():
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
     }
     assert _sanitize_request_body_for_spend_logs_payload(request_body) == request_body
+
+
+def test_large_request_no_truncation_threshold():
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB constant is used for request body sanitization
+    and that the new truncation logic keeps beginning (35%) and end (65%) of the string
+    """
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+
+    # Create a large string that exceeds the threshold
+    # Use a pattern that allows us to verify beginning and end are preserved
+    start_pattern = "START" * 250  # 1250 chars
+    middle_pattern = "MIDDLE" * 200  # 1200 chars
+    end_pattern = "END" * 250  # 750 chars
+    large_content = start_pattern + middle_pattern + end_pattern
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify the content was truncated
+    truncated_content = sanitized["messages"][0]["content"]
+
+    # Calculate expected character counts (35% start, 65% end)
+    expected_start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+
+    # Should keep first 35% of MAX_STRING_LENGTH_PROMPT_IN_DB chars
+    assert truncated_content.startswith(large_content[:expected_start_chars])
+
+    # Should keep last 65% of MAX_STRING_LENGTH_PROMPT_IN_DB chars
+    assert truncated_content.endswith(large_content[-expected_end_chars:])
+
+    # Should have truncation marker
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+
+
+def test_small_request_no_truncation():
+    """
+    Test that small strings are not truncated by MAX_STRING_LENGTH_PROMPT_IN_DB
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    # Create a small string that's under the threshold
+    small_content = "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB - 100)
+
+    request_body = {
+        "messages": [{"role": "user", "content": small_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify the content was NOT truncated
+    assert sanitized["messages"][0]["content"] == small_content
+    assert (
+        len(sanitized["messages"][0]["content"]) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
+    )
+
+
+def test_configurable_string_length_env_var(monkeypatch):
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB can be configured via environment variable
+    """
+    # Set environment variable to a custom value
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+
+    # Import after setting env var to ensure it picks up the new value
+    import importlib
+    import litellm.constants
+    import litellm.proxy.spend_tracking.spend_tracking_utils
+
+    importlib.reload(litellm.constants)
+    importlib.reload(litellm.proxy.spend_tracking.spend_tracking_utils)
+
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _sanitize_request_body_for_spend_logs_payload,
+    )
+
+    # Verify the constant was set to the env var value
+    assert MAX_STRING_LENGTH_PROMPT_IN_DB == 1000
+
+    # Test truncation with the custom value
+    large_content = "A" * 500 + "B" * 800 + "C" * 500  # 1800 chars total
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify truncation occurred with 35% beginning and 65% end preserved
+    truncated_content = sanitized["messages"][0]["content"]
+    expected_start = int(1000 * 0.35)  # 350 chars from beginning
+    expected_end = int(1000 * 0.65)  # 650 chars from end
+
+    assert truncated_content.startswith(large_content[:expected_start])
+    assert truncated_content.endswith(large_content[-expected_end:])
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+    assert "800" in truncated_content  # Should mention skipped 800 chars
+
+
+def test_truncation_preserves_beginning_and_end():
+    """
+    Test that truncation preserves the beginning (35%) and end (65%) of content for better debugging
+    """
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+
+    # Create content with distinct beginning, middle, and end
+    beginning = "BEGIN_" * 200  # 1200 chars
+    middle = "MIDDLE_" * 300  # 2100 chars
+    end = "_END" * 300  # 1200 chars
+    large_content = beginning + middle + end
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    truncated_content = sanitized["messages"][0]["content"]
+
+    # Calculate expected splits (35% beginning, 65% end)
+    expected_start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+
+    # Check that beginning is preserved
+    expected_beginning = large_content[:expected_start_chars]
+    assert truncated_content.startswith(expected_beginning)
+
+    # Check that end is preserved
+    expected_end = large_content[-expected_end_chars:]
+    assert truncated_content.endswith(expected_end)
+
+    # Check truncation marker is present
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+
+    # Calculate expected skipped chars
+    total_chars = len(large_content)
+    kept_chars = expected_start_chars + expected_end_chars
+    expected_skipped = total_chars - kept_chars
+    assert str(expected_skipped) in truncated_content
 
 
 def test_sanitize_request_body_for_spend_logs_payload_long_string():
@@ -2789,6 +2941,167 @@ def test_sanitize_response_redacts_credential_named_fields() -> None:
     }
 
 
+def test_sanitize_response_keeps_logprob_tokens() -> None:
+    response: Final = {
+        "system_fingerprint": "fp_x",
+        "choices": [
+            {
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "sort",
+                            "logprob": -0.1,
+                            "bytes": [115],
+                            "top_logprobs": [{"token": "sort", "logprob": -0.1}],
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {
+        "response": {
+            "system_fingerprint": REDACTED_BY_LITELM_STRING,
+            "choices": [
+                {
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "sort",
+                                "logprob": -0.1,
+                                "bytes": [115],
+                                "top_logprobs": [{"token": "sort", "logprob": -0.1}],
+                            }
+                        ]
+                    }
+                }
+            ],
+        }
+    }
+
+
+def test_sanitize_request_body_keeps_key_named_tool_payload_fields() -> None:
+    request_body: Final = {
+        "model": "anthropic/claude",
+        "aws_secret_access_key": "AKIAEXAMPLESECRET",
+        "prompt_cache_key": "tenant-42-cache",
+        "metadata": {"user_api_key_alias": "tenant-user"},
+        "secret_fields": {"raw_headers": {"authorization": "Bearer secret"}},
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "input": {"key": "order-123", "sort_key": "created_at"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_order",
+                            "arguments": {"key": "order-123", "sort_key": "created_at"},
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "content": {"token_type": "bearer", "partition_key": "tenant_42"}},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "content": [{"token_type": "bearer", "partition_key": "tenant_42"}],
+                    }
+                ],
+            },
+        ],
+        "input": [
+            {"type": "function_call", "arguments": {"key": "tenant-42", "access_level": "admin"}},
+            {
+                "type": "function_call_output",
+                "output": {"token_type": "bearer", "partition_key": "tenant_42"},
+            },
+        ],
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload(request_body) == {
+        "model": "anthropic/claude",
+        "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
+        "prompt_cache_key": REDACTED_BY_LITELM_STRING,
+        "metadata": {"user_api_key_alias": REDACTED_BY_LITELM_STRING},
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "input": {"key": "order-123", "sort_key": "created_at"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_order",
+                            "arguments": {"key": "order-123", "sort_key": "created_at"},
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "content": {"token_type": "bearer", "partition_key": "tenant_42"}},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "content": [{"token_type": "bearer", "partition_key": "tenant_42"}],
+                    }
+                ],
+            },
+        ],
+        "input": [
+            {"type": "function_call", "arguments": {"key": "tenant-42", "access_level": "admin"}},
+            {
+                "type": "function_call_output",
+                "output": {"token_type": "bearer", "partition_key": "tenant_42"},
+            },
+        ],
+    }
+
+
+def test_sanitize_request_body_masks_credentials_beside_tool_blocks() -> None:
+    request_body: Final = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "api_key": "sk-live", "input": {"key": "order-123"}},
+                    {"type": {"nested": 1}, "input": {"api_key": "x"}},
+                ],
+            }
+        ]
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload(request_body) == {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "api_key": REDACTED_BY_LITELM_STRING,
+                        "input": {"key": "order-123"},
+                    },
+                    {"type": {"nested": 1}, "input": {"api_key": REDACTED_BY_LITELM_STRING}},
+                ],
+            }
+        ]
+    }
+
+
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
     """
@@ -3241,7 +3554,7 @@ def test_redact_logged_api_key_empty_string_returns_none():
 
 
 def test_redact_logged_api_key_sk_key_is_hashed():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result = _redact_logged_api_key(raw)
     assert result == hash_token(raw)
     assert result is not None
@@ -3250,14 +3563,14 @@ def test_redact_logged_api_key_sk_key_is_hashed():
 
 
 def test_redact_logged_api_key_bearer_sk_equals_sk_hash():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result_plain = _redact_logged_api_key(raw)
     result_bearer = _redact_logged_api_key(f"Bearer {raw}")
     assert result_bearer == result_plain
 
 
 def test_redact_logged_api_key_bearer_case_insensitive():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result_lower = _redact_logged_api_key(f"bearer {raw}")
     result_upper = _redact_logged_api_key(f"BEARER {raw}")
     expected = hash_token(raw)
@@ -3370,6 +3683,24 @@ def test_get_spend_logs_metadata_keeps_user_agent():
 
 
 @pytest.mark.parametrize(
+    "metadata,expected",
+    (
+        (None, False),
+        ({}, False),
+        ({"tags": ["litellm-roi-estimator"]}, False),
+        ({"litellm_roi_estimator": None}, False),
+        ({"litellm_roi_estimator": "true"}, False),
+        ({"litellm_roi_estimator": False}, False),
+        ({"litellm_roi_estimator": True}, True),
+    ),
+)
+def test_new_spend_logs_always_have_an_explicit_roi_estimator_marker(
+    metadata: dict[str, object] | None, expected: bool
+) -> None:
+    assert _get_spend_logs_metadata(metadata)["litellm_roi_estimator"] is expected
+
+
+@pytest.mark.parametrize(
     "client_sent_oauth_token, custom_llm_provider, expected",
     [
         (True, "anthropic", True),
@@ -3439,7 +3770,7 @@ def test_redact_logged_api_key_bearer_only_returns_none():
 
 
 def test_get_spend_logs_metadata_sk_key_hashed():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     meta = _get_spend_logs_metadata({"user_api_key": raw})
     assert meta["user_api_key"] == hash_token(raw)
     assert meta["user_api_key"] is not None
@@ -3450,7 +3781,7 @@ def test_get_spend_logs_metadata_sk_key_hashed():
 
 
 def test_get_spend_logs_metadata_bearer_sk_key_hashed_same_as_plain():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     meta_plain = _get_spend_logs_metadata({"user_api_key": raw})
     meta_bearer = _get_spend_logs_metadata({"user_api_key": f"Bearer {raw}"})
     assert meta_bearer["user_api_key"] == meta_plain["user_api_key"]
@@ -3945,7 +4276,7 @@ async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeyp
         "max_tokens": 512,
         "litellm_call_id": "test-compression-call-id",
         "litellm_metadata": {
-            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key": "bc46df66218d24bc910f7c95ef9d861c706d22a191f9e7378f8a51f54146474f",
             "user_api_key_user_id": "u1",
             "user_api_key_team_id": "t1",
         },

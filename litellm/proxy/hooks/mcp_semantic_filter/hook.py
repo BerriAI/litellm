@@ -86,7 +86,7 @@ class SemanticToolFilterHook(CustomLogger):
             LiteLLM_Proxy_MCP_Handler,
         )
 
-        return LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools)
+        return LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools)
 
     async def _expand_mcp_tools(
         self,
@@ -104,7 +104,7 @@ class SemanticToolFilterHook(CustomLogger):
         )
 
         # Parse to separate MCP tools from other tools
-        mcp_tools, _ = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(tools)
+        mcp_tools, _ = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
 
         if not mcp_tools:
             return []
@@ -114,7 +114,7 @@ class SemanticToolFilterHook(CustomLogger):
         (
             openai_tools,
             _,
-        ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
+        ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_to_openai_format(
             user_api_key_auth=user_api_key_dict, mcp_tools_with_litellm_proxy=mcp_tools
         )
 

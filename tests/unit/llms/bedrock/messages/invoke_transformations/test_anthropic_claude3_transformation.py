@@ -241,7 +241,7 @@ def test_chunk_parser_usage_transformation():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())  # use copy to avoid side-effects
+    parsed = decoder.chunk_parser(chunk.copy())  # use copy to avoid side-effects
 
     # The invocation metrics key should be removed and replaced by `usage`
     assert "amazon-bedrock-invocationMetrics" not in parsed
@@ -274,7 +274,7 @@ def test_chunk_parser_preserves_cache_usage_fields_with_invocation_metrics():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())
+    parsed = decoder.chunk_parser(chunk.copy())
 
     assert "amazon-bedrock-invocationMetrics" not in parsed
     assert parsed["usage"]["cache_read_input_tokens"] == 9821
@@ -298,7 +298,7 @@ def test_chunk_parser_maps_cache_token_counts_from_invocation_metrics():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())
+    parsed = decoder.chunk_parser(chunk.copy())
 
     assert parsed["usage"]["input_tokens"] == 10174
     assert parsed["usage"]["output_tokens"] == 500
@@ -324,7 +324,7 @@ def test_chunk_parser_keeps_existing_token_counts_over_invocation_metrics():
         },
     }
 
-    parsed = decoder._chunk_parser(chunk.copy())
+    parsed = decoder.chunk_parser(chunk.copy())
 
     assert parsed["usage"]["input_tokens"] == 7
     assert parsed["usage"]["output_tokens"] == 11
@@ -383,7 +383,7 @@ async def test_bedrock_sse_wrapper_preserves_cache_usage_with_invocation_metrics
 
     async def _decoded_stream():  # type: ignore[return-type]
         for chunk in raw_chunks:
-            yield decoder._chunk_parser(copy.deepcopy(chunk))
+            yield decoder.chunk_parser(copy.deepcopy(chunk))
 
     collected: list[bytes] = []
     async for chunk in cfg.bedrock_sse_wrapper(
@@ -1676,7 +1676,7 @@ def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
     tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
     safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
 
-    message_start = decoder._chunk_parser(
+    message_start = decoder.chunk_parser(
         {
             "type": "message_start",
             "message": {
@@ -1695,7 +1695,7 @@ def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
     assert isinstance(message_start, dict)
     assert message_start["message"]["safeguard_results"] == safeguard_results
 
-    message_delta = decoder._chunk_parser(
+    message_delta = decoder.chunk_parser(
         {
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn", "stop_sequence": None, "safeguard_results": safeguard_results},
@@ -3527,3 +3527,54 @@ def test_bedrock_clear_thinking_preserves_display_updates() -> None:
 
     assert result.get("thinking") == {"type": "adaptive", "display": "updates"}
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("action", (None, "tool_addition", "tool_removal"))
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_bedrock_messages_tool_changes_beta(action: str | None, explicit_beta: bool) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    from litellm.types.router import GenericLiteLLMParams
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    content: Final = (
+        [{"type": action, "tool": {"type": "tool_reference", "name": "mcp__test__ping"}}]
+        if action
+        else "Answer briefly"
+    )
+    messages: Final = [{"role": "user", "content": "Hello"}, {"role": "system", "content": content}]
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="global.anthropic.claude-fable-5-1",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+    )
+
+    assert result.get("anthropic_beta", []).count(beta) == int(action is not None or explicit_beta)
+    assert result["messages"] == messages
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_bedrock_removed_tool_change_does_not_add_beta(explicit_beta: bool) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    from litellm.types.router import GenericLiteLLMParams
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="global.anthropic.claude-fable-5-1",
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}],
+            },
+            {"role": "user", "content": "Reply with OK"},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+    )
+
+    assert result["messages"] == [{"role": "user", "content": "Reply with OK"}]
+    assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)

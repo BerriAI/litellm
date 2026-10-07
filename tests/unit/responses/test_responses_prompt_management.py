@@ -71,7 +71,7 @@ def _patch_responses_dispatch():
             side_effect=_provider_by_model,
         ),
         patch.object(
-            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler, "_should_use_litellm_mcp_gateway",
+            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler, "should_use_litellm_mcp_gateway",
             return_value=False,
         ),
         patch.object(

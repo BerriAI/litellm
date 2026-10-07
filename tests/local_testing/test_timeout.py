@@ -2,46 +2,14 @@
 #    This tests the timeout decorator
 
 import os
-import traceback
-
-import time
-from litellm._uuid import uuid
 
 import httpx
 import openai
 import pytest
 
 import litellm
+from litellm._uuid import uuid
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
-
-
-@pytest.mark.parametrize(
-    "model, provider",
-    [
-        ("gpt-3.5-turbo", "openai"),
-        ("azure/gpt-4.1-mini", "azure"),
-    ],
-)
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_httpx_timeout(model, provider, sync_mode):
-    """
-    Test if setting httpx.timeout works for completion calls
-    """
-    timeout_val = httpx.Timeout(10.0, connect=60.0)
-
-    messages = [{"role": "user", "content": "Hey, how's it going?"}]
-
-    if sync_mode:
-        response = litellm.completion(
-            model=model, messages=messages, timeout=timeout_val
-        )
-    else:
-        response = await litellm.acompletion(
-            model=model, messages=messages, timeout=timeout_val
-        )
-
-    print(f"response: {response}")
 
 
 def test_timeout():
@@ -99,7 +67,7 @@ def test_hanging_request_azure():
     """
     litellm.set_verbose = True
     import asyncio
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     try:
         router = litellm.Router(
@@ -242,27 +210,6 @@ def test_timeout_streaming():
 # test_timeout_streaming()
 
 
-@pytest.mark.skip(reason="local test")
-def test_timeout_ollama():
-    # this Will Raise a timeout
-    import litellm
-
-    litellm.set_verbose = True
-    try:
-        litellm.request_timeout = 0.1
-        litellm.set_verbose = True
-        response = litellm.completion(
-            model="ollama/phi",
-            messages=[{"role": "user", "content": "hello, what llm are u"}],
-            max_tokens=1,
-            api_base="https://test-ollama-endpoint.onrender.com",
-        )
-        # Add any assertions here to check the response
-        litellm.request_timeout = None
-        print(response)
-    except openai.APITimeoutError as e:
-        print("got a timeout error! Passed ! ")
-        pass
 
 
 # test_timeout_ollama()

@@ -26,16 +26,19 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_objects,
+    forget_missing_user,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_team_object,
     get_user_object,
 )
+from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
 from litellm.proxy.auth.password_policy import (
     validate_password_not_breached,
     validate_password_policy,
@@ -44,6 +47,7 @@ from litellm.proxy.auth.password_policy import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     object_permission_cache_key,
     user_object_permission_id_cache_key,
 )
@@ -51,13 +55,12 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
-from litellm.proxy.management.teams.access import is_team_admin
+from litellm.proxy.management.teams.authz import is_team_admin
 from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
-    daily_activity_repository,
-    daily_activity_scope,
+    ScopeDenied,
     get_daily_activity,
-    get_daily_activity_aggregated,
+    raise_public,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_view,
@@ -116,7 +119,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
 _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
-_USER_BUDGET_CACHE_FIELDS: Final = frozenset({"max_budget", "model_max_budget"})
+_USER_LIMIT_CACHE_FIELDS: Final = frozenset({"max_budget", "model_max_budget", "tpm_limit", "rpm_limit"})
 
 
 def _user_table(
@@ -541,7 +544,7 @@ async def new_user(
     ```shell
      curl -X POST "http://localhost:4000/user/new" \
      -H "Content-Type: application/json" \
-     -H "Authorization: Bearer sk-1234" \
+     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
      -d '{
          "username": "new_user",
          "email": "new_user@example.com"
@@ -586,6 +589,9 @@ async def new_user(
                 detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}",
             )
 
+        if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
+            enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
+
         _check_permissions_caller_permission(
             data=data,
             user_api_key_dict=user_api_key_dict,
@@ -604,6 +610,9 @@ async def new_user(
         organization_ids: Final = cast(list[str] | None, data_json.pop("organizations", None))
 
         response: Final = await generate_key_helper_fn(request_type="user", **data_json, llm_router=None)
+        created_user_id: Final = cast(str | None, response.get("user_id", None))
+        if created_user_id is not None:
+            forget_missing_user(created_user_id)
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
@@ -947,7 +956,7 @@ async def user_info(
     Example request
     ```
     curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai' \
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
@@ -1100,7 +1109,7 @@ async def user_info_v2(
     Example request:
     ```
     curl -X GET 'http://localhost:4000/v2/user/info?user_id=user123' \\
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
@@ -1149,6 +1158,8 @@ async def user_info_v2(
             user_role=user_data.get("user_role"),
             spend=user_data.get("spend", 0.0),
             max_budget=user_data.get("max_budget"),
+            tpm_limit=user_data.get("tpm_limit"),
+            rpm_limit=user_data.get("rpm_limit"),
             models=user_data.get("models") or [],
             budget_duration=user_data.get("budget_duration"),
             budget_reset_at=user_data.get("budget_reset_at"),
@@ -1289,7 +1300,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k in ("max_budget", "budget_duration"):
+        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit"):
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
@@ -1429,6 +1440,7 @@ def _clears_object_permission(user_request: UpdateUserRequest) -> bool:
     return sent is None or not sent.model_dump(exclude_unset=True, exclude_none=True)
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _invalidate_cached_user_entitlement(user_id: str | None, object_permission_ids: tuple[str, ...]) -> None:
     """Drop the cache entries an entitlement change makes stale.
 
@@ -1452,11 +1464,7 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
         *(object_permission_cache_key(permission_id) for permission_id in dict.fromkeys(object_permission_ids)),
         *((user_object_permission_id_cache_key(user_id), user_id) if user_id is not None else ()),
     )
-    for key in keys:
-        try:
-            await user_api_key_cache.async_delete_cache(key=key)
-        except Exception as e:  # noqa: BLE001  # a cache we cannot clear still expires; never fail the write
-            verbose_proxy_logger.warning("Failed to invalidate cached entitlement key %r: %s", key, e)
+    await evict_and_broadcast(cache_keys=keys, user_api_key_cache=user_api_key_cache)
 
 
 async def _update_single_user_helper(
@@ -1621,7 +1629,7 @@ async def _update_single_user_helper(
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
 
-        if not _USER_BUDGET_CACHE_FIELDS.isdisjoint(non_default_values) or "metadata" in data_json:
+        if not _USER_LIMIT_CACHE_FIELDS.isdisjoint(non_default_values) or "metadata" in data_json:
             await evict_and_broadcast(
                 cache_keys=(non_default_values["user_id"],),
                 user_api_key_cache=user_api_key_cache,
@@ -1679,7 +1687,7 @@ async def user_update(
 
     ```
     curl --location 'http://0.0.0.0:4000/user/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "test-litellm-user-4",
@@ -1867,7 +1875,7 @@ async def bulk_user_update(
     Example request for specific users:
     ```bash
     curl --location 'http://0.0.0.0:4000/user/bulk_update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "users": [
@@ -1888,7 +1896,7 @@ async def bulk_user_update(
     Example request for all users:
     ```bash
     curl --location 'http://0.0.0.0:4000/user/bulk_update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "all_users": true,
@@ -1979,7 +1987,7 @@ async def bulk_user_update(
                 ),
             )
 
-            if not _USER_BUDGET_CACHE_FIELDS.isdisjoint(non_default_values):
+            if not _USER_LIMIT_CACHE_FIELDS.isdisjoint(non_default_values):
                 for start in range(0, len(all_users_in_db), _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE):
                     await asyncio.gather(
                         *(
@@ -2409,7 +2417,7 @@ async def delete_user(
     ```
     curl --location 'http://0.0.0.0:4000/user/delete' \
 
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     --header 'Content-Type: application/json' \
 
@@ -2864,6 +2872,18 @@ async def ui_view_users(
 # Using shared metric helper implementations from common_daily_activity
 
 
+def resolve_user_daily_activity_entity_ids(
+    *, user_id: str | None, user_api_key_dict: UserAPIKeyAuth
+) -> tuple[str, ...] | None | ScopeDenied:
+    if _user_has_admin_view(user_api_key_dict):
+        return (user_id,) if user_id is not None else None
+
+    caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)
+    if user_id is not None and user_id != caller_user_id:
+        return ScopeDenied(403, "Non-admin users can only view their own spend data.")
+    return (caller_user_id,)
+
+
 async def _resolve_user_email_metadata(
     prisma_client: "PrismaClient", records: Sequence[DailySpendRecord]
 ) -> dict[str, dict]:
@@ -2958,20 +2978,13 @@ async def get_user_daily_activity(
         )
 
     try:
-        is_admin: Final = _user_has_admin_view(user_api_key_dict)
-
-        if is_admin:
-            entity_id = user_id  # None means global view, otherwise filter by user
-        else:
-            caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)
-            if user_id is None:
-                user_id = caller_user_id
-            if user_id != caller_user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": "Non-admin users can only view their own spend data."},
-                )
-            entity_id = user_id
+        resolved_entity_ids: Final = resolve_user_daily_activity_entity_ids(
+            user_id=user_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+        if isinstance(resolved_entity_ids, ScopeDenied):
+            raise_public(resolved_entity_ids)
+        entity_id: Final[str | None] = resolved_entity_ids[0] if resolved_entity_ids is not None else None
 
         return await get_daily_activity(
             prisma_client=prisma_client,
@@ -2994,115 +3007,6 @@ async def get_user_daily_activity(
         raise
     except Exception as e:
         verbose_proxy_logger.exception("/spend/daily/analytics: Exception occured - %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": f"Failed to fetch analytics: {e}"},
-        )
-
-
-@router.get(
-    "/user/daily/activity/aggregated",
-    tags=["Budget & Spend Tracking", "Internal User management"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=SpendAnalyticsPaginatedResponse,
-)
-@management_endpoint_wrapper
-async def get_user_daily_activity_aggregated(
-    start_date: str | None = fastapi.Query(
-        default=None,
-        description="Start date in YYYY-MM-DD format",
-    ),
-    end_date: str | None = fastapi.Query(
-        default=None,
-        description="End date in YYYY-MM-DD format",
-    ),
-    model: str | None = fastapi.Query(
-        default=None,
-        description="Filter by specific model",
-    ),
-    api_key: str | None = fastapi.Query(
-        default=None,
-        description="Filter by specific API key",
-    ),
-    user_id: str | None = fastapi.Query(
-        default=None,
-        description="Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id.",
-    ),
-    timezone: int | None = fastapi.Query(
-        default=None,
-        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
-        "Matches JavaScript's Date.getTimezoneOffset() convention.",
-    ),
-    include_current_utc_day: bool = fastapi.Query(
-        default=False,
-        description="When the range ends on the caller's current local day, extend it to "
-        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
-        "terms) is included. Requires the timezone parameter. Historical ranges are "
-        "never extended.",
-    ),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> SpendAnalyticsPaginatedResponse:
-    """
-    Aggregated analytics for a user's daily activity without pagination.
-    Returns the same response shape as the paginated endpoint with page metadata set to single-page.
-
-    Reads daily spend records that only ever accumulate and are never affected by budget
-    resets. Their total can legitimately exceed the `spend` field returned by
-    `/v2/user/info`, which is a running budget counter that every budget reset sets back
-    to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-
-    if start_date is None or end_date is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "Please provide start_date and end_date"},
-        )
-
-    try:
-        is_admin: Final = _user_has_admin_view(user_api_key_dict)
-
-        if is_admin:
-            entity_id = user_id  # None means global view, otherwise filter by user
-        else:
-            caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)
-            if user_id is None:
-                user_id = caller_user_id
-            if user_id != caller_user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": "Non-admin users can only view their own spend data."},
-                )
-            entity_id = user_id
-
-        repository: Final = daily_activity_repository(prisma_client)
-        scope: Final = daily_activity_scope(
-            "litellm_dailyuserspend",
-            "user_id",
-            entity_id,
-            None,
-            api_key,
-            start_date,
-            end_date,
-            model,
-            timezone,
-            include_current_utc_day,
-        )
-        return await get_daily_activity_aggregated(
-            repository,
-            scope,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        verbose_proxy_logger.exception("/user/daily/activity/aggregated: Exception occured - %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},

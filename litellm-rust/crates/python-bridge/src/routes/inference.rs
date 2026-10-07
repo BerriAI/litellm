@@ -1,7 +1,7 @@
-use litellm_core::RouteError;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_python::{from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
+use litellm_inference::RouteError;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -85,6 +85,9 @@ impl InferenceHost {
         let request = self.request.bind(py);
         if let Some(value) = lookup(arguments, request, name)? {
             return Ok((!value.is_none()).then_some(value));
+        }
+        if request.is_instance_of::<PyDict>() {
+            return Ok(None);
         }
         let parameter = request
             .getattr("parameters")?

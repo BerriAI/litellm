@@ -15,6 +15,92 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
+
+DAILY_ACTIVITY_ROUTE_PAIRS: Final[tuple[tuple[str, str], ...]] = (
+    ("/user/daily/activity", "/user/daily/activity/aggregated"),
+    ("/user/daily/activity", "/user/daily/activity/aggregated/keys"),
+    ("/user/daily/activity", "/user/daily/activity/aggregated/search"),
+    ("/user/daily/activity", "/user/daily/activity/aggregated/model_top_keys"),
+    ("/user/daily/activity", "/user/daily/activity/export"),
+    ("/user/daily/activity", "/user/daily/activity/aggregated/cache_leakage_keys"),
+    ("/team/daily/activity", "/team/daily/activity/aggregated"),
+    ("/team/daily/activity", "/team/daily/activity/aggregated/keys"),
+    ("/team/daily/activity", "/team/daily/activity/aggregated/search"),
+    ("/team/daily/activity", "/team/daily/activity/aggregated/model_top_keys"),
+    ("/team/daily/activity", "/team/daily/activity/export"),
+    ("/tag/daily/activity", "/tag/daily/activity/aggregated"),
+    ("/tag/daily/activity", "/tag/daily/activity/aggregated/keys"),
+    ("/tag/daily/activity", "/tag/daily/activity/aggregated/search"),
+    ("/tag/daily/activity", "/tag/daily/activity/aggregated/model_top_keys"),
+    ("/tag/daily/activity", "/tag/daily/activity/export"),
+    ("/organization/daily/activity", "/organization/daily/activity/aggregated"),
+    ("/organization/daily/activity", "/organization/daily/activity/aggregated/keys"),
+    ("/organization/daily/activity", "/organization/daily/activity/aggregated/search"),
+    ("/organization/daily/activity", "/organization/daily/activity/aggregated/model_top_keys"),
+    ("/organization/daily/activity", "/organization/daily/activity/export"),
+    ("/customer/daily/activity", "/customer/daily/activity/aggregated"),
+    ("/customer/daily/activity", "/customer/daily/activity/aggregated/keys"),
+    ("/customer/daily/activity", "/customer/daily/activity/aggregated/search"),
+    ("/customer/daily/activity", "/customer/daily/activity/aggregated/model_top_keys"),
+    ("/customer/daily/activity", "/customer/daily/activity/export"),
+    ("/customer/daily/activity", "/end_user/daily/activity/aggregated"),
+    ("/customer/daily/activity", "/end_user/daily/activity/aggregated/keys"),
+    ("/customer/daily/activity", "/end_user/daily/activity/aggregated/search"),
+    ("/customer/daily/activity", "/end_user/daily/activity/aggregated/model_top_keys"),
+    ("/customer/daily/activity", "/end_user/daily/activity/export"),
+    ("/agent/daily/activity", "/agent/daily/activity/aggregated"),
+    ("/agent/daily/activity", "/agent/daily/activity/aggregated/keys"),
+    ("/agent/daily/activity", "/agent/daily/activity/aggregated/search"),
+    ("/agent/daily/activity", "/agent/daily/activity/aggregated/model_top_keys"),
+    ("/agent/daily/activity", "/agent/daily/activity/export"),
+)
+
+DAILY_ACTIVITY_ROLES: Final[tuple[LitellmUserRoles, ...]] = (
+    LitellmUserRoles.PROXY_ADMIN,
+    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    LitellmUserRoles.ORG_ADMIN,
+    LitellmUserRoles.TEAM,
+    LitellmUserRoles.CUSTOMER,
+)
+
+
+def _daily_activity_route_outcome(route: str, user_role: LitellmUserRoles) -> str:
+    if user_role == LitellmUserRoles.PROXY_ADMIN:
+        return "allowed"
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role.value,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=user_role.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except HTTPException as exc:
+        return f"denied:{exc.status_code}"
+    except Exception as exc:
+        return f"denied:{type(exc).__name__}"
+    return "allowed"
+
+
+@pytest.mark.parametrize(("existing_path", "new_path"), DAILY_ACTIVITY_ROUTE_PAIRS)
+@pytest.mark.parametrize("user_role", DAILY_ACTIVITY_ROLES)
+def test_daily_activity_routes_preserve_route_access_outcomes(
+    existing_path: str, new_path: str, user_role: LitellmUserRoles
+) -> None:
+    assert _daily_activity_route_outcome(new_path, user_role) == _daily_activity_route_outcome(existing_path, user_role)
 
 
 def test_non_admin_config_update_route_rejected():
@@ -939,9 +1025,7 @@ _CLAUDE_CODE_GATEWAY_ROUTES: Final = (
 
 
 @pytest.mark.parametrize("route", _CLAUDE_CODE_GATEWAY_ROUTES)
-@pytest.mark.parametrize(
-    "role", [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value]
-)
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value])
 def test_claude_code_gateway_routes_open_to_signed_in_cli_users(role: str, route: str):
     user_obj: Final = LiteLLM_UserTable(user_id="test_user", user_email="test@example.com", user_role=role)
     valid_token: Final = UserAPIKeyAuth(user_id="test_user", user_role=role)
@@ -1269,8 +1353,7 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
 )
 def test_jwt_team_routes_grant_pass_through_only_for_explicit_paths(route, team_allowed_routes, expected):
     assert (
-        RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes)
-        is expected
+        RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes) is expected
     )
 
 
@@ -2131,9 +2214,9 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
 # layer, even though the underlying handlers already gate on PROXY_ADMIN_VIEW_ONLY.
 #
 # Each route below corresponds to a network call made by the Logs page
-# (ui/litellm-dashboard/src/components/view_logs/) — see the comment on each.
+# (ui/litellm-dashboard/src/components/logs/) — see the comment on each.
 ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
-    # Main paginated log list — uiSpendLogsCall in log_filter_logic.tsx & index.tsx
+    # Main paginated log list — uiSpendLogsCall in request/useLogFilterLogic.ts & index.tsx
     "/spend/logs/ui",
     # Single-log detail drawer — fetched on row click in LogDetailsDrawer
     "/spend/logs/ui/abc-request-id",
@@ -2219,7 +2302,7 @@ def test_internal_user_can_access_logs_drawer_detail_route(user_role):
             request_data={},
         )
     except Exception as e:
-        pytest.fail(f"{user_role.value} should be able to access {route}. Got error: {str(e)}")
+        pytest.fail(f"{user_role.value} should be able to access {route}. Got error: {e!s}")
 
 
 @pytest.mark.parametrize(
@@ -2242,9 +2325,7 @@ def test_logs_drawer_detail_route_in_every_route_group(route_group_name):
     from litellm.proxy._types import LiteLLMRoutes
 
     allowed_routes = getattr(LiteLLMRoutes, route_group_name).value
-    assert RouteChecks.check_route_access(
-        route="/spend/logs/ui/req-34099", allowed_routes=allowed_routes
-    )
+    assert RouteChecks.check_route_access(route="/spend/logs/ui/req-34099", allowed_routes=allowed_routes)
 
 
 def test_logs_drawer_detail_route_allowed_for_scoped_virtual_key():
@@ -2256,9 +2337,7 @@ def test_logs_drawer_detail_route_allowed_for_scoped_virtual_key():
         user_id="scoped_key_user",
         allowed_routes=["spend_tracking_routes"],
     )
-    assert RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/spend/logs/ui/req-34099", valid_token=valid_token
-    )
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route="/spend/logs/ui/req-34099", valid_token=valid_token)
 
 
 @pytest.mark.parametrize("route", ADMIN_VIEWER_LOGS_PAGE_ROUTES)
@@ -2479,6 +2558,29 @@ def test_proxy_admin_viewer_post_blocked_outside_allowlists(route):
             request_data={},
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize("route,allowed", (("/lens/traces/findings", True), ("/lens/example/run", False)))
+def test_admin_viewer_can_read_trace_findings_but_cannot_start_investigations(route: str, allowed: bool) -> None:
+    request: Final = Request({"type": "http", "method": "POST", "path": route, "query_string": b""})
+    auth: Final = UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    def check_access() -> None:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=auth,
+            request_data={},
+        )
+
+    if allowed:
+        assert check_access() is None
+    else:
+        with pytest.raises(HTTPException) as error:
+            check_access()
+        assert error.value.status_code == 403
 
 
 # ── Admin Viewer: management_routes write endpoints stay blocked ─────────────
@@ -4149,7 +4251,9 @@ def test_claude_code_marketplace_routes_open_to_internal_users(route):
     assert _gate(route, LitellmUserRoles.INTERNAL_USER.value) == "allowed"
 
 
-@pytest.mark.parametrize("user_role", [None, LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value])
+@pytest.mark.parametrize(
+    "user_role", [None, LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value]
+)
 @pytest.mark.parametrize("allowed_routes", [None, ["llm_api_routes"]])
 def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_only(
     user_role: str | None, allowed_routes: list[str] | None
@@ -4338,3 +4442,76 @@ def test_legacy_sse_respects_virtual_key_route_permissions(route: str, route_gro
         request_data={},
     )
     assert RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=token, request=request)
+
+
+@pytest.mark.parametrize(
+    "route",
+    (
+        "/v1/traces",
+        "/v1/traces/trace-id",
+        "/v1/traces/trace-id/spans/span-id",
+        "/v1/traces/trace-id/spans/span-id/error",
+    ),
+)
+def test_non_admin_trace_reads_reach_endpoint_visibility_checks(route: str) -> None:
+    user_role: Final = LitellmUserRoles.INTERNAL_USER
+    user: Final = LiteLLM_UserTable(user_id="reader", user_role=user_role.value)
+    auth: Final = UserAPIKeyAuth(user_id="reader", user_role=user_role)
+    request: Final = Request({"type": "http", "method": "GET", "query_string": b""})
+    assert RouteChecks.is_llm_api_route(route)
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user, _user_role=user_role.value, route=route, request=request, valid_token=auth, request_data={}
+    )
+
+
+def test_is_llm_api_route():
+    assert RouteChecks.is_llm_api_route("/v1/chat/completions") is True
+    assert RouteChecks.is_llm_api_route("/v1/completions") is True
+    assert RouteChecks.is_llm_api_route("/v1/embeddings") is True
+    assert RouteChecks.is_llm_api_route("/v1/images/generations") is True
+    assert RouteChecks.is_llm_api_route("/v1/threads/thread_12345") is True
+    assert RouteChecks.is_llm_api_route("/bedrock/model/invoke") is True
+    assert RouteChecks.is_llm_api_route("/vertex-ai/text") is True
+    assert RouteChecks.is_llm_api_route("/gemini/generate") is True
+    assert RouteChecks.is_llm_api_route("/cohere/generate") is True
+    assert RouteChecks.is_llm_api_route("/anthropic/messages") is True
+    assert RouteChecks.is_llm_api_route("/anthropic/v1/messages") is True
+    assert RouteChecks.is_llm_api_route("/azure/endpoint") is True
+    assert RouteChecks.is_llm_api_route("/v1/realtime?model=gpt-4o-realtime-preview") is True
+    assert RouteChecks.is_llm_api_route("/realtime?model=gpt-4o-realtime-preview") is True
+    assert RouteChecks.is_llm_api_route("/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions") is True
+    assert RouteChecks.is_llm_api_route("/openai/deployments/gemini/gemini-1.5-flash/chat/completions") is True
+    assert (
+        RouteChecks.is_llm_api_route("/openai/deployments/anthropic/claude-sonnet-4-5-20250929/chat/completions")
+        is True
+    )
+    assert RouteChecks.is_llm_api_route("/mcp") is True
+    assert RouteChecks.is_llm_api_route("/mcp/") is True
+    assert RouteChecks.is_llm_api_route("/mcp/tools") is True
+    assert RouteChecks.is_llm_api_route("/mcp/tools/call") is True
+    assert RouteChecks.is_llm_api_route("/mcp/tools/list") is True
+    assert RouteChecks.is_llm_api_route("/some/random/route") is False
+    assert RouteChecks.is_llm_api_route("/key/regenerate/82akk800000000jjsk") is False
+    assert RouteChecks.is_llm_api_route("/key/82akk800000000jjsk/delete") is False
+
+    all_llm_api_routes = llm_passthrough_router.routes
+
+    for route in all_llm_api_routes:
+        print("route", route)
+        route_path = str(route.path)
+        print("route_path", route_path)
+        assert RouteChecks.is_llm_api_route(route_path) is True
+
+
+def test_route_matches_pattern():
+    assert RouteChecks._route_matches_pattern("/threads/thread_12345", "/threads/{thread_id}") is True
+    assert (
+        RouteChecks._route_matches_pattern("/key/regenerate/82akk800000000jjsk", "/key/{token_id}/regenerate") is False
+    )
+    assert RouteChecks._route_matches_pattern("/v1/chat/completions", "/v1/chat/completions") is True
+    assert RouteChecks._route_matches_pattern("/v1/models/gpt-4", "/v1/models/{model_name}") is True
+    assert (
+        RouteChecks._route_matches_pattern("/v1/chat/completionz/thread_12345", "/v1/chat/completions/{thread_id}")
+        is False
+    )
+    assert RouteChecks._route_matches_pattern("/v1/{thread_id}/messages", "/v1/messages/thread_2345") is False
