@@ -614,3 +614,63 @@ class TestOpenAILikeEmbeddingHandler:
         assert resolved_headers["Content-Type"] == "application/json"
         assert resolved_headers["Authorization"] == "Bearer sk-test-key"
 
+    def test_case_insensitive_authorization_no_duplicate(self):
+        """
+        Test that when a caller passes lowercase 'authorization', a duplicate
+        'Authorization' header is not added even when api_key is set.
+        """
+        handler = OpenAILikeEmbeddingHandler()
+
+        mock_client = MagicMock()
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "test-model",
+            "usage": {"prompt_tokens": 5, "total_tokens": 5},
+        }
+        mock_response.raise_for_status = Mock()
+        mock_client.post.return_value = mock_response
+
+        mock_logging = MagicMock()
+
+        handler.embedding(
+            model="test-model",
+            input=["test input"],
+            timeout=60.0,
+            logging_obj=mock_logging,
+            api_key="test-key",
+            api_base="http://test.com",
+            optional_params={},
+            client=mock_client,
+            headers={"authorization": "Bearer custom-token"},
+        )
+
+        assert mock_client.post.called
+        call_args = mock_client.post.call_args
+        sent_headers = call_args[1]["headers"]
+
+        assert sent_headers.get("authorization") == "Bearer custom-token"
+        assert "Authorization" not in sent_headers
+
+    def test_validate_environment_case_insensitive_authorization(self):
+        """
+        Test that _validate_environment detects lowercase 'authorization'
+        case-insensitively and does not add a duplicate 'Authorization' header.
+        """
+        handler = OpenAILikeEmbeddingHandler()
+        original_headers = {"authorization": "Bearer custom-token"}
+
+        api_base, resolved_headers = handler._validate_environment(
+            api_key="sk-test-key",
+            api_base="http://test.com",
+            endpoint_type="embeddings",
+            headers=original_headers,
+            custom_endpoint=None,
+        )
+
+        assert original_headers == {"authorization": "Bearer custom-token"}
+        assert resolved_headers.get("authorization") == "Bearer custom-token"
+        assert "Authorization" not in resolved_headers
+
+

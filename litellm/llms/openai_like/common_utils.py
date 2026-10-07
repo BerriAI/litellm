@@ -42,16 +42,20 @@ class OpenAILikeBase:
             resolved_headers = headers.copy()
 
         has_content_type = False
+        has_auth = False
         for k in resolved_headers:
-            if isinstance(k, str) and k.lower() == "content-type":
-                has_content_type = True
-                break
+            if isinstance(k, str):
+                lower_k = k.lower()
+                if lower_k == "content-type":
+                    has_content_type = True
+                elif lower_k == "authorization":
+                    has_auth = True
 
         if not has_content_type:
             resolved_headers["Content-Type"] = "application/json"
 
         if (
-            api_key is not None and "Authorization" not in resolved_headers
+            api_key is not None and not has_auth
         ):  # [TODO] remove 'validate_environment' from OpenAI base. should use llm providers config for this only.
             resolved_headers["Authorization"] = f"Bearer {api_key}"
 
