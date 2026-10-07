@@ -26,7 +26,7 @@ from litellm.utils import (
 from ..common_utils import (
     AWSEventStreamDecoder,
     SagemakerError,
-    client_error_message,
+    client_error_details,
     with_inference_component_hint,
 )
 from ..embedding.transformation import SagemakerEmbeddingConfig
@@ -295,9 +295,10 @@ class SagemakerLLM(BaseAWSLLM):
                 raise e
         except Exception as e:
             verbose_logger.error("Sagemaker error %s", str(e))
-            status_code: Final = getattr(e, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode", 500)
-            error_message: Final = with_inference_component_hint(client_error_message(e), call="litellm.completion")
-            raise SagemakerError(status_code=status_code, message=error_message)
+            status_code, error_message = client_error_details(e)
+            raise SagemakerError(
+                status_code=status_code, message=with_inference_component_hint(error_message, call="litellm.completion")
+            )
 
         return sagemaker_config.transform_response(
             model=model,
@@ -610,9 +611,10 @@ class SagemakerLLM(BaseAWSLLM):
         try:
             response = client.invoke_endpoint(**invoke_kwargs)
         except Exception as e:
-            status_code: Final = getattr(e, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode", 500)
-            error_message: Final = with_inference_component_hint(client_error_message(e), call="litellm.embedding")
-            raise SagemakerError(status_code=status_code, message=error_message)
+            status_code, error_message = client_error_details(e)
+            raise SagemakerError(
+                status_code=status_code, message=with_inference_component_hint(error_message, call="litellm.embedding")
+            )
 
         response = json.loads(response["Body"].read().decode("utf8"))
         ## LOGGING

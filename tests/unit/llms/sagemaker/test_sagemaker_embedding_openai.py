@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ConnectionClosedError
 
 import litellm
 from litellm import Router
@@ -303,6 +303,23 @@ class TestSagemakerEmbeddingInferenceComponents:
 
         assert raised.value.status_code == 500
         assert "InternalFailure" in raised.value.message
+
+    def test_dropped_connection_surfaces_as_a_server_error(self):
+        session, client = fake_sagemaker_session(OPENAI_RESPONSE)
+        client.invoke_endpoint.side_effect = ConnectionClosedError(endpoint_url="https://runtime.sagemaker.test/x")
+        with patch("boto3.Session", return_value=session), pytest.raises(SagemakerError) as raised:
+            self.sagemaker_llm.embedding(
+                model="openai/my-embed-endpoint",
+                input=["hello"],
+                model_response=EmbeddingResponse(),
+                print_verbose=print,
+                encoding=None,
+                logging_obj=MagicMock(),
+                optional_params={"aws_region_name": "us-east-1", "model_id": "my-component"},
+            )
+
+        assert raised.value.status_code == 500
+        assert "Connection was closed" in raised.value.message
 
     def test_non_string_model_id_is_rejected_before_the_call(self):
         session, client = fake_sagemaker_session(OPENAI_RESPONSE)
