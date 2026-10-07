@@ -1,6 +1,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -531,6 +532,47 @@ def test_regular_tool_finish_reason():
     # Verify that finish_reason remains "tool_calls" for regular tools
     assert model_response_iterator.converted_response_format_tool is False
     assert model_response.choices[0].finish_reason == "tool_calls"
+
+
+def _tool_use_events(index: int, tool_id: str, name: str, arguments: str) -> tuple[dict, ...]:
+    return (
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "tool_use", "id": tool_id, "name": name, "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "input_json_delta", "partial_json": arguments},
+        },
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+@pytest.mark.parametrize("json_tool_first", [True, False])
+def test_response_format_tool_with_user_tool_call_streams_tool_calls_finish_reason(json_tool_first: bool):
+    json_tool: Final = _tool_use_events(
+        0 if json_tool_first else 1, "toolu_json", RESPONSE_FORMAT_TOOL_NAME, '{"answer": 42}'
+    )
+    user_tool: Final = _tool_use_events(1 if json_tool_first else 0, "toolu_user", "get_weather", '{"location": "NY"}')
+    tool_events: Final = json_tool + user_tool if json_tool_first else user_tool + json_tool
+    message_delta: Final = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "tool_use"},
+        "usage": {"output_tokens": 20},
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=True)
+
+    chunks: Final = [iterator.chunk_parser(event) for event in (*tool_events, message_delta)]
+
+    streamed_tool_calls: Final = [
+        (tool_call.id, tool_call.function.name, tool_call.function.arguments)
+        for tool_call in chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks)
+    ]
+    assert chunks[-1].choices[0].finish_reason == "tool_calls", "a user tool call must not be reported as a final stop"
+    assert streamed_tool_calls == [("toolu_user", "get_weather", ""), (None, None, '{"location": "NY"}')]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == '{"answer": 42}'
 
 
 def test_text_only_streaming_has_index_zero():
