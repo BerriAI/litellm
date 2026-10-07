@@ -51,9 +51,7 @@ class SpanErrorPage(typing_extensions.TypedDict):
 SpanStatus: TypeAlias = Literal["ok", "error", "unset"]
 
 
-class RunSource(typing_extensions.TypedDict):
-    url: ReadOnly[str]
-    title: ReadOnly[str]
+RunSourceType: TypeAlias = Literal["slack", "teams", "discord", "linear", "github", "jira", "custom"]
 
 
 class AgentNode(typing_extensions.TypedDict):
@@ -107,6 +105,51 @@ class UIMessage(typing_extensions.TypedDict):
     tool_calls: ReadOnly[NotRequired[tuple[UIToolCall, ...]]]
 
 
+class RunSource(typing_extensions.TypedDict):
+    type: ReadOnly[RunSourceType]
+    url: ReadOnly[str]
+    title: ReadOnly[str]
+
+
+class Span(typing_extensions.TypedDict):
+    span_id: ReadOnly[str]
+    parent_span_id: ReadOnly[str | None]
+    name: ReadOnly[str]
+    type: ReadOnly[SpanType]
+    agent: ReadOnly[str]
+    framework: ReadOnly[str]
+    start_offset_ms: ReadOnly[float]
+    duration_ms: ReadOnly[float]
+    status: ReadOnly[SpanStatus]
+    error: ReadOnly[str | None]
+    error_truncated: ReadOnly[bool]
+    input_preview: ReadOnly[str]
+    model: ReadOnly[str | None]
+    input_tokens: ReadOnly[Annotated[int, Field(ge=0, le=4294967295)]]
+    output_tokens: ReadOnly[Annotated[int, Field(ge=0, le=4294967295)]]
+    litellm_request_id: ReadOnly[str | None]
+    spend: ReadOnly[float | None]
+    spend_log_request_id: ReadOnly[str | None]
+    spend_match: ReadOnly[SpendMatch | None | None]
+
+
+class UIMessages(typing_extensions.TypedDict):
+    messages: ReadOnly[tuple[UIMessage, ...]]
+    kind: ReadOnly[Literal["messages"]]
+
+
+UIContent: TypeAlias = UIMessages | UIFields | UIText
+
+
+class SpanDetail(typing_extensions.TypedDict):
+    span_id: ReadOnly[str]
+    input_ui: ReadOnly[UIContent]
+    output_ui: ReadOnly[UIContent]
+    input: ReadOnly[str]
+    output: ReadOnly[str]
+    attributes: ReadOnly[Mapping[str, str]]
+
+
 class TraceSummary(typing_extensions.TypedDict):
     resolution_limited: ReadOnly[NotRequired[bool]]
     trace_id: ReadOnly[str]
@@ -133,28 +176,6 @@ class TraceSummary(typing_extensions.TypedDict):
     source: ReadOnly[NotRequired[RunSource | None | None]]
 
 
-class Span(typing_extensions.TypedDict):
-    span_id: ReadOnly[str]
-    parent_span_id: ReadOnly[str | None]
-    name: ReadOnly[str]
-    type: ReadOnly[SpanType]
-    agent: ReadOnly[str]
-    framework: ReadOnly[str]
-    start_offset_ms: ReadOnly[float]
-    duration_ms: ReadOnly[float]
-    status: ReadOnly[SpanStatus]
-    error: ReadOnly[str | None]
-    error_truncated: ReadOnly[bool]
-    input_preview: ReadOnly[str]
-    model: ReadOnly[str | None]
-    input_tokens: ReadOnly[Annotated[int, Field(ge=0, le=4294967295)]]
-    output_tokens: ReadOnly[Annotated[int, Field(ge=0, le=4294967295)]]
-    litellm_request_id: ReadOnly[str | None]
-    spend: ReadOnly[float | None]
-    spend_log_request_id: ReadOnly[str | None]
-    spend_match: ReadOnly[SpendMatch | None | None]
-
-
 class Trace(typing_extensions.TypedDict):
     summary: ReadOnly[TraceSummary]
     agents: ReadOnly[tuple[AgentNode, ...]]
@@ -165,23 +186,6 @@ class Trace(typing_extensions.TypedDict):
 class TracePage(typing_extensions.TypedDict):
     data: ReadOnly[tuple[TraceSummary, ...]]
     next_cursor: ReadOnly[str | None]
-
-
-class UIMessages(typing_extensions.TypedDict):
-    messages: ReadOnly[tuple[UIMessage, ...]]
-    kind: ReadOnly[Literal["messages"]]
-
-
-UIContent: TypeAlias = UIMessages | UIFields | UIText
-
-
-class SpanDetail(typing_extensions.TypedDict):
-    span_id: ReadOnly[str]
-    input_ui: ReadOnly[UIContent]
-    output_ui: ReadOnly[UIContent]
-    input: ReadOnly[str]
-    output: ReadOnly[str]
-    attributes: ReadOnly[Mapping[str, str]]
 
 
 TraceWireTypes: TypeAlias = QueryScope | SpanDetail | SpanErrorPage | Trace | TracePage | TraceScope | ReadQueryName
