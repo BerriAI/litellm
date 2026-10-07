@@ -21,8 +21,10 @@ import {
   previewText,
   revealSpanInState,
   ROOT_KEY,
+  traceAgentNames,
   treeGuides,
 } from "./utils";
+import { run } from "./list/runSearch/__fixtures__/runs";
 
 const swarm = swarmTrace as Trace;
 const research = researchTrace as Trace;
@@ -483,5 +485,16 @@ describe("findTraceSteps", () => {
     expect(findTraceSteps(spans, "check", true, true).map((item) => item.span_id)).toEqual(["tool"]);
     expect(findTraceSteps(spans, "check", true, false).map((item) => item.span_id)).toEqual(["tool", "framework"]);
     expect(findTraceSteps(spans, "missing", false, false)).toEqual([]);
+  });
+});
+
+describe("traceAgentNames", () => {
+  it("uses the agents when the run has any, else the service that sent it", () => {
+    expect(traceAgentNames(run({ agent_names: ["claude-code"], service: "svc" }))).toEqual(["claude-code"]);
+    expect(traceAgentNames(run({ agent_names: [], service: "claude-agent-sdk-demo" }))).toEqual([
+      "claude-agent-sdk-demo",
+    ]);
+    expect(traceAgentNames(run({ agent_names: undefined, service: "svc" }))).toEqual(["svc"]);
+    expect(traceAgentNames(run({ agent_names: [], service: "" }))).toEqual([]);
   });
 });
