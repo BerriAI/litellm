@@ -2,6 +2,7 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_format_type",
     "remove_additional_properties",
     "remove_strict_from_schema",

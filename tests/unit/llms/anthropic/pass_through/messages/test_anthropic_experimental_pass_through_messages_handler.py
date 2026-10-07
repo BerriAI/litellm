@@ -684,12 +684,12 @@ def _empty_block_msgs():
 
 def test_handler_strips_when_no_presanitized_flag():
     """Sync entry point (no async wrapper): handler must still sanitize."""
-    from litellm.llms.anthropic.pass_through.messages import handler
+    from litellm.llms.anthropic.pass_through.messages import handler, utils
 
     with patch.object(
-        handler,
+        utils,
         "strip_empty_content_blocks_from_anthropic_messages",
-        wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
+        wraps=utils.strip_empty_content_blocks_from_anthropic_messages,
     ) as spy:
         result = handler.anthropic_messages_handler(
             max_tokens=10,
@@ -704,12 +704,12 @@ def test_handler_strips_when_no_presanitized_flag():
 
 def test_handler_skips_strip_when_presanitized():
     """Async wrapper already sanitized -> handler must NOT rescan."""
-    from litellm.llms.anthropic.pass_through.messages import handler
+    from litellm.llms.anthropic.pass_through.messages import handler, utils
 
     with patch.object(
-        handler,
+        utils,
         "strip_empty_content_blocks_from_anthropic_messages",
-        wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
+        wraps=utils.strip_empty_content_blocks_from_anthropic_messages,
     ) as spy:
         result = handler.anthropic_messages_handler(
             max_tokens=10,
@@ -809,7 +809,7 @@ def test_presanitized_flag_not_leaked_to_provider_params():
 @pytest.mark.asyncio
 async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
     """End-to-end: wrapper sanitizes (once) AND signals the handler to skip."""
-    from litellm.llms.anthropic.pass_through.messages import handler
+    from litellm.llms.anthropic.pass_through.messages import handler, utils
 
     captured = {}
 
@@ -825,9 +825,9 @@ async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
         patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
         patch("asyncio.get_event_loop", return_value=fake_loop),
         patch.object(
-            handler,
+            utils,
             "strip_empty_content_blocks_from_anthropic_messages",
-            wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
+            wraps=utils.strip_empty_content_blocks_from_anthropic_messages,
         ) as spy,
     ):
         await handler.anthropic_messages(
