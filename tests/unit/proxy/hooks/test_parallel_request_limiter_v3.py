@@ -7263,6 +7263,7 @@ class _QueueClock:
             return
         await released.wait()
         self.woken_by_release += 1
+        await asyncio.sleep(0)
 
 
 def _queue_key(max_parallel_requests: int = 1, raw_key: str = "sk-queue", **queue_settings: object) -> UserAPIKeyAuth:
@@ -7326,6 +7327,27 @@ async def test_queued_request_waits_for_a_slot_and_is_admitted_when_one_frees():
 
 
 @pytest.mark.asyncio
+async def test_queue_waiter_that_loses_the_race_waits_for_the_next_release():
+    clock = _QueueClock(advance_time=False)
+    handler, cache = _queue_handler(clock)
+    key = _queue_key()
+    await _admit_in_own_stash(handler, cache, key)
+    waiter = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    handler._signal_parallel_slot_released([f"{{api_key:{key.api_key}}}:max_parallel_requests"])
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    assert clock.woken_by_release == 1
+    assert not waiter.done()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+
+@pytest.mark.asyncio
 async def test_queue_release_of_one_key_does_not_wake_waiters_of_another_key():
     clock = _QueueClock(advance_time=False)
     handler, cache = _queue_handler(clock)
@@ -7360,6 +7382,39 @@ class _ReleaseDuringWaitClock(_QueueClock):
             await asyncio.create_task(self.on_wait())
 
 
+class _ReleaseWhenLaterWaiterPollsClock(_QueueClock):
+    def __init__(self) -> None:
+        super().__init__(advance_time=True)
+        self.release: Callable[[], Awaitable[None]] | None = None
+        self._first_turn: asyncio.Event | None = None
+
+    async def wait(self, released: asyncio.Event, timeout_seconds: float) -> None:
+        await super().wait(released, timeout_seconds)
+        self._first_turn = self._first_turn or released
+        if released is not self._first_turn and self.release is not None:
+            release, self.release = self.release, None
+            waiter_stash = _request_stash.get()
+            await release()
+            _request_stash.set(waiter_stash)
+
+
+@pytest.mark.asyncio
+async def test_queue_admits_waiters_in_arrival_order():
+    clock = _ReleaseWhenLaterWaiterPollsClock()
+    handler, cache = _queue_handler(clock)
+    key = _queue_key(max_parallel_requests_queue_timeout=5)
+    first = await _admit_in_own_stash(handler, cache, key)
+    earlier = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    await asyncio.sleep(0)
+    clock.release = lambda: _finish(handler, key, first)
+    later = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+
+    results = await asyncio.wait_for(asyncio.gather(earlier, later, return_exceptions=True), timeout=5)
+
+    assert isinstance(results[0], RequestRateLimiterStash)
+    assert isinstance(results[1], HTTPException)
+
+
 @pytest.mark.asyncio
 async def test_slot_freed_after_the_queue_deadline_does_not_admit_the_waiter():
     clock = _ReleaseDuringWaitClock()
@@ -7388,7 +7443,7 @@ async def test_queued_request_gets_429_after_the_queue_timeout_without_taking_a_
     assert "Limit type: max_parallel_requests" in exc_info.value.detail
     assert "Waited 30.0s in the request queue (timeout 30s)" in exc_info.value.detail
     assert _in_flight(handler, cache, key) == 1
-    assert handler._parallel_queue_depth == {}
+    assert handler._parallel_queue_waiters == {}
 
 
 @pytest.mark.asyncio
@@ -7430,13 +7485,13 @@ async def test_cancelled_waiter_leaves_the_queue_and_holds_no_slot():
     await _admit_in_own_stash(handler, cache, key)
     waiter = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
     await asyncio.sleep(0)
-    assert sum(handler._parallel_queue_depth.values()) == 1
+    assert sum(len(w) for w in handler._parallel_queue_waiters.values()) == 1
 
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiter
 
-    assert handler._parallel_queue_depth == {}
+    assert handler._parallel_queue_waiters == {}
     assert _in_flight(handler, cache, key) == 1
 
 

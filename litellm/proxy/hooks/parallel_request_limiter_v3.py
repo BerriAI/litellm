@@ -921,8 +921,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # follow-up because Lua dominates wall-time and the lock is held for
         # one round-trip.
         self._check_and_increment_lock = asyncio.Lock()
-        self._parallel_slot_released: dict[str, asyncio.Event] = {}
-        self._parallel_queue_depth: collections.Counter[str] = collections.Counter()
+        self._parallel_queue_waiters: dict[str, collections.deque[asyncio.Event]] = {}
 
     def _get_batch_rate_limiter(self) -> CallTypeRateLimiter | None:
         """Get or lazy-load the batch rate limiter."""
@@ -1899,7 +1898,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Hold an over-limit request until the gauge that rejected it frees a
         slot, when that gauge's scope is in queue mode. The request holds no
         slot while it waits, so a cancelled or timed-out waiter leaves nothing
-        to release. Releases on this worker wake waiters at once; releases on
+        to release. Waiters on this worker are served first come, first
+        served: only the oldest one retries. Releases on this worker wake it at once; releases on
         other workers are seen by re-asking Redis every poll interval, and the
         retries skip the local mirror because it does not see those releases.
         """
@@ -1911,30 +1911,31 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if rejecting_gauge is None or policy is None:
             return rejection
         queue_key: Final = rejecting_gauge["counter_key"]
-        if self._parallel_queue_depth[queue_key] >= policy.max_queued:
+        waiters: Final = self._parallel_queue_waiters.setdefault(queue_key, collections.deque())
+        if len(waiters) >= policy.max_queued:
             return self._queue_rejection(rejection, "queue_full", 0.0, policy)
 
         started_at: Final = self._queue_clock.now()
         deadline: Final = started_at + policy.timeout_seconds
-        self._parallel_queue_depth[queue_key] += 1
+        turn: Final = asyncio.Event()
+        waiters.append(turn)
         try:
             while (remaining := deadline - self._queue_clock.now()) > 0:
-                await self._queue_clock.wait(
-                    self._parallel_slot_released.setdefault(queue_key, asyncio.Event()),
-                    min(remaining, PARALLEL_QUEUE_POLL_INTERVAL_SECONDS),
-                )
+                await self._queue_clock.wait(turn, min(remaining, PARALLEL_QUEUE_POLL_INTERVAL_SECONDS))
                 if self._queue_clock.now() >= deadline:
                     break
+                if waiters[0] is not turn:
+                    continue
+                turn.clear()
                 attempt: Final = await self._acquire_parallel_slots(
                     gauges, gauge_keys, slot_id, parent_otel_span, consult_local_mirror=False
                 )
                 if attempt["overall_code"] == "OK":
                     return attempt
         finally:
-            self._parallel_queue_depth[queue_key] -= 1
-            if self._parallel_queue_depth[queue_key] <= 0:
-                del self._parallel_queue_depth[queue_key]
-                self._parallel_slot_released.pop(queue_key, None)
+            waiters.remove(turn)
+            if not waiters:
+                del self._parallel_queue_waiters[queue_key]
         return self._queue_rejection(rejection, "timeout", self._queue_clock.now() - started_at, policy)
 
     @staticmethod
@@ -1956,9 +1957,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
     def _signal_parallel_slot_released(self, counter_keys: Sequence[str]) -> None:
-        for released in (self._parallel_slot_released.pop(key, None) for key in counter_keys):
-            if released is not None:
-                released.set()
+        for waiters in (self._parallel_queue_waiters.get(key) for key in counter_keys):
+            if waiters:
+                waiters[0].set()
 
     async def _acquire_parallel_slots(
         self,
