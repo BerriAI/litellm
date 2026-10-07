@@ -138,6 +138,8 @@ Decision (2026-10-07): Option C. Rust drives the loop, and the strategy routers 
 - context compaction and routing compression are armed through contextvars in the hook and read by the inference call, so the hook and `litellm.<op>` have to run in the same Python task, which `Select` does and per-hook ops would not
 - under `Select`, the health and prompt-cache gates still read the Python-side cooldown cache, which is empty, so the Python-side router needs Rust's cooldowns as its cooldown view, not only as `_excluded_deployment_ids` for the routed group
 
+Known sore spot (2026-10-07): the strategies have no clear interface, which is what makes calling them from Rust awkward. A contract they should move to is drafted in `POC-strategy-contract.md`. Implementing it needs refactors on the Python side first, so it waits until later
+
 ### Increment 4: what the proxy needs to switch over
 
 Today the proxy always gets `PythonRouter`, because it builds `Router(...)` with arguments the Rust backend declines (`router_general_settings`, `search_tools`, `ignore_invalid_deployments`, `fallback_access_check`, `fallback_budget_check`, `auto_router_capability_limit`). Switching over needs three things:
@@ -214,6 +216,6 @@ Increment 2 (runtime model list changes): `RustRouter.upsert_deployment`, `add_d
 
 Suite survey (2026-10-07, every test run on both backends with Rust pinned to `RUST_REQUIRED`): no Rust-only failure was a wrong routing decision. In `tests/local_testing/test_router_{fallbacks,retries,timeout}.py`, 23 tests pass on Python and fail on Rust: 11 use configs the backend declines (rpm/tpm, wildcards, routing strategies, dict fallback entries, `allowed_fails_policy`) and 12 patch a `PythonRouter` internal (`should_retry_this_error`, `_time_to_sleep_before_retry`, `make_call`, `log_retry`, `_get_stream_timeout`); those modules also hold live tests that need provider keys, so they stay Python-only. In `tests/unit/test_router/test_router.py` 777 of 992 fail on Rust: 248 declined configs, and the rest call `PythonRouter` internals (`async_function_with_fallbacks_common_utils`, the Anthropic stream helpers, ...) or read views increment 4 has to provide (`get_model_group_info`, `get_deployment_by_model_group_name`, `get_deployment_model_info`, `get_model_list`, `get_model_access_groups`, `get_deployment_credentials_with_provider`, ...). Suites that test Python helpers directly (`router_utils/test_fallback_event_handlers.py`, `test_cooldown_handlers.py`, `litellm_core_utils/test_fallback_generalizations.py`) never call the router's own methods, so running them twice adds nothing. Opted in: `tests/unit/test_router_streaming_fallback_metadata.py`, and `tests/unit/test_router_retry_policy_update.py` with increment 2. The parity suites under `tests/test_litellm_rust/router` carry the behavior coverage instead
 
-Next: prototype increment 3 with Option C (`Select` target first, then `AllowFallback`), then increment 4
+Next: increment 3 waits on the Python-side strategy refactor toward `POC-strategy-contract.md`; Option C (`Select`, then `AllowFallback`) is still the plan once it lands
 
 Known gaps to close or decline: CustomLogger fallback-event hooks and `router_cooldown_event_callback` (increment 3), the 200-key `InMemoryCache` eviction, fallback keys containing `/` (provider-prefixed matching needs the cost map)
