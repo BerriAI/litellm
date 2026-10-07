@@ -109,6 +109,7 @@ export const KeyRateLimitFields = ({ control }: { control: Control<KeyEditFormVa
 
 const PARALLEL_MODE_HINT =
   "What happens to a request that arrives while Max Parallel Requests are already in flight. Reject returns a 429 at once. Queue holds the request until one of this key's requests finishes, and returns a 429 if no slot frees up before the queue timeout.";
+const PARALLEL_MODE_LABELS = { reject: "Reject with 429", queue: "Queue until a slot frees up" };
 const QUEUE_TIMEOUT_HINT = "Seconds a queued request waits for a free slot before it gets a 429. Defaults to 60.";
 const MAX_QUEUED_HINT =
   "Most requests that can wait for this key on one proxy worker. Requests beyond this get a 429 at once. Leave empty for no cap.";
@@ -123,13 +124,17 @@ export const KeyParallelRequestQueueFields = ({ control }: { control: Control<Ke
         label={labelWithHint("When Max Parallel Requests Is Reached", PARALLEL_MODE_HINT)}
       >
         {({ value, onChange, id }) => (
-          <Select value={(value as string | null | undefined) ?? "reject"} onValueChange={onChange}>
+          <Select
+            items={PARALLEL_MODE_LABELS}
+            value={(value as string | null | undefined) ?? "reject"}
+            onValueChange={onChange}
+          >
             <SelectTrigger id={id}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="reject">Reject with 429</SelectItem>
-              <SelectItem value="queue">Queue until a slot frees up</SelectItem>
+              <SelectItem value="reject">{PARALLEL_MODE_LABELS.reject}</SelectItem>
+              <SelectItem value="queue">{PARALLEL_MODE_LABELS.queue}</SelectItem>
             </SelectContent>
           </Select>
         )}
