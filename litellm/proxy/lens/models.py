@@ -250,6 +250,7 @@ FeedbackScore: TypeAlias = Annotated[int, Field(ge=0, le=LENS_FEEDBACK_MAX_SCORE
 class FeedbackInput(Record):
     score: FeedbackScore
     comment: str = Field(default="", max_length=LENS_FEEDBACK_MAX_COMMENT_CHARS)
+    user: str = Field(default="", max_length=256)
 
 
 class Feedback(TraceIdentity):
@@ -262,7 +263,6 @@ class Feedback(TraceIdentity):
 
 class TraceFeedback(TraceIdentity):
     feedback: tuple[Feedback, ...]
-    viewer: str = ""
 
 
 class TraceFeedbackSummary(TraceIdentity):

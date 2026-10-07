@@ -32470,6 +32470,11 @@ export interface components {
              * @default
              */
             trace_ref: string;
+            /**
+             * User
+             * @default
+             */
+            user: string;
         };
         /** FieldDetail */
         FieldDetail: {
@@ -47733,11 +47738,6 @@ export interface components {
              * @default
              */
             trace_ref: string;
-            /**
-             * Viewer
-             * @default
-             */
-            viewer: string;
         };
         /** TraceFeedbackRequest */
         TraceFeedbackRequest: {
@@ -63427,6 +63427,7 @@ export interface operations {
                 trace_id?: string | null;
                 session_id?: string | null;
                 trace_ref?: string;
+                user?: string;
             };
             header?: never;
             path?: never;

@@ -1,11 +1,10 @@
 from datetime import datetime, timezone
-from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import Field, model_validator
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens.endpoints import Auth, user_scope
 from litellm.proxy.lens.feedback_repository import (
     ClickHouseFeedbackStore,
@@ -17,6 +16,7 @@ from litellm.proxy.lens.models import (
     Feedback,
     FeedbackInput,
     Record,
+    Scope,
     TraceFeedback,
     TraceFeedbackRequest,
     TraceFeedbackSummary,
@@ -49,6 +49,18 @@ class FeedbackSubmission(FeedbackTarget, FeedbackInput):
     pass
 
 
+class FeedbackDeletion(FeedbackTarget):
+    user: str = Field(default="", max_length=256)
+
+
+def write_scope(auth: UserAPIKeyAuth) -> Scope:
+    if auth.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return Scope(all_teams=True)
+    if auth.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
+        raise HTTPException(403, "Admin viewers cannot write feedback")
+    return Scope(team_id=auth.team_id or "", api_key_hash="" if auth.team_id else auth.token or "")
+
+
 def feedback_store(
     storage: Annotated[ClickHouseStorage | None, Depends(provide_storage)],
 ) -> FeedbackStore:
@@ -64,16 +76,17 @@ def stored_now() -> datetime:
     return now.replace(microsecond=now.microsecond // 1000 * 1000)
 
 
-def author(auth: UserAPIKeyAuth) -> str:
-    identity: Final = auth.user_id or auth.token
+def author(auth: UserAPIKeyAuth, user: str) -> str:
+    identity: Final = user or auth.user_id or auth.token
     if not identity:
-        raise HTTPException(403, "Feedback needs a key tied to a user")
+        raise HTTPException(422, "Name the user who left this feedback")
     return identity
 
 
 Store: TypeAlias = Annotated[FeedbackStore, Depends(feedback_store)]
 Now: TypeAlias = Annotated[datetime, Depends(stored_now)]
 Target: TypeAlias = Annotated[FeedbackTarget, Query()]
+Deletion: TypeAlias = Annotated[FeedbackDeletion, Query()]
 
 
 @router.get("", response_model=TraceFeedback)
@@ -81,17 +94,16 @@ async def read_feedback(target: Target, auth: Auth, store: Store) -> TraceFeedba
     feedback: Final = await store.for_trace(user_scope(auth), target.trace())
     if feedback is None:
         raise HTTPException(404, TRACE_NOT_FOUND)
-    return feedback.model_copy(update=MappingProxyType({"viewer": author(auth)}))
+    return feedback
 
 
 @router.put("", response_model=Feedback)
 async def submit_feedback(body: FeedbackSubmission, auth: Auth, store: Store, now: Now) -> Feedback:
-    scope: Final = user_scope(auth, write=True)
     saved: Final = await store.upsert(
-        scope,
+        write_scope(auth),
         FeedbackWrite(
             trace=body.trace(),
-            author=author(auth),
+            author=author(auth, body.user),
             feedback=FeedbackInput(score=body.score, comment=body.comment),
             at=now,
         ),
@@ -102,13 +114,12 @@ async def submit_feedback(body: FeedbackSubmission, auth: Auth, store: Store, no
 
 
 @router.delete("", status_code=204)
-async def delete_feedback(target: Target, auth: Auth, store: Store, now: Now) -> Response:
-    scope: Final = user_scope(auth, write=True)
-    deleted: Final = await store.delete(scope, target.trace(), author(auth), now)
+async def delete_feedback(target: Deletion, auth: Auth, store: Store, now: Now) -> Response:
+    deleted: Final = await store.delete(write_scope(auth), target.trace(), author(auth, target.user), now)
     if deleted is None:
         raise HTTPException(404, TRACE_NOT_FOUND)
     if not deleted:
-        raise HTTPException(404, "You have not left feedback on this trace")
+        raise HTTPException(404, "No feedback from this user on this trace")
     return Response(status_code=204)
 
 

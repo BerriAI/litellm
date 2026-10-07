@@ -9,6 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens.feedback_endpoints import (
+    FeedbackDeletion,
     FeedbackSubmission,
     FeedbackTarget,
     delete_feedback,
@@ -33,6 +34,8 @@ ADMIN: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="a
 OTHER_ADMIN: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="other")
 VIEWER: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, user_id="viewer")
 INTERNAL: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="dev")
+TEAM_APP: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, team_id="team-a", token="app-key")
+SOLO_APP: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, token="key-solo")
 T0: Final = datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc)
 
 
@@ -51,8 +54,12 @@ class FakeClickHouse(ClickHouseStorage):
         assert table == FEEDBACK_TABLE
         self.rows.extend(rows)
 
-    def _visible(self, team: str, key: str, all_teams: int, scope_team: str) -> bool:
-        return bool(all_teams) or team == scope_team
+    def _visible(
+        self, team: str, key: str, access: LensFeedbackTargetParams | LensFeedbackParams | LensFeedbackSummaryParams
+    ) -> bool:
+        if access.all_teams:
+            return True
+        return team == access.team and (access.key_hash == "" or key == access.key_hash)
 
     def _latest(self) -> tuple[Mapping[str, object], ...]:
         newest: Final = {}  # mutable-ok: emulates FINAL collapse
@@ -66,7 +73,7 @@ class FakeClickHouse(ClickHouseStorage):
                 return tuple(
                     FeedbackTargetRow(team_id=team, key_hash=key, trace_ref=ref(team, key, parameters.trace_id))
                     for team, key in self.traces.get(parameters.trace_id, ())
-                    if self._visible(team, key, parameters.all_teams, parameters.team)
+                    if self._visible(team, key, parameters)
                     and parameters.trace_ref in ("", ref(team, key, parameters.trace_id))
                 )
             case LensFeedbackParams():
@@ -83,14 +90,14 @@ class FakeClickHouse(ClickHouseStorage):
                     for r in self._latest()
                     if r["TraceId"] == parameters.trace_id
                     and ref(str(r["TeamId"]), str(r["ApiKeyHash"]), str(r["TraceId"])) == parameters.trace_ref
-                    and self._visible(str(r["TeamId"]), "", parameters.all_teams, parameters.team)
+                    and self._visible(str(r["TeamId"]), str(r["ApiKeyHash"]), parameters)
                 )
             case LensFeedbackSummaryParams():
                 live = tuple(
                     r
                     for r in self._latest()
                     if r["TraceId"] in parameters.trace_ids
-                    and self._visible(str(r["TeamId"]), "", parameters.all_teams, parameters.team)
+                    and self._visible(str(r["TeamId"]), str(r["ApiKeyHash"]), parameters)
                 )
                 keys = sorted({(str(r["TeamId"]), str(r["ApiKeyHash"]), str(r["TraceId"])) for r in live})
                 return tuple(
@@ -118,8 +125,9 @@ def store(**traces: tuple[tuple[str, str], ...]) -> ClickHouseFeedbackStore:
     return ClickHouseFeedbackStore(FakeClickHouse(traces or {"t1": (("team-a", "key-a"),)}))
 
 
-def submission(score: int, comment: str = "", **target: str) -> FeedbackSubmission:
-    return FeedbackSubmission.model_validate({"score": score, "comment": comment, **(target or {"trace_id": "t1"})})
+def submission(score: int, comment: str = "", **fields: str) -> FeedbackSubmission:
+    target: Final = {} if "trace_id" in fields or "session_id" in fields else {"trace_id": "t1"}
+    return FeedbackSubmission.model_validate({"score": score, "comment": comment, **target, **fields})
 
 
 @pytest.mark.asyncio
@@ -135,7 +143,7 @@ async def test_resubmitting_replaces_the_authors_feedback_and_keeps_other_author
 
     assert (first.created_at, second.created_at, second.updated_at) == (T0, T0, T0 + timedelta(minutes=5))
     assert {f.author: f.created_at for f in listed.feedback}["admin"] == T0
-    assert (listed.trace_ref, listed.viewer) == (ref("team-a", "key-a", "t1"), "viewer")
+    assert listed.trace_ref == ref("team-a", "key-a", "t1")
     assert {(f.author, f.score, f.comment) for f in listed.feedback} == {
         ("admin", 7, "fixed after retry"),
         ("other", 9, "great"),
@@ -186,7 +194,7 @@ def test_target_needs_exactly_one_of_trace_or_session(target: dict[str, str]) ->
 
 
 @pytest.mark.asyncio
-async def test_viewers_can_read_but_not_write_and_non_admins_cannot_read() -> None:
+async def test_viewers_can_read_but_not_write_and_non_admins_cannot_read_in_lens() -> None:
     feedback: Final = store()
     await read_feedback(FeedbackTarget(trace_id="t1"), VIEWER, feedback)
 
@@ -199,7 +207,7 @@ async def test_viewers_can_read_but_not_write_and_non_admins_cannot_read() -> No
 
 
 @pytest.mark.asyncio
-async def test_author_and_tenant_come_from_the_caller_and_trace_not_the_request() -> None:
+async def test_tenant_comes_from_the_trace_and_author_defaults_to_the_caller() -> None:
     feedback: Final = store()
     saved: Final = await submit_feedback(submission(5), OTHER_ADMIN, feedback, T0)
 
@@ -209,7 +217,7 @@ async def test_author_and_tenant_come_from_the_caller_and_trace_not_the_request(
         ("team-a", "key-a", "other")
     }
     with pytest.raises(ValidationError):
-        FeedbackSubmission.model_validate({"trace_id": "t1", "score": 5, "author": "someone-else"})
+        FeedbackSubmission.model_validate({"trace_id": "t1", "score": 5, "team_id": "someone-else"})
 
 
 @pytest.mark.asyncio
@@ -218,9 +226,9 @@ async def test_delete_hides_only_the_callers_feedback() -> None:
     await submit_feedback(submission(2), ADMIN, feedback, T0)
     await submit_feedback(submission(8), OTHER_ADMIN, feedback, T0)
 
-    await delete_feedback(FeedbackTarget(trace_id="t1"), ADMIN, feedback, T0 + timedelta(minutes=9))
+    await delete_feedback(FeedbackDeletion(trace_id="t1"), ADMIN, feedback, T0 + timedelta(minutes=9))
     with pytest.raises(HTTPException) as missing:
-        await delete_feedback(FeedbackTarget(trace_id="t1"), ADMIN, feedback, T0 + timedelta(minutes=9))
+        await delete_feedback(FeedbackDeletion(trace_id="t1"), ADMIN, feedback, T0 + timedelta(minutes=9))
 
     remaining: Final = await read_feedback(FeedbackTarget(trace_id="t1"), ADMIN, feedback)
     assert missing.value.status_code == 404
@@ -267,3 +275,48 @@ async def test_summary_without_trace_ref_reports_the_rated_trace_with_its_resolv
     )
 
     assert [(s.trace_ref, s.count, s.lowest) for s in summaries] == [(ref("team-a", "key-a", "t1"), 1, 6)]
+
+
+@pytest.mark.asyncio
+async def test_an_app_key_records_its_end_users_feedback_on_its_own_teams_trace() -> None:
+    feedback: Final = store()
+    await submit_feedback(submission(2, "It ignored my file", user="customer-1"), TEAM_APP, feedback, T0)
+    await submit_feedback(submission(9, "Perfect", user="customer-2"), TEAM_APP, feedback, T0)
+    await submit_feedback(
+        submission(4, "Better after retry", user="customer-1"), TEAM_APP, feedback, T0 + timedelta(minutes=1)
+    )
+
+    listed: Final = await read_feedback(FeedbackTarget(trace_id="t1"), ADMIN, feedback)
+
+    assert {(f.author, f.score, f.comment) for f in listed.feedback} == {
+        ("customer-1", 4, "Better after retry"),
+        ("customer-2", 9, "Perfect"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_app_key_cannot_write_feedback_on_another_tenants_trace() -> None:
+    feedback: Final = store(t1=(("team-b", "key-b"),), solo=(("", "key-solo"),), other=(("", "key-other"),))
+
+    with pytest.raises(HTTPException) as other_team:
+        await submit_feedback(submission(5, user="customer-1"), TEAM_APP, feedback, T0)
+    with pytest.raises(HTTPException) as other_key:
+        await submit_feedback(submission(5, trace_id="other", user="customer-1"), SOLO_APP, feedback, T0)
+    saved: Final = await submit_feedback(submission(5, trace_id="solo", user="customer-1"), SOLO_APP, feedback, T0)
+
+    assert (other_team.value.status_code, other_key.value.status_code) == (404, 404)
+    assert saved.author == "customer-1"
+
+
+@pytest.mark.asyncio
+async def test_an_app_can_remove_one_end_users_feedback() -> None:
+    feedback: Final = store()
+    await submit_feedback(submission(2, user="customer-1"), TEAM_APP, feedback, T0)
+    await submit_feedback(submission(9, user="customer-2"), TEAM_APP, feedback, T0)
+
+    await delete_feedback(
+        FeedbackDeletion(trace_id="t1", user="customer-1"), TEAM_APP, feedback, T0 + timedelta(minutes=1)
+    )
+
+    listed: Final = await read_feedback(FeedbackTarget(trace_id="t1"), ADMIN, feedback)
+    assert [f.author for f in listed.feedback] == ["customer-2"]
