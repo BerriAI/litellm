@@ -24,6 +24,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT
+from e2e_metadata import step
 
 if TYPE_CHECKING:
     from types_boto3_s3.client import S3Client
@@ -53,17 +54,21 @@ class S3LogReader:
     bucket: str
     client: S3Client
 
+    @step("List the log objects in the S3 bucket under {prefix}")
     def list_keys(self, prefix: str) -> list[str]:
         response = self.client.list_objects_v2(Bucket=self.bucket, Prefix=prefix)
         return [obj["Key"] for obj in response.get("Contents", []) if "Key" in obj]
 
+    @step("Download a log object from the S3 bucket")
     def read_record(self, key: str) -> S3LogRecord:
         body = self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
         return S3LogRecord.model_validate_json(body)
 
+    @step("Read the log objects in the S3 bucket under {prefix}")
     def records_matching(self, *, prefix: str, predicate: Callable[[S3LogRecord], bool]) -> list[S3LogRecord]:
         return [record for record in map(self.read_record, self.list_keys(prefix)) if predicate(record)]
 
+    @step("Wait for the request's log object to land in the S3 bucket under {prefix}, then watch for duplicates")
     def poll_records(self, *, prefix: str, predicate: Callable[[S3LogRecord], bool]) -> list[S3LogRecord]:
         """Poll until at least one matching object is listed (the s3_v2
         callback flushes on a ~10s timer), then keep re-reading for

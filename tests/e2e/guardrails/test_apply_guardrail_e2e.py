@@ -11,6 +11,7 @@ import pytest
 
 from e2e_config import MASTER_KEY, unique_marker
 from e2e_http import Success, UnauthorizedError, UnknownApiError
+from e2e_metadata import Domain, Route, Subject, meta
 from guardrails_client import GuardrailsClient
 from lifecycle import ResourceManager
 
@@ -22,6 +23,12 @@ class TestApplyGuardrailEndpoint:
         "guardrail.litellm_content_filter.apply_endpoint.blocks",
         "guardrail.litellm_content_filter.apply_endpoint.allows",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.GUARDRAILS,
+        )
     )
     def test_apply_guardrail_blocks_banned_and_allows_clean(
         self, client: GuardrailsClient, resources: ResourceManager

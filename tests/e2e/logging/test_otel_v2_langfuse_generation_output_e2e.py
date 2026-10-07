@@ -24,6 +24,7 @@ from typing import Final
 import pytest
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import LangfuseCreds, LangfuseObservation, LoggingClient, load_langfuse_creds
 from models import (
@@ -69,6 +70,13 @@ RED_SQUARE_PNG: Final = base64.b64decode(
 )
 BOUNDED_OUTPUT_CHARS: Final = 1024
 PLACEHOLDER_INPUT: Final = "default-message-value"
+COMPLETION_BACKEND: Final = "openai/gpt-3.5-turbo-instruct"
+IMAGE_BACKEND: Final = "openai/gpt-image-1-mini"
+SPEECH_BACKEND: Final = "openai/gpt-4o-mini-tts"
+TRANSCRIPTION_BACKEND: Final = "openai/gpt-4o-mini-transcribe"
+MODERATION_BACKEND: Final = "openai/omni-moderation-latest"
+MISTRAL_OCR_BACKEND: Final = "mistral/mistral-ocr-latest"
+RERANK_BACKEND: Final = "cohere/rerank-v4.0-fast"
 
 
 class _OutputMessage(BaseModel):
@@ -142,7 +150,7 @@ def _openai(model: str) -> LiteLLMParamsBody:
 
 
 def _mistral_ocr() -> LiteLLMParamsBody:
-    return LiteLLMParamsBody(model="mistral/mistral-ocr-latest", api_key="os.environ/MISTRAL_API_KEY")
+    return LiteLLMParamsBody(model=MISTRAL_OCR_BACKEND, api_key="os.environ/MISTRAL_API_KEY")
 
 
 def _langfuse_search_tool(
@@ -171,10 +179,19 @@ def _langfuse_search_tool(
 
 class TestOtelV2LangfuseGenerationOutput:
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(COMPLETION_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_completions_output_is_the_completion_text(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager
     ) -> None:
-        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai("openai/gpt-3.5-turbo-instruct"))
+        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai(COMPLETION_BACKEND))
         started: Final = datetime.now(timezone.utc)
         response: Final = unwrap(
             client.proxy.transport.post(
@@ -193,10 +210,19 @@ class TestOtelV2LangfuseGenerationOutput:
         )
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["images_generations"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.IMAGES,
+            providers=(Provider.OPENAI,),
+            models=(IMAGE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_images_output_is_a_bounded_summary_without_base64(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager
     ) -> None:
-        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai("openai/gpt-image-1-mini"))
+        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai(IMAGE_BACKEND))
         started: Final = datetime.now(timezone.utc)
         response: Final = unwrap(
             client.proxy.transport.post(
@@ -220,10 +246,19 @@ class TestOtelV2LangfuseGenerationOutput:
         )
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["audio_speech"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(SPEECH_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_speech_output_is_a_bounded_summary_without_audio_bytes(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager
     ) -> None:
-        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai("openai/gpt-4o-mini-tts"))
+        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai(SPEECH_BACKEND))
         started: Final = datetime.now(timezone.utc)
         audio: Final = client.proxy.transport.stream_binary(
             "/v1/audio/speech",
@@ -239,10 +274,19 @@ class TestOtelV2LangfuseGenerationOutput:
         )
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["audio_transcriptions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(TRANSCRIPTION_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_transcription_output_is_the_transcript(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager
     ) -> None:
-        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai("openai/gpt-4o-mini-transcribe"))
+        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai(TRANSCRIPTION_BACKEND))
         started: Final = datetime.now(timezone.utc)
         response: Final = unwrap(
             client.proxy.transport.upload(
@@ -262,10 +306,19 @@ class TestOtelV2LangfuseGenerationOutput:
         assert transcript in output, f"generation output lacks the transcript {transcript!r}: {output!r}"
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["moderations"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.MODERATIONS,
+            providers=(Provider.OPENAI,),
+            models=(MODERATION_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_moderations_output_is_the_verdict(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager
     ) -> None:
-        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai("openai/omni-moderation-latest"))
+        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai(MODERATION_BACKEND))
         started: Final = datetime.now(timezone.utc)
         response: Final = unwrap(
             client.proxy.transport.post(
@@ -284,6 +337,15 @@ class TestOtelV2LangfuseGenerationOutput:
         )
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["rerank"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.RERANK,
+            providers=(Provider.COHERE,),
+            models=(RERANK_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_rerank_output_is_the_ranked_indices_and_scores(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager
     ) -> None:
@@ -291,7 +353,7 @@ class TestOtelV2LangfuseGenerationOutput:
             client,
             langfuse_creds,
             resources,
-            LiteLLMParamsBody(model="cohere/rerank-v4.0-fast", api_key="os.environ/COHERE_API_KEY"),
+            LiteLLMParamsBody(model=RERANK_BACKEND, api_key="os.environ/COHERE_API_KEY"),
         )
         query: Final = f"What is the capital of France? {unique_marker()}"
         started: Final = datetime.now(timezone.utc)
@@ -317,6 +379,15 @@ class TestOtelV2LangfuseGenerationOutput:
         assert output == "\n\n".join(ranked), f"generation output is not the ranked indices and scores: {output!r}"
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["ocr"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.OCR,
+            providers=(Provider.MISTRAL,),
+            models=(MISTRAL_OCR_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_ocr_input_is_the_document_url(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager
     ) -> None:
@@ -334,6 +405,15 @@ class TestOtelV2LangfuseGenerationOutput:
         assert response.pages[0].markdown in _output_text(generation)
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["ocr"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.OCR,
+            providers=(Provider.MISTRAL,),
+            models=(MISTRAL_OCR_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_ocr_upload_input_is_a_bounded_document_summary_without_base64(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager
     ) -> None:
@@ -360,10 +440,19 @@ class TestOtelV2LangfuseGenerationOutput:
         )
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["images_edits"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.IMAGES,
+            providers=(Provider.OPENAI,),
+            models=(IMAGE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_image_edit_input_is_the_edit_prompt(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager
     ) -> None:
-        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai("openai/gpt-image-1-mini"))
+        model, key, alias = _langfuse_key(client, langfuse_creds, resources, _openai(IMAGE_BACKEND))
         prompt: Final = f"make the square blue {unique_marker()}"
         started: Final = datetime.now(timezone.utc)
         response: Final = unwrap(
@@ -388,6 +477,11 @@ class TestOtelV2LangfuseGenerationOutput:
         assert _output_text(generation).startswith("b64_json image (")
 
     @pytest.mark.covers("logging.langfuse.success.logs_spend", exercised_on=["search"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+        )
+    )
     def test_search_input_is_the_query_and_output_the_results(
         self, client: LoggingClient, langfuse_creds: LangfuseCreds, resources: ResourceManager
     ) -> None:
