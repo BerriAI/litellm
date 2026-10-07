@@ -263,7 +263,7 @@ def test_worker_kill_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path) 
 
 
 def test_proxy_restart_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path) -> None:
-    """X4: restart the owned proxy between the two halves; pre-restart count asserted, then recounted."""
+    """X4: the boot wipes the kept directory, so the second proxy counts only the second half."""
     marker: Final = uuid.uuid4().hex
     prom_dir: Final = tmp_path / "prom"
     prom_dir.mkdir()
@@ -321,8 +321,8 @@ def test_proxy_restart_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path
                     _populated(_samples(owned_two.gateway, (model,)), deployment),
                     _blank(_samples(owned_two.gateway, (model,))),
                 ),
-                lambda observed: observed[0] == len(named) and observed[1] == 0,
+                lambda observed: observed[0] == len(second_half) and observed[1] == 0,
                 seconds=70,
             )
-            assert post[0] == len(named), (pre, post, outcomes_two)
+            assert post[0] == len(second_half), (pre, post, outcomes_two)
             owned_two.gateway.post("/model/delete", {"id": deployment})
