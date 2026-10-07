@@ -1,6 +1,8 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::{Arc, OnceLock},
+    time::Instant,
+};
 
-use serde_json::Map;
 use tracing::{
     Dispatch, Event, Metadata, Subscriber,
     span::{Attributes, Id, Record as SpanRecord},
@@ -9,13 +11,14 @@ use tracing_subscriber::{
     Layer, Registry, filter::dynamic_filter_fn, layer::Context, prelude::*, registry::LookupSpan,
 };
 
-use crate::{Emitting, Record, Sink};
+use crate::{CONTEXT, Emitting, Record, Sink};
 
 pub fn sink_layer<S, R>(sink: S) -> impl Layer<R>
 where
     S: Sink,
     R: Subscriber + for<'a> LookupSpan<'a>,
 {
+    register_scoped();
     let sink = Arc::new(sink);
     let filter_sink = sink.clone();
     Output(sink).with_filter(dynamic_filter_fn(move |metadata, _| {
@@ -24,6 +27,7 @@ where
 }
 
 pub(crate) fn dispatch(sink: impl Sink) -> Dispatch {
+    register_scoped();
     let sink = Arc::new(sink);
     let filter_sink = sink.clone();
     Dispatch::new(
@@ -33,6 +37,12 @@ pub(crate) fn dispatch(sink: impl Sink) -> Dispatch {
                 enabled(filter_sink.as_ref(), metadata)
             })),
     )
+}
+
+fn register_scoped() {
+    // A sole scoped dispatcher can cache unscoped callsites as never interested.
+    static REGISTRATION: OnceLock<Dispatch> = OnceLock::new();
+    REGISTRATION.get_or_init(|| Dispatch::new(tracing::subscriber::NoSubscriber::default()));
 }
 
 fn enabled(sink: &impl Sink, metadata: &Metadata<'_>) -> bool {
@@ -68,7 +78,7 @@ where
         let mut record = Record {
             metadata: attributes.metadata(),
             message: String::new(),
-            fields: Map::new(),
+            fields: CONTEXT.with(|fields| fields.borrow().as_ref().clone()),
         };
         attributes.record(&mut record);
         extensions.insert(SpanData {
@@ -96,7 +106,7 @@ where
         let mut record = Record {
             metadata: event.metadata(),
             message: String::new(),
-            fields: Map::new(),
+            fields: CONTEXT.with(|fields| fields.borrow().as_ref().clone()),
         };
         if let Some(scope) = context.event_scope(event) {
             for span in scope.from_root() {
@@ -122,7 +132,7 @@ where
         let mut record = Record {
             metadata: span.metadata(),
             message: "span closed".into(),
-            fields: Map::new(),
+            fields: CONTEXT.with(|fields| fields.borrow().as_ref().clone()),
         };
         for ancestor in span.scope().from_root() {
             if let Some(data) = ancestor.extensions().get::<SpanData>() {
