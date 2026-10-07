@@ -123,6 +123,8 @@ import type {
   SpanErrorQuery,
   SpanQuery,
   Trace,
+  TraceAgentList,
+  TraceAgentsQuery,
   TraceDetailQuery,
   TraceListQuery,
   TracePage,
@@ -1971,15 +1973,37 @@ export const agentTraceListCall = async ({
   startMs,
   endMs,
   cursor,
+  agent,
 }: {
   accessToken: string;
   startMs: number;
   endMs: number;
   cursor?: string | null;
+  agent?: string;
 }): Promise<TracePage> => {
-  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined } satisfies TraceListQuery;
+  const query = {
+    start_ms: startMs,
+    end_ms: endMs,
+    cursor: cursor ?? undefined,
+    agent: agent || undefined,
+  } satisfies TraceListQuery;
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
+
+/** Agent names with a run in the window, scoped like GET /v1/traces. */
+export const agentTraceAgentsCall = async ({
+  accessToken,
+  startMs,
+  endMs,
+}: {
+  accessToken: string;
+  startMs: number;
+  endMs: number;
+}): Promise<TraceAgentList> =>
+  apiClient.get<TraceAgentList>(`/v1/traces/agents`, {
+    accessToken,
+    query: { start_ms: startMs, end_ms: endMs } satisfies TraceAgentsQuery,
+  });
 
 export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
   apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
