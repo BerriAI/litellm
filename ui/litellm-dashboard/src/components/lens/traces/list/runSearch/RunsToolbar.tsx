@@ -20,7 +20,6 @@ interface RunsToolbarProps {
   query: string;
   onQueryChange: (value: string) => void;
   runs: readonly TraceSummary[];
-  /** Agents with a run anywhere in the range, including ones whose runs aren't loaded yet. */
   agentOptions?: readonly string[];
   /** The range the list shows, for the copied query. */
   range?: TimeWindow;
