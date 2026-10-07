@@ -14,6 +14,8 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.decisions import (
     ChoiceAnswer,
     DecisionInputMessage,
+    DecisionsInputTokensDetails,
+    DecisionsOutputTokensDetails,
     DecisionsResponse,
     DecisionsUsage,
     PredicateAnswer,
@@ -95,6 +97,13 @@ _EXPECTED_USAGE: Final[Mapping[str, object]] = {
     "output_tokens_details": {"reasoning_tokens": 0},
     "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
 }
+_ZERO_USAGE: Final = DecisionsUsage(
+    input_tokens=0,
+    input_tokens_details=DecisionsInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
+    output_tokens=0,
+    output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
+    total_tokens=0,
+)
 _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     ("perplexity", "perplexity/pplx-decider-v1-27b", "https://api.perplexity.ai/v1/decisions", "pplx-decider-v1-27b"),
     ("typesafe", "typesafe/jev-1.13", "https://api.typesafe.ai/v1/systemone", "jev-1.13"),
@@ -376,7 +385,6 @@ def test_system_one_provider_extras_are_not_part_of_the_response(respx_mock: res
     )
 
     assert response.model_extra == {}
-    assert response.usage is not None
     assert response.usage.model_dump(mode="json") == _EXPECTED_USAGE
 
 
@@ -384,7 +392,13 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
     response: Final = DecisionsResponse(
         model="pplx-decider-v1-27b",
         answers=[],
-        usage=DecisionsUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
+        usage=DecisionsUsage(
+            input_tokens=_INPUT_TOKENS,
+            input_tokens_details=DecisionsInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
+            output_tokens=_OUTPUT_TOKENS,
+            output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
+            total_tokens=_INPUT_TOKENS + _OUTPUT_TOKENS,
+        ),
     )
     response.set_hidden_params({"model": "perplexity/pplx-decider-v1-27b", "custom_llm_provider": "perplexity"})
 
@@ -399,7 +413,7 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
 
 
 def test_decisions_response_hidden_params_getter_preserves_mutable_identity() -> None:
-    response: Final = DecisionsResponse(model="decider", answers=(), usage=None)
+    response: Final = DecisionsResponse(model="decider", answers=(), usage=_ZERO_USAGE)
 
     assert response.hidden_params is response._hidden_params
 

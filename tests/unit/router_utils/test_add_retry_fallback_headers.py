@@ -14,7 +14,20 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
     replace_complexity_router_headers,
 )
-from litellm.types.decisions import DecisionsResponse
+from litellm.types.decisions import (
+    DecisionsInputTokensDetails,
+    DecisionsOutputTokensDetails,
+    DecisionsResponse,
+    DecisionsUsage,
+)
+
+_ZERO_USAGE: Final = DecisionsUsage(
+    input_tokens=0,
+    input_tokens_details=DecisionsInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
+    output_tokens=0,
+    output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
+    total_tokens=0,
+)
 
 
 class StreamingWrapper:
@@ -197,15 +210,8 @@ def test_add_fallback_headers_serializes_fallback_errors():
     )
 
     assert result is response
-    assert response._hidden_params["additional_headers"][
-        "x-litellm-attempted-fallbacks"
-    ] == 1
-    assert (
-        json.loads(
-            response._hidden_params["additional_headers"]["x-litellm-fallback-errors"]
-        )
-        == fallback_errors
-    )
+    assert response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+    assert json.loads(response._hidden_params["additional_headers"]["x-litellm-fallback-errors"]) == fallback_errors
 
 
 def test_add_retry_headers_to_streaming_wrapper():
@@ -231,9 +237,7 @@ def test_get_hidden_params_dict_with_pydantic_model_hidden_params():
 
     class Response:
         def __init__(self):
-            self._hidden_params = InnerHiddenParams(
-                additional_headers={"x-custom": "value"}
-            )
+            self._hidden_params = InnerHiddenParams(additional_headers={"x-custom": "value"})
 
     result = get_hidden_params_dict(Response())
     assert result == {"additional_headers": {"x-custom": "value"}}
@@ -259,7 +263,7 @@ def test_add_fallback_headers_when_no_existing_additional_headers():
 
 
 def test_add_fallback_headers_to_frozen_decisions_response() -> None:
-    response: Final = DecisionsResponse(model="decider", answers=(), usage=None)
+    response: Final = DecisionsResponse(model="decider", answers=(), usage=_ZERO_USAGE)
 
     result: Final = add_fallback_headers_to_response(response=response, attempted_fallbacks=1)
 
@@ -268,7 +272,7 @@ def test_add_fallback_headers_to_frozen_decisions_response() -> None:
 
 
 def test_ensure_response_additional_headers_updates_frozen_decisions_response() -> None:
-    response: Final = DecisionsResponse(model="decider", answers=(), usage=None)
+    response: Final = DecisionsResponse(model="decider", answers=(), usage=_ZERO_USAGE)
 
     additional_headers: Final = ensure_response_additional_headers(response)
 
@@ -321,9 +325,7 @@ def test_get_fallback_errors_from_headers_existing_list_passthrough():
 
 
 def test_get_fallback_errors_from_headers_invalid_json_returns_empty():
-    result = get_fallback_errors_from_headers(
-        {"x-litellm-fallback-errors": "not-valid-json-{"}
-    )
+    result = get_fallback_errors_from_headers({"x-litellm-fallback-errors": "not-valid-json-{"})
     assert result == []
 
 
