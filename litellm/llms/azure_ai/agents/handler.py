@@ -29,6 +29,7 @@ import httpx
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure_ai.agents.transformation import (
     AzureAIAgentsConfig,
@@ -231,9 +232,7 @@ class AzureAIAgentsHandler:
         model_response.model = model
 
         # Store thread_id for conversation continuity
-        if not hasattr(model_response, "_hidden_params") or model_response._hidden_params is None:
-            model_response._hidden_params = {}
-        model_response._hidden_params["thread_id"] = thread_id
+        set_hidden_param(model_response, "thread_id", thread_id)
 
         # Estimate token usage
         try:
@@ -660,7 +659,7 @@ class AzureAIAgentsHandler:
                         ],
                     )
                     if thread_id:
-                        final_chunk._hidden_params = {"thread_id": thread_id}
+                        final_chunk.hidden_params = {"thread_id": thread_id}
                     yield final_chunk
                     return
 
@@ -706,7 +705,7 @@ class AzureAIAgentsHandler:
                                     ],
                                 )
                                 if thread_id:
-                                    chunk._hidden_params = {"thread_id": thread_id}
+                                    chunk.hidden_params = {"thread_id": thread_id}
                                 yield chunk
 
 

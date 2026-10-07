@@ -9,6 +9,7 @@ from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, KeyGenerateBody, LiteLLMParamsBody, TeamNewBody
 from spend_e2e_client import SpendClient
 
+BACKEND: Final = "openai/gpt-5.6-luna"
 INPUT_RATE: Final = 0.00004
 OUTPUT_RATE: Final = 0.00008
 
@@ -38,7 +39,7 @@ def create_traffic(client: SpendClient, resources: ResourceManager) -> tuple[Tea
     model_id: Final = client.proxy.create_model(
         model,
         LiteLLMParamsBody(
-            model="openai/gpt-5.6-luna",
+            model=BACKEND,
             api_key="os.environ/OPENAI_API_KEY",
             api_base=None if base is None else f"{base}/v1",
             input_cost_per_token=INPUT_RATE,

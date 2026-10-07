@@ -63,7 +63,8 @@ def mock_request():
             self.method = method
             self.request_body = request_body or {}
             # Add url attribute that the actual code expects
-            self.url = "http://localhost:8000/test"
+            self.url = httpx.URL("http://localhost:8000/test")
+            self.scope = {"type": "http", "method": method, "path": "/test"}
             # Add state attribute that FastAPI requests have
             self.state = type("State", (), {})()
 
@@ -414,6 +415,8 @@ PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES = {
     "/transcribe": {"POST"},
     "/transcribe/{operation}": {"POST"},
     "/tinyfish/{endpoint:path}": {"GET", "POST"},
+    "/laya/v1/systemone": {"POST"},
+    "/bespoke/v1/systemone": {"POST"},
 }
 
 
