@@ -32,7 +32,7 @@ fn named_requests_preserve_all_access_cases(
         )
     };
     round_trip::<ListTracesParams>(request(
-        json!({"start_ms": -1, "end_ms": 10, "cursor_ms": 0, "cursor_trace_id": "", "limit": 100}),
+        json!({"start_ms": -1, "end_ms": 10, "cursor_ms": 0, "cursor_trace_id": "", "limit": 100, "agent": "claude-code"}),
     ));
     round_trip::<TraceIdentityParams>(request(json!({"trace_id": "trace"})));
     round_trip::<TraceSpansParams>(request(json!({"trace_id": "trace", "trace_ref": "ref"})));
