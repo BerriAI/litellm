@@ -104,6 +104,31 @@ const OPTIONS: OptionConfig[] = [
     adminOnly: true,
   },
 ];
+export interface UsageOptionAvailability {
+  userRole: string | null;
+  canViewTagUsage?: boolean;
+  isOrgAdmin?: boolean;
+}
+
+export const isUsageOptionAvailable = (
+  value: UsageOption,
+  { userRole, canViewTagUsage = false, isOrgAdmin = false }: UsageOptionAvailability,
+): boolean => {
+  const option = OPTIONS.find((o) => o.value === value);
+  if (!option) return false;
+  const isAdmin = all_admin_roles.includes(userRole ?? "");
+  if (option.capability) {
+    return hasCapability(userRole, option.capability, isOrgAdmin);
+  }
+  if (option.value === "tag" && canViewTagUsage) {
+    return true;
+  }
+  if (option.adminOnly && !isAdmin) {
+    return false;
+  }
+  return true;
+};
+
 export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   value,
   onChange,
@@ -116,18 +141,9 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
 }) => {
   const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
-    return OPTIONS.filter((option) => {
-      if (option.capability) {
-        return hasCapability(userRole, option.capability, isOrgAdmin);
-      }
-      if (option.value === "tag" && canViewTagUsage) {
-        return true;
-      }
-      if (option.adminOnly && !isAdmin) {
-        return false;
-      }
-      return true;
-    }).map((option) => {
+    return OPTIONS.filter((option) =>
+      isUsageOptionAvailable(option.value, { userRole, canViewTagUsage, isOrgAdmin }),
+    ).map((option) => {
       let label = option.label;
       let desc = option.description;
       if (option.showForAdmin && option.showForNonAdmin) {

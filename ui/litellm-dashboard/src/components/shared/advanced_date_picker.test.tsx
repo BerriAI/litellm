@@ -235,4 +235,38 @@ describe("AdvancedDatePicker", () => {
       expect(applyButton).toBeDisabled();
     });
   });
+
+  it("should close dropdown when Apply is clicked", async () => {
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+    openDropdown(container);
+    expect(screen.getByText("Today")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Apply"));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Today")).not.toBeInTheDocument();
+    });
+  });
+
+  it("should close dropdown on Apply even without requestIdleCallback (Safari)", async () => {
+    const original = window.requestIdleCallback;
+    // @ts-expect-error - deleting a browser API to emulate Safari's absence of it
+    delete window.requestIdleCallback;
+
+    try {
+      const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+      openDropdown(container);
+      expect(screen.getByText("Today")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Apply"));
+
+      await waitFor(() => {
+        expect(screen.queryByText("Today")).not.toBeInTheDocument();
+      });
+    } finally {
+      window.requestIdleCallback = original;
+    }
+  });
 });

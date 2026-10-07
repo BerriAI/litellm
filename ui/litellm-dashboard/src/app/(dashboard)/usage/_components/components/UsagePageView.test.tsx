@@ -88,8 +88,9 @@ vi.mock("./EndpointUsage/EndpointUsage", () => ({
   default: () => <div>Endpoint Usage</div>,
 }));
 
-vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
+vi.mock("./UsageViewSelect/UsageViewSelect", async (importOriginal) => {
   const React = await import("react");
+  const actual = await importOriginal<typeof import("./UsageViewSelect/UsageViewSelect")>();
   const UsageViewSelect = ({
     value,
     onChange,
@@ -120,7 +121,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
     );
   };
   UsageViewSelect.displayName = "UsageViewSelect";
-  return { UsageViewSelect };
+  return { ...actual, UsageViewSelect };
 });
 
 vi.mock("@/components/shared/advanced_date_picker", async () => {
@@ -387,6 +388,7 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
+    localStorage.clear();
     vi.mocked(processActivityData).mockReset();
     vi.mocked(processActivityData).mockImplementation((_data, key) => ({
       [key]: modelActivity(`activity-source:${key}`),
@@ -1375,6 +1377,64 @@ describe("UsagePage", () => {
       expect(screen.getByText("Key Activity")).toBeInTheDocument();
       expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
+    });
+
+    it("should persist the selected activity tab across a reload", async () => {
+      const { unmount } = renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      act(() => {
+        fireEvent.click(screen.getByText("Model Activity"));
+      });
+
+      await waitFor(() => {
+        expect(localStorage.getItem("litellmUsageActivityTab")).toBe("models");
+      });
+
+      unmount();
+      mockUserDailyActivityAggregatedCall.mockClear();
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(screen.getByRole("tab", { name: "Model Activity" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tab", { name: "Cost" })).toHaveAttribute("aria-selected", "false");
+    });
+  });
+
+  describe("persisted usage view", () => {
+    it.each(["agent", "organization", "customer", "user"])(
+      "should not restore a persisted %s usage view for a session without access to it",
+      async (persistedView) => {
+        localStorage.setItem("litellmUsageView", persistedView);
+        mockUseAuthorized.mockReturnValue(nonAdminSession);
+
+        renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+
+        await waitFor(() => {
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+        });
+
+        expect((screen.getByTestId("usage-view-select") as HTMLSelectElement).value).toBe("global");
+      },
+    );
+
+    it("should restore a persisted usage view that the session still has access to", async () => {
+      localStorage.setItem("litellmUsageView", "team");
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect((screen.getByTestId("usage-view-select") as HTMLSelectElement).value).toBe("team");
     });
   });
 });
