@@ -30,6 +30,7 @@ _MANAGED_MODEL_ROUTES: Final = frozenset(
             "moderations",
             "rerank",
             "decisions",
+            "systemone",
             "ocr",
         ),
     )
@@ -74,6 +75,7 @@ _MODEL_ROUTE_KINDS: Final[
         "/audio/speech": "speech",
         "/rerank": "body",
         "/decisions": "body",
+        "/systemone": "body",
         "/messages/count_tokens": "body",
         ":countTokens": "path",
     }
