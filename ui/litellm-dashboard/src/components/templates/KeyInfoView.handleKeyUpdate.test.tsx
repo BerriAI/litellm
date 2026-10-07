@@ -50,7 +50,8 @@ vi.mock("@/utils/dataUtils", () => ({
   copyToClipboard: async () => true,
   formatNumberWithCommas: (n: any) => String(n),
 }));
-vi.mock("../key_info_utils", () => ({
+vi.mock("../key_info_utils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../key_info_utils")>()),
   extractLoggingSettings: () => ({}),
   formatMetadataForDisplay: (m: any) => JSON.stringify(m, null, 2),
   stripTagsFromMetadata: (m: any) => m,

@@ -32,6 +32,9 @@ export interface KeyEditFormValues {
   throttle_on_budget_exceeded?: boolean;
   enable_prompt_caching?: boolean;
   max_parallel_requests?: number | string | null;
+  max_parallel_requests_mode?: string | null;
+  max_parallel_requests_queue_timeout?: number | string | null;
+  max_parallel_requests_max_queued?: number | string | null;
   model_tpm_limit?: string;
   model_rpm_limit?: string;
   default_estimated_output_tokens?: number | string | null;
@@ -82,6 +85,11 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   throttle_on_budget_exceeded: Boolean(readMetadata(keyData, "throttle_on_budget_exceeded")),
   enable_prompt_caching: Boolean(readMetadata(keyData, "enable_prompt_caching")),
   max_parallel_requests: keyData.max_parallel_requests,
+  max_parallel_requests_mode: (readMetadata(keyData, "max_parallel_requests_mode") as string | undefined) ?? null,
+  max_parallel_requests_queue_timeout:
+    (readMetadata(keyData, "max_parallel_requests_queue_timeout") as number | undefined) ?? null,
+  max_parallel_requests_max_queued:
+    (readMetadata(keyData, "max_parallel_requests_max_queued") as number | undefined) ?? null,
   model_tpm_limit: (keyData as { model_tpm_limit?: string }).model_tpm_limit,
   model_rpm_limit: (keyData as { model_rpm_limit?: string }).model_rpm_limit,
   ...(estimateFields(keyData.metadata as Record<string, unknown> | null | undefined) as {
@@ -136,6 +144,9 @@ export const keyEditFormSchema = z.object({
   throttle_on_budget_exceeded: z.custom<boolean | undefined>().optional(),
   enable_prompt_caching: z.custom<boolean | undefined>().optional(),
   max_parallel_requests: z.custom<number | string | null | undefined>().optional(),
+  max_parallel_requests_mode: z.custom<string | null | undefined>().optional(),
+  max_parallel_requests_queue_timeout: z.custom<number | string | null | undefined>().optional(),
+  max_parallel_requests_max_queued: z.custom<number | string | null | undefined>().optional(),
   model_tpm_limit: z.custom<string | undefined>().optional(),
   model_rpm_limit: z.custom<string | undefined>().optional(),
   default_estimated_output_tokens: z
@@ -193,6 +204,9 @@ export const toSubmittedValues = (
   throttle_on_budget_exceeded: values.throttle_on_budget_exceeded,
   enable_prompt_caching: values.enable_prompt_caching,
   max_parallel_requests: values.max_parallel_requests,
+  max_parallel_requests_mode: values.max_parallel_requests_mode,
+  max_parallel_requests_queue_timeout: values.max_parallel_requests_queue_timeout,
+  max_parallel_requests_max_queued: values.max_parallel_requests_max_queued,
   model_tpm_limit: values.model_tpm_limit,
   model_rpm_limit: values.model_rpm_limit,
   default_estimated_output_tokens: values.default_estimated_output_tokens,

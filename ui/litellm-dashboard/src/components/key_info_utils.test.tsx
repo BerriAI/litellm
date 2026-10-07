@@ -4,6 +4,7 @@ import {
   extractLoggingSettings,
   formatMetadataForDisplay,
   stripTagsFromMetadata,
+  parallelRequestOverflowLabel,
 } from "./key_info_utils";
 
 describe("filterSensitiveMetadata", () => {
@@ -55,5 +56,25 @@ describe("stripTagsFromMetadata", () => {
     expect(result).toEqual({ keep: { x: 1 } });
     // Ensure original input is not mutated
     expect(input).toEqual(originalCopy);
+  });
+});
+
+describe("parallelRequestOverflowLabel", () => {
+  it.each([
+    [undefined, "Reject with 429"],
+    [{}, "Reject with 429"],
+    [{ max_parallel_requests_mode: "reject" }, "Reject with 429"],
+    [{ max_parallel_requests_mode: "queue" }, "Queue, 60s timeout"],
+    [{ max_parallel_requests_mode: "queue", max_parallel_requests_queue_timeout: 30 }, "Queue, 30s timeout"],
+    [
+      {
+        max_parallel_requests_mode: "queue",
+        max_parallel_requests_queue_timeout: 30,
+        max_parallel_requests_max_queued: 5,
+      },
+      "Queue, 30s timeout, up to 5 waiting per worker",
+    ],
+  ])("summarizes %j as %s", (metadata, expected) => {
+    expect(parallelRequestOverflowLabel(metadata)).toBe(expected);
   });
 });

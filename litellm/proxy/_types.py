@@ -14,6 +14,7 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    PositiveFloat,
     PositiveInt,
     PrivateAttr,
     TypeAdapter,
@@ -1372,6 +1373,9 @@ class KeyRequestBase(GenerateRequestBase):
     tpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
         None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
     )
+    max_parallel_requests_mode: Literal["reject", "queue"] | None = None
+    max_parallel_requests_queue_timeout: PositiveFloat | None = None
+    max_parallel_requests_max_queued: PositiveInt | None = None
     router_settings: UpdateRouterConfig | None = None
     access_group_ids: list[str] | None = None
 
@@ -5081,6 +5085,9 @@ LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "tag_rpm_limit",
     "rpm_limit_type",
     "tpm_limit_type",
+    "max_parallel_requests_mode",
+    "max_parallel_requests_queue_timeout",
+    "max_parallel_requests_max_queued",
     "enforced_params",
     "temp_budget_increase",
     "temp_budget_expiry",

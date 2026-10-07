@@ -7667,3 +7667,223 @@ async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
         await _rpm_request(limiter, cache, auth, "a2a/cheap")
     assert denied.value.status_code == 429
     assert "expensive" in str(denied.value.detail)
+
+
+class _QueueClock:
+    """No real clock: a waiter either blocks until a release signals it, or (advance_time) each wait
+    jumps the clock by its full timeout so queue timeouts elapse at once."""
+
+    def __init__(self, advance_time: bool = True) -> None:
+        self.now_seconds = 0.0
+        self.woken_by_release = 0
+        self._advance_time = advance_time
+
+    def now(self) -> float:
+        return self.now_seconds
+
+    async def wait(self, released: asyncio.Event, timeout_seconds: float) -> None:
+        if self._advance_time:
+            self.now_seconds += timeout_seconds
+            await asyncio.sleep(0)
+            return
+        await released.wait()
+        self.woken_by_release += 1
+
+
+def _queue_key(max_parallel_requests: int = 1, **queue_settings: object) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key=hash_token("sk-queue"),
+        max_parallel_requests=max_parallel_requests,
+        metadata={"max_parallel_requests_mode": "queue", **queue_settings},
+    )
+
+
+def _queue_handler(clock: _QueueClock) -> tuple[_PROXY_MaxParallelRequestsHandler, DualCache]:
+    cache = DualCache()
+    return (
+        _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), queue_clock=clock),
+        cache,
+    )
+
+
+async def _admit_in_own_stash(
+    handler: _PROXY_MaxParallelRequestsHandler, cache: DualCache, key: UserAPIKeyAuth
+) -> RequestRateLimiterStash:
+    _request_stash.set(None)
+    await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data={"model": "gpt-4o-mini"}, call_type="")
+    return get_or_create_request_stash()
+
+
+async def _finish(handler: _PROXY_MaxParallelRequestsHandler, key: UserAPIKeyAuth, stash: RequestRateLimiterStash):
+    _request_stash.set(stash)
+    await handler.async_log_success_event(
+        kwargs={"standard_logging_object": {"metadata": {"user_api_key_hash": key.api_key}}},
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+
+def _in_flight(handler: _PROXY_MaxParallelRequestsHandler, cache: DualCache, key: UserAPIKeyAuth) -> int:
+    counter_key = f"{{api_key:{key.api_key}}}:max_parallel_requests"
+    return handler._gauge_in_flight_from_cache_value(cache.in_memory_cache.get_cache(key=counter_key))
+
+
+@pytest.mark.asyncio
+async def test_queued_request_waits_for_a_slot_and_is_admitted_when_one_frees():
+    clock = _QueueClock(advance_time=False)
+    handler, cache = _queue_handler(clock)
+    key = _queue_key()
+    first = await _admit_in_own_stash(handler, cache, key)
+
+    waiter = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert not waiter.done()
+    assert _in_flight(handler, cache, key) == 1
+
+    await _finish(handler, key, first)
+    second = await asyncio.wait_for(waiter, timeout=1)
+
+    assert second.parallel_slot is not None
+    assert _in_flight(handler, cache, key) == 1
+    assert clock.woken_by_release == 1
+
+
+@pytest.mark.asyncio
+async def test_queued_request_gets_429_after_the_queue_timeout_without_taking_a_slot():
+    handler, cache = _queue_handler(_QueueClock())
+    key = _queue_key(max_parallel_requests_queue_timeout=30)
+    await _admit_in_own_stash(handler, cache, key)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _admit_in_own_stash(handler, cache, key)
+
+    assert exc_info.value.status_code == 429
+    assert "Limit type: max_parallel_requests" in exc_info.value.detail
+    assert "Waited 30.0s in the request queue (timeout 30s)" in exc_info.value.detail
+    assert _in_flight(handler, cache, key) == 1
+    assert handler._parallel_queue_depth == {}
+
+
+@pytest.mark.asyncio
+async def test_queue_timeout_defaults_to_sixty_seconds():
+    handler, cache = _queue_handler(_QueueClock())
+    key = _queue_key()
+    await _admit_in_own_stash(handler, cache, key)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _admit_in_own_stash(handler, cache, key)
+
+    assert "Waited 60.0s in the request queue (timeout 60s)" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_request_beyond_max_queued_is_rejected_at_once():
+    clock = _QueueClock(advance_time=False)
+    handler, cache = _queue_handler(clock)
+    key = _queue_key(max_parallel_requests_max_queued=1)
+    await _admit_in_own_stash(handler, cache, key)
+    waiter = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    await asyncio.sleep(0)
+    time_before = clock.now_seconds
+
+    with pytest.raises(HTTPException) as exc_info:
+        await asyncio.wait_for(_admit_in_own_stash(handler, cache, key), timeout=1)
+
+    assert "Request queue is full (1 requests already waiting for a slot)" in exc_info.value.detail
+    assert clock.now_seconds == time_before
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_leaves_the_queue_and_holds_no_slot():
+    handler, cache = _queue_handler(_QueueClock(advance_time=False))
+    key = _queue_key()
+    await _admit_in_own_stash(handler, cache, key)
+    waiter = asyncio.create_task(_admit_in_own_stash(handler, cache, key))
+    await asyncio.sleep(0)
+    assert sum(handler._parallel_queue_depth.values()) == 1
+
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    assert handler._parallel_queue_depth == {}
+    assert _in_flight(handler, cache, key) == 1
+
+
+@pytest.mark.asyncio
+async def test_reject_mode_and_keys_without_settings_still_429_at_once():
+    clock = _QueueClock()
+    handler, cache = _queue_handler(clock)
+    for metadata in ({}, {"max_parallel_requests_mode": "reject"}):
+        _request_stash.set(None)
+        key = UserAPIKeyAuth(api_key=hash_token(f"sk-{len(metadata)}"), max_parallel_requests=1, metadata=metadata)
+        await _admit_in_own_stash(handler, cache, key)
+        with pytest.raises(HTTPException) as exc_info:
+            await _admit_in_own_stash(handler, cache, key)
+        assert "request queue" not in exc_info.value.detail.lower()
+    assert clock.now_seconds == 0
+
+
+class _ScriptedAcquireRedis:
+    """Stands in for RedisCache: the acquire script answers from a script, every other script is unused."""
+
+    def __init__(self, acquire_replies: Sequence[list[int]]) -> None:
+        self.acquire_calls: list[tuple[str, ...]] = []
+        self._replies = iter(acquire_replies)
+
+    def async_register_script(self, script: str):
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PARALLEL_ACQUIRE_SCRIPT
+
+        async def acquire(keys: Sequence[str], args: Sequence[object]) -> list[int]:
+            self.acquire_calls.append(tuple(keys))
+            return next(self._replies)
+
+        async def unused(keys: Sequence[str], args: Sequence[object]) -> list[int]:
+            raise AssertionError("only the parallel acquire script should run")
+
+        return acquire if script is PARALLEL_ACQUIRE_SCRIPT else unused
+
+
+@pytest.mark.asyncio
+async def test_queue_retries_ask_redis_even_when_the_local_mirror_looks_full():
+    from typing import cast
+
+    from litellm.caching.redis_cache import RedisCache
+
+    redis = _ScriptedAcquireRedis([[0, 1]])
+    cache = DualCache(redis_cache=cast(RedisCache, redis))
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache), queue_clock=_QueueClock())
+    key = _queue_key()
+    stale_mirror_says_full = 1
+    await cache.async_set_cache(
+        key=f"{{api_key:{key.api_key}}}:max_parallel_requests", value=stale_mirror_says_full, local_only=True
+    )
+
+    stash = await _admit_in_own_stash(handler, cache, key)
+
+    assert stash.parallel_slot is not None
+    assert redis.acquire_calls == [(f"{{api_key:{key.api_key}}}:max_parallel_requests",)]
+
+
+@pytest.mark.parametrize(
+    "metadata, expected",
+    [
+        ({}, None),
+        ({"max_parallel_requests_mode": "reject"}, None),
+        ({"max_parallel_requests_mode": "queue"}, (60.0, None)),
+        ({"max_parallel_requests_mode": "queue", "max_parallel_requests_queue_timeout": 5}, (5.0, None)),
+        ({"max_parallel_requests_mode": "queue", "max_parallel_requests_max_queued": 3}, (60.0, 3)),
+        ({"max_parallel_requests_mode": "queue", "max_parallel_requests_queue_timeout": -1}, None),
+        ({"max_parallel_requests_mode": "wait"}, None),
+    ],
+)
+def test_parallel_queue_policy_reads_key_metadata(metadata, expected):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import parallel_queue_policy
+
+    policy = parallel_queue_policy(metadata)
+    assert (None if policy is None else (policy.timeout_seconds, policy.max_queued)) == expected

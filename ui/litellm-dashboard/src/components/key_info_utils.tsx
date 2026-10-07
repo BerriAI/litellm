@@ -61,3 +61,16 @@ export const stripTagsFromMetadata = (metadata: any) => {
   const { tags, ...rest } = metadata as Record<string, any>;
   return rest;
 };
+
+/**
+ * Human-readable summary of a key's max_parallel_requests overflow behavior, read from its metadata.
+ */
+export const parallelRequestOverflowLabel = (metadata: Record<string, unknown> | null | undefined): string => {
+  if (metadata?.max_parallel_requests_mode !== "queue") {
+    return "Reject with 429";
+  }
+  const timeout = metadata.max_parallel_requests_queue_timeout ?? 60;
+  const maxQueued = metadata.max_parallel_requests_max_queued;
+  const cap = maxQueued == null ? "" : `, up to ${maxQueued} waiting per worker`;
+  return `Queue, ${timeout}s timeout${cap}`;
+};

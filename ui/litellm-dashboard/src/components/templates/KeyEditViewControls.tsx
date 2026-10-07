@@ -1,5 +1,5 @@
 import React from "react";
-import { Control, UseFormReturn } from "react-hook-form";
+import { Control, UseFormReturn, useWatch } from "react-hook-form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -106,6 +106,59 @@ export const KeyRateLimitFields = ({ control }: { control: Control<KeyEditFormVa
     </FormField>
   </>
 );
+
+const PARALLEL_MODE_HINT =
+  "What happens to a request that arrives while Max Parallel Requests are already in flight. Reject returns a 429 at once. Queue holds the request until one of this key's requests finishes, and returns a 429 if no slot frees up before the queue timeout.";
+const QUEUE_TIMEOUT_HINT = "Seconds a queued request waits for a free slot before it gets a 429. Defaults to 60.";
+const MAX_QUEUED_HINT =
+  "Most requests that can wait for this key on one proxy worker. Requests beyond this get a 429 at once. Leave empty for no cap.";
+
+export const KeyParallelRequestQueueFields = ({ control }: { control: Control<KeyEditFormValues> }) => {
+  const mode = useWatch({ control, name: "max_parallel_requests_mode" });
+  return (
+    <>
+      <FormField
+        control={control}
+        name="max_parallel_requests_mode"
+        label={labelWithHint("When Max Parallel Requests Is Reached", PARALLEL_MODE_HINT)}
+      >
+        {({ value, onChange, id }) => (
+          <Select value={(value as string | null | undefined) ?? "reject"} onValueChange={onChange}>
+            <SelectTrigger id={id}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="reject">Reject with 429</SelectItem>
+              <SelectItem value="queue">Queue until a slot frees up</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+      </FormField>
+      {mode === "queue" && (
+        <>
+          <FormField
+            control={control}
+            name="max_parallel_requests_queue_timeout"
+            label={labelWithHint("Queue Timeout (seconds)", QUEUE_TIMEOUT_HINT)}
+          >
+            {({ ref: _ref, ...field }) => (
+              <NumericalInput {...field} value={field.value ?? ""} min={1} placeholder="60" />
+            )}
+          </FormField>
+          <FormField
+            control={control}
+            name="max_parallel_requests_max_queued"
+            label={labelWithHint("Max Queued Requests per Worker", MAX_QUEUED_HINT)}
+          >
+            {({ ref: _ref, ...field }) => (
+              <NumericalInput {...field} value={field.value ?? ""} min={1} step={1} placeholder="No cap" />
+            )}
+          </FormField>
+        </>
+      )}
+    </>
+  );
+};
 
 export const KeyAgentAndSkillFields = ({
   control,

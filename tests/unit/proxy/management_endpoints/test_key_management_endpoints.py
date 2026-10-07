@@ -21217,3 +21217,53 @@ async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
         "guardrail": "bedrock",
         "aws_secret_access_key": "aws-secret",
     }
+
+
+@pytest.mark.asyncio
+async def test_key_queue_settings_fold_into_metadata_the_limiter_reads():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        ParallelQueuePolicy,
+        parallel_queue_policy,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="hashed", metadata={})
+    updated = await prepare_key_update_data(
+        data=UpdateKeyRequest(
+            key="sk-1",
+            max_parallel_requests=4,
+            max_parallel_requests_mode="queue",
+            max_parallel_requests_queue_timeout=30,
+            max_parallel_requests_max_queued=5,
+        ),
+        existing_key_row=existing_key,
+    )
+    assert parallel_queue_policy(updated["metadata"]) == ParallelQueuePolicy(timeout_seconds=30.0, max_queued=5)
+
+    untouched = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", key_alias="renamed"),
+        existing_key_row=LiteLLM_VerificationToken(token="hashed", metadata=updated["metadata"]),
+    )
+    assert untouched["metadata"]["max_parallel_requests_mode"] == "queue"
+
+    switched_off = await prepare_key_update_data(
+        data=UpdateKeyRequest(key="sk-1", max_parallel_requests_mode="reject"),
+        existing_key_row=LiteLLM_VerificationToken(token="hashed", metadata=updated["metadata"]),
+    )
+    assert parallel_queue_policy(switched_off["metadata"]) is None
+
+
+@pytest.mark.parametrize(
+    "bad_settings",
+    [
+        {"max_parallel_requests_mode": "wait"},
+        {"max_parallel_requests_queue_timeout": 0},
+        {"max_parallel_requests_max_queued": 0},
+    ],
+)
+def test_key_requests_reject_invalid_queue_settings(bad_settings):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        GenerateKeyRequest(**bad_settings)
+    with pytest.raises(ValidationError):
+        UpdateKeyRequest(key="sk-1", **bad_settings)
