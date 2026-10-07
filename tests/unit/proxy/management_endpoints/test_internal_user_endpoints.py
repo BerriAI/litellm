@@ -1643,6 +1643,7 @@ async def test_new_user_clears_recent_missing_user_lookup(mocker: MockerFixture)
     user_id: Final = "sso-created-user"
     db_access_time_key: Final = f"user_id:{user_id}"
     auth_checks.last_db_access_time.pop(db_access_time_key, None)
+    mocker.patch.object(auth_checks, "db_cache_expiry", 3600)
     prisma_client: Final = mocker.MagicMock()
     prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=1)
     prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=None)
@@ -1669,10 +1670,6 @@ async def test_new_user_clears_recent_missing_user_lookup(mocker: MockerFixture)
         new=mocker.AsyncMock(
             return_value={"user_id": user_id, "token": "sk-sso-created-user", "expires": None}
         ),
-    )
-    mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.UserManagementEventHooks.async_user_created_hook",
-        new=mocker.AsyncMock(),
     )
 
     try:
