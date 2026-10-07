@@ -1157,7 +1157,7 @@ _CONVERSE_BODY: Final = {
 
 
 class _FakeBedrockHTTPHandler(HTTPHandler):
-    def post(self, url, *args, **kwargs):
+    def post(self, url: str, *args: object, **kwargs: object) -> httpx.Response:
         body = _CONVERSE_BODY if url.endswith("/converse") else _INVOKE_CLAUDE_BODY
         return httpx.Response(
             200,
@@ -1192,7 +1192,11 @@ def _complete_bedrock_claude(
     ],
 )
 def test_invoke_claude_prices_like_converse_for_the_same_region_and_model(
-    local_model_cost_map, monkeypatch, aws_region_name, bedrock_model, cost_key
+    local_model_cost_map: object,
+    monkeypatch: pytest.MonkeyPatch,
+    aws_region_name: str,
+    bedrock_model: str,
+    cost_key: str | None,
 ):
     """Invoke Claude used to drop region_name and report the Anthropic body model, so a
     GovCloud call was priced at the commercial rate while Converse got the GovCloud key
@@ -1215,7 +1219,10 @@ def test_invoke_claude_prices_like_converse_for_the_same_region_and_model(
         assert invoke._hidden_params["response_cost"] == pytest.approx(expected_cost)
 
 
-def test_invoke_claude_uses_model_id_override_for_response_and_cost(local_model_cost_map, monkeypatch):
+def test_invoke_claude_uses_model_id_override_for_response_and_cost(
+    local_model_cost_map: object,
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
     monkeypatch.delenv("AWS_PROFILE", raising=False)
@@ -1247,11 +1254,11 @@ def test_invoke_claude_uses_model_id_override_for_response_and_cost(local_model_
     ],
 )
 def test_invoke_claude_keeps_resolved_region(
-    local_model_cost_map,
-    monkeypatch,
-    environment_region,
-    model_id,
-    expected_region,
+    local_model_cost_map: object,
+    monkeypatch: pytest.MonkeyPatch,
+    environment_region: str | None,
+    model_id: str | None,
+    expected_region: str,
 ):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
@@ -1277,8 +1284,8 @@ def test_invoke_claude_keeps_resolved_region(
 
 
 def test_invoke_claude_application_profile_uses_provider_response_model_for_cost(
-    local_model_cost_map,
-    monkeypatch,
+    local_model_cost_map: object,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")

@@ -48,10 +48,10 @@ else:
 
 def _get_bedrock_claude_response_model(
     route_model: str,
-    requested_model_id: object,
+    requested_model_id: str | None,
     provider_response_model: object,
 ) -> str:
-    if isinstance(requested_model_id, str) and is_bedrock_application_inference_profile_arn(requested_model_id):
+    if requested_model_id is not None and is_bedrock_application_inference_profile_arn(requested_model_id):
         if isinstance(provider_response_model, str):
             return (
                 provider_response_model
@@ -59,7 +59,7 @@ def _get_bedrock_claude_response_model(
                 else f"anthropic.{provider_response_model}"
             )
         return strip_bedrock_routing_prefix(route_model)
-    if isinstance(requested_model_id, str):
+    if requested_model_id is not None:
         return extract_model_name_from_bedrock_arn(requested_model_id)
     return strip_bedrock_routing_prefix(route_model)
 
@@ -413,7 +413,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
-        requested_model_id: Final = litellm_params.get("bedrock_invoke_model_id")
+        requested_model_id_param: Final = litellm_params.get("bedrock_invoke_model_id")
+        requested_model_id: Final[str | None] = (
+            requested_model_id_param if isinstance(requested_model_id_param, str) else None
+        )
         response_model: Final = _get_bedrock_claude_response_model(
             route_model=model,
             requested_model_id=requested_model_id,
