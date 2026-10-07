@@ -365,6 +365,34 @@ async def test_callback_observing_stamp_before_pre_header_increment_fails_leaves
     assert await router.get_model_group_usage("gpt-5-mini") == (None, None)
 
 
+def test_track_deployment_metrics(model_list):
+    """Test if the 'track_deployment_metrics' function is working correctly"""
+    from litellm.types.utils import ModelResponse
+
+    router = Router(model_list=model_list)
+    router._track_deployment_metrics(
+        deployment=router.get_deployment_by_model_group_name(
+            model_group_name="gpt-5-mini"
+        ),
+        response=ModelResponse(
+            model="gpt-5-mini",
+            usage={"total_tokens": 100},
+        ),
+        parent_otel_span=None,
+    )
+
+
+def test_pass_through_assistants_endpoint_factory(model_list):
+    """Test if the 'pass_through_assistants_endpoint_factory' function is working correctly"""
+    router = Router(model_list=model_list)
+    router._pass_through_assistants_endpoint_factory(
+        original_function=litellm.acreate_assistants,
+        custom_llm_provider="openai",
+        client=None,
+        **{},
+    )
+
+
 def test_factory_function(model_list):
     """Test if the 'factory_function' function is working correctly"""
     router = Router(model_list=model_list)
