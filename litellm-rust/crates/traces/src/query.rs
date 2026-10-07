@@ -16,6 +16,9 @@ pub enum ReadQuery {
     Sample,
     Content,
     Evidence,
+    FeedbackTarget,
+    Feedback,
+    FeedbackSummary,
 }
 
 impl ReadQuery {
