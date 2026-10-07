@@ -33,6 +33,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.types.utils import oauth_token_exchange_litellm_params
 from litellm.types.workload_identity import (
     ANTHROPIC_WIF_KWARGS_KEYS,
     OPENAI_WIF_KWARGS_KEYS,
@@ -1175,7 +1176,7 @@ async def test_test_connection_refuses_a_non_admin_pointing_a_federated_deployme
         )
 
     assert exc_info.value.code == "403"
-    assert "workload identity federation" in exc_info.value.message
+    assert "workload identity federation or OAuth token exchange" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -2505,6 +2506,10 @@ async def test_health_endpoint_keeps_federation_identity_admin_only():
         "anthropic_keycloak_client_id": "litellm-proxy",
         "openai_identity_provider_id": "idp_01H",
         "openai_service_account_id": "sa_01H",
+        "token_exchange_audience": "https://graph.microsoft.com",
+        "token_exchange_endpoint": "https://identity.example.com/token",
+        "token_exchange_profile": "jwt_bearer_obo",
+        "token_exchange_scope": "https://graph.microsoft.com/.default",
     }
     full_model_list = [
         {
@@ -2559,21 +2564,21 @@ async def test_health_endpoint_keeps_federation_identity_admin_only():
     assert non_admin_endpoint["model_id"] == "id-a"
 
 
-@pytest.mark.parametrize("federation_field", sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS))
-def test_no_federation_field_reaches_a_non_admin_health_entry(federation_field: str):
-    """Every key that configures workload identity federation either names the identity a
-    deployment mints as or carries the secret it mints with, and a non-admin who can see the
-    deployment is healthy must learn neither. Both lists that enforce that are derived from the
-    same key sets this runs over, so a field added to the funnel without joining either one shows
-    up here as a value a non-admin could read."""
+@pytest.mark.parametrize(
+    "server_owned_field",
+    sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS | set(oauth_token_exchange_litellm_params)),
+)
+def test_no_server_owned_identity_field_reaches_a_non_admin_health_entry(server_owned_field: str):
+    """Every server-owned identity field is hidden from non-admin health entries."""
     from litellm.proxy.health_check import clean_endpoint_data
+
     from litellm.proxy.health_endpoints._health_endpoints import (
         _strip_admin_only_fields_from_health_result,
     )
 
-    canary = f"CANARY-{federation_field}-VALUE"
+    canary = f"CANARY-{server_owned_field}-VALUE"
     cleaned = clean_endpoint_data(
-        {"model": "anthropic/claude-sonnet-5", federation_field: canary},
+        {"model": "anthropic/claude-sonnet-5", server_owned_field: canary},
         details=True,
     )
     stripped = _strip_admin_only_fields_from_health_result(
@@ -2581,7 +2586,7 @@ def test_no_federation_field_reaches_a_non_admin_health_entry(federation_field: 
     )
 
     assert stripped["healthy_endpoints"][0]["model"] == "anthropic/claude-sonnet-5"
-    assert federation_field not in stripped["healthy_endpoints"][0]
+    assert server_owned_field not in stripped["healthy_endpoints"][0]
     assert canary not in str(stripped)
 
 

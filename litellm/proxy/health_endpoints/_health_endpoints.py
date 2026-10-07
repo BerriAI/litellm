@@ -978,11 +978,10 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     """
-    Return a copy of the /health response with the admin-only fields (provider routing plus the
-    workload identity federation params naming the identity a deployment mints as) removed from
-    each healthy/unhealthy endpoint entry. Used to hide those fields from non-admin callers while
-    still showing them which deployments they own and whether each one is
-    healthy. Proxy admins receive the unmodified result.
+    Return a copy of the /health response with the admin-only fields (provider routing plus
+    server-owned federation or OAuth token-exchange params) removed from each healthy/unhealthy
+    endpoint entry. Used to hide those fields from non-admin callers while still showing them which
+    deployments they own and whether each one is healthy. Proxy admins receive the unmodified result.
     """
     out: Final = dict(result)
     drop: Final = set(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)

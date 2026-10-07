@@ -2556,10 +2556,10 @@ def create_tokenizer(json: str):
 
 
 def token_counter(
-    model="",
-    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
+    model: str = "",
+    custom_tokenizer: Mapping[str, object] | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: Sequence | None = None,
+    messages: Sequence[AllMessageValues] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
@@ -8655,6 +8655,10 @@ class ProviderConfigManager:
                 lambda: ProviderConfigManager._get_langgraph_config(),
                 False,
             ),
+            LlmProviders.MICROSOFT_365_COPILOT: (
+                lambda: ProviderConfigManager._get_microsoft_365_copilot_config(),
+                False,
+            ),
             LlmProviders.SAIL: (ProviderConfigManager._get_sail_chat_config, False),
             LlmProviders.LANGFLOW: (
                 lambda: ProviderConfigManager._get_langflow_config(),
@@ -8748,6 +8752,12 @@ class ProviderConfigManager:
         from litellm.llms.langgraph.chat.transformation import LangGraphConfig
 
         return LangGraphConfig()
+
+    @staticmethod
+    def _get_microsoft_365_copilot_config() -> BaseConfig:
+        from litellm.llms.microsoft_365_copilot.chat.transformation import Microsoft365CopilotChatConfig
+
+        return Microsoft365CopilotChatConfig()
 
     @staticmethod
     def _get_langflow_config() -> BaseConfig:

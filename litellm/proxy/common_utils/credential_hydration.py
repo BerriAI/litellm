@@ -36,15 +36,16 @@ _FEDERATION_SURFACE_FIELDS: Final = frozenset(
 
 
 def write_touches_federation_surface(incoming: Mapping[str, object] | None) -> bool:
-    """Whether this write can move or re-scope the token a federated deployment mints.
+    """Whether this write can move or re-scope a deployment's delegated token.
 
     Three groups of fields can. The federation parameters choose which server-side secret is read
-    and what the minted token is scoped to. ``litellm_credential_name`` resolves to those same
-    parameters by reference. ``api_key``, ``api_base``, ``base_url``, and the
+    and what the minted token is scoped to. OAuth token-exchange parameters select the server-side
+    token endpoint and grant profile. ``litellm_credential_name`` resolves to those same parameters
+    by reference. ``api_key``, ``api_base``, ``base_url``, and the
     ``configurable_clientside_auth_params`` that let a caller override them decide where the
-    resulting token is sent. A write setting none of them leaves the federation configuration
-    exactly as the proxy admin left it, so renaming a federated deployment or changing its rpm
-    stays an ordinary team-admin edit.
+    resulting token is sent. A write setting none of them leaves the delegated-token configuration
+    exactly as the proxy admin left it, so renaming a deployment or changing its rpm stays an
+    ordinary team-admin edit.
     """
     return incoming is not None and not _FEDERATION_SURFACE_FIELDS.isdisjoint(incoming.keys())
 

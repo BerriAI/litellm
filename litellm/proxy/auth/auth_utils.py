@@ -263,7 +263,8 @@ def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
     if wif_fields:
         raise ValueError(
             f"Rejected Request: litellm_credential_name={named!r} names a credential configured for "
-            f"workload identity federation ({wif_fields[0]}), which a request body cannot choose. "
+            f"workload identity federation or OAuth token exchange ({wif_fields[0]}), which a request body "
+            "cannot choose. "
             "A proxy admin attaches it to a deployment."
         )
 
@@ -560,8 +561,8 @@ def _reject_url_valued_fallback_target(value: str) -> None:
 
 
 def is_request_body_safe(
-    request_body: dict,
-    general_settings: dict,
+    request_body: dict[str, object],
+    general_settings: dict[str, object],
     llm_router: Router | None,
     model: str,
     *,

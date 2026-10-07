@@ -1737,7 +1737,7 @@ class HTTPHandler:
 
 def get_async_httpx_client(
     llm_provider: LlmProviders | httpxSpecialProvider | str,
-    params: dict | None = None,
+    params: Mapping[str, object] | None = None,
     shared_session: Optional["ClientSession"] = None,
 ) -> AsyncHTTPHandler:
     """
@@ -1789,7 +1789,7 @@ def get_async_httpx_client(
     return _new_client
 
 
-def get_httpx_client(params: dict | None = None) -> HTTPHandler:
+def get_httpx_client(params: Mapping[str, object] | None = None) -> HTTPHandler:
     """
     Retrieves the HTTP client from the cache
     If not present, creates a new client

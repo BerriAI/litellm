@@ -13,6 +13,7 @@ import {
   type MountedFieldControlProps,
   type MountedFormValues,
 } from "../common_components/MountedFormField";
+import { authTypesFor, hiddenAuthFieldKeys, inferAuthTypeId } from "./provider_auth_types";
 import { ProviderCredentialFieldMetadata } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
@@ -81,9 +82,18 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
 
 const providerFieldsByDisplayName: Record<string, ProviderCredentialField[]> = {};
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, hiddenFieldKeys }) => {
+const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
+  selectedProvider,
+  hiddenFieldKeys,
+}) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
+  const authTypes = authTypesFor(selectedProvider);
+  const [selectedAuthTypeId, setSelectedAuthTypeId] = React.useState(() =>
+    inferAuthTypeId(authTypes, form.getValues()),
+  );
+  const selectedAuthType = authTypes.find(({ id }) => id === selectedAuthTypeId) ?? authTypes[0];
+  const authTypeSelectId = React.useId();
   const credentialsFileRef = React.useRef<HTMLInputElement>(null);
   const pickCredentialsFile =
     (onLoaded: (contents: string) => void) => (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -166,10 +176,22 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     return mapped;
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
 
-  const allFields = React.useMemo(
-    () => (hiddenFieldKeys ? providerFields.filter((field) => !hiddenFieldKeys.includes(field.key)) : providerFields),
-    [providerFields, hiddenFieldKeys],
+  const authTypeHiddenFieldKeys = React.useMemo(
+    () => hiddenAuthFieldKeys(authTypes, selectedAuthType?.id ?? ""),
+    [authTypes, selectedAuthType],
   );
+
+  const allFields = React.useMemo(() => {
+    if (authTypes.length === 0) {
+      return hiddenFieldKeys ? providerFields.filter((field) => !hiddenFieldKeys.includes(field.key)) : providerFields;
+    }
+
+    const fieldsToHide = [...(hiddenFieldKeys ?? []), ...authTypeHiddenFieldKeys];
+
+    return providerFields
+      .filter((field) => !fieldsToHide.includes(field.key))
+      .map((field) => (selectedAuthType?.requiredFieldKeys.includes(field.key) ? { ...field, required: true } : field));
+  }, [providerFields, hiddenFieldKeys, authTypes, authTypeHiddenFieldKeys, selectedAuthType]);
 
   const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
   const lastInferredApiVersionRef = React.useRef<string | null>(null);
@@ -285,6 +307,30 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
 
   return (
     <>
+      {authTypes.length > 0 && selectedAuthType && (
+        <div className="mb-4 flex flex-col gap-2">
+          <label htmlFor={authTypeSelectId} className="text-sm font-medium">
+            {labelWithHint("Auth Type:", "Select how LiteLLM authenticates to this provider.")}
+          </label>
+          <Select
+            items={authTypes.map(({ id, label }) => ({ value: id, label }))}
+            value={selectedAuthType.id}
+            onValueChange={(value) => setSelectedAuthTypeId(value ?? "")}
+          >
+            <SelectTrigger id={authTypeSelectId} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {authTypes.map((authType) => (
+                <SelectItem key={authType.id} value={authType.id}>
+                  {authType.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-sm text-muted-foreground">{selectedAuthType.description}</p>
+        </div>
+      )}
       {isLoading && allFields.length === 0 && <p className="text-sm mb-2">Loading provider fields...</p>}
       {loadError && allFields.length === 0 && (
         <p className="text-sm mb-2 text-destructive">
@@ -329,5 +375,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     </>
   );
 };
+
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = (props) => (
+  <ProviderSpecificFieldsContent key={props.selectedProvider ?? "no-provider"} {...props} />
+);
 
 export default ProviderSpecificFields;
