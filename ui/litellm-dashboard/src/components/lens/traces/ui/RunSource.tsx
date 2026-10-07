@@ -19,20 +19,29 @@ interface SourceApp {
   readonly logo: string | null;
 }
 
-const APPS: Readonly<Record<SourceType, SourceApp>> = {
-  slack: { label: "Slack", logo: slackLogo.src },
-  teams: { label: "Teams", logo: null },
-  discord: { label: "Discord", logo: null },
-  linear: { label: "Linear", logo: linearLogo.src },
-  github: { label: "GitHub", logo: githubLogo.src },
-  jira: { label: "Jira", logo: jiraLogo.src },
-  custom: { label: "Conversation", logo: null },
+interface BrandedApp extends SourceApp {
+  readonly domains: readonly string[];
+}
+
+const BRANDED: Readonly<Record<Exclude<SourceType, "custom">, BrandedApp>> = {
+  slack: { label: "Slack", logo: slackLogo.src, domains: ["slack.com"] },
+  teams: { label: "Teams", logo: null, domains: ["teams.microsoft.com", "teams.cloud.microsoft"] },
+  discord: { label: "Discord", logo: null, domains: ["discord.com"] },
+  linear: { label: "Linear", logo: linearLogo.src, domains: ["linear.app"] },
+  github: { label: "GitHub", logo: githubLogo.src, domains: ["github.com"] },
+  jira: { label: "Jira", logo: jiraLogo.src, domains: ["atlassian.net"] },
 };
 
+const onDomain = (hostname: string, domain: string): boolean => hostname === domain || hostname.endsWith(`.${domain}`);
+
+/** Brands a source only when its URL is on that app's domain, so a trace can't dress up any link as Slack. */
 export function sourceApp(source: Pick<Source, "type" | "url">): SourceApp | null {
   const parsed = URL.canParse(source.url) ? new URL(source.url) : null;
   if (parsed?.protocol !== "https:") return null;
-  return APPS[source.type] ?? APPS.custom;
+  const app = source.type === "custom" ? undefined : BRANDED[source.type];
+  return app?.domains.some((domain) => onDomain(parsed.hostname, domain))
+    ? app
+    : { label: parsed.hostname, logo: null };
 }
 
 function AppMark({ app, className }: { app: SourceApp; className: string }) {
