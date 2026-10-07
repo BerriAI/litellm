@@ -3,10 +3,9 @@ use std::{
     time::Duration,
 };
 
-use litellm_host::lifecycle::CallEvent;
-use litellm_host::lifecycle::ExecutionEvent;
+use litellm_host::lifecycle::{CallEvent, ExecutionEvent};
+use litellm_inference::call::{Kind, Stage};
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
-
 use rstest::rstest;
 
 use super::*;
@@ -69,7 +68,7 @@ async fn pages_features_and_extra_options_map_to_the_analyze_call() {
 #[case(json!({"pages": [-1]}), Error::Pages("negative page index".into()))]
 #[case(json!({"pages": "1&&features=bad"}), Error::Pages("invalid native page range".into()))]
 #[case(json!({"features": "languages&pages=1"}), Error::Features)]
-#[case(json!({"req_format": "azure"}), Error::RequestFormat)]
+#[case(json!({"req_format": "azure"}), Error::RequestFormat("azure".into()))]
 #[tokio::test]
 async fn invalid_pages_features_and_format_are_rejected_before_sending(
     #[case] options: Value,
@@ -84,7 +83,7 @@ async fn invalid_pages_features_and_format_are_rejected_before_sending(
         options.clone(),
     )) {
         Ok(request) => perform(request).await,
-        Err(error) => Err(error),
+        Err(error) => Err(litellm_inference::call::Failure::at(Stage::Prepare, error)),
     };
 
     assert!(
@@ -92,11 +91,12 @@ async fn invalid_pages_features_and_format_are_rejected_before_sending(
         "sent invalid options: {options}"
     );
     let error = result.unwrap_err();
+    assert_eq!(error.stage, Stage::Prepare);
     assert_eq!(
-        std::mem::discriminant(&error),
+        std::mem::discriminant(&error.error),
         std::mem::discriminant(&expected)
     );
-    assert_eq!(error.http_status_code(), Some(400));
+    assert_eq!(error.kind(), Kind::Request);
     assert_eq!(error.to_string(), expected.to_string());
 }
 

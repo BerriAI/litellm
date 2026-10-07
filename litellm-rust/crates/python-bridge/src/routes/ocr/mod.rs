@@ -1,5 +1,4 @@
 mod document;
-mod errors;
 mod host;
 mod project;
 
@@ -67,6 +66,14 @@ fn run_ocr(
     )
 }
 
+/// A failure in a helper that never contacts the provider.
+pub(super) fn prepare_failure(error: litellm_llms::base_llm::ocr::error::Error) -> PyErr {
+    crate::errors::failure_to_pyerr(litellm_llms::base_llm::call::Failure::at(
+        litellm_llms::base_llm::call::Stage::Prepare,
+        error,
+    ))
+}
+
 fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
     project_provider_defaults(&PythonSettings::ProviderDefaults.read(py)?)
 }
@@ -99,7 +106,7 @@ pub(crate) fn ocr_health_check_document(
     custom_llm_provider: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
     let document = provider_config::get_health_check_document(model, custom_llm_provider)
-        .map_err(errors::to_pyerr)?;
+        .map_err(prepare_failure)?;
     to_py(py, &document)
 }
 
@@ -111,7 +118,7 @@ pub(crate) fn ocr_passthrough_response(
     body: &[u8],
 ) -> PyResult<Option<Py<PyAny>>> {
     provider_config::passthrough_response(model, endpoint, body)
-        .map_err(errors::to_pyerr)?
+        .map_err(prepare_failure)?
         .map(|response| to_py(py, &response.into_json()))
         .transpose()
 }

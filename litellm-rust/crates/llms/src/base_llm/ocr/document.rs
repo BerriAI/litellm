@@ -1,16 +1,13 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError, mime::Mime};
-use litellm_http::{
-    media::{DownloadPolicy, Error as MediaError, MediaFetcher},
-    transport::Error as TransportError,
-};
+use litellm_http::media::{DownloadPolicy, Error as MediaError, MediaFetcher};
+use litellm_llms_types::formats::ocr::OcrDocument;
 use reqwest::Url;
 
 use crate::base_llm::ocr::{
     error::Error,
     transformation::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS, OcrConnection},
 };
-use litellm_llms_types::formats::ocr::OcrDocument;
 
 pub struct InlineDocument<'a>(DataUrl<'a>);
 
@@ -92,18 +89,8 @@ fn map_media_error(error: MediaError) -> Error {
         MediaError::TooManyRedirects => Error::TooManyRedirects,
         MediaError::MissingRedirectLocation => Error::MissingRedirectLocation,
         MediaError::InvalidRedirect => Error::InvalidRedirect,
-        MediaError::Http(status) => TransportError::Http {
-            request_url: None,
-            status,
-            body: "OCR document download failed".into(),
-        }
-        .into(),
-        MediaError::Timeout => TransportError::Http {
-            request_url: None,
-            status: 408,
-            body: "OCR document download timed out".into(),
-        }
-        .into(),
+        MediaError::Http(status) => Error::DocumentDownloadStatus(status),
+        MediaError::Timeout => Error::DocumentDownloadTimeout,
         MediaError::Transport(error) => error.into(),
     }
 }

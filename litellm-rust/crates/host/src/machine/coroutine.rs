@@ -1,4 +1,3 @@
-use crate::observation::ObservationSender;
 use std::{future::Future, pin::Pin};
 
 use litellm_coroutine::{Coroutine, CoroutineState, ResumeError};
@@ -7,7 +6,11 @@ use super::{
     context::CallContext,
     contract::{HostFailure, Interrupted, Machine, MachineStep, Step},
 };
-use crate::protocol::{HostRequest, Protocol};
+use crate::{
+    failure::Failure,
+    observation::ObservationSender,
+    protocol::{HostRequest, Protocol},
+};
 
 /// The machine's own failures, distinct from anything the provider call reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,9 +22,9 @@ pub enum MachineFault {
 }
 
 pub type ExecuteFuture<R, C = <R as Protocol>::Response> =
-    Pin<Box<dyn Future<Output = Result<C, <R as Protocol>::Error>> + Send>>;
+    Pin<Box<dyn Future<Output = Result<C, Failure<<R as Protocol>::Error>>> + Send>>;
 
-type CallCoroutine<R, C> = Coroutine<HostRequest<R>, Result<C, <R as Protocol>::Error>>;
+type CallCoroutine<R, C> = Coroutine<HostRequest<R>, Result<C, Failure<<R as Protocol>::Error>>>;
 
 pub struct CallMachine<R: Protocol, C = <R as Protocol>::Response> {
     coroutine: CallCoroutine<R, C>,
@@ -54,7 +57,7 @@ where
                 .coroutine
                 .resume()
                 .await
-                .map_err(MachineFault::Protocol)?
+                .map_err(|error| Failure::from(MachineFault::Protocol(error)))?
             {
                 CoroutineState::Yielded(op) => Ok(MachineStep::Suspended(op)),
                 CoroutineState::Complete(outcome) => outcome.map(MachineStep::Complete),
@@ -62,7 +65,7 @@ where
         })
     }
 
-    fn interrupt(&mut self, failure: HostFailure<R::Error>) -> Interrupted<'_, Self> {
+    fn interrupt(&mut self, failure: HostFailure<Failure<R::Error>>) -> Interrupted<'_, Self> {
         self.coroutine.cancel();
         Box::pin(async move { Err(failure.into_error()) })
     }

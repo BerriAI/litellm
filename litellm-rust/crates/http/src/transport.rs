@@ -1,31 +1,35 @@
+//! Why a request got no answer. A provider's non-success answer is not a transport error;
+//! `litellm_host::failure::UpstreamResponse` carries it.
+
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
-    #[error("upstream request failed with status {status}: {body}")]
-    Http {
-        status: u16,
-        body: String,
-        request_url: Option<String>,
-    },
     #[error("upstream network error: {0}")]
     Network(String),
     #[error("could not reach the provider: {0}")]
     Connect(String),
+    #[error("upstream request timed out: {0}")]
+    Timeout(String),
 }
 
 impl Error {
+    /// Distinguishes a connection that never opened, which a host may retry elsewhere,
+    /// from a request that may have reached the provider.
     pub fn from_reqwest_before_dispatch(error: reqwest::Error) -> Self {
-        let before_dispatch = !error.is_timeout() && (error.is_connect() || error.is_builder());
-        let message = describe(error);
-        if before_dispatch {
-            Self::Connect(message)
-        } else {
-            Self::Network(message)
+        if error.is_timeout() {
+            return Self::Timeout(describe(error));
         }
+        if error.is_connect() || error.is_builder() {
+            return Self::Connect(describe(error));
+        }
+        Self::Network(describe(error))
     }
 }
 
 impl From<reqwest::Error> for Error {
     fn from(error: reqwest::Error) -> Self {
+        if error.is_timeout() {
+            return Self::Timeout(describe(error));
+        }
         Self::Network(describe(error))
     }
 }
@@ -107,7 +111,7 @@ mod tests {
         assert!(error.is_timeout());
         assert!(matches!(
             crate::transport::Error::from_reqwest_before_dispatch(error),
-            crate::transport::Error::Network(_)
+            crate::transport::Error::Timeout(_)
         ));
     }
 }

@@ -1,3 +1,4 @@
+use litellm_inference::call::{Failure, Stage, UpstreamResponse};
 use litellm_inference_transcription::{Error, types::AudioTranscriptionRequest};
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
@@ -8,7 +9,7 @@ use support::*;
 
 const MODEL: &str = "mistral.voxtral-mini-3b-2507";
 
-async fn transcribe(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
+async fn transcribe(request: AudioTranscriptionRequest<'_>) -> Result<Value, Failure<Error>> {
     audio_transcription_route().execute(request).await
 }
 
@@ -154,7 +155,7 @@ async fn invalid_audio_is_rejected_before_sending(
 
     assert!(
         matches!(
-            error,
+            error.error,
             Error::InvalidRequest(_) | Error::MissingField(_) | Error::InvalidType { .. }
         ),
         "{error:?}"
@@ -185,7 +186,7 @@ async fn unsupported_providers_are_rejected_before_sending(
     .await
     .expect_err("unsupported provider errors");
 
-    assert_eq!(error, Error::InvalidProvider(reported.into()));
+    assert_eq!(error.error, Error::InvalidProvider(reported.into()));
 }
 
 #[rstest]
@@ -199,7 +200,7 @@ async fn a_non_string_extra_header_is_rejected(request: AudioTranscriptionReques
     .await
     .expect_err("a non-string header is rejected");
 
-    assert!(matches!(error, Error::Headers(_)), "{error:?}");
+    assert!(matches!(error.error, Error::Headers(_)), "{error:?}");
 }
 
 #[rstest]
@@ -221,17 +222,25 @@ async fn an_upstream_error_keeps_its_status_and_body(
     .await
     .expect_err("upstream error propagates");
 
+    assert_eq!(error.stage, Stage::Upstream);
+    let Error::Upstream(UpstreamResponse {
+        status: upstream_status,
+        body: upstream_body,
+        url: upstream_url,
+        ..
+    }) = error.error
+    else {
+        panic!("expected the provider's answer");
+    };
+    assert_eq!(upstream_status, status);
+    assert_eq!(upstream_body, "upstream said no");
     assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            request_url: Some(format!(
-                "{}{}",
-                upstream.uri(),
-                only_request(&upstream).await.url.path()
-            )),
-            status,
-            body: "upstream said no".into()
-        })
+        upstream_url,
+        Some(format!(
+            "{}{}",
+            upstream.uri(),
+            only_request(&upstream).await.url.path()
+        ))
     );
 }
 
@@ -253,7 +262,10 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     .await
     .expect_err("an unreadable body fails");
 
-    assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+    assert!(
+        matches!(error.error, Error::InvalidResponse(_)),
+        "{error:?}"
+    );
 }
 
 #[rstest]

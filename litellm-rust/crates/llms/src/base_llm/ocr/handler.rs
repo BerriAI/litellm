@@ -10,19 +10,22 @@ use litellm_http::{
     outbound::{OutboundRequest, RequestSigner},
     transport,
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument};
+use litellm_secrets::source::SecretSource;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::base_llm::ocr::{
-    error::Error,
-    settings::OcrSettings,
-    transformation::{
-        BaseOcrConfig, DecodedOcrResponse, OcrResponseContext, PreparedOcrRequest,
-        decode_request_value, decode_response,
+use crate::base_llm::{
+    call::{self, Failure},
+    ocr::{
+        error::Error,
+        settings::OcrSettings,
+        transformation::{
+            BaseOcrConfig, DecodedOcrResponse, OcrResponseContext, PreparedOcrRequest,
+            decode_request_value, decode_response,
+        },
     },
 };
-use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument};
-use litellm_secrets::source::SecretSource;
 
 /// The route's view of one call, handed to provider code that has to reach the
 /// caller's hooks mid-flight (guardrails on the outgoing body, raw response events).
@@ -119,46 +122,33 @@ pub async fn ocr<C: BaseOcrConfig>(
     client: &OcrClient,
     request: &PreparedOcrRequest,
     hooks: &dyn CallHooks<Error>,
-) -> Result<LiteLLMOcrResponse, Error> {
-    let http = config.prepare_request(request, client, hooks).await?;
+) -> Result<LiteLLMOcrResponse, Failure<Error>> {
+    let (http, request_format) = call::prepare(async {
+        let http = config.prepare_request(request, client, hooks).await?;
+        Ok((http, request.response_format()?))
+    })
+    .await?;
     let url = http.url().to_string();
     let headers = http.headers().to_vec();
-    let response = http
-        .send(client.provider_http())
+    let response = call::send(client.provider_http(), http)
         .await
-        .map_err(transport_error)?;
-    if !response.status().is_success() {
-        let headers = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|value| (name.to_string(), value.to_string()))
+        .map_err(|failure| {
+            failure.map(|error| match error {
+                Error::Upstream(upstream) => {
+                    Error::Upstream(config.transform_upstream_error(upstream))
+                }
+                other => other,
             })
-            .collect();
-        return match read_response_bytes(response, request.connection.max_response_bytes).await {
-            Err(Error::Transport(transport::Error::Http {
-                status,
-                body,
-                request_url,
-            })) => Err(config.get_error_class(body, status, headers, request_url)),
-            Err(error) => Err(error),
-            Ok(_) => unreachable!("non-success response produces an HTTP error"),
-        };
-    }
+        })?;
     let context = OcrResponseContext {
         client,
         connection: &request.connection,
         hooks,
-        request_format: request.response_format()?,
+        request_format,
         url: &url,
         headers: &headers,
     };
-    config
-        .async_transform_ocr_response(&request.model, response, context)
-        .await
+    call::receive(config.async_transform_ocr_response(&request.model, response, context)).await
 }
 
 pub async fn read_json_response<T: DeserializeOwned>(
@@ -170,50 +160,29 @@ pub async fn read_json_response<T: DeserializeOwned>(
     decode_response(&bytes, native)
 }
 
+/// Reads a success body of at most `limit` bytes. A non-success answer, which a follow-up
+/// request such as a poll or an upload may receive, is reported as the provider's answer.
 pub async fn read_response_bytes(
     mut response: reqwest::Response,
     limit: usize,
 ) -> Result<Bytes, Error> {
-    let status = response.status();
-    let request_url = (!status.is_success()).then(|| response.url().to_string());
-    if status.is_success()
-        && response
-            .content_length()
-            .is_some_and(|length| length > limit as u64)
+    if !response.status().is_success() {
+        return Err(call::upstream_response(response, limit).await?.into());
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
     {
         return Err(Error::TooLarge { limit });
     }
     let mut bytes = BytesMut::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-        let remaining = limit.saturating_sub(bytes.len());
-        if status.is_success() && chunk.len() > remaining {
+    while let Some(chunk) = response.chunk().await.map_err(transport::Error::from)? {
+        if chunk.len() > limit - bytes.len() {
             return Err(Error::TooLarge { limit });
         }
-        bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-        if !status.is_success() && bytes.len() == limit {
-            break;
-        }
-    }
-    if !status.is_success() {
-        return Err(transport::Error::Http {
-            request_url,
-            status: status.as_u16(),
-            body: String::from_utf8_lossy(&bytes).into_owned(),
-        }
-        .into());
+        bytes.extend_from_slice(&chunk);
     }
     Ok(bytes.freeze())
-}
-
-pub fn transport_error(error: reqwest::Error) -> Error {
-    if error.is_timeout() {
-        return Error::Transport(transport::Error::Http {
-            request_url: None,
-            status: 408,
-            body: "OCR request timed out".into(),
-        });
-    }
-    transport::Error::from(error).into()
 }
 
 pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
@@ -308,29 +277,27 @@ pub fn body_document(body: &Value) -> Result<OcrDocument, Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use litellm_host::failure::UpstreamResponse;
 
     use super::*;
 
     #[rstest::rstest]
     #[tokio::test]
-    async fn request_timeout_has_an_http_408_status() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let _connection = listener.accept().await.unwrap();
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        });
-        let error = litellm_http::Client::plain_for_test()
-            .get(format!("http://{address}"))
-            .timeout(Duration::from_millis(10))
+    async fn a_follow_up_request_answered_with_an_error_is_the_providers_answer() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::any())
+            .respond_with(wiremock::ResponseTemplate::new(503).set_body_string("busy"))
+            .mount(&server)
+            .await;
+        let response = litellm_http::Client::plain_for_test()
+            .get(server.uri())
             .send()
             .await
-            .unwrap_err();
-        assert!(matches!(
-            transport_error(error),
-            Error::Transport(transport::Error::Http { status: 408, .. })
-        ));
-        server.abort();
+            .unwrap();
+        let error = read_response_bytes(response, 1024).await.unwrap_err();
+        let Error::Upstream(UpstreamResponse { status, body, .. }) = error else {
+            panic!("{error:?}");
+        };
+        assert_eq!((status, body.as_str()), (503, "busy"));
     }
 }

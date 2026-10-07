@@ -4,6 +4,11 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use litellm_host::interceptors::{Interceptors, ProviderIdentity, RequestContext, WireRequest};
 use litellm_http::transport::Error as TransportError;
+use litellm_inference::{
+    call::{self, Failure},
+    context::CallContext,
+    outbound::outbound_request,
+};
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     messages::{
@@ -15,12 +20,8 @@ use litellm_llms_types::formats::messages::MessagesResponse;
 use litellm_tracing::ByteChunk;
 use serde_json::Value;
 
-use super::{
-    Error, MessagesCallResponse, MessagesRoute, common_utils::truncate_error_body,
-    prepare::ProviderMessagesRequest,
-};
+use super::{Error, MessagesCallResponse, MessagesRoute, prepare::ProviderMessagesRequest};
 use crate::constants::MESSAGES_TIMEOUT_SECS;
-use litellm_inference::{context::CallContext, outbound::outbound_request};
 
 pub(super) struct ProviderCall {
     pub identity: ProviderIdentity,
@@ -102,7 +103,7 @@ impl MessagesRoute {
         &self,
         request: ProviderCall,
         context: &CallContext<'_, impl Interceptors<Error>>,
-    ) -> Result<MessagesCallResponse, Error> {
+    ) -> Result<MessagesCallResponse, Failure<Error>> {
         let ProviderCall {
             identity,
             wire,
@@ -113,20 +114,20 @@ impl MessagesRoute {
         } = request;
         let provider_name = provider.as_str();
         log_request_body(provider_name, stream, &wire.body);
-        let response = send(
-            &self.http,
-            Authenticated {
-                headers: wire.headers,
-                signer,
-            },
-            &wire.url,
-            &wire.body,
-            timeout,
-        )
+        let outbound = call::prepare(async {
+            outbound_request(
+                Authenticated {
+                    headers: wire.headers,
+                    signer,
+                },
+                wire.url,
+                &wire.body,
+                Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
+            )
+            .map_err(Error::from)
+        })
         .await?;
-        if !response.status().is_success() {
-            return Err(provider_error(response).await);
-        }
+        let response = call::send(&self.http, outbound).await?;
         let config = provider.config();
         if stream {
             return Ok(streaming_response(
@@ -135,10 +136,15 @@ impl MessagesRoute {
                 provider_name,
             ));
         }
-        let text = response.text().await.map_err(network)?;
-        log_response_body(&text);
-        context.response_received(&text).await?;
-        decode_response(config, &identity.model, &text)
+        let text = call::receive(async {
+            let text = response.text().await.map_err(network)?;
+            log_response_body(&text);
+            Ok(text)
+        })
+        .await?;
+        call::post_call(context.response_received(&text)).await?;
+        call::receive(async { decode_response(config, &identity.model, &text) })
+            .await
             .map(|message| MessagesCallResponse::Complete(Box::new(message)))
     }
 }
@@ -152,40 +158,6 @@ fn serialize_failure(err: serde_json::Error) -> Error {
 
 fn network(error: reqwest::Error) -> Error {
     Error::Transport(TransportError::Network(error.to_string()))
-}
-
-async fn send(
-    http: &litellm_http::Client,
-    authenticated: Authenticated,
-    url: &str,
-    body: &Value,
-    timeout: Option<Duration>,
-) -> Result<reqwest::Response, Error> {
-    let request = outbound_request(
-        authenticated,
-        url.to_string(),
-        body,
-        Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
-    )?;
-    litellm_inference::outbound::send(request, http)
-        .await
-        .map_err(network)
-}
-
-async fn provider_error(response: reqwest::Response) -> Error {
-    let status = response.status().as_u16();
-    let request_url = Some(response.url().to_string());
-    match response.text().await {
-        Ok(text) => {
-            log_error_body(status, &text);
-            Error::Transport(TransportError::Http {
-                request_url,
-                status,
-                body: truncate_error_body(&text),
-            })
-        }
-        Err(error) => network(error),
-    }
 }
 
 fn decode_response(
@@ -258,10 +230,6 @@ fn log_request_body(provider: &str, stream: bool, body: &serde_json::Value) {
 
 fn log_response_body(body: &str) {
     tracing::debug!(body, "provider response body");
-}
-
-fn log_error_body(status: u16, body: &str) {
-    tracing::debug!(status, body, "provider error body");
 }
 
 fn log_chunk(provider: &str, stage: &str, data: &bytes::Bytes) {

@@ -1,5 +1,6 @@
 use litellm_host::observation::ObservationSender;
 pub use litellm_inference::RouteError as Error;
+use litellm_inference::call::{self, Failure};
 
 pub mod route;
 pub mod types;
@@ -49,7 +50,7 @@ impl ResponsesRoute {
         call: ResponsesCall,
         interceptors: &impl Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
-    ) -> Result<ResponsesOutput, Error> {
+    ) -> Result<ResponsesOutput, Failure<Error>> {
         let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
@@ -75,7 +76,7 @@ impl ResponsesRoute {
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ResponsesOutput, Error> {
+    ) -> Result<ResponsesOutput, Failure<Error>> {
         litellm_inference::diagnostic::call(async {
             self.run_provider(call, cache_options, interceptors, observers)
                 .await
@@ -89,13 +90,13 @@ impl ResponsesRoute {
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ResponsesOutput, Error> {
-        let request = prepare::prepare(call, self.secrets.as_ref()).await?;
+    ) -> Result<ResponsesOutput, Failure<Error>> {
+        let request = call::prepare(prepare::prepare(call, self.secrets.as_ref())).await?;
         litellm_inference::diagnostic::provider(
             &request.context.model,
             &request.context.custom_llm_provider,
         );
-        let execute: futures_util::future::BoxFuture<'_, Result<ResponsesOutput, Error>> =
+        let execute: futures_util::future::BoxFuture<'_, Result<ResponsesOutput, Failure<Error>>> =
             Box::pin(handler::execute(
                 &self.http,
                 &self.auth,

@@ -16,6 +16,7 @@ import litellm
 from litellm.constants import TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
 from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding
 from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_model
+from litellm.rust_bridge import failures
 from litellm.rust_bridge import token_counter as bridge
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge._native import Tokenizer
@@ -359,11 +360,14 @@ DECLINED_REQUESTS: Final[tuple[dict[str, object], ...]] = (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tokenizer", TOKENIZERS)
 @pytest.mark.parametrize("request_body", DECLINED_REQUESTS)
-async def test_native_declines_shapes_python_prices_differently(
+async def test_native_cannot_count_shapes_python_prices_differently(
     request_body: dict[str, object], tokenizer: bridge.RustTokenizer
 ) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     raw, _ = _counted(request_body, MODEL_BY_TOKENIZER[tokenizer])
 
-    with pytest.raises(native.RustBridgeDeclined):
+    with pytest.raises(Exception) as caught:
         await bridge.native_count(native.TokenCounter, tokenizer, raw)
+    report: Final = failures.read_report(caught.value)
+    assert report is not None
+    assert (report.stage, report.kind.kind) == ("prepare", "unsupported")

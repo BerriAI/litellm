@@ -8,7 +8,7 @@ use pyo3::{
 use serde_json::Value;
 
 use crate::{
-    errors::{RustBridgeDeclined, route_error_to_pyerr},
+    errors::failure_to_pyerr,
     marshal::{marshal_headers, optional_timeout},
 };
 
@@ -19,50 +19,13 @@ fn run_public(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    use super::inference::InferenceHost;
     use litellm_callbacks_legacy_python::LoggingOperation;
+
+    use super::inference::InferenceHost;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.responses.route_host",
     );
-    if let Some(reason) = py
-        .import("litellm.rust_bridge.responses.route_host")?
-        .getattr("decline_reason")?
-        .call1((&request,))?
-        .extract::<Option<String>>()?
-    {
-        return Err(RustBridgeDeclined::new_err(reason));
-    }
-    let model = host
-        .argument(py, &kwargs, "model")?
-        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("model is required"))?
-        .extract::<String>()?;
-    let provider = host
-        .argument(py, &kwargs, "custom_llm_provider")?
-        .map(|value| value.extract::<String>())
-        .transpose()?;
-    if provider
-        .as_deref()
-        .is_some_and(|provider| provider != "openai")
-        || model
-            .strip_prefix("openai/")
-            .unwrap_or(&model)
-            .contains('/')
-    {
-        return Err(RustBridgeDeclined::new_err(
-            "native HTTP responses provider",
-        ));
-    }
-    if host
-        .argument(py, &kwargs, "stream")?
-        .map(|value| litellm_host_python::from_py::<Value>(&value))
-        .transpose()?
-        .is_some_and(|value| value == Value::Bool(true))
-    {
-        return Err(RustBridgeDeclined::new_err(
-            "native Python responses streaming",
-        ));
-    }
     let cache_call_type = if asynchronous {
         "aresponses"
     } else {
@@ -137,7 +100,7 @@ impl ResponsesWebSocketConnection {
         crate::execution::run_async_value(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
-                .map_err(route_error_to_pyerr)?;
+                .map_err(failure_to_pyerr)?;
             Ok(ResponsesWebSocketConnection { inner })
         })
     }
@@ -145,21 +108,21 @@ impl ResponsesWebSocketConnection {
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::execution::run_async_value(py, async move {
-            inner.send_text(text).await.map_err(route_error_to_pyerr)
+            inner.send_text(text).await.map_err(failure_to_pyerr)
         })
     }
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::execution::run_async_value(py, async move {
-            inner.recv_text().await.map_err(route_error_to_pyerr)
+            inner.recv_text().await.map_err(failure_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::execution::run_async_value(py, async move {
-            inner.close().await.map_err(route_error_to_pyerr)
+            inner.close().await.map_err(failure_to_pyerr)
         })
     }
 }

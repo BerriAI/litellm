@@ -11,7 +11,7 @@ from litellm.chat_completions import dispatch as chat_dispatch
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.rust_bridge import _native
+from litellm.rust_bridge import _native, failures
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, ModelResponse
@@ -255,16 +255,19 @@ async def test_unstarted_native_inference_has_no_provider_or_callback_effects(
         {"model_list": []},
     ),
 )
-async def test_native_responses_declines_unsupported_requests_before_callbacks(
+async def test_native_responses_rejects_unsupported_requests_before_the_provider(
     recording_server: RecordingServer,
     options: Mapping[str, object],
 ) -> None:
     recorder: Final = RecordingLogger()
     recording_server.expected_requests = 0
-    with pytest.raises(_native.RustBridgeDeclined):
-        native_call("responses", True, recording_server, {**options, "callbacks": [recorder]})
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await execute("responses", True, recording_server, {**options, "callbacks": [recorder]})
     assert not recording_server.requests
-    assert not recorder.events
+    failure: Final = failures.decode(caught.value)
+    assert failure is not None
+    assert failure.stage == "prepare"
+    assert "failure_handler" in recorder.names
 
 
 @pytest.mark.asyncio
@@ -273,9 +276,9 @@ async def test_native_chat_validation_failure_is_terminal(
     asynchronous: bool, recording_server: RecordingServer
 ) -> None:
     recording_server.expected_requests = 0
-    with pytest.raises(Exception, match="chat completions requires at least one message") as failure:
+    with pytest.raises(litellm.BadRequestError, match="chat completions requires at least one message") as caught:
         await execute("chat", asynchronous, recording_server, {"messages": []})
-    assert not isinstance(failure.value, _native.RustBridgeDeclined)
+    assert failures.decode(caught.value) is not None
     assert not recording_server.requests
 
 

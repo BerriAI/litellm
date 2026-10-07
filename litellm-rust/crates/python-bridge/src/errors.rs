@@ -1,126 +1,196 @@
-use litellm_http::transport::Error as TransportError;
-use litellm_inference::RouteError;
-use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
-    prelude::*,
-};
+//! The one exception a native call raises into Python: `RustFailure(report)`, where the report
+//! says where the call failed, what went wrong and the message. Python decodes it once, in
+//! `litellm.rust_bridge.failures`, and decides there whether to reroute or which public
+//! exception to raise.
+
+use std::fmt::Display;
+
+use litellm_host::failure::{Classify, Failure, Kind, Report, Stage};
+use litellm_host_python::to_py;
+use pyo3::prelude::*;
 
 pyo3::create_exception!(
     _native,
-    RustBridgeDeclined,
+    RustFailure,
     pyo3::exceptions::PyException,
-    "The route declined before calling the provider, so the host may retry on its own path."
+    "A native call failed. The one argument is the failure report: `stage` (where), `kind` (what) and `message`."
 );
 
-pyo3::create_exception!(
-    _native,
-    RustUpstreamError,
-    pyo3::exceptions::PyException,
-    "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
-);
-
-pub(crate) fn route_error_to_pyerr(error: RouteError) -> PyErr {
-    match error {
-        RouteError::Transport(TransportError::Http {
-            status,
-            body,
-            request_url,
-        }) => Python::attach(|py| upstream_error(py, status, body, Vec::new(), request_url))
-            .unwrap_or_else(|error| error),
-        other => by_fault(other.is_request(), other.to_string()),
-    }
+pub(crate) fn failure_to_pyerr<E: Classify + Display>(failure: Failure<E>) -> PyErr {
+    report_to_pyerr(failure.report())
 }
 
-pub(crate) fn upstream_error(
+pub(crate) fn report_to_pyerr(report: Report) -> PyErr {
+    Python::attach(|py| match to_py(py, &report) {
+        Ok(report) => RustFailure::new_err(report),
+        Err(error) => error,
+    })
+}
+
+/// A capability this build does not provide, found before any work was done.
+pub(crate) fn unsupported(message: impl Into<String>) -> PyErr {
+    report_to_pyerr(Report {
+        stage: Stage::Prepare,
+        kind: Kind::Unsupported,
+        message: message.into(),
+    })
+}
+
+/// The public LiteLLM exception for a native failure, built once in Python from the report so
+/// callbacks and the caller see the same exception. Anything that is not a `RustFailure` comes
+/// back unchanged.
+pub(crate) fn public_error(
     py: Python<'_>,
-    status: u16,
-    body: String,
-    headers: Vec<(String, String)>,
-    request_url: Option<String>,
+    native: PyErr,
+    request: &Bound<'_, PyAny>,
+    provider: Option<&str>,
 ) -> PyResult<PyErr> {
-    let error = RustUpstreamError::new_err((status, body));
-    error.value(py).setattr("headers", headers)?;
-    error.value(py).setattr("request_url", request_url)?;
-    Ok(error)
-}
-
-/// A request the caller got wrong is a `ValueError`; anything else is a `RuntimeError`.
-pub(crate) fn by_fault(is_request: bool, message: String) -> PyErr {
-    if is_request {
-        PyValueError::new_err(message)
-    } else {
-        PyRuntimeError::new_err(message)
-    }
+    let mapped = py
+        .import("litellm.rust_bridge.failures")?
+        .getattr("public_exception")?
+        .call1((native.value(py), request, provider))?;
+    Ok(PyErr::from_value(mapped))
 }
 
 #[cfg(test)]
 mod tests {
+    use litellm_host::failure::UpstreamResponse;
+    use litellm_inference::RouteError;
+    use pyo3::types::PyDict;
+
     use super::*;
 
+    fn report<'py>(py: Python<'py>, error: &PyErr) -> Bound<'py, PyDict> {
+        assert!(error.is_instance_of::<RustFailure>(py), "{error}");
+        error
+            .value(py)
+            .getattr("args")
+            .unwrap()
+            .get_item(0)
+            .unwrap()
+            .cast_into::<PyDict>()
+            .unwrap()
+    }
+
     #[rstest::rstest]
-    #[case::unsupported(RouteError::Unsupported("test capability"), true)]
-    #[case::invalid_provider(RouteError::InvalidProvider("unknown".into()), true)]
-    #[case::invalid_request(RouteError::InvalidRequest("empty messages".into()), true)]
-    #[case::connection(TransportError::Connect("unreachable".into()).into(), false)]
-    #[case::network(TransportError::Network("timed out".into()).into(), false)]
-    #[case::invalid_response(RouteError::InvalidResponse("missing usage".into()), false)]
-    fn route_failures_are_terminal(#[case] error: RouteError, #[case] is_request: bool) {
+    fn an_upstream_failure_reports_its_stage_kind_and_provider_answer() {
         Python::initialize();
         Python::attach(|py| {
-            let failure = route_error_to_pyerr(error);
-            assert!(!failure.is_instance_of::<RustBridgeDeclined>(py));
-            assert_eq!(failure.is_instance_of::<PyValueError>(py), is_request);
-            assert_eq!(failure.is_instance_of::<PyRuntimeError>(py), !is_request);
+            let failure = Failure::at(
+                Stage::Upstream,
+                RouteError::Upstream(UpstreamResponse {
+                    status: 429,
+                    headers: vec![("retry-after".into(), "7".into())],
+                    body: "slow down".into(),
+                    url: Some("https://upstream.invalid/v1/responses".into()),
+                }),
+            );
+            let error = failure_to_pyerr(failure);
+            let report = report(py, &error);
+            assert_eq!(
+                report
+                    .get_item("stage")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "upstream"
+            );
+            let kind = report.get_item("kind").unwrap().unwrap();
+            assert_eq!(
+                kind.get_item("kind").unwrap().extract::<String>().unwrap(),
+                "upstream"
+            );
+            assert_eq!(
+                kind.get_item("status").unwrap().extract::<u16>().unwrap(),
+                429
+            );
+            assert_eq!(
+                kind.get_item("url").unwrap().extract::<String>().unwrap(),
+                "https://upstream.invalid/v1/responses"
+            );
+            assert_eq!(
+                kind.get_item("headers")
+                    .unwrap()
+                    .extract::<Vec<(String, String)>>()
+                    .unwrap(),
+                vec![("retry-after".to_string(), "7".to_string())]
+            );
+            assert_eq!(
+                report
+                    .get_item("message")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "upstream request failed with status 429: slow down"
+            );
         });
     }
 
     #[rstest::rstest]
-    fn transport_status_and_url_survive_python_mapping() {
+    #[case::rejected_request(Failure::at(Stage::Prepare, RouteError::InvalidRequest("top_k".into())), "prepare", "request")]
+    #[case::unreachable(Failure::at(Stage::Send, RouteError::Transport(litellm_http::transport::Error::Connect("refused".into()))), "send", "connection")]
+    #[case::undecodable(Failure::at(Stage::Receive, RouteError::InvalidResponse("bad json".into())), "receive", "response")]
+    #[case::host_fault(Failure::host(RouteError::InvalidRequest("abandoned".into())), "host", "request")]
+    fn route_failures_report_stage_and_kind(
+        #[case] failure: Failure<RouteError>,
+        #[case] stage: &str,
+        #[case] kind: &str,
+    ) {
         Python::initialize();
         Python::attach(|py| {
-            let upstream = route_error_to_pyerr(
-                TransportError::Http {
-                    request_url: Some("https://upstream.invalid/v1/responses".into()),
-                    status: 429,
-                    body: "slow down".into(),
-                }
-                .into(),
-            );
+            let error = failure_to_pyerr(failure);
+            let report = report(py, &error);
             assert_eq!(
-                upstream
-                    .value(py)
-                    .getattr("request_url")
+                report
+                    .get_item("stage")
+                    .unwrap()
                     .unwrap()
                     .extract::<String>()
                     .unwrap(),
-                "https://upstream.invalid/v1/responses"
+                stage
             );
-            assert!(upstream.is_instance_of::<RustUpstreamError>(py));
             assert_eq!(
-                upstream
-                    .value(py)
-                    .getattr("args")
+                report
+                    .get_item("kind")
                     .unwrap()
-                    .extract::<(u16, String)>()
+                    .unwrap()
+                    .get_item("kind")
+                    .unwrap()
+                    .extract::<String>()
                     .unwrap(),
-                (429, "slow down".into())
+                kind
             );
         });
     }
 
     #[test]
-    fn missing_api_key_stays_a_runtime_error_while_other_auth_failures_are_value_errors() {
+    fn an_unsupported_capability_is_a_prepare_failure_nothing_was_sent_for() {
         Python::initialize();
         Python::attach(|py| {
-            let missing =
-                route_error_to_pyerr(RouteError::Auth(litellm_auth::Error::MissingApiKey {
-                    provider: "Anthropic",
-                    environment_variable: "ANTHROPIC_API_KEY",
-                }));
-            assert!(missing.is_instance_of::<PyRuntimeError>(py));
-            let invalid =
-                route_error_to_pyerr(RouteError::Auth(litellm_auth::Error::InvalidHeader));
-            assert!(invalid.is_instance_of::<PyValueError>(py));
+            let error = unsupported("tokenizer backend requires the tiktoken feature");
+            let report = report(py, &error);
+            assert_eq!(
+                report
+                    .get_item("stage")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "prepare"
+            );
+            assert_eq!(
+                report
+                    .get_item("kind")
+                    .unwrap()
+                    .unwrap()
+                    .get_item("kind")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "unsupported"
+            );
         });
     }
 }

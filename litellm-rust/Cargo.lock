@@ -3926,7 +3926,9 @@ dependencies = [
  "litellm-auth",
  "litellm-coroutine",
  "rstest",
+ "serde",
  "serde_json",
+ "thiserror 2.0.19",
  "tokio",
 ]
 
@@ -4202,7 +4204,9 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "tracing",
  "url",
+ "wiremock",
 ]
 
 [[package]]

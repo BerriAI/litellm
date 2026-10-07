@@ -1,4 +1,4 @@
-use crate::execution::{run_async, run_sync};
+use litellm_inference::call::{self, Failure};
 use litellm_inference_transcription::{
     AudioTranscriptionRoute, Error, types::AudioTranscriptionRequest,
 };
@@ -6,7 +6,8 @@ use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::route_error_to_pyerr,
+    errors::failure_to_pyerr,
+    execution::{run_async, run_sync},
     marshal::{RouteOptions, optional_object_field, required_field, value_route_options},
 };
 
@@ -16,7 +17,8 @@ async fn execute(
     audio: Value,
     optional_params: Map<String, Value>,
     options: RouteOptions,
-) -> Result<Value, Error> {
+) -> Result<Value, Failure<Error>> {
+    let http = call::prepare(async { http.map_err(Error::from) }).await?;
     let RouteOptions {
         model,
         api_key,
@@ -25,7 +27,7 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    AudioTranscriptionRoute::new(http?, crate::http::resources().auth.clone(), secrets)
+    AudioTranscriptionRoute::new(http, crate::http::resources().auth.clone(), secrets)
         .execute(AudioTranscriptionRequest {
             model: &model,
             audio,
@@ -52,7 +54,7 @@ pub(crate) fn transcription(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<
     run_sync(
         py,
         execute(http, secrets, audio, optional_params, options),
-        route_error_to_pyerr,
+        failure_to_pyerr,
     )
 }
 
@@ -72,6 +74,6 @@ pub(crate) fn atranscription<'py>(
     run_async(
         py,
         execute(http, secrets, audio, optional_params, options),
-        route_error_to_pyerr,
+        failure_to_pyerr,
     )
 }

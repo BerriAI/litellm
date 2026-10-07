@@ -1,8 +1,10 @@
-use litellm_host::observation::ObservationSender;
 use std::sync::Arc;
 
-use litellm_host::interceptors::Interceptors;
-use litellm_llms::base_llm::ocr::{error::Error, handler::OcrClient};
+use litellm_host::{interceptors::Interceptors, observation::ObservationSender};
+use litellm_llms::base_llm::{
+    call::{self, Failure},
+    ocr::{error::Error, handler::OcrClient},
+};
 use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 
 use super::{
@@ -25,7 +27,7 @@ impl OcrRoute {
         request: LiteLLMOcrRequest,
         interceptors: &impl Interceptors<Error>,
         observers: Option<ObservationSender>,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<LiteLLMOcrResponse, Failure<Error>> {
         litellm_host::lifecycle::observe_unary(
             observers.clone(),
             self.run(request, interceptors, observers.as_ref()),
@@ -46,18 +48,20 @@ impl OcrRoute {
         request: LiteLLMOcrRequest,
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<LiteLLMOcrResponse, Failure<Error>> {
         litellm_inference::diagnostic::unary(async {
             let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
-            let prepared = prepare_request_document(request).await?;
-            let execute: futures_util::future::BoxFuture<'_, Result<LiteLLMOcrResponse, Error>> =
-                Box::pin(perform_ocr_request(
-                    &self.client,
-                    prepared,
-                    interceptors,
-                    caller_document,
-                    observers,
-                ));
+            let prepared = call::prepare(prepare_request_document(request)).await?;
+            let execute: futures_util::future::BoxFuture<
+                '_,
+                Result<LiteLLMOcrResponse, Failure<Error>>,
+            > = Box::pin(perform_ocr_request(
+                &self.client,
+                prepared,
+                interceptors,
+                caller_document,
+                observers,
+            ));
             execute.await
         })
         .await

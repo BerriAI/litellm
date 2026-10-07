@@ -71,7 +71,7 @@ def optional_sequence(value: object) -> Sequence[object] | None:
     return cast("Sequence[object]", value)  # cast-ok: the same caller-owned object is handed on unchanged
 
 
-def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, object]) -> str | None:
+def unsupported_argument(parameters: tuple[str, ...], kwargs: Mapping[str, object]) -> str | None:
     if litellm.drop_params or litellm.modify_params:
         return "native inference does not implement the configured parameter rewrites"
     for name, value in kwargs.items():

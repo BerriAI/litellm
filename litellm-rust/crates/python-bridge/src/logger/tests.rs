@@ -4,7 +4,6 @@ use litellm_host::{
     machine::{HostFailure, Interrupted, Machine, MachineStep, Step},
     protocol::Protocol,
 };
-
 use pyo3::{prelude::*, types::PyDict};
 
 struct DiagnosticMachine;
@@ -31,7 +30,10 @@ impl Machine for DiagnosticMachine {
         })
     }
 
-    fn interrupt(&mut self, _: HostFailure<String>) -> Interrupted<'_, Self> {
+    fn interrupt(
+        &mut self,
+        _: HostFailure<litellm_host::failure::Failure<String>>,
+    ) -> Interrupted<'_, Self> {
         Box::pin(async {
             litellm_tracing::warn!("machine interrupted");
             Ok(())
@@ -46,11 +48,13 @@ fn machine_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         machine
             .resume()
             .await
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            .map_err(|failure| pyo3::exceptions::PyValueError::new_err(failure.error))?;
         machine
-            .interrupt(HostFailure::Error("stop".into()))
+            .interrupt(HostFailure::Error(litellm_host::failure::Failure::host(
+                "stop".into(),
+            )))
             .await
-            .map_err(pyo3::exceptions::PyValueError::new_err)
+            .map_err(|failure| pyo3::exceptions::PyValueError::new_err(failure.error))
     });
     assert!(matches!(
         litellm_host_python::poll_async_value(py, future.as_mut())?,

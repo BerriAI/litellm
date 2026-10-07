@@ -134,7 +134,10 @@ mod tests {
             error,
             Error::RequestField { .. } | Error::MissingDocumentUrl
         ));
-        assert_eq!(error.http_status_code(), Some(400));
+        assert_eq!(
+            litellm_llms::base_llm::call::Classify::kind(&error),
+            litellm_llms::base_llm::call::Kind::Request
+        );
         assert!(error.to_string().contains(field), "{error}");
     }
 

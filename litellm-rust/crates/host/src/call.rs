@@ -1,10 +1,11 @@
-use crate::observation::ObservationSender;
 use std::future::Future;
 
 use futures_util::{TryStreamExt, stream::BoxStream};
 
 use crate::{
+    failure::{Failure, Stage},
     machine::{CallMachine, ChannelInterceptors, HostServices, MachineFault},
+    observation::ObservationSender,
     protocol::Protocol,
 };
 
@@ -54,18 +55,34 @@ where
         ) -> Fut
         + Send
         + 'static,
-    Fut: Future<Output = Result<OutputOf<P>, P::Error>> + Send + 'static,
+    Fut: Future<Output = Result<OutputOf<P>, Failure<P::Error>>> + Send + 'static,
 {
     CallMachine::new(observers, move |host| {
         Box::pin(async move {
             match execute(request, host.services, host.interceptors, host.observers).await? {
                 CallOutput::Complete(response) => Ok(HostedCompletion::Complete(response)),
                 CallOutput::Stream { head, mut chunks } => {
-                    if host.stream.open_stream(head).await?.is_break() {
+                    if host
+                        .stream
+                        .open_stream(head)
+                        .await
+                        .map_err(Failure::host)?
+                        .is_break()
+                    {
                         return Ok(HostedCompletion::Detached);
                     }
-                    while let Some(chunk) = chunks.try_next().await? {
-                        if host.stream.send_chunk(chunk).await?.is_break() {
+                    while let Some(chunk) = chunks
+                        .try_next()
+                        .await
+                        .map_err(|error| Failure::at(Stage::Receive, error))?
+                    {
+                        if host
+                            .stream
+                            .send_chunk(chunk)
+                            .await
+                            .map_err(Failure::host)?
+                            .is_break()
+                        {
                             return Ok(HostedCompletion::Detached);
                         }
                     }

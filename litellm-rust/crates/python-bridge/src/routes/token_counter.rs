@@ -1,6 +1,4 @@
-use crate::execution::run_async;
-use std::sync::Arc;
-use std::{num::NonZero, thread::available_parallelism};
+use std::{num::NonZero, sync::Arc, thread::available_parallelism};
 
 use litellm_host_python::enter_native;
 use litellm_token_counter::{
@@ -13,8 +11,7 @@ use pyo3::{
 };
 use tokio::sync::Semaphore;
 
-use crate::errors::RustBridgeDeclined;
-use crate::tokenizer::Tokenizer;
+use crate::{errors::unsupported, execution::run_async, tokenizer::Tokenizer};
 
 /// Counts the input tokens of a raw request body off the Python event loop with
 /// the GIL released. Python owns which requests get here and what to do with
@@ -82,7 +79,7 @@ pub(crate) fn token_count_error_to_pyerr(error: Error) -> PyErr {
         | Error::ContentBlock
         | Error::ArrayItems
         | Error::JsonSerialization(_)
-        | Error::JsonUtf8(_) => RustBridgeDeclined::new_err(message),
+        | Error::JsonUtf8(_) => unsupported(message),
         Error::Encode(_) | Error::Decode(_) | Error::Task(_) => PyRuntimeError::new_err(message),
     }
 }

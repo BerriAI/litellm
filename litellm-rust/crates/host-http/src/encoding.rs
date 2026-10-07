@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
-use litellm_host::protocol::Protocol;
+use litellm_host::{failure::Failure, protocol::Protocol};
 
 use crate::Error;
 
@@ -26,7 +26,10 @@ pub trait StreamEncoder: ResponseEncoder + 'static {
         chunk: <Self::Protocol as Protocol>::Chunk,
     ) -> Result<Bytes, <Self::Protocol as Protocol>::Error>;
 
-    fn encode_stream_error(&self, error: Error<<Self::Protocol as Protocol>::Error>) -> Bytes;
+    fn encode_stream_error(
+        &self,
+        error: Error<Failure<<Self::Protocol as Protocol>::Error>>,
+    ) -> Bytes;
 }
 
 pub struct Unary<P, F> {

@@ -1,4 +1,5 @@
-use super::{native, python};
+use std::sync::Arc;
+
 use litellm_cache_response::{
     CacheOptions, CachePolicy, CacheScope, ResponseCacheService, ScopedCache,
 };
@@ -7,7 +8,8 @@ use litellm_host::{
     protocol::Protocol,
 };
 use pyo3::{prelude::*, types::PyDict};
-use std::sync::Arc;
+
+use super::{native, python};
 
 pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
 
@@ -79,7 +81,7 @@ pub(crate) fn admit_native(
     if let Some(configured) = selected_cache(py, kwargs, call_type)?
         && native::v2::native_handle(&configured)?.is_none()
     {
-        return Err(crate::errors::RustBridgeDeclined::new_err(
+        return Err(crate::errors::unsupported(
             "the configured cache requires Python inference",
         ));
     }

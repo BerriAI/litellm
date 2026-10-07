@@ -5,6 +5,7 @@ use std::{
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
+use litellm_inference::call::{Failure, Stage, UpstreamResponse};
 use litellm_inference_messages::{
     MessagesCallResponse,
     route::{Messages, MessagesStreamHead},
@@ -140,9 +141,9 @@ fn sse_response() -> ResponseTemplate {
     )
 }
 
-async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Error> {
+async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Failure<Error>> {
     litellm_host_native::in_process::run_hosted(
-        machine(Arc::new(RecordingSecrets::empty()))(host.request()?),
+        machine(Arc::new(RecordingSecrets::empty()))(host.request().map_err(Failure::host)?),
         host.runtime(),
     )
     .await
@@ -248,17 +249,25 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(
         .await
         .expect_err("upstream error propagates");
 
+    assert_eq!(error.stage, Stage::Upstream);
+    let Error::Upstream(UpstreamResponse {
+        status: upstream_status,
+        body: upstream_body,
+        url: upstream_url,
+        ..
+    }) = error.error
+    else {
+        panic!("expected the provider's answer");
+    };
+    assert_eq!(upstream_status, 429);
+    assert_eq!(upstream_body, body);
     assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            request_url: Some(format!(
-                "{}{}",
-                upstream.uri(),
-                only_request(&upstream).await.url.path()
-            )),
-            status: 429,
-            body: body.into()
-        })
+        upstream_url,
+        Some(format!(
+            "{}{}",
+            upstream.uri(),
+            only_request(&upstream).await.url.path()
+        ))
     );
     assert!(host.seen.into_inner().unwrap().is_empty());
 }
@@ -325,7 +334,7 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
         .expect("the stalled stream gives up within the timeout")
         .expect_err("a stalled body fails the call");
 
-    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(matches!(error.error, Error::Transport(_)), "{error:?}");
     let seen = host.seen.into_inner().unwrap();
     assert!(
         matches!(seen.as_slice(), [Seen::Open(_), Seen::Deliver(chunk)] if chunk.as_ref() == b"event: message_start\ndata: {}\n\n"),
@@ -380,17 +389,25 @@ async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall)
         .err()
         .expect("upstream failure is returned by messages()");
 
+    assert_eq!(error.stage, Stage::Upstream);
+    let Error::Upstream(UpstreamResponse {
+        status: upstream_status,
+        body: upstream_body,
+        url: upstream_url,
+        ..
+    }) = error.error
+    else {
+        panic!("expected the provider's answer");
+    };
+    assert_eq!(upstream_status, 429);
+    assert_eq!(upstream_body, "slow down");
     assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            request_url: Some(format!(
-                "{}{}",
-                upstream.uri(),
-                only_request(&upstream).await.url.path()
-            )),
-            status: 429,
-            body: "slow down".into(),
-        })
+        upstream_url,
+        Some(format!(
+            "{}{}",
+            upstream.uri(),
+            only_request(&upstream).await.url.path()
+        ))
     );
 }
 

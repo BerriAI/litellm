@@ -1,13 +1,15 @@
 use std::convert::Infallible;
 
-use super::super::inference::InferenceHost;
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
+use litellm_inference::call::Failure;
 use litellm_inference_responses::{Error, route::Responses, types::ResponsesCall};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
 };
+
+use super::super::inference::InferenceHost;
 
 pub(super) struct ResponsesPythonHost(pub InferenceHost);
 
@@ -59,6 +61,9 @@ impl PythonBinding for ResponsesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<ResponsesCall, InvokeError<Error>> {
+        if let Some(reason) = self.0.unsupported_request(py)? {
+            return Err(InvokeError::Native(Error::InvalidRequest(reason.into())));
+        }
         let call = project(&self.0, py, arguments).map_err(InvokeError::Python)?;
         if call
             .optional_params
@@ -102,7 +107,7 @@ impl PythonBinding for ResponsesPythonHost {
         ))
     }
 
-    fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
+    fn map_error(&self, py: Python<'_>, error: Failure<Error>) -> PyResult<PyErr> {
         self.0.error(py, error)
     }
     fn host_error(error: &PyErr) -> Error {

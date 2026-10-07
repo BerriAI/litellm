@@ -107,10 +107,9 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::protocol::InterceptRequest;
     use crate::{
         machine::{CallMachine, Machine, MachineFault, MachineStep},
-        protocol::{HostRequest, Protocol},
+        protocol::{HostRequest, InterceptRequest, Protocol},
     };
 
     struct Unit;
@@ -156,16 +155,16 @@ mod tests {
     async fn the_channel_yields_each_hook_as_its_op_and_returns_the_answer() {
         let mut machine = CallMachine::<Unit>::new(None, |channel| {
             Box::pin(async move {
-                let sent = Interceptors::before_provider_request(
+                let sent = crate::failure::prepare(Interceptors::before_provider_request(
                     &channel.interceptors,
                     wire("prepared"),
                     context(),
-                )
+                ))
                 .await?;
-                Interceptors::after_provider_response(
+                crate::failure::post_call(Interceptors::after_provider_response(
                     &channel.interceptors,
                     RawResponse { body: "raw".into() },
-                )
+                ))
                 .await?;
                 Ok((sent, ()))
             })

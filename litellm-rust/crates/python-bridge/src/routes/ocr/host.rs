@@ -1,20 +1,19 @@
 use litellm_auth::ResolvedCredential;
-use litellm_host_python::{InvokeError, PythonBinding, missing_state, to_py};
-use litellm_host_python::{PythonHostCalls, PythonOwned};
+use litellm_host_python::{
+    InvokeError, PythonBinding, PythonHostCalls, PythonOwned, missing_state, to_py,
+};
 use litellm_inference_ocr::route::{Ocr, OcrCall, OcrOp};
-use litellm_llms::base_llm::ocr::error::Error;
+use litellm_llms::base_llm::{call::Failure, ocr::error::Error};
 use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 use pyo3::{
-    exceptions::{PyBaseException, PyException},
+    exceptions::PyException,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
 };
 
-use super::{
-    errors::to_pyerr as ocr_error_to_pyerr,
-    project::{OcrHostHandles, project_request},
-};
+use super::project::{OcrHostHandles, project_request};
+use crate::errors::{failure_to_pyerr, public_error};
 
 enum OcrHostData {
     Unprojected,
@@ -71,18 +70,10 @@ impl OcrPythonHost {
             return error;
         }
         let provider = match &self.data {
-            OcrHostData::Projected(handles) => handles.provider,
-            _ => "",
+            OcrHostData::Projected(handles) => Some(handles.provider),
+            _ => None,
         };
-        let mapped = py
-            .import("litellm.rust_bridge.ocr.route_host")
-            .and_then(|module| module.getattr("map_failure"))
-            .and_then(|map| map.call1((error.value(py), self.request.bind(py), provider)))
-            .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
-        match mapped {
-            Ok(mapped) => PyErr::from_value(mapped.into_bound(py).into_any()),
-            Err(_) => error,
-        }
+        public_error(py, error.clone_ref(py), self.request.bind(py), provider).unwrap_or(error)
     }
 }
 
@@ -126,13 +117,13 @@ impl PythonBinding for OcrPythonHost {
         match chunk {}
     }
 
-    fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        if let Error::Secret(source) = &error
+    fn map_error(&self, py: Python<'_>, failure: Failure<Error>) -> PyResult<PyErr> {
+        if let Error::Secret(source) = &failure.error
             && let Some(original) = crate::secrets::python_error(py, source)
         {
             return Ok(original);
         }
-        Ok(self.map_failure(py, ocr_error_to_pyerr(error)))
+        Ok(self.map_failure(py, failure_to_pyerr(failure)))
     }
 
     fn host_error(error: &PyErr) -> Error {

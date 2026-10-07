@@ -7,6 +7,7 @@
 //! may rewrite the wire request before it is sent.
 
 pub mod call;
+pub mod failure;
 pub mod hooks;
 pub mod interceptors;
 pub mod lifecycle;

@@ -1,4 +1,3 @@
-use litellm_host::lifecycle::ExecutionEvent;
 use std::{
     ops::ControlFlow,
     sync::{
@@ -11,7 +10,7 @@ use futures_util::{StreamExt, stream};
 use litellm_host::{
     call::{CallOutput, HostedCompletion, hosted_call},
     interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
-    lifecycle::{CallEvent, CallObserver},
+    lifecycle::{CallEvent, CallObserver, ExecutionEvent},
     machine::{CallMachine, HostFailure, Interrupted, Machine, MachineFault, Step},
     protocol::{Protocol, Reply},
 };
@@ -152,29 +151,32 @@ fn dispatching_call() -> TestMachine {
         "projected",
         None,
         |request, services, route_hooks, _observations| async move {
-            let custom = services.call(|reply| reply).await?;
-            let wire = route_hooks
-                .before_provider_request(
-                    WireRequest {
-                        url: request.into(),
-                        headers: Vec::new(),
-                        body: json!({}),
-                    },
-                    RequestContext {
-                        model: custom.into(),
-                        custom_llm_provider: "test".into(),
-                        optional_params: json!({}),
-                        secret_fields: Vec::new(),
-                        api_key: None,
-                    },
-                )
-                .await?;
-            route_hooks
-                .after_provider_response(RawResponse {
-                    body: wire.url.clone(),
-                })
-                .await?;
-            Ok(CallOutput::Complete(wire.url))
+            litellm_host::failure::prepare(async move {
+                let custom = services.call(|reply| reply).await?;
+                let wire = route_hooks
+                    .before_provider_request(
+                        WireRequest {
+                            url: request.into(),
+                            headers: Vec::new(),
+                            body: json!({}),
+                        },
+                        RequestContext {
+                            model: custom.into(),
+                            custom_llm_provider: "test".into(),
+                            optional_params: json!({}),
+                            secret_fields: Vec::new(),
+                            api_key: None,
+                        },
+                    )
+                    .await?;
+                route_hooks
+                    .after_provider_response(RawResponse {
+                        body: wire.url.clone(),
+                    })
+                    .await?;
+                Ok(CallOutput::Complete(wire.url))
+            })
+            .await
         },
     )
 }
@@ -202,16 +204,19 @@ fn streaming_call(chunks: Vec<Result<usize, TestError>>) -> Streaming {
         "input",
         None,
         move |_, _, _, _observations| async move {
-            let chunks = stream::iter(chunks)
-                .inspect(move |_| {
-                    let _held = &release;
-                    provider_polls.fetch_add(1, Ordering::SeqCst);
+            litellm_host::failure::prepare(async move {
+                let chunks = stream::iter(chunks)
+                    .inspect(move |_| {
+                        let _held = &release;
+                        provider_polls.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .boxed();
+                Ok(CallOutput::Stream {
+                    head: "headers",
+                    chunks,
                 })
-                .boxed();
-            Ok(CallOutput::Stream {
-                head: "headers",
-                chunks,
             })
+            .await
         },
     );
     Streaming {
@@ -257,7 +262,7 @@ async fn handler_failures_interrupt_the_machine(
             reject: reject_hook,
         },
     );
-    assert!(matches!(driver.advance().await, Err(error) if error == expected));
+    assert!(matches!(driver.advance().await, Err(error) if error.error == expected));
     assert!(observer.0.lock().unwrap().is_empty());
 }
 
@@ -290,7 +295,10 @@ async fn provider_stream_errors_surface_at_the_failing_chunk() {
     let mut driver = Driver::new(machine, Services { reject: false }, ());
     assert!(matches!(driver.advance().await, Ok(Boundary::Open(_))));
     assert!(matches!(driver.advance().await, Ok(Boundary::Chunk(0))));
-    assert_eq!(driver.advance().await.err(), Some(TestError::Provider));
+    assert_eq!(
+        driver.advance().await.err().map(|failure| failure.error),
+        Some(TestError::Provider)
+    );
     assert_eq!(polls.load(Ordering::SeqCst), 2);
 }
 
@@ -331,7 +339,7 @@ async fn dropping_the_driver_drops_the_call(#[case] chunks_before_drop: usize) {
 
 struct Interruptible {
     inner: TestMachine,
-    interrupted: Arc<Mutex<Vec<HostFailure<TestError>>>>,
+    interrupted: Arc<Mutex<Vec<HostFailure<litellm_host::failure::Failure<TestError>>>>>,
 }
 
 impl Machine for Interruptible {
@@ -342,7 +350,10 @@ impl Machine for Interruptible {
         self.inner.resume()
     }
 
-    fn interrupt(&mut self, failure: HostFailure<TestError>) -> Interrupted<'_, Self> {
+    fn interrupt(
+        &mut self,
+        failure: HostFailure<litellm_host::failure::Failure<TestError>>,
+    ) -> Interrupted<'_, Self> {
         self.interrupted.lock().unwrap().push(failure.clone());
         self.inner.interrupt(failure)
     }
@@ -414,7 +425,7 @@ async fn in_process_runner_follows_consumer_demand(
         },
     )
     .await;
-    assert_eq!(outcome, expected);
+    assert_eq!(outcome.map_err(|failure| failure.error), expected);
     assert_eq!(polls.load(Ordering::SeqCst), expected_polls);
     assert_eq!(
         *consumer.delivered.lock().unwrap(),
@@ -458,10 +469,16 @@ async fn consumer_failures_interrupt_the_machine(#[case] fail_after: usize) {
         },
     )
     .await;
-    assert_eq!(outcome, Err(TestError::Consumer));
+    assert_eq!(
+        outcome.map_err(|failure| failure.error),
+        Err(TestError::Consumer)
+    );
     assert_eq!(
         *interrupted.lock().unwrap(),
-        [HostFailure::Error(TestError::Consumer)]
+        [HostFailure::Error(litellm_host::failure::Failure::at(
+            litellm_host::failure::Stage::Receive,
+            TestError::Consumer
+        ))]
     );
     assert_eq!(polls.load(Ordering::SeqCst), fail_after);
 }
@@ -514,11 +531,14 @@ fn scripted(
 ) -> CallMachine<TestProtocol, ()> {
     CallMachine::new(None, move |host| {
         Box::pin(async move {
-            for op in ops {
-                let answered = host.services.call(|reply| reply).await?;
-                assert_eq!(answered, *op);
-            }
-            outcome
+            litellm_host::failure::prepare(async move {
+                for op in ops {
+                    let answered = host.services.call(|reply| reply).await?;
+                    assert_eq!(answered, *op);
+                }
+                outcome
+            })
+            .await
         })
     })
 }
@@ -543,7 +563,7 @@ async fn generic_runner_forwards_ops_and_emits_one_terminal(
         events: Observations::default(),
     };
     let outcome = run(scripted(ops, call_outcome), host.runtime()).await;
-    assert_eq!(outcome, expected);
+    assert_eq!(outcome.map_err(|failure| failure.error), expected);
     assert_eq!(
         *host.seen.lock().unwrap(),
         seen.iter()
@@ -660,14 +680,17 @@ async fn response_interception_waits_and_can_reject_after_observation(#[case] re
         "input",
         Some(sender),
         |_, _, interceptors, observers| async move {
-            let raw = RawResponse {
-                body: "provider response".into(),
-            };
-            observers.unwrap().emit(CallEvent::Execution(
-                ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
-            ));
-            interceptors.after_provider_response(raw).await?;
-            Ok(CallOutput::Complete("accepted".into()))
+            litellm_host::failure::prepare(async move {
+                let raw = RawResponse {
+                    body: "provider response".into(),
+                };
+                observers.unwrap().emit(CallEvent::Execution(
+                    ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
+                ));
+                interceptors.after_provider_response(raw).await?;
+                Ok(CallOutput::Complete("accepted".into()))
+            })
+            .await
         },
     );
     let interceptor = ResponseGate {
@@ -684,7 +707,7 @@ async fn response_interception_waits_and_can_reject_after_observation(#[case] re
     match advance.await {
         Err(error) => {
             assert!(reject);
-            assert_eq!(error, TestError::Hook);
+            assert_eq!(error.error, TestError::Hook);
         }
         Ok(Boundary::Complete(HostedCompletion::Complete(value))) => {
             assert!(!reject);

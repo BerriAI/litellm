@@ -1,4 +1,6 @@
 use litellm_core_utils::call_arguments::CallArguments;
+use litellm_host::failure::UpstreamResponse;
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 use serde::{Deserialize, Serialize};
 
 use super::common_utils::{
@@ -13,7 +15,6 @@ use crate::base_llm::ocr::{
         BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
-use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DetectDocumentTextRequest {
@@ -100,14 +101,8 @@ impl BaseOcrConfig for TextractDetectTextConfig {
         decode_and_normalize_response(model, raw_response, request_format, normalize_response)
     }
 
-    fn get_error_class(
-        &self,
-        error_message: String,
-        status_code: u16,
-        headers: Vec<(String, String)>,
-        request_url: Option<String>,
-    ) -> Error {
-        error_class(error_message, status_code, headers, request_url)
+    fn transform_upstream_error(&self, response: UpstreamResponse) -> UpstreamResponse {
+        error_class(response)
     }
 }
 
@@ -235,16 +230,16 @@ mod tests {
 
     #[rstest]
     fn provider_errors_go_through_the_shared_textract_error_class() {
-        let error = TextractDetectTextConfig.get_error_class(
-            r#"{"__type":"UnsupportedDocumentException","Message":"Request has unsupported document format"}"#.into(),
-            400,
-            Vec::new(),
-            None,
-        );
+        let error = TextractDetectTextConfig.transform_upstream_error(UpstreamResponse {
+            status: 400,
+            headers: Vec::new(),
+            body: r#"{"__type":"UnsupportedDocumentException","Message":"Request has unsupported document format"}"#.into(),
+            url: None,
+        });
 
         assert!(
             error
-                .to_string()
+                .body
                 .contains("multi-page documents are not supported")
         );
     }

@@ -1,4 +1,3 @@
-use crate::observation::ObservationSender;
 use std::{
     future::Future,
     time::{SystemTime, UNIX_EPOCH},
@@ -6,7 +5,7 @@ use std::{
 
 use futures_util::TryStreamExt;
 
-use crate::{call::CallOutput, interceptors::RawResponse};
+use crate::{call::CallOutput, interceptors::RawResponse, observation::ObservationSender};
 
 /// Seconds since the Unix epoch, on one clock for every host.
 pub fn epoch_seconds() -> f64 {
@@ -146,10 +145,10 @@ impl Drop for CallGuard {
     }
 }
 
-pub async fn observe_call<R, H, C, E>(
+pub async fn observe_call<R, H, C, E, X>(
     observers: Option<ObservationSender>,
-    execute: impl Future<Output = Result<CallOutput<R, H, C, E>, E>>,
-) -> Result<CallOutput<R, H, C, E>, E>
+    execute: impl Future<Output = Result<CallOutput<R, H, C, E>, X>>,
+) -> Result<CallOutput<R, H, C, E>, X>
 where
     C: Send + 'static,
     E: Send + 'static,

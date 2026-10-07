@@ -1,4 +1,3 @@
-use litellm_host::protocol::StreamDelivery;
 use std::{
     convert::Infallible,
     ops::ControlFlow,
@@ -13,7 +12,7 @@ use litellm_host::{
     call::{CallOutput, HostedCompletion, hosted_call},
     lifecycle::{CallEvent, CallObserver, observe_call, observe_unary},
     machine::{Machine, MachineFault, MachineStep},
-    protocol::{HostRequest, Protocol},
+    protocol::{HostRequest, Protocol, StreamDelivery},
 };
 use rstest::{fixture, rstest};
 
@@ -163,7 +162,7 @@ async fn unary_calls_emit_one_terminal_event(observer: Arc<Observer>, #[case] fa
 async fn streams_finish_only_when_consumed(observer: Arc<Observer>, #[case] fail: bool) {
     let chunks = stream::iter([Ok(1), if fail { Err("provider") } else { Ok(2) }]).boxed();
     let output = observe_call(Some(observer.0.sender.clone()), async {
-        Ok::<Output, _>(CallOutput::Stream { head: (), chunks })
+        Ok::<Output, &str>(CallOutput::Stream { head: (), chunks })
     })
     .await
     .unwrap();
@@ -192,7 +191,7 @@ async fn streams_finish_only_when_consumed(observer: Arc<Observer>, #[case] fail
 async fn dropping_a_stream_cancels_without_success(observer: Arc<Observer>) {
     let chunks = stream::pending().boxed();
     let output = observe_call(Some(observer.0.sender.clone()), async {
-        Ok::<Output, _>(CallOutput::Stream { head: (), chunks })
+        Ok::<Output, &str>(CallOutput::Stream { head: (), chunks })
     })
     .await
     .unwrap();

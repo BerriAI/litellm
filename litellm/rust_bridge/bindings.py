@@ -38,12 +38,11 @@ class NativeBinding(Generic[BindingT]):
         self._override = _UNSET
 
 
-def native_exception_types() -> tuple[type[BaseException], type[BaseException]] | None:
+def native_failure_type() -> type[BaseException] | None:
     native: Final = get_native_bridge()
     if native is None:
         return None
-    declined: Final = getattr(native, "RustBridgeDeclined", None)
-    upstream: Final = getattr(native, "RustUpstreamError", None)
-    if not isinstance(declined, type) or not isinstance(upstream, type):
+    failure: Final = getattr(native, "RustFailure", None)
+    if not isinstance(failure, type) or not issubclass(failure, BaseException):
         return None
-    return declined, upstream
+    return failure

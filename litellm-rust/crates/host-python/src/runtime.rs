@@ -1,17 +1,24 @@
-use std::future::Future;
-use std::panic::AssertUnwindSafe;
-use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
-use std::time::Duration;
+use std::{
+    future::Future,
+    panic::AssertUnwindSafe,
+    pin::Pin,
+    task::{Context, Poll, Waker},
+    time::Duration,
+};
 
-use crate::fork_gate::{ForkGate, Refused, RuntimeAlreadyStarted};
-use crate::{Pythonized, panic_to_pyerr, release_gil};
 use futures_util::FutureExt;
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use serde::Serialize;
-use tokio::runtime::{Handle, Runtime};
-use tokio::time::{self, MissedTickBehavior};
+use tokio::{
+    runtime::{Handle, Runtime},
+    time::{self, MissedTickBehavior},
+};
+
+use crate::{
+    Pythonized,
+    fork_gate::{ForkGate, Refused, RuntimeAlreadyStarted},
+    panic_to_pyerr, release_gil,
+};
 
 pyo3::create_exception!(
     _native,
@@ -226,17 +233,24 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::CString;
-    use std::future::{pending, poll_fn};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{Arc, mpsc};
-    use std::task::Poll;
-    use std::thread;
-    use std::time::Instant;
+    use std::{
+        ffi::CString,
+        future::{pending, poll_fn},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            mpsc,
+        },
+        task::Poll,
+        thread,
+        time::Instant,
+    };
 
-    use pyo3::exceptions::PyLookupError;
-    use pyo3::panic::PanicException;
-    use pyo3::types::{PyDict, PyModule};
+    use pyo3::{
+        exceptions::PyLookupError,
+        panic::PanicException,
+        types::{PyDict, PyModule},
+    };
     use rstest::rstest;
     use serde::Serializer;
     use tokio::runtime::Builder;

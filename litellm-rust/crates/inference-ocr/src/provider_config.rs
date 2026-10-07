@@ -1,5 +1,6 @@
-use litellm_core_utils::get_llm_provider_logic::LlmProviders;
-use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_core_utils::get_llm_provider_logic::{
+    CustomLlmProvider, LlmProviders, get_custom_llm_provider,
+};
 use litellm_llms::{
     aws_textract::ocr::{
         analyze_transformation::TextractAnalyzeDocumentConfig, common_utils::TextractOperation,
@@ -134,7 +135,7 @@ impl OcrConfigKind {
         client: &OcrClient,
         request: &PreparedOcrRequest,
         interceptors: &dyn CallHooks<Error>,
-    ) -> Result<LiteLLMOcrResponse, Error> {
+    ) -> Result<LiteLLMOcrResponse, litellm_llms::base_llm::call::Failure<Error>> {
         with_config!(self, config => handler::ocr(&config, client, request, interceptors).await)
     }
 }
@@ -545,7 +546,10 @@ mod tests {
     ) {
         let error = resolve_provider_config(model, provider).unwrap_err();
         assert!(matches!(&error, Error::InvalidProvider(provider) if provider == "not_a_provider"));
-        assert_eq!(error.http_status_code(), Some(400));
+        assert_eq!(
+            litellm_llms::base_llm::call::Classify::kind(&error),
+            litellm_llms::base_llm::call::Kind::Request
+        );
     }
 
     #[rstest]

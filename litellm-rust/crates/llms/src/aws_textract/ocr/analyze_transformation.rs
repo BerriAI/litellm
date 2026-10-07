@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use litellm_core_utils::call_arguments::{CallArguments, parse_options};
+use litellm_host::failure::UpstreamResponse;
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 use serde::{Deserialize, Serialize};
 
 use super::common_utils::{
@@ -15,7 +17,6 @@ use crate::base_llm::ocr::{
         BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
-use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 const DEFAULT_FEATURE_TYPES: [FeatureType; 2] = [FeatureType::Layout, FeatureType::Tables];
 
@@ -119,14 +120,8 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
         decode_and_normalize_response(model, raw_response, request_format, normalize_response)
     }
 
-    fn get_error_class(
-        &self,
-        error_message: String,
-        status_code: u16,
-        headers: Vec<(String, String)>,
-        request_url: Option<String>,
-    ) -> Error {
-        error_class(error_message, status_code, headers, request_url)
+    fn transform_upstream_error(&self, response: UpstreamResponse) -> UpstreamResponse {
+        error_class(response)
     }
 }
 

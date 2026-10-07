@@ -85,7 +85,7 @@ async def test_ocr_contract_invalid_response_format(
     asynchronous: bool,
 ) -> None:
     ocr_server.expected_requests = 0
-    with pytest.raises(litellm.UnsupportedParamsError) as caught:
+    with pytest.raises(litellm.BadRequestError) as caught:
         await call_native(ocr_server, asynchronous, req_format="bogus", num_retries=0)
     assert caught.value.status_code == 400
     for value in ("req_format", "bogus", "native", "litellm"):

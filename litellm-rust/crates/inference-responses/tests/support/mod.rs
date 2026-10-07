@@ -263,6 +263,9 @@ impl TraceCapture {
 impl litellm_tracing::Sink for TraceCapture {
     fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
         metadata.target().starts_with("litellm_inference")
+            || metadata
+                .target()
+                .starts_with("litellm_llms::base_llm::call")
     }
 
     fn emit(&self, record: &litellm_tracing::Record) {

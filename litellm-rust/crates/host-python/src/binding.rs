@@ -1,7 +1,7 @@
+use litellm_host::{failure::Failure, protocol::Protocol};
+use pyo3::{prelude::*, types::PyDict};
+
 use crate::{InvokeError, PythonOwned};
-use litellm_host::protocol::Protocol;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
 /// Converts requests, responses, stream values and errors at the Python boundary.
 pub trait PythonBinding: PythonOwned {
@@ -41,10 +41,12 @@ pub trait PythonBinding: PythonOwned {
         chunk: <Self::Protocol as Protocol>::Chunk,
     ) -> PyResult<Py<PyAny>>;
 
+    /// The public exception for a native failure, built from where the call failed and what
+    /// the route reported.
     fn map_error(
         &self,
         py: Python<'_>,
-        error: <Self::Protocol as Protocol>::Error,
+        error: Failure<<Self::Protocol as Protocol>::Error>,
     ) -> PyResult<Self::Failure>;
 
     fn host_error(error: &PyErr) -> <Self::Protocol as Protocol>::Error;

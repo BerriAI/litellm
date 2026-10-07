@@ -5,8 +5,7 @@ from typing import Final
 
 import litellm
 from litellm import get_llm_provider
-from litellm.rust_bridge import failures
-from litellm.rust_bridge.public_call import inference_decline_reason, optional_str
+from litellm.rust_bridge.public_call import optional_str, unsupported_argument
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 
 PARAMETERS: Final = tuple(ResponsesAPIOptionalRequestParams.__annotations__)
@@ -24,23 +23,17 @@ def arguments(request: Mapping[str, object]) -> Mapping[str, object]:
     return request
 
 
-def map_failure(error: Exception, request: Mapping[str, object]) -> Exception:
-    provider: Final = optional_str(request.get("custom_llm_provider")) or "openai"
-    return failures.map_native_failure(
-        error,
-        str(request["model"]),
-        provider,
-        arguments(request),
-        optional_str(request.get("api_base")) or optional_str(request.get("base_url")),
-    )
-
-
-def decline_reason(request: Mapping[str, object]) -> str | None:
-    if optional_str(request.get("custom_llm_provider")) is None and "/" not in str(request["model"]):
+def unsupported_request(request: Mapping[str, object]) -> str | None:
+    """Why the native Responses route cannot serve this call, reported as a request failure before any work."""
+    model: Final = str(request["model"])
+    provider: Final = optional_str(request.get("custom_llm_provider"))
+    if provider is None and "/" not in model:
         try:
-            _, provider, _, _ = get_llm_provider(model=str(request["model"]))
+            _, resolved, _, _ = get_llm_provider(model=model)
         except litellm.exceptions.BadRequestError:
             return "native Responses could not resolve the provider"
-        if provider != "openai":
+        if resolved != "openai":
             return "native HTTP responses provider"
-    return inference_decline_reason(PARAMETERS, request)
+    elif (provider or model.partition("/")[0]) != "openai" or "/" in model.removeprefix("openai/"):
+        return "native HTTP responses provider"
+    return unsupported_argument(PARAMETERS, request)

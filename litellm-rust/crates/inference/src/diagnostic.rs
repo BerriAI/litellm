@@ -61,9 +61,9 @@ pub async fn operation<R, E>(
     result
 }
 
-pub async fn call<R, H, C, E>(
-    execute: impl Future<Output = Result<CallOutput<R, H, C, E>, E>>,
-) -> Result<CallOutput<R, H, C, E>, E>
+pub async fn call<R, H, C, E, X>(
+    execute: impl Future<Output = Result<CallOutput<R, H, C, E>, X>>,
+) -> Result<CallOutput<R, H, C, E>, X>
 where
     C: Send + 'static,
     E: Send + 'static,

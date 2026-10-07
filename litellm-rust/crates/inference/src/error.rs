@@ -2,11 +2,14 @@
 //!
 //! A variant is declared by the layer that produces it and nested here as is:
 //! credentials by `litellm_auth` (AWS folds into it at that crate's boundary), the wire by
-//! `litellm_http`, secrets by `litellm_secrets`. The transformation layer's [`LlmError`]
-//! maps onto the same-named variants once, here, so no route re-declares them.
+//! `litellm_http`, a provider's answer by `litellm_host::failure`, secrets by
+//! `litellm_secrets`. The transformation layer's [`LlmError`] maps onto the same-named
+//! variants once, here, so no route re-declares them. Where in the call a variant surfaced
+//! is the [`litellm_host::failure::Failure`] around it, never the variant.
 
 use std::sync::Arc;
 
+use litellm_host::failure::{Classify, Kind, UpstreamResponse};
 use litellm_http::transport::Error as TransportError;
 use litellm_llms::Error as LlmError;
 
@@ -32,13 +35,13 @@ pub enum RouteError {
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error(transparent)]
+    Upstream(#[from] UpstreamResponse),
+    #[error(transparent)]
     Headers(#[from] litellm_http::request::HeaderError),
     #[error(transparent)]
     Http(#[from] litellm_http::Error),
     #[error(transparent)]
     Secret(#[from] SecretError),
-    #[error("post-call hook failed: {0}")]
-    PostCallHook(#[source] Arc<RouteError>),
 }
 
 impl From<litellm_host::machine::MachineFault> for RouteError {
@@ -51,27 +54,23 @@ impl From<litellm_host::machine::MachineFault> for RouteError {
     }
 }
 
-impl RouteError {
-    pub fn post_call(error: Self) -> Self {
-        Self::PostCallHook(Arc::new(error))
-    }
-
-    /// The caller's request is what is wrong, as opposed to the environment, the wire, or
-    /// the provider's answer.
-    pub fn is_request(&self) -> bool {
+impl Classify for RouteError {
+    fn kind(&self) -> Kind {
         match self {
-            Self::InvalidType { .. }
+            Self::Upstream(response) => Kind::Upstream(response.clone()),
+            Self::Unsupported(_) => Kind::Unsupported,
+            Self::Auth(litellm_auth::Error::MissingApiKey { .. }) => Kind::Auth,
+            Self::Auth(_)
+            | Self::InvalidType { .. }
             | Self::MissingField(_)
             | Self::InvalidProvider(_)
             | Self::InvalidRequest(_)
-            | Self::Unsupported(_)
-            | Self::Headers(_) => true,
-            Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
-            Self::InvalidResponse(_)
-            | Self::Transport(_)
-            | Self::Http(_)
-            | Self::Secret(_)
-            | Self::PostCallHook(_) => false,
+            | Self::Headers(_)
+            | Self::Http(_) => Kind::Request,
+            Self::Transport(TransportError::Timeout(_)) => Kind::Timeout,
+            Self::Transport(_) => Kind::Connection,
+            Self::InvalidResponse(_) => Kind::Response,
+            Self::Secret(_) => Kind::Internal,
         }
     }
 }
@@ -115,23 +114,45 @@ impl Eq for SecretError {}
 
 #[cfg(test)]
 mod tests {
-    use super::RouteError;
+    use litellm_host::failure::{Classify, Kind, UpstreamResponse};
+    use litellm_http::transport::Error as TransportError;
     use litellm_llms::{Error as LlmError, ErrorDetail};
     use rstest::rstest;
 
-    #[test]
-    fn a_missing_api_key_is_the_environment_not_the_request() {
-        assert!(
-            !RouteError::Auth(litellm_auth::Error::MissingApiKey {
-                provider: "Anthropic",
-                environment_variable: "ANTHROPIC_API_KEY",
-            })
-            .is_request()
-        );
-        assert!(RouteError::Auth(litellm_auth::Error::InvalidHeader).is_request());
-        assert!(RouteError::InvalidRequest("top_k".into()).is_request());
-        assert!(!RouteError::InvalidResponse("bad json".into()).is_request());
+    use super::RouteError;
+
+    fn upstream() -> UpstreamResponse {
+        UpstreamResponse {
+            status: 429,
+            headers: Vec::new(),
+            body: "slow down".into(),
+            url: None,
+        }
     }
+
+    #[rstest]
+    #[case::missing_key_is_auth(
+        RouteError::Auth(litellm_auth::Error::MissingApiKey {
+            provider: "Anthropic",
+            environment_variable: "ANTHROPIC_API_KEY",
+        }),
+        Kind::Auth,
+    )]
+    #[case::malformed_header_is_the_request(
+        RouteError::Auth(litellm_auth::Error::InvalidHeader),
+        Kind::Request
+    )]
+    #[case::rejected_parameter(RouteError::InvalidRequest("top_k".into()), Kind::Request)]
+    #[case::unsupported_capability(RouteError::Unsupported("streaming"), Kind::Unsupported)]
+    #[case::provider_answer(RouteError::Upstream(upstream()), Kind::Upstream(upstream()))]
+    #[case::timeout(RouteError::Transport(TransportError::Timeout("slow".into())), Kind::Timeout)]
+    #[case::lost_connection(RouteError::Transport(TransportError::Network("reset".into())), Kind::Connection)]
+    #[case::unreachable(RouteError::Transport(TransportError::Connect("refused".into())), Kind::Connection)]
+    #[case::undecodable_answer(RouteError::InvalidResponse("bad json".into()), Kind::Response)]
+    fn each_variant_has_one_kind(#[case] error: RouteError, #[case] kind: Kind) {
+        assert_eq!(error.kind(), kind);
+    }
+
     #[rstest]
     #[case::request(true)]
     #[case::response(false)]
@@ -144,7 +165,14 @@ mod tests {
         } else {
             LlmError::InvalidResponse(detail)
         });
-        assert_eq!(error.is_request(), request);
+        assert_eq!(
+            error.kind(),
+            if request {
+                Kind::Request
+            } else {
+                Kind::Response
+            }
+        );
         let category = if request { "request" } else { "response" };
         assert_eq!(
             error.to_string(),

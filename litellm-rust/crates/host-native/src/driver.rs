@@ -1,6 +1,7 @@
 use std::ops::ControlFlow;
 
 use litellm_host::{
+    failure::{Failure, Stage},
     interceptors::Interceptors,
     machine::{HostFailure, Machine, MachineStep},
     protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
@@ -10,6 +11,7 @@ use crate::services::HostCallHandler;
 
 type ProtocolOf<M> = <M as Machine>::Protocol;
 type ErrorOf<M> = <ProtocolOf<M> as Protocol>::Error;
+type FailureOf<M> = Failure<ErrorOf<M>>;
 
 pub enum Boundary<M: Machine> {
     Complete(M::Complete),
@@ -41,22 +43,22 @@ where
         }
     }
 
-    pub async fn advance(&mut self) -> Result<Boundary<M>, ErrorOf<M>> {
+    pub async fn advance(&mut self) -> Result<Boundary<M>, FailureOf<M>> {
         self.resume(ControlFlow::Continue(())).await
     }
 
-    pub async fn detach(&mut self) -> Result<Boundary<M>, ErrorOf<M>> {
+    pub async fn detach(&mut self) -> Result<Boundary<M>, FailureOf<M>> {
         self.resume(ControlFlow::Break(())).await
     }
 
     /// Interrupts the machine with a failure the consumer hit at the last stream boundary,
     /// dropping the held demand reply unanswered
-    pub async fn fail(&mut self, error: ErrorOf<M>) -> Result<M::Complete, ErrorOf<M>> {
+    pub async fn fail(&mut self, error: FailureOf<M>) -> Result<M::Complete, FailureOf<M>> {
         self.demand = None;
         self.machine.interrupt(HostFailure::Error(error)).await
     }
 
-    async fn resume(&mut self, demand: ControlFlow<()>) -> Result<Boundary<M>, ErrorOf<M>> {
+    async fn resume(&mut self, demand: ControlFlow<()>) -> Result<Boundary<M>, FailureOf<M>> {
         if let Some(reply) = self.demand.take() {
             reply.send(demand);
         }
@@ -70,8 +72,13 @@ where
                     .interceptors
                     .result_ready(facts)
                     .await
-                    .map(|()| reply.send(())),
-                HostRequest::HostCall(call) => self.services.handle_host_call(call).await,
+                    .map(|()| reply.send(()))
+                    .map_err(|error| Failure::at(Stage::PostCall, error)),
+                HostRequest::HostCall(call) => self
+                    .services
+                    .handle_host_call(call)
+                    .await
+                    .map_err(|error| Failure::at(Stage::Prepare, error)),
                 HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                     wire,
                     context,
@@ -80,12 +87,14 @@ where
                     .interceptors
                     .before_provider_request(*wire, *context)
                     .await
-                    .map(|wire| reply.send(wire)),
+                    .map(|wire| reply.send(wire))
+                    .map_err(|error| Failure::at(Stage::Prepare, error)),
                 HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
                     self.interceptors
                         .after_provider_response(raw)
                         .await
                         .map(|()| reply.send(()))
+                        .map_err(|error| Failure::at(Stage::PostCall, error))
                 }
                 HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                     self.demand = Some(reply);
