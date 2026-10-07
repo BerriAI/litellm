@@ -189,9 +189,7 @@ def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
     assert optional_params["aws_session_token"] == "session-secret"
 
 
-def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
 
@@ -238,6 +236,10 @@ def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(
     assert "goog-secret" not in str(logging_obj.model_call_details["standard_logging_object"])
     assert logging_obj.model_call_details["response_cost"] is not None
     assert logging_obj.optional_params["extra_headers"] == {"x-goog-api-key": "goog-secret"}
+
+
+
+
 
 
 def test_realtime_stream_combines_text_and_audio_token_details():
@@ -1354,6 +1356,8 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     print(f"Cost with cache: {cost_with_cache}")
 
 
+
+
 def test_gemini_25_explicit_caching_cost_direct_usage():
     """
     Test that Gemini 2.5 models correctly calculate costs with explicit caching.
@@ -1988,6 +1992,8 @@ def test_cost_margin_with_discount(monkeypatch):
     print(f"  - Base cost: ${base_cost:.6f}")
     print(f"  - Cost with 5% discount + 10% margin: ${cost_with_both:.6f}")
     print(f"  - Expected: ${expected_cost:.6f}")
+
+
 
 
 def test_completion_cost_extracts_service_tier_from_response(_local_model_cost_map):
@@ -2739,6 +2745,8 @@ def test_gemini_without_cache_tokens_details():
     print("✅ Gemini without cacheTokensDetails works correctly")
 
 
+
+
 def test_additional_costs_only_for_azure_ai(_local_model_cost_map):
     """
     Test that _get_additional_costs is only called for azure_ai provider.
@@ -3283,7 +3291,9 @@ def test_cost_per_token_resolves_per_second_rate_precedence(
 
     model: Final = "test-chat-per-second-rate-precedence"
     entry: Final = {**pricing_fields, "litellm_provider": "together_ai", "mode": "chat"}
-    litellm.register_model(model_cost={model: entry})
+    litellm.register_model(
+        model_cost={model: entry}
+    )
 
     assert cost_per_token(
         model=model,
@@ -4051,10 +4061,7 @@ def test_completion_cost_region_without_its_own_row_prices_mantle_claude_from_th
             custom_llm_provider="bedrock_mantle",
             region_name="us-east-1",
         ) == pytest.approx(expected), deployment
-    assert (
-        litellm.get_model_info(f"bedrock_mantle/us-east-1/{model}", "bedrock_mantle")["key"]
-        == f"bedrock_mantle/{model}"
-    )
+    assert litellm.get_model_info(f"bedrock_mantle/us-east-1/{model}", "bedrock_mantle")["key"] == f"bedrock_mantle/{model}"
 
 
 @pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])
@@ -4978,7 +4985,9 @@ def test_xai_batch_tier_discounts_the_long_context_rate_like_the_flat_batch_rate
         assert info[f"{prefix}_above_200k_tokens_batches"] < info[f"{prefix}_above_200k_tokens"]
 
 
-@pytest.mark.parametrize(("prompt_tokens", "tier"), [(200_000, "_above_200k_tokens_batches"), (199_999, "_batches")])
+@pytest.mark.parametrize(
+    ("prompt_tokens", "tier"), [(200_000, "_above_200k_tokens_batches"), (199_999, "_batches")]
+)
 def test_xai_batch_cost_calculator_bills_the_200k_batch_tier_inclusively(
     _local_model_cost_map: None, prompt_tokens: int, tier: str
 ) -> None:
