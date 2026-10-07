@@ -31,13 +31,15 @@ pub(super) async fn execute(
         headers: authenticated.headers,
         body: request.body,
     };
-    let cache = cache.filter(|_| authenticated.signer.is_none());
+    let cache = cache
+        .filter(|_| authenticated.signer.is_none())
+        .map(|cache| cache.guard(&outbound));
     let wire = interceptors
         .before_provider_request(outbound, request.context)
         .await?;
     litellm_inference::caching::execute_streaming::<super::route::Responses, _, _>(
         identity,
-        cache,
+        cache.and_then(|cache| cache.confirm(&wire)),
         interceptors,
         observers,
         || async move {

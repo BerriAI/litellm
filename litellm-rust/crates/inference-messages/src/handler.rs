@@ -65,7 +65,9 @@ impl MessagesRoute {
             headers: authenticated.headers,
             body: serde_json::to_value(&body).map_err(serialize_failure)?,
         };
-        let cache = cache.filter(|_| authenticated.signer.is_none());
+        let cache = cache
+            .filter(|_| authenticated.signer.is_none())
+            .map(|cache| cache.guard(&outbound));
         let wire = context
             .interceptors
             .before_provider_request(outbound, request_context)
@@ -85,7 +87,7 @@ impl MessagesRoute {
         };
         Ok(ProviderCall {
             identity,
-            cache,
+            cache: cache.and_then(|cache| cache.confirm(&wire)),
             wire,
             provider,
             signer: authenticated.signer,

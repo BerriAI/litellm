@@ -5,6 +5,7 @@
 - Native keys hash every parameter the host forwards, as if Python's `enable_caching_on_provider_specific_optional_params` were on. The host removes litellm-owned kwargs before they reach key material
 - Key material has no per-field participation. A rule that drops parameters from the key is injected when `ResponseCache<B>` is constructed, never decided per request
 - A key combines what the route projects from the request (`CacheKeyInput`: surface and parameters) with what only the host knows about the call (`CacheScope`: credential). Routes never receive the scope
+- A request that `before_provider_request` changed skips the cache on both storage paths, so neither derivation sees the rewritten request
 - A key is a value computed once per call and handed back to the service that produced it. It is never written back into the request, and no precomputed key or key input rides on `CacheOptions`
 - A key built outside this crate, such as Python's `get_cache_key` result, is `CacheKey::Supplied` and never passes through `CacheKey::derive`
 - Python-backed storage accepts only a scope without a `CacheCredential`, because Python's key cannot carry one. A scope with a credential against it fails key resolution and skips the cache

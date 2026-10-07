@@ -1,6 +1,8 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_cache_response::{CacheKeyInput, CacheOptions, ResponseCacheService};
+use litellm_host::interceptors::WireRequest;
+use serde_json::Value;
 
 use super::CacheKeyProjection;
 use crate::RouteError;
@@ -41,4 +43,56 @@ impl CachePlan {
             input: request.cache_key_input()?,
         }))
     }
+
+    pub fn guard(self, outbound: &WireRequest) -> GuardedPlan {
+        GuardedPlan {
+            sent: SentRequest::of(outbound),
+            plan: self,
+        }
+    }
+}
+
+pub struct GuardedPlan {
+    plan: CachePlan,
+    sent: SentRequest,
+}
+
+impl GuardedPlan {
+    pub fn confirm(self, wire: &WireRequest) -> Option<CachePlan> {
+        if self.sent.matches(wire) {
+            return Some(self.plan);
+        }
+        tracing::debug!("request changed before the provider call, skipping the response cache");
+        None
+    }
+}
+
+#[derive(PartialEq)]
+struct SentRequest {
+    url: String,
+    headers: BTreeMap<String, String>,
+    body: Value,
+}
+
+impl SentRequest {
+    fn of(wire: &WireRequest) -> Self {
+        Self {
+            url: wire.url.clone(),
+            headers: normalized_headers(&wire.headers),
+            body: wire.body.clone(),
+        }
+    }
+
+    fn matches(&self, wire: &WireRequest) -> bool {
+        self.url == wire.url
+            && self.body == wire.body
+            && self.headers == normalized_headers(&wire.headers)
+    }
+}
+
+fn normalized_headers(headers: &[(String, String)]) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+        .collect()
 }

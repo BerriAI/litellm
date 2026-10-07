@@ -206,9 +206,10 @@ impl Interceptors<RouteError> for ChangingHooks {
 #[rstest]
 #[case::credentials("credentials")]
 #[case::endpoint("endpoint")]
+#[case::callback("callback")]
 #[case::headers("headers")]
 #[tokio::test]
-async fn cache_identity_ignores_deployment_settings(
+async fn cache_identity_ignores_deployment_settings_and_skips_rewritten_requests(
     cache: Arc<dyn ResponseCacheService>,
     #[case] change: &str,
 ) {
