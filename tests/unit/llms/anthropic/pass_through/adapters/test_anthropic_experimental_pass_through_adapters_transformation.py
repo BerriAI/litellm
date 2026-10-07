@@ -2696,6 +2696,40 @@ def test_cache_control_not_preserved_in_tool_result_for_non_claude():
     assert "cache_control" not in tool_message
 
 
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,keeps_is_error",
+    [
+        ("gemini/gemini-3.5-flash-lite", None, True),
+        ("gemini-3.5-flash-lite", "vertex_ai", True),
+        ("gpt-4", "openai", False),
+        ("openrouter/google/gemini-3.5-flash-lite", None, False),
+    ],
+)
+def test_tool_result_is_error_kept_only_for_gemini_targets(model, custom_llm_provider, keeps_is_error):
+    """https://github.com/BerriAI/litellm/issues/44979"""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "exit code 1: migration failed",
+                    "is_error": True,
+                }
+            ],
+        )
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    tool_message = next(msg for msg in result if msg.get("role") == "tool")
+    assert tool_message["content"] == "exit code 1: migration failed"
+    assert ("is_error" in tool_message) is keeps_is_error
+
+
 def test_cache_control_preserved_in_assistant_text_for_claude():
     """Cache control should be preserved in assistant text blocks for Claude models."""
     anthropic_messages = [
