@@ -76,15 +76,8 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
         "model": "azure_ai/claude-haiku-5-5",
         "max_tokens": 64,
         "system": "You are a terse assistant.",
-        "messages": [
-            {
-                "role": "user",
-                "content": "Say hello.",
-            },
-        ],
-        "cache": {
-            "no-cache": True,
-        },
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "cache": {"no-cache": True},
     },
     expected_provider_endpoint="/anthropic/v1/messages",
     expected_provider_headers={
@@ -96,30 +89,15 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
         "model": "claude-haiku-5-5",
         "max_tokens": 64,
         "stream": False,
-        "system": [
-            {
-                "type": "text",
-                "text": "You are a terse assistant.",
-            },
-        ],
-        "messages": [
-            {
-                "role": "user",
-                "content": "Say hello.",
-            },
-        ],
+        "system": [{"type": "text", "text": "You are a terse assistant."}],
+        "messages": [{"role": "user", "content": "Say hello."}],
     },
     mock_provider_response={
         "model": "claude-haiku-5-5",
         "id": "msg_011CfoboMv8t1SZhyzZeXDH3",
         "type": "message",
         "role": "assistant",
-        "content": [
-            {
-                "type": "text",
-                "text": "Hello.",
-            },
-        ],
+        "content": [{"type": "text", "text": "Hello."}],
         "container": None,
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -128,14 +106,9 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
             "input_tokens": 23,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
-            "cache_creation": {
-                "ephemeral_5m_input_tokens": 0,
-                "ephemeral_1h_input_tokens": 0,
-            },
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
-            "output_tokens_details": {
-                "thinking_tokens": 0,
-            },
+            "output_tokens_details": {"thinking_tokens": 0},
             "service_tier": "standard",
             "inference_geo": "global",
         },
@@ -146,12 +119,7 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
         "id": "msg_011CfoboMv8t1SZhyzZeXDH3",
         "type": "message",
         "role": "assistant",
-        "content": [
-            {
-                "type": "text",
-                "text": "Hello.",
-            },
-        ],
+        "content": [{"type": "text", "text": "Hello."}],
         "container": None,
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -160,14 +128,9 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
             "input_tokens": 23,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
-            "cache_creation": {
-                "ephemeral_5m_input_tokens": 0,
-                "ephemeral_1h_input_tokens": 0,
-            },
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
-            "output_tokens_details": {
-                "thinking_tokens": 0,
-            },
+            "output_tokens_details": {"thinking_tokens": 0},
             "service_tier": "standard",
             "inference_geo": "global",
         },

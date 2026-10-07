@@ -94,49 +94,18 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
         "max_output_tokens": 64,
         "instructions": "You are a terse assistant.",
         "input": "Say hello.",
-        "cache": {
-            "no-cache": True,
-        },
+        "cache": {"no-cache": True},
     },
     expected_provider_endpoint="/model/us.anthropic.claude-haiku-5-5/converse",
-    expected_provider_headers={
-        "authorization": "Bearer synthetic-bedrock-key",
-        "content-type": "application/json",
-    },
+    expected_provider_headers={"authorization": "Bearer synthetic-bedrock-key", "content-type": "application/json"},
     expected_provider_request={
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "text": "Say hello.",
-                    },
-                ],
-            },
-        ],
-        "inferenceConfig": {
-            "maxTokens": 64,
-        },
-        "system": [
-            {
-                "text": "You are a terse assistant.",
-            },
-        ],
+        "messages": [{"role": "user", "content": [{"text": "Say hello."}]}],
+        "inferenceConfig": {"maxTokens": 64},
+        "system": [{"text": "You are a terse assistant."}],
     },
     mock_provider_response={
-        "metrics": {
-            "latencyMs": 954,
-        },
-        "output": {
-            "message": {
-                "content": [
-                    {
-                        "text": "Hello.",
-                    },
-                ],
-                "role": "assistant",
-            },
-        },
+        "metrics": {"latencyMs": 954},
+        "output": {"message": {"content": [{"text": "Hello."}], "role": "assistant"}},
         "stopReason": "end_turn",
         "usage": {
             "cacheReadInputTokenCount": 0,
@@ -164,17 +133,11 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
                 "id": ANY,
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": "Hello.",
-                        "annotations": [],
-                    },
-                ],
+                "content": [{"type": "output_text", "text": "Hello.", "annotations": []}],
                 "phase": None,
-            },
+            }
         ],
-        "parallel_tool_calls": 0,
+        "parallel_tool_calls": False,
         "temperature": None,
         "tool_choice": "auto",
         "tools": [],
@@ -197,11 +160,7 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
                 "cache_write_tokens": 0,
             },
             "output_tokens": 6,
-            "output_tokens_details": {
-                "audio_tokens": None,
-                "reasoning_tokens": 0,
-                "text_tokens": 6,
-            },
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 0, "text_tokens": 6},
             "total_tokens": 29,
             "cost": None,
         },

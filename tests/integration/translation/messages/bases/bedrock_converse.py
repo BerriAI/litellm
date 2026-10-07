@@ -55,55 +55,19 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
         "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
         "max_tokens": 64,
         "system": "You are a terse assistant.",
-        "messages": [
-            {
-                "role": "user",
-                "content": "Say hello.",
-            },
-        ],
-        "cache": {
-            "no-cache": True,
-        },
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "cache": {"no-cache": True},
     },
     expected_provider_endpoint="/model/us.anthropic.claude-haiku-5-5/converse",
-    expected_provider_headers={
-        "authorization": "Bearer synthetic-bedrock-key",
-        "content-type": "application/json",
-    },
+    expected_provider_headers={"authorization": "Bearer synthetic-bedrock-key", "content-type": "application/json"},
     expected_provider_request={
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "text": "Say hello.",
-                    },
-                ],
-            },
-        ],
-        "inferenceConfig": {
-            "maxTokens": 64,
-        },
-        "system": [
-            {
-                "text": "You are a terse assistant.",
-            },
-        ],
+        "messages": [{"role": "user", "content": [{"text": "Say hello."}]}],
+        "inferenceConfig": {"maxTokens": 64},
+        "system": [{"text": "You are a terse assistant."}],
     },
     mock_provider_response={
-        "metrics": {
-            "latencyMs": 954,
-        },
-        "output": {
-            "message": {
-                "content": [
-                    {
-                        "text": "Hello.",
-                    },
-                ],
-                "role": "assistant",
-            },
-        },
+        "metrics": {"latencyMs": 954},
+        "output": {"message": {"content": [{"text": "Hello."}], "role": "assistant"}},
         "stopReason": "end_turn",
         "usage": {
             "cacheReadInputTokenCount": 0,
@@ -122,16 +86,8 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
         "role": "assistant",
         "model": "bedrock/converse/us.anthropic.claude-haiku-5-5",
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": 23,
-            "output_tokens": 6,
-        },
-        "content": [
-            {
-                "type": "text",
-                "text": "Hello.",
-            },
-        ],
+        "usage": {"input_tokens": 23, "output_tokens": 6},
+        "content": [{"type": "text", "text": "Hello."}],
         "stop_reason": "end_turn",
         "stop_details": None,
     },
