@@ -37,6 +37,13 @@ def fork_reservation():
 
 @pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
+    def test_drop_script_dir_from_sys_path(self):
+        script_dir = os.path.dirname(os.path.abspath(proxy_cli.__file__))
+        with patch.object(sys, "path", [script_dir, "outside"]):
+            proxy_cli._drop_script_dir_from_sys_path()
+
+            assert sys.path == ["outside"]
+
     @patch("importlib.metadata.version")
     @patch("click.echo")
     def test_echo_litellm_version(self, mock_echo, mock_version):
