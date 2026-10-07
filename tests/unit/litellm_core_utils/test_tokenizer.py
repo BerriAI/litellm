@@ -520,11 +520,19 @@ def test_native_added_token_decoder_preserves_fields_without_python_dependency(m
 
 
 def test_native_added_token_decoder_preserves_unrelated_import_failure():
+    import builtins
     from unittest.mock import patch
 
     native = HuggingFaceTokenizer.from_str(TOKENIZER_JSON)
     failure = ModuleNotFoundError(name="broken_tokenizer_dependency")
-    with patch("builtins.__import__", side_effect=failure):
+    original_import = builtins.__import__
+
+    def import_dependency(name, *args, **kwargs):
+        if name == "tokenizers":
+            raise failure
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=import_dependency):
         with pytest.raises(ModuleNotFoundError) as caught:
             native.get_added_tokens_decoder()
     assert caught.value is failure

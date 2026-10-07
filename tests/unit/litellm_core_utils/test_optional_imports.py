@@ -1,3 +1,4 @@
+import builtins
 from typing import Final
 from unittest.mock import patch
 
@@ -21,7 +22,14 @@ def test_missing_optional_dependency_names_the_installable_package(module: str) 
     "failure", [ModuleNotFoundError(name="unrelated_dependency"), ImportError("broken installation")]
 )
 def test_optional_import_preserves_unrelated_failure(failure: ImportError) -> None:
-    with patch("builtins.__import__", side_effect=failure):
+    original_import: Final = builtins.__import__
+
+    def import_dependency(name, *args, **kwargs):
+        if name == "botocore":
+            raise failure
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=import_dependency):
         with pytest.raises(ImportError) as caught:
             ensure_optional_import("botocore")
     assert caught.value is failure
