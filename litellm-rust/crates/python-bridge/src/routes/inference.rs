@@ -1,5 +1,5 @@
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
-use litellm_host_python::{from_py, lookup, to_py};
+use litellm_host_python::{from_py, lookup};
 use litellm_inference::RouteError;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::Serialize;
@@ -7,7 +7,10 @@ use serde_json::{Map, Value};
 
 use crate::{
     errors::route_error_to_pyerr,
-    marshal::{RouteOptions, optional_timeout, python_timeout_seconds},
+    marshal::{
+        RouteOptions, optional_timeout, project_optional_fields, public_response,
+        python_timeout_seconds,
+    },
 };
 
 pub(super) struct InferenceHost {
@@ -104,21 +107,13 @@ impl InferenceHost {
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Map<String, Value>> {
         let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
-        names
-            .iter()
-            .filter_map(|name| match self.argument(py, arguments, name) {
-                Ok(Some(value)) => Some(from_py(&value).map(|value| (name.clone(), value))),
-                Ok(None) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect()
+        project_optional_fields(names.iter().map(String::as_str), |name| {
+            self.argument(py, arguments, name)
+        })
     }
 
     pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {
-        py.import(self.module)?
-            .getattr("response")?
-            .call1((to_py(py, response)?,))
-            .map(Bound::unbind)
+        public_response(py, self.module, response)
     }
 
     pub fn error(&self, py: Python<'_>, error: RouteError) -> PyResult<PyErr> {
