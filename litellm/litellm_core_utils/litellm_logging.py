@@ -5731,12 +5731,6 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def _get_rerank_usage_from_meta(meta: object) -> Usage | None:
-        """
-        RerankResponse has no top-level `usage` field - token usage lives under
-        `meta.billed_units`/`meta.tokens` instead (Cohere-style API). Some servers
-        report only one of the two fields; since rerank has no completion step,
-        cross-fill so a lone `tokens.input_tokens` still yields a nonzero total.
-        """
         if not isinstance(meta, dict) or ("billed_units" not in meta and "tokens" not in meta):
             return None
         billed_units: Final = meta.get("billed_units")
