@@ -125,7 +125,7 @@ def test_extract_tool_calls_from_chat_response_handles_tool_calls():
         object="chat.completion",
     )
 
-    tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_chat_response(response)
+    tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response)
 
     assert len(tool_calls) == 1
     assert tool_calls[0]["function"]["name"] == "foo"
@@ -163,7 +163,7 @@ def test_create_follow_up_messages_for_chat_appends_tool_results():
         }
     ]
 
-    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
+    follow_up = LiteLLM_Proxy_MCP_Handler.create_follow_up_messages_for_chat(
         original_messages,
         response,
         tool_results,
@@ -195,8 +195,8 @@ def test_transform_mcp_tools_to_openai_uses_chat_format(monkeypatch):
         fake_transform_responses,
     )
 
-    chat_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(["tool"], target_format="chat")
-    resp_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(["tool"])
+    chat_tools = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(["tool"], target_format="chat")
+    resp_tools = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(["tool"])
 
     assert chat_tools == [{"chat": True}]
     assert resp_tools == [{"responses": True}]
@@ -218,7 +218,7 @@ def test_create_follow_up_input_handles_response_function_tool_call():
         ]
     )
 
-    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+    follow_up = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
         response=cast(Any, response),
         tool_results=[],
         original_input=None,
@@ -245,7 +245,7 @@ async def test_execute_tool_calls_strips_server_prefix(monkeypatch):
         }
     ]
 
-    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=tool_calls,
         user_api_key_auth=None,
@@ -267,7 +267,7 @@ async def test_execute_tool_calls_keeps_tool_name_without_prefix(monkeypatch):
         }
     ]
 
-    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=tool_calls,
         user_api_key_auth=None,
@@ -289,7 +289,7 @@ async def test_execute_tool_calls_keeps_tool_name_when_equal_to_server(monkeypat
         }
     ]
 
-    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "echo"},
         tool_calls=tool_calls,
         user_api_key_auth=None,
@@ -325,7 +325,7 @@ async def test_execute_tool_calls_strips_prefix_when_alias_differs_from_server_n
         }
     ]
 
-    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki_test"},
         tool_calls=tool_calls,
         user_api_key_auth=None,
@@ -368,7 +368,7 @@ async def test_execute_tool_calls_reverse_maps_display_name(monkeypatch):
         }
     ]
 
-    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki_mcp"},
         tool_calls=tool_calls,
         user_api_key_auth=None,
@@ -402,7 +402,7 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
 
     user_auth = types.SimpleNamespace(api_key="test_key", user_id="test_user")
 
-    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=tool_calls,
         user_api_key_auth=user_auth,
@@ -445,7 +445,7 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     tool_name = "deepwiki-read_wiki_structure"
     tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
 
-    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=tool_calls,
         user_api_key_auth=None,
@@ -485,7 +485,7 @@ async def test_execute_tool_calls_threads_logging_obj_into_call_tool(monkeypatch
     tool_name = "deepwiki-read_wiki_structure"
     tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
 
-    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=tool_calls,
         user_api_key_auth=None,
@@ -528,7 +528,7 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
 
     tool_name = "deepwiki-read_wiki_structure"
-    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
         user_api_key_auth=None,
@@ -563,7 +563,7 @@ async def test_execute_tool_calls_returns_proxy_result_without_logging(monkeypat
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (None, None))
 
     tool_name = "deepwiki-read_wiki_structure"
-    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
         user_api_key_auth=None,
@@ -601,7 +601,7 @@ async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypat
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
 
     tool_name = "deepwiki-read_wiki_structure"
-    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
         user_api_key_auth=None,
@@ -644,7 +644,7 @@ async def test_execute_tool_calls_continues_when_post_call_logging_fails(monkeyp
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
 
     tool_name = "deepwiki-read_wiki_structure"
-    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
         user_api_key_auth=None,
@@ -692,7 +692,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
         mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}],
     )
 
-    forwarded: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(tools)
+    forwarded: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(tools)
     assert [tool["name"] for tool in forwarded] == ["safe", "masked"]
     assert forwarded[0]["description"] == "Safe lookup"
     assert forwarded[1]["description"] == "Contact [MASKED]"
@@ -708,12 +708,12 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
 
 
 def test_get_parent_request_tags_from_metadata():
-    tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags({"metadata": {"tags": ["team-a", "prod"]}})
+    tags = LiteLLM_Proxy_MCP_Handler.get_parent_request_tags({"metadata": {"tags": ["team-a", "prod"]}})
     assert tags == ["team-a", "prod"]
 
 
 def test_get_parent_request_tags_from_nested_litellm_params():
-    tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(
+    tags = LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(
         {
             "metadata": {"tags": ["top-level"]},
             "litellm_params": {
@@ -770,7 +770,7 @@ async def test_execute_tool_calls_exposes_sanitized_client_headers_to_logging(mo
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
-    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
         user_api_key_auth=None,
@@ -796,7 +796,7 @@ async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monk
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
-    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
         tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
         user_api_key_auth=None,
@@ -872,7 +872,7 @@ def test_extract_tool_call_details_reads_anthropic_tool_use_input():
         "input": {"repoName": "BerriAI/litellm"},
     }
 
-    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_use_block)
+    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(tool_use_block)
 
     assert name == "read_wiki_structure"
     assert call_id == "toolu_01ABC"
@@ -887,7 +887,7 @@ def test_extract_tool_call_details_still_prefers_openai_arguments():
         "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
     }
 
-    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(openai_tool_call)
+    name, arguments, call_id = LiteLLM_Proxy_MCP_Handler.extract_tool_call_details(openai_tool_call)
 
     assert name == "get_weather"
     assert call_id == "call_123"
@@ -987,7 +987,7 @@ async def test_split_mcp_tools_leaves_external_mcp_path_urls_for_the_provider():
         assert names == {"mcp"}
         return frozenset()
 
-    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(
+    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(
         [ZAPIER_TOOL, EXPLICIT_GATEWAY_TOOL, FUNCTION_TOOL], served_names=served_names
     )
 
@@ -1009,7 +1009,7 @@ async def test_split_mcp_tools_repoints_served_proxy_urls_at_the_gateway():
     async def served_names(names):
         return frozenset({"my-toolset"})
 
-    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(
+    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(
         [served_tool, unserved_tool], served_names=served_names
     )
 
@@ -1022,7 +1022,7 @@ async def test_split_mcp_tools_skips_resolution_when_nothing_points_at_the_proxy
     async def served_names(names):
         raise AssertionError("no lookup expected")
 
-    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(
+    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(
         [EXPLICIT_GATEWAY_TOOL, FUNCTION_TOOL], served_names=served_names
     )
 
@@ -1031,10 +1031,10 @@ async def test_split_mcp_tools_skips_resolution_when_nothing_points_at_the_proxy
 
 
 def test_should_use_gateway_still_triggers_on_http_mcp_path():
-    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([ZAPIER_TOOL]) is True
-    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([EXPLICIT_GATEWAY_TOOL]) is True
-    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([FUNCTION_TOOL]) is False
-    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(None) is False
+    assert LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway([ZAPIER_TOOL]) is True
+    assert LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway([EXPLICIT_GATEWAY_TOOL]) is True
+    assert LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway([FUNCTION_TOOL]) is False
+    assert LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(None) is False
 
 
 @pytest.mark.asyncio
@@ -1101,7 +1101,7 @@ def test_create_follow_up_input_preserves_reasoning_when_stateless():
     Regression test (LIT-5427): a store=false follow-up has to replay the reasoning
     item, including reasoning.encrypted_content, since the provider kept no state.
     """
-    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+    follow_up = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
         response=_response_with_reasoning_and_tool_call(),
         tool_results=[{"tool_call_id": "call-1", "name": "foo", "result": "done"}],
         original_input="hi",
@@ -1153,7 +1153,7 @@ def test_create_follow_up_input_keeps_each_reasoning_item_before_its_function_ca
     item that follows it, so the replay has to keep the response's output order instead
     of grouping every reasoning item ahead of every function call.
     """
-    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+    follow_up = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
         response=_response_with_interleaved_reasoning_and_tool_calls(),
         tool_results=[
             {"tool_call_id": "call-1", "name": "foo", "result": "one"},
@@ -1184,7 +1184,7 @@ def test_create_follow_up_input_keeps_each_reasoning_item_before_its_function_ca
 
 def test_create_follow_up_input_omits_reasoning_when_stateful():
     """With store=true the provider still holds the reasoning item, so don't resend it."""
-    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+    follow_up = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
         response=_response_with_reasoning_and_tool_call(),
         tool_results=[{"tool_call_id": "call-1", "name": "foo", "result": "done"}],
         original_input="hi",
@@ -1203,7 +1203,7 @@ def test_create_follow_up_input_omits_reasoning_when_stateful():
     ],
 )
 def test_is_persistence_disabled(call_params: dict[str, Any], expected: bool):
-    assert LiteLLM_Proxy_MCP_Handler._is_persistence_disabled(call_params) is expected
+    assert LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(call_params) is expected
 
 
 @pytest.mark.parametrize(
@@ -1260,9 +1260,9 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
     monkeypatch.setattr(responses_main, "aresponses", fake_aresponses)
     monkeypatch.setattr(mcp_handler_module, "aresponses", fake_aresponses)
     monkeypatch.setattr(
-        LiteLLM_Proxy_MCP_Handler, "_process_mcp_tools_without_openai_transform", staticmethod(fake_process)
+        LiteLLM_Proxy_MCP_Handler, "process_mcp_tools_without_openai_transform", staticmethod(fake_process)
     )
-    monkeypatch.setattr(LiteLLM_Proxy_MCP_Handler, "_execute_tool_calls", staticmethod(fake_execute))
+    monkeypatch.setattr(LiteLLM_Proxy_MCP_Handler, "execute_tool_calls", staticmethod(fake_execute))
 
     await responses_main.aresponses_api_with_mcp(
         input="hi",
@@ -1383,7 +1383,7 @@ async def test_bridge_listing_leaves_the_callers_catalog_unchanged(
                 if (listed := manager.get_listed_tool(server, tool.name, caller)) is not None
             }
             assert bool(before) is real_listing
-            tools, _server_names = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+            tools, _server_names = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
                 user_api_key_auth=user,
                 mcp_tools_with_litellm_proxy=[
                     {
@@ -1459,7 +1459,7 @@ async def test_concurrent_bridge_calls_use_their_own_served_metadata(monkeypatch
     async def bridge(name: str, first: bool) -> None:
         if not first:
             await first_listed.wait()
-        tools, server_map = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+        tools, server_map = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
             user_api_key_auth=user,
             mcp_tools_with_litellm_proxy=[
                 {"type": "mcp", "server_url": "litellm_proxy/mcp/bridge", "allowed_tools": [name]}
@@ -1467,7 +1467,7 @@ async def test_concurrent_bridge_calls_use_their_own_served_metadata(monkeypatch
         )
         (first_listed if first else second_listed).set()
         await second_listed.wait()
-        result: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        result: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
             tool_server_map=server_map,
             tool_calls=[
                 {"type": "function_call", "name": f"bridge-{name}", "arguments": '{"probe":"bridge"}', "call_id": name}

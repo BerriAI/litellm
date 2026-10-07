@@ -2419,17 +2419,17 @@ def test_service_tier_suffixes_constant_in_sync_with_enum():
 
 
 def test_get_cost_per_unit_falls_back_from_service_tier_key_to_base():
-    from litellm.litellm_core_utils.llm_cost_calc.utils import _get_cost_per_unit
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_cost_per_unit
 
     model_info = {"input_cost_per_token": 2e-6}
     # service-tier key is absent -> falls back to the base key
-    assert _get_cost_per_unit(model_info, "input_cost_per_token_priority") == 2e-6
+    assert get_cost_per_unit(model_info, "input_cost_per_token_priority") == 2e-6
     # service-tier key present -> used directly, no fallback
     model_info_direct = {
         "input_cost_per_token_priority": 5e-6,
         "input_cost_per_token": 2e-6,
     }
-    assert _get_cost_per_unit(model_info_direct, "input_cost_per_token_priority") == 5e-6
+    assert get_cost_per_unit(model_info_direct, "input_cost_per_token_priority") == 5e-6
 
 
 def test_threshold_keys_exclude_service_tier_variants():
@@ -2860,7 +2860,7 @@ def test_token_type_cost_breakdown_openai_responses_api_cache_write_read(
     from litellm.responses.utils import ResponseAPILoggingUtils
 
     model = "gpt-5.6"
-    usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_usage)
+    usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
 
     breakdown = get_token_type_cost_breakdown(model=model, custom_llm_provider="openai", usage=usage)
 

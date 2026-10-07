@@ -269,7 +269,7 @@ import litellm
 import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
-from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
+from litellm._logging import redact_string, verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import DeclaredBatchRead
 from litellm.caching.redis_batch import (
@@ -317,9 +317,9 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
 )
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
-    _get_parent_otel_span_from_kwargs,
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
+    get_parent_otel_span_from_kwargs,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -580,6 +580,7 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_spend_event
 from litellm.proxy.image_endpoints.endpoints import router as image_router
+from litellm.proxy.lens.dataset_endpoints import router as lens_dataset_router
 from litellm.proxy.lens.endpoints import router as lens_router
 from litellm.proxy.list_api.common import (
     ManagementProblem,
@@ -923,7 +924,7 @@ from litellm.types.secret_managers.main import (
 )
 from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawRequestTypedDict, StandardLoggingPayload
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.utils import _add_custom_logger_callback_to_specific_event
+from litellm.utils import add_custom_logger_callback_to_specific_event
 
 try:
     from litellm._version import version
@@ -1574,7 +1575,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         for _tagged_routers in llm_router.adaptive_routers.values():
             for _tagged in _tagged_routers:
                 await _tagged.strategy.load_state_from_db(prisma_client)
-                _tagged.strategy._state_loaded = True
+                _tagged.strategy.state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize dd tracer
@@ -4457,7 +4458,7 @@ def _write_health_state_to_router_cache(
     is on.
     """
     from litellm.proxy.health_check import build_deployment_health_states
-    from litellm.router_utils.cooldown_handlers import _set_cooldown_deployments
+    from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
     from litellm.router_utils.router_callbacks.track_deployment_metrics import (
         increment_deployment_failures_for_current_minute,
     )
@@ -4516,7 +4517,7 @@ def _write_health_state_to_router_cache(
                 deployment_id=model_id,
             )
 
-            _set_cooldown_deployments(
+            set_cooldown_deployments(
                 litellm_router_instance=llm_router,
                 original_exception=original_exception,
                 exception_status=exception_status,
@@ -4549,11 +4550,11 @@ async def _adaptive_router_flusher_loop():
                     ar = tagged.strategy
                     # Lazy state load: covers adaptive routers registered via
                     # `/config/reload` after proxy boot.
-                    if not getattr(ar, "_state_loaded", False):
+                    if not getattr(ar, "state_loaded", False):
                         try:
                             await ar.load_state_from_db(prisma_client)
                         finally:
-                            ar._state_loaded = True
+                            ar.state_loaded = True
                     await ar.queue.flush_state_to_db(prisma_client)
                     await ar.queue.flush_session_to_db(prisma_client)
         except asyncio.CancelledError:
@@ -6666,7 +6667,7 @@ class ProxyConfig:
                     litellm.key_alias_pattern = parse_key_alias_pattern(value)
                 elif key == "json_logs" and value is True:
                     litellm.json_logs = True
-                    litellm._turn_on_json()
+                    litellm.turn_on_json()
                     verbose_proxy_logger.debug(
                         "%s Enabled JSON logging via config%s", blue_color_code, reset_color_code
                     )
@@ -7076,7 +7077,7 @@ class ProxyConfig:
         )
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
-            router._update_redis_cache(cache=redis_usage_cache)
+            router.update_redis_cache(cache=redis_usage_cache)
 
         # Guardrail settings
         guardrails_v2: list[dict] | None = None
@@ -7610,7 +7611,7 @@ class ProxyConfig:
         """
         if callback in litellm._known_custom_logger_compatible_callbacks:
             for event_type in event_types:
-                _add_custom_logger_callback_to_specific_event(callback, event_type)
+                add_custom_logger_callback_to_specific_event(callback, event_type)
         elif callback not in existing_callbacks:
             if event_types == ["success"]:
                 litellm.logging_callback_manager.add_litellm_success_callback(callback)
@@ -8954,7 +8955,7 @@ class ProxyConfig:
 
         try:
             # read vector stores from db table
-            vector_stores: Final = await VectorStoreRegistry._get_vector_stores_from_db(prisma_client=prisma_client)
+            vector_stores: Final = await VectorStoreRegistry.get_vector_stores_from_db(prisma_client=prisma_client)
             if len(vector_stores) <= 0:
                 return
 
@@ -8973,7 +8974,7 @@ class ProxyConfig:
 
         try:
             # read vector stores from db table
-            vector_store_indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(
+            vector_store_indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(
                 prisma_client=prisma_client
             )
 
@@ -10383,7 +10384,7 @@ class ProxyStartupEvent:
             enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
         )
         if llm_router is not None and llm_router.cache.redis_cache is None:
-            llm_router._update_redis_cache(cache=coordination_redis_cache)
+            llm_router.update_redis_cache(cache=coordination_redis_cache)
         verbose_proxy_logger.info(
             "coordination_redis: using the standalone Redis saved in the database "
             "for usage tracking, rate limiting, and cross-pod coordination."
@@ -11500,8 +11501,8 @@ class ProxyStartupEvent:
         Doc: https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/dd_libraries/python/
         """
         from litellm.litellm_core_utils.dd_tracing import (
-            _should_use_dd_profiler,
             _should_use_dd_tracer,
+            should_use_dd_profiler,
         )
 
         if _should_use_dd_tracer():
@@ -11509,7 +11510,7 @@ class ProxyStartupEvent:
 
             ddtrace.patch_all(logging=True, openai=False)
 
-        if _should_use_dd_profiler():
+        if should_use_dd_profiler():
             from ddtrace.profiling import Profiler
 
             prof: Final = Profiler()
@@ -13141,7 +13142,7 @@ async def realtime_websocket_endpoint(
         await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
     except Exception as e:
         verbose_proxy_logger.exception("Internal server error")
-        redacted_error: Final = _redact_string(str(e))
+        redacted_error: Final = redact_string(str(e))
         try:
             await websocket.send_text(realtime_error_event(redacted_error, error_type="server_error"))
         except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
@@ -14143,7 +14144,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    _tokenizer_used: Final = await asyncify(litellm.utils._select_tokenizer)(
+    _tokenizer_used: Final = await asyncify(litellm.utils.select_tokenizer)(
         model=model_to_use, custom_tokenizer=custom_tokenizer
     )
 
@@ -20111,6 +20112,7 @@ app.include_router(auto_router_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
+app.include_router(lens_dataset_router)
 app.include_router(lens_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)

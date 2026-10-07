@@ -68,7 +68,7 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
-    _get_potential_model_names,
+    get_potential_model_names,
     _is_litellm_router_call,
     _is_streaming_request,
     _run_success_deployment_hook_on_converted_chat_stream,
@@ -83,6 +83,13 @@ from litellm.utils import (
     is_cached_message,
     is_prompt_caching_valid_prompt,
 )
+
+
+def test_get_base_model_from_metadata_returns_unvalidated_root_value():
+    from litellm.utils import get_base_model_from_metadata
+
+    assert get_base_model_from_metadata({"litellm_params": {"base_model": 42}}) == 42
+
 
 # Adds the parent directory to the system path
 
@@ -182,13 +189,13 @@ def test_potential_model_names_keeps_provider_prefixed_candidate():
     Agent API serves `perplexity/glm-5.2`, mapped as `perplexity/perplexity/glm-5.2`)
     needs the un-stripped `<provider>/<model>` candidate. Every other candidate reads
     the leading `perplexity/` as the litellm prefix and strips it away."""
-    already_prefixed = _get_potential_model_names(model="perplexity/glm-5.2", custom_llm_provider="perplexity")
+    already_prefixed = get_potential_model_names(model="perplexity/glm-5.2", custom_llm_provider="perplexity")
     assert already_prefixed["provider_prefixed_model_name"] == "perplexity/perplexity/glm-5.2"
     assert already_prefixed["split_model"] == "glm-5.2"
     assert already_prefixed["combined_model_name"] == "perplexity/glm-5.2"
     assert already_prefixed["combined_stripped_model_name"] == "perplexity/glm-5.2"
 
-    bare = _get_potential_model_names(model="glm-5.2", custom_llm_provider="perplexity")
+    bare = get_potential_model_names(model="glm-5.2", custom_llm_provider="perplexity")
     assert bare["provider_prefixed_model_name"] == bare["combined_model_name"] == "perplexity/glm-5.2"
 
 
@@ -242,9 +249,9 @@ def test_get_model_info_prefers_exact_dated_key_over_stripped(
 
 
 def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
-    with patch("litellm.utils._get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
+    with patch("litellm.utils.get_potential_model_names", side_effect=RuntimeError("malformed metadata")):
         with pytest.raises(Exception, match="This model isn't mapped yet") as exc_info:
-            litellm.utils._get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
+            litellm.utils.get_model_info_helper(model="gpt-4o", custom_llm_provider="openai")
     assert not isinstance(exc_info.value, litellm.ModelNotMappedError)
 
 
@@ -665,6 +672,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
+        "output_cost_per_image_token_batches",
         "input_cost_per_video_token",
         "output_cost_per_video_token",
         "input_cost_per_audio_per_second",
@@ -903,6 +911,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_image_2K": {"type": "number"},
                 "output_cost_per_image_4K": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
+                "output_cost_per_image_token_batches": {"type": "number"},
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
@@ -4234,7 +4243,7 @@ async def test_s3_v2_success_callback_registers_alongside_user_subclass(
     and success_callback ["s3_v2"], the built-in s3_v2 logger was never added and S3 logs were
     silently dropped while requests kept returning 200."""
     from litellm.integrations.s3_v2 import S3Logger
-    from litellm.utils import _add_custom_logger_callback_to_specific_event
+    from litellm.utils import add_custom_logger_callback_to_specific_event
 
     class UserS3Logger(S3Logger):
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -4246,7 +4255,7 @@ async def test_s3_v2_success_callback_registers_alongside_user_subclass(
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
 
-    _add_custom_logger_callback_to_specific_event("s3_v2", "success")
+    add_custom_logger_callback_to_specific_event("s3_v2", "success")
 
     assert any(type(cb) is S3Logger for cb in litellm.success_callback)
     assert any(type(cb) is S3Logger for cb in litellm._async_success_callback)
@@ -6010,16 +6019,16 @@ class TestDefaultReasoningEffortHydration:
         [("gpt-5.1", "openai"), ("gpt-5.4", "openai"), ("azure/gpt-5.1", "azure")],
     )
     def test_the_declared_default_survives_model_info_hydration(self, local_model_cost_map, model, provider):
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=provider))
+        model_info = dict(get_model_info_helper(model=model, custom_llm_provider=provider))
         assert model_info["default_reasoning_effort"] == "none"
 
     def test_a_model_that_declares_nothing_hydrates_to_none(self, local_model_cost_map):
         """Absent means "the map does not say", which the gate reads as reasoning being active."""
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
-        model_info = dict(_get_model_info_helper(model="gpt-5.6-terra", custom_llm_provider="openai"))
+        model_info = dict(get_model_info_helper(model="gpt-5.6-terra", custom_llm_provider="openai"))
         assert model_info.get("default_reasoning_effort") is None
 
 
@@ -6711,3 +6720,67 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+@pytest.mark.asyncio
+async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chat over the Responses bridge exits two @client wrappers with one logging object. Issue
+    #44500: both exits enqueued a success handler, and on a large prompt the first one yielded to
+    the worker-thread base64 offload before it marked ``has_logged_async_success``, so the second
+    passed the check too and the request was logged and billed twice. The schedule step claims the
+    log for the object synchronously, so only the inner provider-shaped result is ever logged."""
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.utils import _dispatch_success_logging
+
+    class CountingLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.logged_results: list[object] = []
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            if kwargs["litellm_call_id"] == "bridge-call-id":
+                self.logged_results.append(response_obj)
+
+    counting_logger: Final = CountingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [counting_logger])
+    real_truncate: Final = litellm_logging.truncate_base64_in_messages_async
+
+    async def yielding_truncate(messages):
+        await asyncio.sleep(0)
+        return await real_truncate(messages)
+
+    monkeypatch.setattr(litellm_logging, "truncate_base64_in_messages_async", yielding_truncate)
+
+    messages: Final = [{"role": "user", "content": "hello"}]
+    logging_obj: Final = Logging(
+        model="gpt-5.6-luna",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp(),
+        litellm_call_id="bridge-call-id",
+        function_id="bridge-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="gpt-5.6-luna", custom_llm_provider="openai", input=messages
+    )
+    inner_result: Final = ModelResponse(id="inner")
+    outer_result: Final = ModelResponse(id="outer")
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    for result in (inner_result, outer_result):
+        _dispatch_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=now,
+            end_time=now,
+            is_completion_with_fallbacks=False,
+            is_litellm_internal_call=False,
+        )
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert len(counting_logger.logged_results) == 1, counting_logger.logged_results
+    assert counting_logger.logged_results[0] is inner_result

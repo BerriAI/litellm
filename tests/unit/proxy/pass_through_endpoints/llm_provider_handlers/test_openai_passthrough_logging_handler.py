@@ -1684,8 +1684,8 @@ class TestOpenAIPassthroughIntegration:
         )
         image_response._hidden_params = {"response_cost": test_cost}
 
-        # Test the _response_cost_calculator method
-        calculated_cost = logging_obj._response_cost_calculator(result=image_response)
+        # Test the response_cost_calculator method
+        calculated_cost = logging_obj.response_cost_calculator(result=image_response)
 
         assert calculated_cost == test_cost, f"Expected {test_cost}, got {calculated_cost}"
 

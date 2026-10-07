@@ -117,7 +117,7 @@ async def test_vector_store_hook_routes_search_through_proxy_router(
 async def test_e2e_bedrock_knowledgebase_retrieval_with_completion(
     setup_vector_store_registry,
 ):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = AsyncHTTPHandler()
     print("value of litellm.vector_store_registry:", litellm.vector_store_registry)
 
@@ -187,7 +187,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(
     """
 
     # Init client
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     async_client = AsyncHTTPHandler()
     response = await litellm.acompletion(
         model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -231,7 +231,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_streaming(
     """
 
     # Init client
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     async_client = AsyncHTTPHandler()
     response = await litellm.acompletion(
         model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
@@ -290,7 +290,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools(
     """
 
     # Init client
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.acompletion(
         model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
         messages=[{"role": "user", "content": "what is litellm?"}],
@@ -310,7 +310,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools_
 
     In this case we filter for a non-existent user_id, which should return no results.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     response = await litellm.acompletion(
         model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
@@ -731,7 +731,7 @@ async def test_openai_with_mixed_tool_call_mock_openai(setup_vector_store_regist
 async def test_e2e_bedrock_knowledgebase_retrieval_without_vector_store_registry(
     setup_vector_store_registry,
 ):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = AsyncHTTPHandler()
     litellm.vector_store_registry = None
 
@@ -796,7 +796,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_vector_store_not_in_regi
 
     In this test newUnknownVectorStoreId is not in the registry, so no vector store request is made
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client = AsyncHTTPHandler()
 
     if litellm.vector_store_registry is not None:
