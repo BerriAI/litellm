@@ -511,6 +511,36 @@ describe("UserEditView", () => {
       expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("rpm_limit");
     });
 
+    it("submits zero when the stored TPM limit changes to zero", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), {
+        target: { value: "0" },
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].tpm_limit).toBe(0);
+    });
+
+    it("omits the TPM limit when the stored value is re-entered", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), {
+        target: { value: "100000" },
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("tpm_limit");
+    });
+
     it("sends null only for a deliberately cleared TPM limit", async () => {
       const onSubmit = vi.fn();
       renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
@@ -598,7 +628,7 @@ describe("UserEditView", () => {
         "user_id",
         "user_role",
       ]);
-      expect(payload).toStrictEqual({
+      const expectedPayload = {
         user_id: "user-123",
         user_email: "test@example.com",
         user_alias: "Test User",
@@ -609,7 +639,8 @@ describe("UserEditView", () => {
         metadata: { key1: "value1", key2: "value2" },
         mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
         mcp_tool_permissions: {},
-      });
+      };
+      expect(payload).toStrictEqual(expectedPayload);
       expect(typeof payload.max_budget).toBe("number");
     });
 
@@ -682,23 +713,29 @@ describe("UserEditView", () => {
       await waitFor(() => {
         expect(onSubmit).toHaveBeenCalled();
       });
-      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      const expectedPayload = {
         user_id: "user-null",
         user_email: "null@example.com",
         user_alias: null,
         user_role: null,
         budget_duration: null,
         max_budget: null,
-      });
+      };
+      expect(onSubmit.mock.calls[0][0]).toMatchObject(expectedPayload);
     });
 
     it("should keep the budget input's native step constraint armed", async () => {
       renderWithProviders(<UserEditView {...defaultProps} />);
 
       const budgetInput = await screen.findByRole("spinbutton", { name: /max budget/i });
+      const submitButton = screen.getByRole("button", { name: /save changes/i }) as HTMLButtonElement;
+      const form = submitButton.form;
+      if (!form) {
+        throw new Error("User edit form was not rendered");
+      }
       expect(budgetInput).toHaveAttribute("step", "0.01");
       expect(budgetInput).not.toHaveAttribute("min");
-      expect(budgetInput.closest("form")).not.toHaveAttribute("novalidate");
+      expect(form).not.toHaveAttribute("novalidate");
     });
 
     it("shows the tool matrix for servers the user reaches only through an access group or toolset", async () => {

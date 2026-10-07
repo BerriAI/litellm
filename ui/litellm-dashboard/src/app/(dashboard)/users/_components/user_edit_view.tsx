@@ -5,7 +5,6 @@ import BudgetDurationDropdown from "@/components/common_components/budget_durati
 import { ModelMaxBudget, ModelMaxBudgetField } from "@/components/key_team_helpers/ModelMaxBudgetEditor";
 import { modelMaxBudgetUpdate } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { useSeededState } from "@/components/key_team_helpers/useSeededState";
-import { isValidRateLimitInput, rateLimitUpdate } from "./userRateLimitPayload";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
@@ -21,6 +20,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { CircleHelp } from "lucide-react";
+
+const RATE_LIMIT_ERROR = "Enter a non-negative whole number, or leave empty for unlimited";
+const isBlank = (value: string | number | null | undefined): boolean =>
+  value === null || value === undefined || String(value).trim() === "";
+const rateLimitField = z
+  .union([z.string(), z.number()])
+  .nullish()
+  .transform((value) => (isBlank(value) ? null : Number(value)))
+  .pipe(z.number({ error: RATE_LIMIT_ERROR }).int(RATE_LIMIT_ERROR).nonnegative(RATE_LIMIT_ERROR).nullable());
 
 interface UserEditViewProps {
   userData: any;
@@ -54,6 +62,8 @@ const userEditShape = {
   models: z.array(z.string()),
   budget_duration: z.string().nullish(),
   metadata: z.string().nullish(),
+  tpm_limit: rateLimitField,
+  rpm_limit: rateLimitField,
   mcp_servers_and_groups: MCP_SELECTION_SHAPE.optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
 };
@@ -64,21 +74,8 @@ const budgetSchema = (unlimitedBudget: boolean) =>
     max_budget: z
       .union([z.string(), z.number()])
       .nullish()
-      .refine(
-        (value) => unlimitedBudget || (value !== "" && value !== null && value !== undefined),
-        "Please enter a budget or select Unlimited Budget",
-      ),
-    tpm_limit: z
-      .union([z.string(), z.number()])
-      .nullish()
-      .refine(isValidRateLimitInput, "Enter a non-negative whole number, or leave empty for unlimited"),
-    rpm_limit: z
-      .union([z.string(), z.number()])
-      .nullish()
-      .refine(isValidRateLimitInput, "Enter a non-negative whole number, or leave empty for unlimited"),
+      .refine((value) => unlimitedBudget || !isBlank(value), "Please enter a budget or select Unlimited Budget"),
   });
-
-type UserEditFormValues = z.infer<ReturnType<typeof budgetSchema>>;
 
 const buildMcpFieldValues = (objectPermission: ObjectPermission | null | undefined) => ({
   mcp_servers_and_groups: {
@@ -97,7 +94,7 @@ const toFormValues = (
   objectPermission: ObjectPermission | null | undefined,
   isBulkEdit: boolean,
   canEditMcpPermissions: boolean,
-): UserEditFormValues => {
+): z.input<ReturnType<typeof budgetSchema>> => {
   const maxBudget = userData.user_info?.max_budget;
   const isUnlimited = maxBudget === null || maxBudget === undefined;
   return {
@@ -132,6 +129,9 @@ const parseMetadata = (metadata: string | null | undefined): ParsedMetadata => {
     return { ok: false };
   }
 };
+
+const changedLimit = (value: number | null, stored: number | null | undefined): number | null | undefined =>
+  value === (stored ?? null) ? undefined : value;
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -181,7 +181,7 @@ export function UserEditView({
     }
   };
 
-  const handleSubmit = (values: UserEditFormValues) => {
+  const handleSubmit = (values: z.output<ReturnType<typeof budgetSchema>>) => {
     const metadata = parseMetadata(values.metadata);
     if (!metadata.ok) {
       return;
@@ -189,9 +189,9 @@ export function UserEditView({
 
     const { tpm_limit: tpmLimitInput, rpm_limit: rpmLimitInput, ...formValues } = values;
     const modelBudgets = modelMaxBudgetUpdate(modelMaxBudget, userData.user_info?.model_max_budget);
-    const tpmLimit = rateLimitUpdate(tpmLimitInput, isBulkEdit ? undefined : userData.user_info?.tpm_limit);
-    const rpmLimit = rateLimitUpdate(rpmLimitInput, isBulkEdit ? undefined : userData.user_info?.rpm_limit);
-    onSubmit({
+    const tpmLimit = changedLimit(tpmLimitInput, userData.user_info?.tpm_limit);
+    const rpmLimit = changedLimit(rpmLimitInput, userData.user_info?.rpm_limit);
+    const payload = {
       ...formValues,
       ...("metadata" in values ? { metadata: metadata.value } : {}),
       ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
@@ -199,7 +199,8 @@ export function UserEditView({
       ...(rpmLimit !== undefined && { rpm_limit: rpmLimit }),
       max_budget:
         unlimitedBudget || values.max_budget === "" || values.max_budget === undefined ? null : values.max_budget,
-    });
+    };
+    onSubmit(payload);
   };
 
   const modelOptions = [
