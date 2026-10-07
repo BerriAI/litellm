@@ -325,6 +325,7 @@ mod tests {
             call_keys: Vec::new(),
             call_evidence: None,
             tool_call_id: String::new(),
+            source_type: String::new(),
             source_url: String::new(),
             source_title: String::new(),
             team_id: String::new(),
