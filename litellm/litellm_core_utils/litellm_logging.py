@@ -6015,7 +6015,7 @@ class StandardLoggingPayloadSetup:
         if not response_obj:
             return _empty
         _raw: Final = response_obj.get("usage", None)
-        if not _raw:
+        if _raw is None:
             rerank_usage: Final = StandardLoggingPayloadSetup._get_rerank_usage_from_meta(response_obj.get("meta"))
             if rerank_usage is not None:
                 return rerank_usage.model_dump()
