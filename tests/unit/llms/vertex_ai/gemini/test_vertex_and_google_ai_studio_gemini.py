@@ -2,7 +2,7 @@ import asyncio, importlib, os
 import json
 import re
 from copy import deepcopy
-from typing import Final, List, cast, get_args
+from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -2880,14 +2880,14 @@ def test_reasoning_effort_dict_format_gemini_3():
 
 @pytest.mark.parametrize("model", ["gemini-3-pro-preview", "gemini-flash-latest"])
 @pytest.mark.parametrize("config_cls", ["vertex", "studio"])
-def test_gemini_3_omits_temperature_when_not_specified(model, config_cls):
+def test_gemini_3_omits_temperature_when_not_specified(model: str, config_cls: Literal["vertex", "studio"]) -> None:
     """Gemini 3+ requests must not gain a temperature the caller did not send"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
-    cfg = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
-    result = cfg.map_openai_params(
+    cfg: Final = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+    result: Final = cfg.map_openai_params(
         non_default_params={},
         optional_params={},
         model=model,
@@ -2898,14 +2898,14 @@ def test_gemini_3_omits_temperature_when_not_specified(model, config_cls):
 
 
 @pytest.mark.parametrize("config_cls", ["vertex", "studio"])
-def test_gemini_3_explicit_temperature_is_still_forwarded(config_cls):
+def test_gemini_3_explicit_temperature_is_still_forwarded(config_cls: Literal["vertex", "studio"]) -> None:
     """An explicitly supplied temperature is still forwarded"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
-    cfg = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
-    result = cfg.map_openai_params(
+    cfg: Final = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+    result: Final = cfg.map_openai_params(
         non_default_params={"temperature": 0.4},
         optional_params={},
         model="gemini-3-pro-preview",
@@ -2916,11 +2916,13 @@ def test_gemini_3_explicit_temperature_is_still_forwarded(config_cls):
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
-def test_get_optional_params_gemini_3_has_no_default_temperature(custom_llm_provider):
+def test_get_optional_params_gemini_3_has_no_default_temperature(
+    custom_llm_provider: Literal["gemini", "vertex_ai"],
+) -> None:
     """Neither the gemini nor the vertex_ai route injects a temperature"""
     from litellm.utils import get_optional_params
 
-    optional_params = get_optional_params(
+    optional_params: Final = get_optional_params(
         model="gemini-3-pro-preview",
         custom_llm_provider=custom_llm_provider,
         reasoning_effort="medium",
