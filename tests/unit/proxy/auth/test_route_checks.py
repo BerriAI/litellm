@@ -4452,8 +4452,13 @@ def test_legacy_sse_respects_virtual_key_route_permissions(route: str, route_gro
 
 @pytest.mark.parametrize(
     "route",
-    ("/v1/traces", "/v1/traces/trace-id", "/v1/traces/trace-id/spans/span-id",
-     "/v1/traces/trace-id/spans/span-id/error"),
+    (
+        "/v1/traces",
+        "/v1/traces/agents",
+        "/v1/traces/trace-id",
+        "/v1/traces/trace-id/spans/span-id",
+        "/v1/traces/trace-id/spans/span-id/error",
+    ),
 )
 def test_non_admin_trace_reads_reach_endpoint_visibility_checks(route: str) -> None:
     user_role: Final = LitellmUserRoles.INTERNAL_USER
