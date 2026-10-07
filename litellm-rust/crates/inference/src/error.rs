@@ -84,6 +84,7 @@ impl From<LlmError> for RouteError {
             LlmError::InvalidRequest(message) => Self::InvalidRequest(message),
             LlmError::InvalidResponse(litellm_llms::ErrorDetail::Http { status, message }) => {
                 Self::Transport(TransportError::Http {
+                    request_url: None,
                     status,
                     body: message,
                 })
@@ -137,6 +138,7 @@ mod tests {
         assert_eq!(
             error,
             RouteError::Transport(litellm_http::transport::Error::Http {
+                request_url: None,
                 status,
                 body: "upstream failure".into(),
             })
