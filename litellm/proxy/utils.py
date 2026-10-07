@@ -4184,6 +4184,8 @@ class ProxyLogging:
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if logging_obj is None:
             return
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
         _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
             logging_obj, "_on_deferred_stream_complete", None
         )
@@ -4191,7 +4193,7 @@ class ProxyLogging:
         if _deferred_cb is not None and _args is not None:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
-            asyncio.create_task(_deferred_cb(*_args))
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=_deferred_cb(*_args))
 
     _fire_deferred_stream_logging = fire_deferred_stream_logging
 

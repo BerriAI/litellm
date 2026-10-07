@@ -36,6 +36,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.guardrails import GuardrailEventHooks
 
 # ---------------------------------------------------------------------------
@@ -736,9 +737,7 @@ class TestDeferredStreamingClosure:
             # CSW stored args; now simulate what ProxyLogging does
             request_data = {"litellm_logging_obj": mock_logging_obj}
             ProxyLogging._fire_deferred_stream_logging(request_data)
-
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            await GLOBAL_LOGGING_WORKER.flush()
 
         assert guardrail_called is True, "Guardrail hook should be called"
         assert (
@@ -948,9 +947,7 @@ class TestDeferredStreamingClosure:
             # CSW stored args; now simulate what ProxyLogging does
             request_data = {"litellm_logging_obj": mock_logging_obj}
             ProxyLogging._fire_deferred_stream_logging(request_data)
-
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            await GLOBAL_LOGGING_WORKER.flush()
 
         assert hook_called is True, "Production closure must call guardrail hook"
         assert (
@@ -1320,8 +1317,7 @@ class TestFireDeferredStreamLogging:
 
         request_data = {"litellm_logging_obj": mock_logging_obj}
         ProxyLogging._fire_deferred_stream_logging(request_data)
-
-        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
 
         assert callback_called is True
         assert callback_args["response"] == "test_response"
@@ -1521,7 +1517,7 @@ class TestArmDeferredStreamDispatch:
         assembled = object()
         logging_obj._deferred_stream_complete_args = (assembled, False)
         ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
 
         assert recorded["result"] is assembled
         assert recorded["cache_hit"] is False
@@ -1555,7 +1551,7 @@ class TestArmDeferredStreamDispatch:
         assembled = object()
         logging_obj._deferred_stream_complete_args = (assembled, False)
         ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
 
         assert recorded["result"] is assembled
         assert recorded["cache_hit"] is False
@@ -1563,8 +1559,6 @@ class TestArmDeferredStreamDispatch:
 
     @pytest.mark.asyncio
     async def test_native_stream_closure_enqueues_single_coroutine(self):
-        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
         logging_obj, recorded = self._dispatch_recording_logging_obj()
 
         async def _agen():
@@ -1587,7 +1581,9 @@ class TestArmDeferredStreamDispatch:
             GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
         ) as mock_enqueue:
             ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-            await asyncio.sleep(0)
+            deferred = mock_enqueue.call_args.kwargs["async_coroutine"]
+            mock_enqueue.reset_mock()
+            await deferred
         mock_enqueue.assert_called_once_with(async_coroutine=coro)
         assert recorded == {}
         coro.close()
@@ -1600,8 +1596,6 @@ class TestArmDeferredStreamDispatch:
         so stores (assembled_response, cache_hit). The closure armed for a raw
         generator must accept that shape too, or _fire_deferred_stream_logging
         raises TypeError and the request loses its spend log and callbacks."""
-        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
         logging_obj, recorded = self._dispatch_recording_logging_obj()
 
         async def _agen():
@@ -1620,7 +1614,9 @@ class TestArmDeferredStreamDispatch:
             GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
         ) as mock_enqueue:
             ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-            await asyncio.sleep(0)
+            deferred = mock_enqueue.call_args.kwargs["async_coroutine"]
+            mock_enqueue.reset_mock()
+            await deferred
 
         mock_enqueue.assert_not_called()
         assert recorded["result"] is assembled
@@ -1630,8 +1626,6 @@ class TestArmDeferredStreamDispatch:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("stored_args", [(object(),), (object(), object(), object())])
     async def test_raw_generator_stream_with_unknown_arg_shape_logs_and_drops(self, stored_args, caplog):
-        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
         logging_obj, recorded = self._dispatch_recording_logging_obj()
 
         async def _agen():
@@ -1652,7 +1646,9 @@ class TestArmDeferredStreamDispatch:
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
         ):
             ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-            await asyncio.sleep(0)
+            deferred = mock_enqueue.call_args.kwargs["async_coroutine"]
+            mock_enqueue.reset_mock()
+            await deferred
 
         mock_enqueue.assert_not_called()
         assert recorded == {}
