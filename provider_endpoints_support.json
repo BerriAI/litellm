@@ -1941,6 +1941,7 @@
       "url": "https://docs.litellm.ai/docs/providers/openai",
       "endpoints": {
         "chat_completions": true,
+        "systemone": true,
         "messages": true,
         "responses": true,
         "embeddings": true,

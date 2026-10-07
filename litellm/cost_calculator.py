@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
+    TokenTypeCostBreakdown,
     calculate_cost_component,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -450,6 +451,18 @@ def cost_per_token(
             total_tokens=prompt_tokens + completion_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+        )
+
+    if call_type in ("decisions", "adecisions") and custom_llm_provider == "openai":
+        return cost_per_token(
+            model=model,
+            prompt_tokens=usage_block.prompt_tokens,
+            completion_tokens=0,
+            custom_llm_provider=custom_llm_provider,
+            custom_cost_per_token=custom_cost_per_token,
+            custom_cost_per_second=custom_cost_per_second,
+            call_type="completion",
+            data_residency=data_residency,
         )
 
     ## CUSTOM PRICING ##
@@ -1025,6 +1038,12 @@ def _extract_service_tier(source: object) -> str | None:
 def get_usage_object(
     completion_response: object,
 ) -> Usage | None:
+    if isinstance(completion_response, DecisionsResponse):
+        return (
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(completion_response.usage.model_dump())
+            if completion_response.usage is not None
+            else None
+        )
     usage_obj: Final = cast(
         Usage | ResponseAPIUsage | dict | BaseModel,
         (
@@ -1036,6 +1055,8 @@ def get_usage_object(
 
     if usage_obj is None:
         return None
+    if isinstance(usage_obj, DecisionsUsage):
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj.model_dump())
     if isinstance(usage_obj, Usage):
         return usage_obj
     elif isinstance(usage_obj, dict) and litellm.AnthropicConfig.is_anthropic_usage_object(usage_obj):
@@ -1081,6 +1102,8 @@ def infer_call_type(call_type: CallTypesLiteral | None, completion_response: obj
     if completion_response is None:
         return None
 
+    if isinstance(completion_response, DecisionsResponse):
+        return "decisions"
     if isinstance(completion_response, ModelResponse) or isinstance(completion_response, ModelResponseStream):
         return "completion"
     elif isinstance(completion_response, EmbeddingResponse):
@@ -1900,14 +1923,31 @@ def completion_cost(
                         _breakdown_provider: str | None = (
                             custom_llm_provider if isinstance(custom_llm_provider, str) else None
                         )
-                        _token_type_breakdown = get_token_type_cost_breakdown(
-                            model=model,
-                            custom_llm_provider=_breakdown_provider,
-                            usage=cost_per_token_usage_object,
-                            service_tier=service_tier,
-                            data_residency=data_residency,
-                            vertex_location=vertex_location,
-                            custom_cost_per_token=custom_cost_per_token,
+                        _token_type_breakdown: Final = (
+                            TokenTypeCostBreakdown(
+                                reasoning_cost=0.0,
+                                cache_read_cost=0.0,
+                                cache_creation_cost=0.0,
+                                rates=BilledTokenRates(
+                                    input_cost_per_token=prompt_tokens_cost_usd_dollar / max(prompt_tokens, 1),
+                                    output_cost_per_token=0.0,
+                                    cache_read_input_token_cost=0.0,
+                                    cache_read_input_audio_token_cost=0.0,
+                                    cache_creation_input_token_cost=0.0,
+                                    cache_creation_input_token_cost_above_1hr=0.0,
+                                    output_cost_per_reasoning_token=0.0,
+                                ),
+                            )
+                            if call_type in ("decisions", "adecisions") and _breakdown_provider == "openai"
+                            else get_token_type_cost_breakdown(
+                                model=model,
+                                custom_llm_provider=_breakdown_provider,
+                                usage=cost_per_token_usage_object,
+                                service_tier=service_tier,
+                                data_residency=data_residency,
+                                vertex_location=vertex_location,
+                                custom_cost_per_token=custom_cost_per_token,
+                            )
                         )
                         _reasoning_cost = _token_type_breakdown.reasoning_cost
                         _cache_read_cost = _token_type_breakdown.cache_read_cost
