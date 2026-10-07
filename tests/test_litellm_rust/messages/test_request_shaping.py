@@ -235,3 +235,56 @@ async def test_non_string_metadata_user_id_is_rejected_before_the_provider_call(
         await litellm.anthropic.messages.acreate(**arguments(messages_server, metadata={"user_id": 123}))
 
     assert messages_server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_native_messages_observes_runtime_capabilities_and_separate_caller_settings(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, LiteLLMMessagesRequest
+
+    native: Final = NATIVE_AMESSAGES.load()
+    assert native is not None
+    model: Final = "claude-test-runtime-capabilities"
+    messages_server.expected_requests = 2
+    request: Final = LiteLLMMessagesRequest(
+        model=model,
+        messages=MESSAGES,
+        max_tokens=16,
+        stream=None,
+        api_key="test-key",
+        api_base=messages_server.base_url,
+        custom_llm_provider="anthropic",
+        kwargs={"temperature": 0.2, "drop_params": True},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "supports_sampling_params": True,
+        },
+    )
+    first: Final = await native(request, (), request.kwargs)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "supports_sampling_params": False,
+        },
+    )
+    second: Final = await native(request, (), request.kwargs)
+
+    assert isinstance(first, dict)
+    assert isinstance(second, dict)
+    assert first["id"] == second["id"] == MESSAGES_RESPONSE["id"]
+    assert len(messages_server.requests) == 2
+    first_body: Final = messages_server.requests[0].body
+    second_body: Final = messages_server.requests[1].body
+    assert isinstance(first_body, dict)
+    assert isinstance(second_body, dict)
+    assert first_body["temperature"] == request.kwargs["temperature"]
+    assert second_body == {name: value for name, value in first_body.items() if name != "temperature"}

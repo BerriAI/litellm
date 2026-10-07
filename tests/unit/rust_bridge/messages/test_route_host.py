@@ -3,7 +3,6 @@ from typing import Final
 
 from litellm.rust_bridge.messages.route_host import arguments, response
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
-from dataclasses import astuple
 import pytest
 import litellm
 from litellm.rust_bridge.messages import route_host
@@ -46,51 +45,17 @@ def test_arguments_are_the_public_kwargs_view() -> None:
     assert arguments(request) is kwargs
 
 
-pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+def test_settings_project_caller_configuration_without_resolving_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
 
+    projected: Final = route_host.settings({"drop_params": "true", "additional_drop_params": ["metadata.user_id"]})
 
-def _flag_model(monkeypatch: pytest.MonkeyPatch, name: str, **flags: bool) -> None:
-    monkeypatch.setitem(
-        litellm.model_cost,
-        name,
-        {
-            "litellm_provider": "anthropic",
-            "mode": "chat",
-            "input_cost_per_token": 0,
-            "output_cost_per_token": 0,
-            **flags,
-        },
-    )
-
-
-def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    _flag_model(
-        monkeypatch,
-        "claude-test-adaptive",
-        supports_reasoning=True,
-        supports_adaptive_thinking=True,
-        supports_output_config=True,
-        supports_xhigh_reasoning_effort=True,
-        supports_sampling_params=False,
-    )
-
-    capabilities: Final = route_host.model_capabilities("anthropic/claude-test-adaptive", None)
-
-    assert capabilities.supports_adaptive_thinking
-    assert capabilities.supports_output_config
-    assert not capabilities.supports_legacy_thinking
-    assert not capabilities.supports_sampling_params
-    assert capabilities.effort_tiers.xhigh
-    assert not capabilities.effort_tiers.max
-
-
-def test_unmapped_model_keeps_sampling_params_and_no_reasoning_features() -> None:
-    capabilities: Final = route_host.model_capabilities("anthropic/not-a-real-model", None)
-
-    assert capabilities.supports_sampling_params
-    assert not capabilities.supports_reasoning
-    assert not capabilities.supports_adaptive_thinking
-    assert not any(astuple(capabilities.effort_tiers))
+    assert projected == {
+        "drop_params": True,
+        "reasoning_auto_summary": True,
+        "additional_drop_params": ("metadata.user_id",),
+    }
 
 
 @pytest.mark.parametrize(
@@ -108,7 +73,7 @@ def test_drop_params_merges_the_global_flag_with_the_request(
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", global_flag)
 
-    assert route_host.shaping("anthropic/not-a-real-model", None, kwargs)["drop_params"] is expected
+    assert route_host.settings(kwargs)["drop_params"] is expected
 
 
 @pytest.mark.parametrize(
@@ -120,9 +85,9 @@ def test_drop_params_merges_the_global_flag_with_the_request(
     ],
 )
 def test_additional_drop_params_keep_only_string_paths(configured: object, expected: tuple[str, ...]) -> None:
-    shaping: Final = route_host.shaping("anthropic/not-a-real-model", None, {"additional_drop_params": configured})
+    settings: Final = route_host.settings({"additional_drop_params": configured})
 
-    assert shaping["additional_drop_params"] == expected
+    assert settings["additional_drop_params"] == expected
 
 
 def test_native_request_rejections_map_to_the_public_400() -> None:
