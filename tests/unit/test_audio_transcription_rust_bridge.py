@@ -9,6 +9,7 @@ import pytest
 import litellm
 from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
 from litellm.rust_bridge import bindings, configuration
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.transcription.native import NATIVE_ATRANSCRIPTION, NATIVE_TRANSCRIPTION
 
 MODEL: Final = "bedrock/mistral.voxtral-mini-3b-2507"
@@ -40,20 +41,15 @@ class SyncBridge:
         self._effect: Final = effect
         self.calls: tuple[dict[str, object], ...] = ()
 
-    def __call__(
-        self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]:
+    def __call__(self, call: NativeCall) -> dict[str, object]:
         self.calls = (
             *self.calls,
-            {"model": model, "audio": audio, "provider": custom_llm_provider, "timeout": timeout_seconds},
+            {
+                "model": call.bound["model"],
+                "audio": call.bound["audio"],
+                "provider": call.bound["custom_llm_provider"],
+                "timeout": call.bound["timeout_seconds"],
+            },
         )
         if self._effect is not None:
             raise self._effect
@@ -64,17 +60,9 @@ class AsyncBridge:
     def __init__(self) -> None:
         self.calls: tuple[str, ...] = ()
 
-    async def __call__(
-        self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
-    ) -> dict[str, object]:
+    async def __call__(self, call: NativeCall) -> dict[str, object]:
+        model: Final = call.bound["model"]
+        assert isinstance(model, str)
         self.calls = (*self.calls, model)
         return {"text": "async rust"}
 
