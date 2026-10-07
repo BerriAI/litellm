@@ -28,10 +28,8 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_token_cost_above_32k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_token_cost_above_100k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_token_cost_above_100k_tokens_batches: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -39,7 +37,6 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_token_cost_above_1hr: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_token_cost_above_1hr_above_100k_tokens: Option<f64>,
     /// Rate applied once the prompt exceeds the token threshold in the field name.
@@ -90,10 +87,8 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_token_cost_above_32k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_token_cost_above_100k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_token_cost_above_100k_tokens_batches: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -214,10 +209,8 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token_above_32k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token_above_100k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token_above_100k_tokens_batches: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -375,10 +368,8 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_token_above_32k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_token_above_100k_tokens: Option<f64>,
-    /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_token_above_100k_tokens_batches: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
