@@ -15,8 +15,11 @@ from litellm.proxy._types import LiteLLM_MCPServerTable
 from litellm.types.mcp import MCPAuth
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     import httpx
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+    from fastapi import APIRouter
 
     from litellm.proxy.auth.handle_jwt import JWTHandler
 
@@ -11904,7 +11907,7 @@ def test_named_resource_discovery_follows_matching_authorization_issuer(
 
 
 @pytest.fixture
-def _gateway_root_path_discovery_router(monkeypatch):
+def _gateway_root_path_discovery_router(monkeypatch: pytest.MonkeyPatch) -> "Iterator[APIRouter]":
     """The ``.well-known`` routes bake ``SERVER_ROOT_PATH`` into their paths when the module is
     executed, so it is re-executed under the gateway env and its namespace restored afterwards
     (a second reload would hand earlier importers a different ``router`` object)."""
@@ -11912,29 +11915,30 @@ def _gateway_root_path_discovery_router(monkeypatch):
 
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints
 
-    snapshot = dict(vars(discoverable_endpoints))
+    snapshot: Final = dict(vars(discoverable_endpoints))
     monkeypatch.setenv("SERVER_ROOT_PATH", "/gateway")
     monkeypatch.setenv("PROXY_BASE_URL", "https://llm.example.test/gateway")
     try:
         yield importlib.reload(discoverable_endpoints).router
     finally:
-        for key in [key for key in vars(discoverable_endpoints) if key not in snapshot]:
+        added_keys: Final = [key for key in vars(discoverable_endpoints) if key not in snapshot]
+        for key in added_keys:
             delattr(discoverable_endpoints, key)
         vars(discoverable_endpoints).update(snapshot)
 
 
 def test_static_root_path_authorization_discovery_preserves_issuer(
-    _gateway_root_path_discovery_router, _isolated_mcp_registry
-):
+    _gateway_root_path_discovery_router: "APIRouter", _isolated_mcp_registry: "dict[str, MCPServer]"
+) -> None:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    server = _create_oauth2_server(server_id="example", name="example", server_name="example", alias="example")
+    server: Final = _create_oauth2_server(server_id="example", name="example", server_name="example", alias="example")
     _isolated_mcp_registry[server.server_id] = server
-    app = FastAPI(root_path="/gateway")
+    app: Final = FastAPI(root_path="/gateway")
     app.include_router(_gateway_root_path_discovery_router)
     with TestClient(app) as client:
-        responses = {
+        responses: Final = {
             path: client.get(f"/.well-known/oauth-authorization-server/gateway/{path}")
             for path in ("mcp/example", "example/mcp", "example", "mcp")
         }
