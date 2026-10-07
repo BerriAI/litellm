@@ -66,10 +66,11 @@ def test_core_manifest_preserves_runtime_dependencies_without_extras() -> None:
     assert removed <= legacy_dependencies
     assert "jsonschema" in core_dependencies
     assert legacy_dependencies - removed <= core_dependencies
-    core_requirements: Final = {Requirement(value).name: Requirement(value) for value in core["project"]["dependencies"]}
-    legacy_requirements: Final = {Requirement(value).name: Requirement(value) for value in legacy["project"]["dependencies"]}
-    for name in legacy_dependencies - removed:
-        assert core_requirements[name].specifier == legacy_requirements[name].specifier, name
+    core_requirements: Final = {Requirement(value) for value in core["project"]["dependencies"]}
+    retained_requirements: Final = {
+        Requirement(value) for value in legacy["project"]["dependencies"] if Requirement(value).name not in removed
+    }
+    assert retained_requirements <= core_requirements
     assert not core["project"].get("optional-dependencies")
     assert not core["project"].get("scripts")
 
