@@ -76,9 +76,16 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     MCPServerAccess,
+    UnloadableEntitlementError,
     _is_mcp_admitted_user_subject,
 )
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+from litellm.proxy._experimental.mcp_server.data_boundary import (
+    DataBoundaryViolation,
+    data_boundary_policy_unavailable_detail,
+    find_data_boundary_violation,
+    violation_unless_any_source_admits,
+)
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
 )
@@ -2738,6 +2745,7 @@ class MCPServerManager:
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
                 max_concurrent_requests=server_config.get("max_concurrent_requests", None),
+                data_boundary=server_config.get("data_boundary", None),
                 token_validation=server_config.get("token_validation", None),
                 oauth_identity_binding=server_config.get("oauth_identity_binding", None),
             )
@@ -3327,6 +3335,7 @@ class MCPServerManager:
             or "rfc8693",
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
+            data_boundary=mcp_server.data_boundary,
         )
         _warn_legacy_delegate_auth_if_applicable(new_server, source="database")
         if register_oauth_discovery:
@@ -4858,6 +4867,8 @@ class MCPServerManager:
     ) -> ReadResourceResult:
         """Read resource contents from a specific MCP server."""
 
+        await self.check_data_boundary_for_key_team(server=server, user_api_key_auth=user_api_key_auth)
+
         verbose_logger.debug("Connecting to url: %s", server.url)
         verbose_logger.info("read_resource_from_server for %s...", server.name)
 
@@ -4894,6 +4905,8 @@ class MCPServerManager:
         client_ip: str | None = None,
     ) -> GetPromptResult:
         """Fetch a specific prompt definition from a single MCP server."""
+
+        await self.check_data_boundary_for_key_team(server=server, user_api_key_auth=user_api_key_auth)
 
         verbose_logger.debug("Connecting to url: %s", server.url)
         verbose_logger.info("get_prompt_from_server for %s...", server.name)
@@ -5798,6 +5811,70 @@ class MCPServerManager:
                 },
             )
 
+    async def check_data_boundary_for_key_team(
+        self,
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> None:
+        if user_api_key_auth is None:
+            return
+        try:
+            violation: Final = await self._find_data_boundary_violation(server, user_api_key_auth)
+        except UnloadableEntitlementError as e:
+            raise HTTPException(status_code=403, detail=data_boundary_policy_unavailable_detail(server.name)) from e
+        if violation is not None:
+            raise HTTPException(status_code=403, detail=violation.to_detail())
+
+    async def _find_data_boundary_violation(
+        self,
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> DataBoundaryViolation | None:
+        if not _is_mcp_admitted_user_subject(user_api_key_auth):
+            return await self._source_data_boundary_violation(server, user_api_key_auth, "key")
+        source_grants: Final = await MCPRequestHandler.admitted_source_grants(user_api_key_auth)
+        granting_sources: Final = tuple(source for source, granted in source_grants if server.server_id in granted)
+        own_sources: Final = tuple(source for source, _granted in source_grants if source.team_id is None)
+        results: Final = tuple(
+            [await self._admitted_source_result(server, source) for source in (granting_sources or own_sources)]
+        )
+        if not results or None in results:
+            return None
+        unloadable: Final = next((r for r in results if isinstance(r, UnloadableEntitlementError)), None)
+        if unloadable is not None:
+            raise unloadable
+        return violation_unless_any_source_admits([r for r in results if isinstance(r, DataBoundaryViolation)])
+
+    async def _admitted_source_result(
+        self,
+        server: MCPServer,
+        source: UserAPIKeyAuth,
+    ) -> DataBoundaryViolation | UnloadableEntitlementError | None:
+        try:
+            return await self._source_data_boundary_violation(server, source, "user")
+        except UnloadableEntitlementError as e:
+            return e
+
+    async def _source_data_boundary_violation(
+        self,
+        server: MCPServer,
+        source: UserAPIKeyAuth,
+        principal_source: Literal["key", "user"],
+    ) -> DataBoundaryViolation | None:
+        principal_permission: Final = await MCPRequestHandler.key_object_permission_for_policy(source)
+        team_permission: Final = await MCPRequestHandler.team_object_permission_for_policy(source)
+        return find_data_boundary_violation(
+            server_name=server.name,
+            server_data_boundary=server.data_boundary,
+            policies=(
+                (
+                    principal_source,
+                    principal_permission.mcp_data_boundaries if principal_permission is not None else None,
+                ),
+                ("team", team_permission.mcp_data_boundaries if team_permission is not None else None),
+            ),
+        )
+
     async def _call_openapi_tool_handler(
         self,
         server: MCPServer,
@@ -5913,6 +5990,11 @@ class MCPServerManager:
         ## check tool-level permissions from object_permission
         await self.check_tool_permission_for_key_team(
             tool_name=name,
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+        )
+
+        await self.check_data_boundary_for_key_team(
             server=server,
             user_api_key_auth=user_api_key_auth,
         )
@@ -7193,6 +7275,7 @@ class MCPServerManager:
             instructions=server.instructions,
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
+            data_boundary=server.data_boundary,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -7316,6 +7399,7 @@ class MCPServerManager:
             instructions=server.instructions,
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
+            data_boundary=server.data_boundary,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> list[LiteLLM_MCPServerTable]:

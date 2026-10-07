@@ -31766,6 +31766,17 @@
                 }
               ]
             },
+            "data_boundary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Boundary"
+            },
             "dcr_bridge": {
               "anyOf": [
                 {
@@ -33548,6 +33559,17 @@
                 }
               ]
             },
+            "data_boundary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Boundary"
+            },
             "dcr_bridge": {
               "anyOf": [
                 {
@@ -34503,6 +34525,17 @@
                   "type": "null"
                 }
               ]
+            },
+            "data_boundary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Boundary"
             },
             "dcr_bridge": {
               "anyOf": [
@@ -36832,6 +36865,17 @@
                 }
               ]
             },
+            "data_boundary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Boundary"
+            },
             "dcr_bridge": {
               "anyOf": [
                 {
@@ -38632,6 +38676,17 @@
                 }
               ]
             },
+            "data_boundary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Boundary"
+            },
             "dcr_bridge": {
               "anyOf": [
                 {
@@ -39174,6 +39229,17 @@
                   "type": "null"
                 }
               ]
+            },
+            "data_boundary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Boundary"
             },
             "dcr_bridge": {
               "anyOf": [
@@ -42020,6 +42086,17 @@
                   "type": "null"
                 }
               ]
+            },
+            "data_boundary": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data Boundary"
             },
             "dcr_bridge": {
               "anyOf": [

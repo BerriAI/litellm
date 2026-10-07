@@ -8,7 +8,14 @@ export interface MountedFieldNames {
 
 const ENTRA_OBO_PROFILE = "entra_obo";
 
-const ALWAYS_MOUNTED_ROOT = ["server_name", "alias", "description", "transport", "max_concurrent_requests"] as const;
+const ALWAYS_MOUNTED_ROOT = [
+  "server_name",
+  "alias",
+  "description",
+  "transport",
+  "max_concurrent_requests",
+  "data_boundary",
+] as const;
 
 const PERMISSION_SECTION_ROOT = [
   "allow_all_keys",

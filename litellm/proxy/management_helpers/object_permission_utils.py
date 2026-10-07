@@ -118,6 +118,7 @@ async def prepare_object_permission_upsert(
         **new_object_permission,
         "object_permission_id": object_permission_id,
     }
+    mcp_data_boundaries: Final = merged.get("mcp_data_boundaries")
     record: Final[dict[str, object]] = {
         **merged,
         **(
@@ -125,6 +126,7 @@ async def prepare_object_permission_upsert(
             if "mcp_tool_permissions" in merged
             else {}
         ),
+        **({"mcp_data_boundaries": list(mcp_data_boundaries)} if isinstance(mcp_data_boundaries, tuple) else {}),
     }
     return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
 
@@ -215,9 +217,11 @@ async def _set_object_permission(
         data_json.pop("object_permission")
         return data_json
 
+    mcp_data_boundaries: Final = permission_data.get("mcp_data_boundaries")
     # Clean data: exclude None values and object_permission_id
     clean_data: Final[dict[str, object]] = {
-        k: v for k, v in permission_data.items() if v is not None and k != "object_permission_id"
+        **{k: v for k, v in permission_data.items() if v is not None and k != "object_permission_id"},
+        **({"mcp_data_boundaries": list(mcp_data_boundaries)} if isinstance(mcp_data_boundaries, tuple) else {}),
     }
 
     await reject_ambiguous_mcp_tool_permission_keys(

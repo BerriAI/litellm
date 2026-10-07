@@ -75,6 +75,7 @@ _PERMISSION_LISTS: Final = _lists_as_json(
         "models",
         "search_tools",
         "skills",
+        "mcp_data_boundaries",
     ),
 )
 _BUDGET_LISTS: Final = _lists_as_json("b", ("allowed_models",))

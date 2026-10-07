@@ -2112,6 +2112,7 @@ describe("KeyEditView", () => {
     vector_stores: [],
     mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
     mcp_tool_permissions: {},
+    mcp_data_boundaries: [],
     agents_and_groups: { agents: [], accessGroups: [] },
     skills: [],
     organization_id: null,

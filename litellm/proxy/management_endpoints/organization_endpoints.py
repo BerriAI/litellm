@@ -682,8 +682,13 @@ async def _set_object_permission(
             existing_mcp_tool_permissions=None,
             prisma_client=prisma_client,
         )
+        object_permission_data: Final = data.object_permission.model_dump(exclude_none=True)
+        mcp_data_boundaries: Final = data.object_permission.mcp_data_boundaries
         created_object_permission: Final = await _table(ObjectPermissionRepository(prisma_client)).create(
-            data=data.object_permission.model_dump(exclude_none=True),
+            data={
+                **object_permission_data,
+                **({"mcp_data_boundaries": list(mcp_data_boundaries)} if mcp_data_boundaries is not None else {}),
+            },
         )
         del data.object_permission
         return created_object_permission.object_permission_id

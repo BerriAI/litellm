@@ -102,6 +102,7 @@ const teamCreateFieldsSchema = z.object({
     })
     .optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
+  object_permission_mcp_data_boundaries: z.array(z.string()).optional(),
   allowed_agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
   object_permission_skills: z.array(z.string()).optional(),
@@ -133,6 +134,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   allowed_passthrough_routes: undefined,
   allowed_mcp_servers_and_groups: undefined,
   mcp_tool_permissions: {},
+  object_permission_mcp_data_boundaries: undefined,
   allowed_agents_and_groups: undefined,
   object_permission_search_tools: undefined,
   object_permission_skills: undefined,
@@ -152,7 +154,11 @@ const ADDITIONAL_SETTINGS_FIELDS = [
   "allowed_vector_store_ids",
   "allowed_passthrough_routes",
 ] as const;
-const MCP_SETTINGS_FIELDS = ["allowed_mcp_servers_and_groups", "mcp_tool_permissions"] as const;
+const MCP_SETTINGS_FIELDS = [
+  "allowed_mcp_servers_and_groups",
+  "mcp_tool_permissions",
+  "object_permission_mcp_data_boundaries",
+] as const;
 const AGENT_SETTINGS_FIELDS = ["allowed_agents_and_groups"] as const;
 const SEARCH_TOOL_SETTINGS_FIELDS = ["object_permission_search_tools"] as const;
 const SKILL_SETTINGS_FIELDS = ["object_permission_skills"] as const;
@@ -524,6 +530,17 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           formValues.object_permission.skills = formValues.object_permission_skills;
         }
         delete formValues.object_permission_skills;
+
+        if (
+          Array.isArray(formValues.object_permission_mcp_data_boundaries) &&
+          formValues.object_permission_mcp_data_boundaries.length > 0
+        ) {
+          formValues.object_permission = {
+            ...formValues.object_permission,
+            mcp_data_boundaries: formValues.object_permission_mcp_data_boundaries,
+          };
+        }
+        delete formValues.object_permission_mcp_data_boundaries;
 
         // Add model_aliases if any are defined
         if (Object.keys(modelAliases).length > 0) {
@@ -1138,6 +1155,27 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
                         />
                       </div>
+
+                      <FormField
+                        control={form.control}
+                        name="object_permission_mcp_data_boundaries"
+                        className="mt-4"
+                        label={labelWithHint(
+                          "Allowed MCP Data Boundaries",
+                          "Only MCP servers whose data boundary is in this list can be called. Leave empty to allow every boundary.",
+                        )}
+                        description="Restrict keys on this team to MCP servers in these data boundaries"
+                      >
+                        {({ value, onChange, id }) => (
+                          <TagsInput
+                            id={id}
+                            value={value ?? []}
+                            onValueChange={onChange}
+                            placeholder="e.g. eu (optional, empty = all boundaries)"
+                            tokenSeparators={[","]}
+                          />
+                        )}
+                      </FormField>
                     </CollapsibleContent>
                   </Collapsible>
 

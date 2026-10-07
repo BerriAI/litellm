@@ -44,6 +44,7 @@ from pydantic import AnyUrl, TypeAdapter
 from litellm.constants import MCP_METADATA_TIMEOUT
 from litellm.proxy._experimental.mcp_server import discoverable_endpoints
 from litellm.proxy._experimental.mcp_server.tool_outcome import TextResult
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import UnloadableEntitlementError
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
     MCPServerManager,
@@ -61,6 +62,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamTable,
     LitellmUserRoles,
     MCPApprovalStatus,
     MCPEnvVar,
@@ -18990,3 +18992,306 @@ async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_
         with pytest.raises(MCPError, match="LITELLM_SALT_KEY"):
             await listing
         assert manager._get_mcp_server_from_tool_name("first") is None
+
+
+def _boundary_server(data_boundary: str | None) -> MCPServer:
+    return MCPServer(
+        server_id="crm_us",
+        name="crm_us",
+        url="https://crm.example.com/mcp",
+        transport=MCPTransport.http,
+        data_boundary=data_boundary,
+    )
+
+
+def _boundary_caller(mcp_data_boundaries: list[str] | None) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-boundary",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-boundary",
+            mcp_data_boundaries=mcp_data_boundaries,
+        ),
+    )
+
+
+def _admitting_proxy_logging() -> MagicMock:
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+    proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+    proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+    return proxy_logging_obj
+
+
+class TestMCPDataBoundaryPolicy:
+    @pytest.mark.asyncio
+    async def test_tool_call_into_server_outside_key_boundary_is_refused_with_reason(self):
+        manager = MCPServerManager()
+        proxy_logging_obj = _admitting_proxy_logging()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.pre_call_tool_check(
+                name="fetch_record",
+                arguments={"record_id": "42"},
+                server_name="crm_us",
+                user_api_key_auth=_boundary_caller(["eu"]),
+                proxy_logging_obj=proxy_logging_obj,
+                server=_boundary_server("us-east"),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {
+            "error": (
+                "MCP data boundary violation: server 'crm_us' is in data boundary 'us-east', "
+                "but the key policy only permits data boundaries ['eu']. "
+                "Contact proxy admin to change the data boundary policy."
+            ),
+            "code": "mcp_data_boundary_violation",
+            "server_name": "crm_us",
+            "server_data_boundary": "us-east",
+            "allowed_data_boundaries": ("eu",),
+            "policy_source": "key",
+        }
+        proxy_logging_obj.pre_call_hook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "server_boundary,key_boundaries",
+        (("eu", ["eu"]), ("us-east", None), ("us-east", []), (None, None)),
+    )
+    async def test_tool_call_inside_boundary_or_without_policy_is_admitted(self, server_boundary, key_boundaries):
+        manager = MCPServerManager()
+        proxy_logging_obj = _admitting_proxy_logging()
+
+        await manager.pre_call_tool_check(
+            name="fetch_record",
+            arguments={"record_id": "42"},
+            server_name="crm_us",
+            user_api_key_auth=_boundary_caller(key_boundaries),
+            proxy_logging_obj=proxy_logging_obj,
+            server=_boundary_server(server_boundary),
+        )
+
+        proxy_logging_obj.pre_call_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_team_boundary_is_enforced_when_key_sets_none(self):
+        manager = MCPServerManager()
+        team_permission = LiteLLM_ObjectPermissionTable(object_permission_id="op-team", mcp_data_boundaries=["eu"])
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.team_object_permission_for_policy",
+                AsyncMock(return_value=team_permission),
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await manager.check_data_boundary_for_key_team(
+                server=_boundary_server("us"),
+                user_api_key_auth=_boundary_caller(None),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["policy_source"] == "team"
+        assert exc_info.value.detail["allowed_data_boundaries"] == ("eu",)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("loaded", (None, RuntimeError("db down")))
+    async def test_key_naming_an_unloadable_policy_is_refused(self, loaded):
+        manager = MCPServerManager()
+        caller = UserAPIKeyAuth(api_key="sk-boundary", object_permission_id="op-unloadable")
+        read = AsyncMock(side_effect=loaded) if isinstance(loaded, Exception) else AsyncMock(return_value=loaded)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.auth.auth_checks.get_object_permission", read),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await manager.check_data_boundary_for_key_team(server=_boundary_server("us-east"), user_api_key_auth=caller)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {
+            "error": (
+                "MCP data boundary policy for server 'crm_us' could not be loaded, so the request is denied. "
+                "Contact proxy admin to check the data boundary policy."
+            ),
+            "code": "mcp_data_boundary_violation",
+            "server_name": "crm_us",
+        }
+        read.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_team_naming_an_unloadable_policy_is_refused(self):
+        manager = MCPServerManager()
+        caller = UserAPIKeyAuth(api_key="sk-boundary", team_id="team-eu")
+        team = LiteLLM_TeamTable(team_id="team-eu", object_permission_id="op-team-unloadable")
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.auth.auth_checks.get_team_object", AsyncMock(return_value=team)),
+            patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=None)),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await manager.check_data_boundary_for_key_team(server=_boundary_server("us-east"), user_api_key_auth=caller)
+
+        assert exc_info.value.status_code == 403
+        assert "could not be loaded" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_key_policy_loaded_by_id_is_enforced(self):
+        manager = MCPServerManager()
+        caller = UserAPIKeyAuth(api_key="sk-boundary", object_permission_id="op-key")
+        loaded = LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_data_boundaries=["eu"])
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.auth.auth_checks.get_object_permission", AsyncMock(return_value=loaded)),
+        ):
+            await manager.check_data_boundary_for_key_team(server=_boundary_server("eu"), user_api_key_auth=caller)
+            with pytest.raises(HTTPException) as exc_info:
+                await manager.check_data_boundary_for_key_team(
+                    server=_boundary_server("us-east"), user_api_key_auth=caller
+                )
+
+        assert exc_info.value.detail["policy_source"] == "key"
+        assert exc_info.value.detail["allowed_data_boundaries"] == ("eu",)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "granting_teams,expected_violation",
+        (
+            ((("team-eu", {"crm_us"}),), "team"),
+            ((("team-eu", {"crm_us"}), ("team-open", {"crm_us"})), None),
+            ((("team-eu", {"other"}),), None),
+        ),
+    )
+    async def test_admitted_user_is_bound_by_the_teams_that_grant_the_server(self, granting_teams, expected_violation):
+        manager = MCPServerManager()
+        subject = UserAPIKeyAuth(user_id="user-1")
+        subject.mcp_admitted_user_subject = True
+        own_source = UserAPIKeyAuth(user_id="user-1")
+        grants = [(own_source, set())] + [
+            (UserAPIKeyAuth(user_id="user-1", team_id=team_id), granted) for team_id, granted in granting_teams
+        ]
+        team_permissions = {
+            "team-eu": LiteLLM_ObjectPermissionTable(object_permission_id="op-eu", mcp_data_boundaries=["eu"]),
+            "team-open": LiteLLM_ObjectPermissionTable(object_permission_id="op-open"),
+        }
+        handler = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler"
+
+        with (
+            patch(f"{handler}.admitted_source_grants", AsyncMock(return_value=grants)),
+            patch(
+                f"{handler}.team_object_permission_for_policy",
+                AsyncMock(side_effect=lambda source: team_permissions.get(source.team_id or "")),
+            ),
+        ):
+            violation = await manager._find_data_boundary_violation(_boundary_server("us-east"), subject)
+
+        assert (violation.policy_source if violation is not None else None) == expected_violation
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "other_team_permission,expected_status",
+        (
+            (LiteLLM_ObjectPermissionTable(object_permission_id="op-open"), None),
+            (LiteLLM_ObjectPermissionTable(object_permission_id="op-eu", mcp_data_boundaries=["eu"]), 403),
+            (None, None),
+        ),
+    )
+    async def test_unloadable_team_grant_does_not_override_another_granting_team(
+        self, other_team_permission, expected_status
+    ):
+        manager = MCPServerManager()
+        subject = UserAPIKeyAuth(user_id="user-1")
+        subject.mcp_admitted_user_subject = True
+        grants = [
+            (UserAPIKeyAuth(user_id="user-1"), set()),
+            (UserAPIKeyAuth(user_id="user-1", team_id="team-broken"), {"crm_us"}),
+            (UserAPIKeyAuth(user_id="user-1", team_id="team-other"), {"crm_us"}),
+        ]
+
+        async def team_permission(source):
+            if source.team_id == "team-broken":
+                raise UnloadableEntitlementError("team team-broken permission op-broken could not be loaded")
+            return other_team_permission
+
+        handler = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler"
+        with (
+            patch(f"{handler}.admitted_source_grants", AsyncMock(return_value=grants)),
+            patch(f"{handler}.team_object_permission_for_policy", AsyncMock(side_effect=team_permission)),
+        ):
+            if expected_status is None:
+                await manager.check_data_boundary_for_key_team(server=_boundary_server("us-east"), user_api_key_auth=subject)
+                return
+            with pytest.raises(HTTPException) as exc_info:
+                await manager.check_data_boundary_for_key_team(server=_boundary_server("us-east"), user_api_key_auth=subject)
+
+        assert exc_info.value.status_code == expected_status
+        assert "could not be loaded" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_admitted_user_whose_only_granting_team_is_unloadable_is_refused(self):
+        manager = MCPServerManager()
+        subject = UserAPIKeyAuth(user_id="user-1")
+        subject.mcp_admitted_user_subject = True
+        grants = [(UserAPIKeyAuth(user_id="user-1", team_id="team-broken"), {"crm_us"})]
+        handler = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler"
+
+        with (
+            patch(f"{handler}.admitted_source_grants", AsyncMock(return_value=grants)),
+            patch(
+                f"{handler}.team_object_permission_for_policy",
+                AsyncMock(side_effect=UnloadableEntitlementError("team permission could not be loaded")),
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await manager.check_data_boundary_for_key_team(server=_boundary_server("us-east"), user_api_key_auth=subject)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["code"] == "mcp_data_boundary_violation"
+        assert "could not be loaded" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_prompt_and_resource_reads_outside_boundary_never_reach_upstream(self):
+        manager = MCPServerManager()
+        create_client = AsyncMock()
+
+        with patch.object(manager, "_create_mcp_client", create_client):
+            with pytest.raises(HTTPException) as prompt_exc:
+                await manager.get_prompt_from_server(
+                    server=_boundary_server("us"),
+                    user_api_key_auth=_boundary_caller(["eu"]),
+                    prompt_name="summarize",
+                )
+            with pytest.raises(HTTPException) as resource_exc:
+                await manager.read_resource_from_server(
+                    server=_boundary_server("us"),
+                    user_api_key_auth=_boundary_caller(["eu"]),
+                    url=AnyUrl("records://latest"),
+                )
+
+        assert prompt_exc.value.detail["code"] == "mcp_data_boundary_violation"
+        assert resource_exc.value.detail["code"] == "mcp_data_boundary_violation"
+        create_client.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_data_boundary_is_loaded_from_config_and_database(self, config_only_mcp_manager_factory):
+        manager = config_only_mcp_manager_factory()
+        await manager.load_servers_from_config(
+            {"crm_us": {"url": "https://crm.example.com/mcp", "transport": MCPTransport.http, "data_boundary": "us"}}
+        )
+        row = LiteLLM_MCPServerTable(
+            server_id="docs-eu",
+            alias="docs_eu",
+            url="https://docs.example.com/mcp",
+            transport=MCPTransport.http,
+            data_boundary="eu",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        from_db = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+
+        assert [server.data_boundary for server in manager.config_mcp_servers.values()] == ["us"]
+        assert from_db.data_boundary == "eu"
+        assert manager._build_mcp_server_table(from_db).data_boundary == "eu"

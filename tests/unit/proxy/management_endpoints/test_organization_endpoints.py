@@ -1381,6 +1381,28 @@ async def test_new_organization_rejects_shared_alias_tool_permission_key():
 
 
 @pytest.mark.asyncio
+async def test_new_organization_converts_data_boundaries_for_prisma():
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, NewOrganizationRequest
+    from litellm.proxy.management_endpoints.organization_endpoints import _set_object_permission
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id="op-1")
+    )
+    data = NewOrganizationRequest(
+        organization_alias="org",
+        object_permission=LiteLLM_ObjectPermissionBase(mcp_data_boundaries=["eu", "us"]),
+    )
+
+    object_permission_id = await _set_object_permission(data=data, prisma_client=prisma_client)
+
+    assert object_permission_id == "op-1"
+    created_data = prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+    assert created_data["mcp_data_boundaries"] == ["eu", "us"]
+
+
+@pytest.mark.asyncio
 async def test_new_organization_temp_budget_fields_go_to_budget_row_not_metadata(monkeypatch):
     """temp_budget_increase/expiry are budget columns and also key-metadata field names, so
     /organization/new must write them to the budget row and keep the datetime out of the org
