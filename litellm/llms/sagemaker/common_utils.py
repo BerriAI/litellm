@@ -51,6 +51,11 @@ def with_inference_component_hint(error_message: str, call: str) -> str:
     return error_message
 
 
+def client_error_message(error: Exception) -> str:
+    message: Final = getattr(error, "response", {}).get("Error", {}).get("Message")
+    return message if isinstance(message, str) and message else str(error)
+
+
 class SagemakerError(BaseLLMException):
     def __init__(
         self,

@@ -281,6 +281,29 @@ class TestSagemakerEmbeddingInferenceComponents:
             sagemaker_message + "\n " + expected_hint if expected_hint else sagemaker_message
         )
 
+    def test_null_error_message_surfaces_the_error_code(self):
+        session, client = fake_sagemaker_session(OPENAI_RESPONSE)
+        client.invoke_endpoint.side_effect = ClientError(
+            {
+                "Error": {"Code": "InternalFailure", "Message": None},
+                "ResponseMetadata": {"HTTPStatusCode": 500},
+            },
+            "InvokeEndpoint",
+        )
+        with patch("boto3.Session", return_value=session), pytest.raises(SagemakerError) as raised:
+            self.sagemaker_llm.embedding(
+                model="openai/my-embed-endpoint",
+                input=["hello"],
+                model_response=EmbeddingResponse(),
+                print_verbose=print,
+                encoding=None,
+                logging_obj=MagicMock(),
+                optional_params={"aws_region_name": "us-east-1", "model_id": "x" * 2048},
+            )
+
+        assert raised.value.status_code == 500
+        assert "InternalFailure" in raised.value.message
+
     def test_non_string_model_id_is_rejected_before_the_call(self):
         session, client = fake_sagemaker_session(OPENAI_RESPONSE)
         with patch("boto3.Session", return_value=session), pytest.raises(SagemakerError) as raised:
