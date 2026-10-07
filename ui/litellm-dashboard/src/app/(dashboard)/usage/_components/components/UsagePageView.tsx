@@ -117,8 +117,7 @@ function loadPersistedDateRange(): DateRangePickerValue {
       if (!isNaN(fromDate.getTime()) && !isNaN(toDate.getTime())) {
         return { from: fromDate, to: toDate };
       }
-    } catch {
-    }
+    } catch {}
   }
 
   return DEFAULT_DATE_RANGE();
