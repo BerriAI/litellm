@@ -10,8 +10,9 @@ import pytest
 import yaml
 from tests.integration._support.native.clickhouse import clickhouse_url as clickhouse_url
 from tests.integration._support.native.fixtures import recording_server as recording_server
+from integration._support.client import eventually
 from integration._support.otlp_sink import SpanSinks, owned_sinks
-from integration._support.prometheus_series import CapRig, series_cap_rig
+from integration._support.prometheus_series import CapRig, series_cap_rig, spend_rows
 from pydantic import JsonValue
 
 AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
@@ -65,4 +66,9 @@ def capped(tmp_path_factory: pytest.TempPathFactory) -> Iterator[CapRig]:
         workers=2,
         warm_keys=3,
     ) as rig:
+        eventually(
+            lambda: tuple(len(spend_rows(key.alias)) for key in rig.warm),
+            lambda counts: all(count == 1 for count in counts),
+            seconds=70,
+        )
         yield rig
