@@ -153,7 +153,7 @@ function GithubCta({ label = "Star Moyai on GitHub" }: { label?: string }) {
       href={MOYAI_GITHUB_URL}
       target="_blank"
       rel="noopener noreferrer"
-      className={`${styles.cta} group inline-flex items-center gap-3 rounded-full px-7 py-3.5 text-base font-semibold text-[#05070d] transition-transform hover:scale-[1.03]}`}
+      className={`${styles.cta} group inline-flex items-center gap-3 rounded-full px-7 py-3.5 text-base font-semibold text-[#05070d] transition-transform hover:scale-[1.03]`}
     >
       <Github className="size-5" />
       <span>{label}</span>
