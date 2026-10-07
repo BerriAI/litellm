@@ -1,4 +1,4 @@
-import asyncio, importlib, os
+import asyncio, importlib, os, uuid
 import json
 import re
 from copy import deepcopy
@@ -10,11 +10,12 @@ import pytest
 from pydantic import BaseModel
 
 import litellm
-from litellm import ModelResponse, completion
+from litellm import ModelResponse, completion, embedding, image_generation
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -26,6 +27,72 @@ from litellm.llms.vertex_ai.gemini.transformation import(
     gemini_convert_messages_with_history,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+from litellm.llms.vertex_ai.context_caching.transformation import (
+    separate_cached_messages,
+    transform_openai_messages_to_gemini_context_caching,
+)
+import tempfile
+
+GEMINI_3_IMAGE_SIZE_MAPPINGS: Final[tuple[tuple[str, str, str], ...]] = (
+    ('512x512', '1:1', '512'),
+    ('1024x1024', '1:1', '1K'),
+    ('2048x2048', '1:1', '2K'),
+    ('4096x4096', '1:1', '4K'),
+    ('256x1024', '1:4', '512'),
+    ('512x2048', '1:4', '1K'),
+    ('1024x4096', '1:4', '2K'),
+    ('2048x8192', '1:4', '4K'),
+    ('192x1536', '1:8', '512'),
+    ('384x3072', '1:8', '1K'),
+    ('768x6144', '1:8', '2K'),
+    ('1536x12288', '1:8', '4K'),
+    ('424x632', '2:3', '512'),
+    ('848x1264', '2:3', '1K'),
+    ('1696x2528', '2:3', '2K'),
+    ('3392x5056', '2:3', '4K'),
+    ('632x424', '3:2', '512'),
+    ('1264x848', '3:2', '1K'),
+    ('2528x1696', '3:2', '2K'),
+    ('5056x3392', '3:2', '4K'),
+    ('448x600', '3:4', '512'),
+    ('896x1200', '3:4', '1K'),
+    ('1792x2400', '3:4', '2K'),
+    ('3584x4800', '3:4', '4K'),
+    ('1024x256', '4:1', '512'),
+    ('2048x512', '4:1', '1K'),
+    ('4096x1024', '4:1', '2K'),
+    ('8192x2048', '4:1', '4K'),
+    ('600x448', '4:3', '512'),
+    ('1200x896', '4:3', '1K'),
+    ('2400x1792', '4:3', '2K'),
+    ('4800x3584', '4:3', '4K'),
+    ('464x576', '4:5', '512'),
+    ('928x1152', '4:5', '1K'),
+    ('1856x2304', '4:5', '2K'),
+    ('3712x4608', '4:5', '4K'),
+    ('576x464', '5:4', '512'),
+    ('1152x928', '5:4', '1K'),
+    ('2304x1856', '5:4', '2K'),
+    ('4608x3712', '5:4', '4K'),
+    ('1536x192', '8:1', '512'),
+    ('3072x384', '8:1', '1K'),
+    ('6144x768', '8:1', '2K'),
+    ('12288x1536', '8:1', '4K'),
+    ('384x688', '9:16', '512'),
+    ('768x1376', '9:16', '1K'),
+    ('1536x2752', '9:16', '2K'),
+    ('3072x5504', '9:16', '4K'),
+    ('688x384', '16:9', '512'),
+    ('1376x768', '16:9', '1K'),
+    ('2752x1536', '16:9', '2K'),
+    ('5504x3072', '16:9', '4K'),
+    ('792x336', '21:9', '512'),
+    ('1584x672', '21:9', '1K'),
+    ('3168x1344', '21:9', '2K'),
+    ('6336x2688', '21:9', '4K'),
+)
 
 
 def test_top_logprobs():
@@ -6495,3 +6562,2340 @@ def test_round_trip_without_thought_signature_still_works():
     text_part = model_message["parts"][0]
     assert text_part["text"] == "Hi there"
     assert "thoughtSignature" not in text_part
+
+
+def test_gemini_context_caching_with_ttl():
+    """Test Gemini context caching with TTL support"""
+
+    messages_with_ttl = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral", "ttl": "3600s"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral", "ttl": "7200s"},
+                }
+            ],
+        },
+    ]
+
+    result = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-1.5-pro",
+        messages=messages_with_ttl,
+        cache_key="test-ttl-cache-key",
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
+    )
+
+    assert "ttl" in result
+    assert result["ttl"] == "3600s"
+    assert result["model"] == "models/gemini-1.5-pro"
+    assert result["displayName"] == "test-ttl-cache-key"
+
+    messages_invalid_ttl = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Cached content with invalid TTL",
+                    "cache_control": {"type": "ephemeral", "ttl": "invalid_ttl"},
+                }
+            ],
+        }
+    ]
+
+    result_invalid = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-1.5-pro",
+        messages=messages_invalid_ttl,
+        cache_key="test-invalid-ttl",
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
+    )
+
+    assert "ttl" not in result_invalid
+    assert result_invalid["model"] == "models/gemini-1.5-pro"
+    assert result_invalid["displayName"] == "test-invalid-ttl"
+
+    messages_no_ttl = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Cached content without TTL",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+    ]
+
+    result_no_ttl = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-1.5-pro",
+        messages=messages_no_ttl,
+        cache_key="test-no-ttl",
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
+    )
+
+    assert "ttl" not in result_no_ttl
+    assert result_no_ttl["model"] == "models/gemini-1.5-pro"
+    assert result_no_ttl["displayName"] == "test-no-ttl"
+
+    messages_mixed = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "System message with TTL",
+                    "cache_control": {"type": "ephemeral", "ttl": "1800s"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "User message without TTL",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Assistant response without cache control"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Another user message",
+                    "cache_control": {"type": "ephemeral", "ttl": "900s"},
+                }
+            ],
+        },
+    ]
+
+    cached_messages, non_cached_messages = separate_cached_messages(messages_mixed)
+    assert len(cached_messages) > 0
+    assert len(non_cached_messages) > 0
+
+    result_mixed = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-1.5-pro",
+        messages=messages_mixed,
+        cache_key="test-mixed-ttl",
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
+    )
+
+    assert "ttl" in result_mixed
+    assert result_mixed["ttl"] == "1800s"
+    assert result_mixed["model"] == "models/gemini-1.5-pro"
+    assert result_mixed["displayName"] == "test-mixed-ttl"
+
+
+def test_gemini_context_caching_separate_messages():
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 400,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+    cached_messages, non_cached_messages = separate_cached_messages(messages)
+    print(cached_messages)
+    print(non_cached_messages)
+    assert len(cached_messages) > 0, "Cached messages should be present"
+    assert len(non_cached_messages) > 0, "Non-cached messages should be present"
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "gemini/gemini-2.5-flash-image",
+        "gemini/gemini-2.0-flash-preview-image-generation",
+        "gemini/gemini-3-pro-image-preview",
+    ],
+)
+def test_gemini_flash_image_preview_models(model_name: str):
+    """
+    Validate Gemini Flash image preview models route through image_generation()
+    and invoke the generateContent endpoint returning inline image data.
+    """
+    from unittest.mock import patch, MagicMock
+    from litellm.types.utils import ImageResponse, ImageObject
+
+    mock_response = ImageResponse()
+    mock_response.data = [ImageObject(b64_json="test_base64_data", url=None)]
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+    ) as mock_post:
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"inlineData": {"data": "test_base64_image_data"}}]
+                    }
+                }
+            ]
+        }
+        mock_http_response.status_code = 200
+        mock_post.return_value = mock_http_response
+
+        response = litellm.image_generation(
+            model=model_name,
+            prompt="Generate a simple test image",
+            api_key="test_api_key",
+        )
+
+        assert response is not None
+        assert hasattr(response, "data")
+        assert response.data is not None
+        assert len(response.data) > 0
+
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        called_url = (
+            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
+        )
+
+        assert ":generateContent" in called_url
+        assert model_name.split("/", 1)[1] in called_url
+
+        request_data = call_args.kwargs.get("json", {})
+        assert "contents" in request_data
+        assert "parts" in request_data["contents"][0]
+
+        assert "generationConfig" in request_data
+        assert "response_modalities" in request_data["generationConfig"]
+        assert request_data["generationConfig"]["response_modalities"] == [
+            "IMAGE",
+            "TEXT",
+        ]
+
+
+@pytest.mark.parametrize(
+    "model, kwargs, expected_image_config",
+    [
+        (
+            "gemini/gemini-3-pro-image-preview",
+            {"imageConfig": {"aspectRatio": "16:9", "imageSize": "512px"}},
+            {"aspectRatio": "16:9", "imageSize": "512px"},
+        ),
+        (
+            "gemini/gemini-2.5-flash-image",
+            {"size": "2048x2048"},
+            {"aspectRatio": "1:1"},
+        ),
+    ],
+)
+def test_gemini_image_generation_forwards_image_config(
+    model: str, kwargs: dict, expected_image_config: dict
+):
+    from unittest.mock import patch, MagicMock
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+    ) as mock_post:
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"inlineData": {"data": "test_base64_image_data"}}]
+                    }
+                }
+            ]
+        }
+        mock_http_response.status_code = 200
+        mock_post.return_value = mock_http_response
+
+        litellm.image_generation(
+            model=model,
+            prompt="Generate a simple test image",
+            api_key="test_api_key",
+            **kwargs,
+        )
+
+        request_data = mock_post.call_args.kwargs.get("json", {})
+        assert request_data["generationConfig"]["imageConfig"] == expected_image_config
+
+
+def test_gemini_image_generation_image_config_takes_precedence_over_size():
+    from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
+
+    explicit_image_config = {"aspectRatio": "16:9", "imageSize": "2K"}
+
+    mapped_params = GoogleImageGenConfig().map_openai_params(
+        non_default_params={
+            "imageConfig": explicit_image_config,
+            "size": "768x1376",
+        },
+        optional_params={},
+        model="gemini-3-pro-image-preview",
+        drop_params=False,
+    )
+
+    assert mapped_params["imageConfig"] == explicit_image_config
+
+
+def test_gemini_image_generation_ignores_non_dict_image_config():
+    from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
+
+    mapped_params = GoogleImageGenConfig().map_openai_params(
+        non_default_params={
+            "size": "768x1376",
+            "imageConfig": "not-a-dict",
+        },
+        optional_params={},
+        model="gemini-3-pro-image-preview",
+        drop_params=False,
+    )
+
+    assert mapped_params["imageConfig"] == {"aspectRatio": "9:16", "imageSize": "1K"}
+
+
+@pytest.mark.parametrize(
+    "size, expected_aspect_ratio, expected_image_size",
+    GEMINI_3_IMAGE_SIZE_MAPPINGS,
+)
+def test_gemini_image_generation_openai_size_maps_to_google_table(
+    size: str, expected_aspect_ratio: str, expected_image_size: str
+):
+    from litellm.llms.gemini.common_utils import (
+        map_openai_size_to_gemini_image_config,
+    )
+
+    assert map_openai_size_to_gemini_image_config(
+        size, "gemini-3-pro-image-preview"
+    ) == {
+        "aspectRatio": expected_aspect_ratio,
+        "imageSize": expected_image_size,
+    }
+
+
+@pytest.mark.parametrize(
+    "size, expected_aspect_ratio, expected_image_size",
+    [
+        ("1000x1800", "9:16", "1K"),
+        ("1800x1000", "16:9", "1K"),
+        ("3000x3000", "1:1", "2K"),
+        ("500x500", "1:1", "512"),
+        ("1280x896", "4:3", "1K"),
+        ("896x1280", "3:4", "1K"),
+    ],
+)
+def test_gemini_image_generation_openai_size_snaps_to_nearest_option(
+    size: str, expected_aspect_ratio: str, expected_image_size: str
+):
+    from litellm.llms.gemini.common_utils import (
+        map_openai_size_to_gemini_image_config,
+    )
+
+    assert map_openai_size_to_gemini_image_config(
+        size, "gemini-3-pro-image-preview"
+    ) == {
+        "aspectRatio": expected_aspect_ratio,
+        "imageSize": expected_image_size,
+    }
+
+
+@pytest.mark.parametrize("size", ["auto", "invalid", "0x1024", "1024x0"])
+def test_gemini_image_generation_openai_size_auto_uses_google_defaults(size: str):
+    from litellm.llms.gemini.common_utils import (
+        map_openai_size_to_gemini_image_config,
+    )
+
+    assert map_openai_size_to_gemini_image_config(
+        size, "gemini-3-pro-image-preview"
+    ) is None
+
+
+def test_gemini_imagen_models_use_predict_endpoint():
+    """
+    Test that Imagen models still use :predict endpoint (not broken by gemini-2.5-flash-image-preview fix)
+    """
+    from unittest.mock import patch, MagicMock
+    from litellm.types.utils import ImageResponse, ImageObject
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+    ) as mock_post:
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = {
+            "predictions": [{"bytesBase64Encoded": "test_base64_image_data"}]
+        }
+        mock_http_response.status_code = 200
+        mock_post.return_value = mock_http_response
+
+        response = litellm.image_generation(
+            model="gemini/imagen-3.0-generate-001",
+            prompt="Generate a simple test image",
+            size="1280x896",
+            api_key="test_api_key",
+        )
+
+        assert response is not None
+        assert hasattr(response, "data")
+
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        called_url = (
+            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
+        )
+
+        assert ":predict" in called_url
+        assert "imagen-3.0-generate-001" in called_url
+        assert ":generateContent" not in called_url
+
+        request_data = call_args.kwargs.get("json", {})
+        assert "instances" in request_data
+        assert "parameters" in request_data
+        assert request_data["parameters"]["aspectRatio"] == "4:3"
+        assert request_data["parameters"]["imageSize"] == "1K"
+        assert "imageConfig" not in request_data["parameters"]
+
+
+def test_gemini_thinking_budget_0():
+    litellm.turn_on_debug()
+    from litellm.types.utils import Message, CallTypes
+    from litellm.utils import return_raw_request
+    import json
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-2.5-flash",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Explain the concept of Occam's Razor and provide a simple, everyday example",
+                }
+            ],
+            "thinking": {"type": "enabled", "budget_tokens": 0},
+        },
+    )
+    print(json.dumps(raw_request, indent=4, default=str))
+    assert "0" in json.dumps(raw_request["raw_request_body"])
+
+
+@pytest.mark.asyncio
+async def test_claude_tool_use_with_gemini():
+    """
+    Tests that tool use via litellm.anthropic.messages.acreate with a non-Anthropic model
+    (Gemini) correctly produces Anthropic SSE streaming format with tool_use blocks.
+
+    Uses a mocked acompletion response to make the test deterministic — Gemini 2.5 flash
+    can return MALFORMED_FUNCTION_CALL non-deterministically with low max_tokens, so this
+    test focuses on verifying the streaming transformation logic rather than live model behavior.
+    """
+    from unittest.mock import patch, AsyncMock
+    from litellm.types.utils import (
+        ModelResponseStream,
+        StreamingChoices,
+        Delta,
+        ChatCompletionDeltaToolCall,
+        Function,
+    )
+
+    def make_chunk(content=None, finish_reason=None, tool_calls=None, usage=None):
+        kwargs = {}
+        if usage is not None:
+            kwargs["usage"] = usage
+        return ModelResponseStream(
+            id="chatcmpl-mock",
+            model="gemini-2.5-flash",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=content,
+                        role="assistant",
+                        tool_calls=tool_calls,
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+            **kwargs,
+        )
+
+    mock_chunks = [
+        make_chunk(
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call-mock-id",
+                    type="function",
+                    function=Function(name="get_weather", arguments=""),
+                    index=0,
+                )
+            ],
+        ),
+        make_chunk(
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call-mock-id",
+                    type="function",
+                    function=Function(name=None, arguments='{"location": "Boston"}'),
+                    index=0,
+                )
+            ],
+        ),
+        make_chunk(finish_reason="tool_calls"),
+        make_chunk(
+            usage={
+                "prompt_tokens": 63,
+                "completion_tokens": 30,
+                "total_tokens": 93,
+            }
+        ),
+    ]
+
+    class MockAsyncStream:
+        def __init__(self):
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index < len(mock_chunks):
+                chunk = mock_chunks[self._index]
+                self._index += 1
+                return chunk
+            raise StopAsyncIteration
+
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = MockAsyncStream()
+
+        response = await litellm.anthropic.messages.acreate(
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hello, can you tell me the weather in Boston. Please respond with a tool call?",
+                }
+            ],
+            model="gemini/gemini-2.5-flash",
+            stream=True,
+            max_tokens=1000,
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get current weather information for a specific location",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                }
+            ],
+        )
+
+        is_content_block_tool_use = False
+        is_partial_json = False
+        has_usage_in_message_delta = False
+        is_content_block_stop = False
+
+        async for chunk in response:
+            print(chunk)
+            if "content_block_stop" in str(chunk):
+                is_content_block_stop = True
+
+            if isinstance(chunk, bytes):
+                chunk_str = chunk.decode("utf-8")
+
+                if "data: " in chunk_str:
+                    try:
+                        data_line = [
+                            line
+                            for line in chunk_str.split("\n")
+                            if line.startswith("data: ")
+                        ][0]
+                        json_str = data_line[6:]
+                        chunk_data = json.loads(json_str)
+
+                        if "tool_use" in json_str:
+                            is_content_block_tool_use = True
+                        if "partial_json" in json_str:
+                            is_partial_json = True
+                        if "content_block_stop" in json_str:
+                            is_content_block_stop = True
+
+                        if (
+                            chunk_data.get("type") == "message_delta"
+                            and chunk_data.get("delta", {}).get("stop_reason")
+                            is not None
+                            and "usage" in chunk_data
+                        ):
+                            has_usage_in_message_delta = True
+                            usage = chunk_data["usage"]
+                            assert (
+                                "input_tokens" in usage
+                            ), "input_tokens should be present in usage"
+                            assert (
+                                "output_tokens" in usage
+                            ), "output_tokens should be present in usage"
+                            assert isinstance(
+                                usage["input_tokens"], int
+                            ), "input_tokens should be an integer"
+                            assert isinstance(
+                                usage["output_tokens"], int
+                            ), "output_tokens should be an integer"
+                            print(f"Found usage in message_delta: {usage}")
+
+                    except (json.JSONDecodeError, IndexError) as e:
+                        pass
+            else:
+                if "tool_use" in str(chunk):
+                    is_content_block_tool_use = True
+                if "partial_json" in str(chunk):
+                    is_partial_json = True
+                if "content_block_stop" in str(chunk):
+                    is_content_block_stop = True
+
+    assert is_content_block_tool_use, "content_block_tool_use should be present"
+    assert is_partial_json, "partial_json should be present"
+    assert (
+        has_usage_in_message_delta
+    ), "Usage should be present in message_delta with stop_reason"
+    assert is_content_block_stop, "is_content_block_stop should be present"
+
+
+def test_gemini_reasoning_effort_minimal():
+    """
+    Test that reasoning_effort='minimal' correctly maps to model-specific minimum thinking budgets
+    """
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+    import json
+
+    test_cases = [
+        ("gemini/gemini-2.5-flash", 1),
+        ("gemini/gemini-2.5-pro", 128),
+        ("gemini/gemini-2.5-flash-lite", 512),
+    ]
+
+    for model, expected_min_budget in test_cases:
+        raw_request = return_raw_request(
+            endpoint=CallTypes.completion,
+            kwargs={
+                "model": model,
+                "messages": [{"role": "user", "content": "Hello"}],
+                "reasoning_effort": "minimal",
+            },
+        )
+
+        request_body = raw_request["raw_request_body"]
+        assert (
+            "generationConfig" in request_body
+        ), f"Model {model} should have generationConfig"
+
+        generation_config = request_body["generationConfig"]
+        assert (
+            "thinkingConfig" in generation_config
+        ), f"Model {model} should have thinkingConfig"
+
+        thinking_config = generation_config["thinkingConfig"]
+        assert (
+            "thinkingBudget" in thinking_config
+        ), f"Model {model} should have thinkingBudget"
+
+        actual_budget = thinking_config["thinkingBudget"]
+        assert (
+            actual_budget == expected_min_budget
+        ), f"Model {model} should map 'minimal' to {expected_min_budget} tokens, got {actual_budget}"
+
+        assert thinking_config.get(
+            "includeThoughts", True
+        ), f"Model {model} should have includeThoughts=True for minimal reasoning effort"
+
+    try:
+        raw_request = return_raw_request(
+            endpoint=CallTypes.completion,
+            kwargs={
+                "model": "gemini/unknown-model",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "reasoning_effort": "minimal",
+            },
+        )
+
+        request_body = raw_request["raw_request_body"]
+        generation_config = request_body["generationConfig"]
+        thinking_config = generation_config["thinkingConfig"]
+        assert (
+            thinking_config["thinkingBudget"] == 128
+        ), "Unknown model should use generic fallback of 128 tokens"
+    except Exception as e:
+        print(f"Note: Unknown model test skipped due to: {e}")
+        pass
+
+
+def test_gemini_exception_message_format():
+    """
+    Test that Gemini provider exceptions show as 'GeminiException' not 'VertexAIException'.
+
+    This addresses issue #14586 where Gemini API errors were incorrectly showing as
+    VertexAIException instead of GeminiException due to incorrect exception mapping.
+    """
+    import httpx
+    from unittest.mock import Mock
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm import BadRequestError
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 400
+    mock_response.text = "Invalid API key provided"
+    mock_response.headers = {}
+
+    mock_exception = httpx.HTTPStatusError(
+        message="Bad Request", request=Mock(), response=mock_response
+    )
+    mock_exception.response = mock_response
+    mock_exception.status_code = 400
+
+    with pytest.raises(BadRequestError) as exc_info:
+        exception_type(
+            model="gemini-pro",
+            original_exception=mock_exception,
+            custom_llm_provider="gemini",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    e = exc_info.value
+    error_message = str(e)
+    print(f"Error message: {error_message}")
+
+    assert "GeminiException" in error_message, (
+        f"Expected 'GeminiException' in error message, got: {error_message}. "
+        f"This test should fail before the fix is implemented."
+    )
+    assert (
+        "VertexAIException" not in error_message
+    ), f"Should not contain 'VertexAIException' in error message, got: {error_message}"
+
+
+def test_reasoning_effort_none_mapping():
+    """
+    Test that reasoning_effort='none' correctly maps to thinkingConfig.
+    Related issue: https://github.com/BerriAI/litellm/issues/16420
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+        reasoning_effort="none",
+        model="gemini-2.0-flash-thinking-exp-01-21",
+    )
+
+    assert result is not None
+    assert result["thinkingBudget"] == 0
+    assert result["includeThoughts"] is False
+
+
+def test_gemini_function_args_preserve_unicode():
+    """
+    Test for Issue #16533: Gemini function call arguments should preserve non-ASCII characters
+    https://github.com/BerriAI/litellm/issues/16533
+
+    Before fix: "や" becomes "\u3084"
+    After fix: "や" stays as "や"
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    parts = [
+        {
+            "functionCall": {
+                "name": "send_message",
+                "args": {
+                    "message": "やあ",
+                    "recipient": "たけし",
+                },
+            }
+        }
+    ]
+
+    function, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts, cumulative_tool_call_idx=0, is_function_call=False
+    )
+
+    arguments_str = tools[0]["function"]["arguments"]
+    parsed_args = json.loads(arguments_str)
+
+    assert parsed_args["message"] == "やあ", "Japanese characters should be preserved"
+    assert (
+        parsed_args["recipient"] == "たけし"
+    ), "Japanese characters should be preserved"
+
+    assert "\\u" not in arguments_str, "Should not contain Unicode escape sequences"
+    assert (
+        "やあ" in arguments_str
+    ), "Original Japanese characters should be in the string"
+    assert (
+        "たけし" in arguments_str
+    ), "Original Japanese characters should be in the string"
+
+    parts_spanish = [
+        {
+            "functionCall": {
+                "name": "send_message",
+                "args": {"message": "¡Hola! ¿Cómo estás?", "recipient": "José"},
+            }
+        }
+    ]
+
+    function, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts_spanish, cumulative_tool_call_idx=0, is_function_call=False
+    )
+
+    arguments_str = tools[0]["function"]["arguments"]
+    parsed_args = json.loads(arguments_str)
+
+    assert parsed_args["message"] == "¡Hola! ¿Cómo estás?"
+    assert parsed_args["recipient"] == "José"
+    assert "\\u" not in arguments_str
+    assert "José" in arguments_str
+
+
+def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
+    """
+    Test that Anthropic thinking parameters for Gemini 3+ follow provider defaults
+    unless force-low behavior is explicitly enabled.
+
+    For Gemini 3+ models (gemini-3-flash, gemini-3-pro, gemini-3-flash-preview):
+    - Should not force thinkingLevel by default
+    - Should still set includeThoughts correctly
+
+    Related issue: https://github.com/BerriAI/litellm/issues/XXXX
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+    original_force_low_flag = litellm.enable_gemini_default_thinking_level_low
+    litellm.enable_gemini_default_thinking_level_low = False
+
+    thinking_param: AnthropicThinkingParam = {
+        "type": "enabled",
+        "budget_tokens": 10000,
+    }
+    try:
+        result = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-flash",
+        )
+
+        assert (
+            "thinkingLevel" not in result
+        ), "Should not force thinkingLevel for Gemini 3"
+        assert (
+            "thinkingBudget" not in result
+        ), "Should NOT have thinkingBudget for Gemini 3"
+        assert result["includeThoughts"] is True
+
+        thinking_param_disabled: AnthropicThinkingParam = {
+            "type": "disabled",
+            "budget_tokens": None,
+        }
+
+        result_disabled = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param_disabled,
+            model="gemini-3-pro-preview",
+        )
+
+        assert result_disabled.get("includeThoughts") is False
+        assert (
+            "thinkingLevel" not in result_disabled
+            or result_disabled.get("thinkingLevel") is None
+        )
+
+        thinking_param_zero: AnthropicThinkingParam = {
+            "type": "enabled",
+            "budget_tokens": 0,
+        }
+
+        result_zero = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param_zero,
+            model="gemini-3-flash",
+        )
+
+        assert result_zero["includeThoughts"] is False
+        assert (
+            "thinkingLevel" not in result_zero
+            or result_zero.get("thinkingLevel") is None
+        )
+
+        result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-flash-preview",
+        )
+
+        assert "thinkingLevel" not in result_gemini3flashpreview
+        assert "thinkingBudget" not in result_gemini3flashpreview
+        assert result_gemini3flashpreview["includeThoughts"] is True
+    finally:
+        litellm.enable_gemini_default_thinking_level_low = original_force_low_flag
+
+
+def test_anthropic_thinking_param_to_gemini_3_force_low_feature_flag():
+    """
+    Test that Gemini 3 thinkingLevel forced mapping is available behind a feature flag.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+    original_force_low_flag = litellm.enable_gemini_default_thinking_level_low
+    litellm.enable_gemini_default_thinking_level_low = True
+
+    thinking_param: AnthropicThinkingParam = {
+        "type": "enabled",
+        "budget_tokens": 10000,
+    }
+
+    try:
+        result_flash = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-flash",
+        )
+        assert result_flash["thinkingLevel"] == "minimal"
+        assert result_flash["includeThoughts"] is True
+
+        result_pro = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-pro-preview",
+        )
+        assert result_pro["thinkingLevel"] == "low"
+        assert result_pro["includeThoughts"] is True
+    finally:
+        litellm.enable_gemini_default_thinking_level_low = original_force_low_flag
+
+
+def test_anthropic_thinking_param_to_gemini_2_thinkingBudget():
+    """
+    Test that Anthropic thinking parameters are correctly transformed to Gemini 2 thinkingBudget
+    (not thinkingLevel).
+
+    For Gemini 2.x models (gemini-2.5-flash, gemini-2.0-flash):
+    - Should continue using thinkingBudget
+    - thinkingLevel should NOT be used
+
+    Related issue: https://github.com/BerriAI/litellm/issues/XXXX
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+    thinking_param: AnthropicThinkingParam = {
+        "type": "enabled",
+        "budget_tokens": 10000,
+    }
+
+    result = VertexGeminiConfig._map_thinking_param(
+        thinking_param=thinking_param,
+        model="gemini-2.5-flash",
+    )
+
+    assert "thinkingBudget" in result, "Should have thinkingBudget for Gemini 2"
+    assert "thinkingLevel" not in result, "Should NOT have thinkingLevel for Gemini 2"
+    assert result["includeThoughts"] is True
+    assert result["thinkingBudget"] == 10000
+
+    result_gemini2 = VertexGeminiConfig._map_thinking_param(
+        thinking_param=thinking_param,
+        model="gemini-2.0-flash-thinking-exp-01-21",
+    )
+
+    assert "thinkingBudget" in result_gemini2, "Should have thinkingBudget for Gemini 2"
+    assert (
+        "thinkingLevel" not in result_gemini2
+    ), "Should NOT have thinkingLevel for Gemini 2"
+    assert result_gemini2["includeThoughts"] is True
+    assert result_gemini2["thinkingBudget"] == 10000
+
+
+def test_anthropic_thinking_param_via_map_openai_params():
+    """
+    Test that the thinking parameter is correctly transformed through the full map_openai_params flow
+    for Gemini 3 models, without forcing thinkingLevel by default.
+
+    This tests the full integration from Anthropic API format to Gemini format.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
+
+    config = VertexGeminiConfig()
+
+    non_default_params = {
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 10000,
+        }
+    }
+    optional_params: dict = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="gemini-3-flash",
+        drop_params=False,
+    )
+
+    assert "thinkingConfig" in result, "Should have thinkingConfig in optional_params"
+    thinking_config = result["thinkingConfig"]
+    assert (
+        "thinkingLevel" not in thinking_config
+    ), "Should not force thinkingLevel for Gemini 3 by default"
+    assert (
+        "thinkingBudget" not in thinking_config
+    ), "Should NOT have thinkingBudget for Gemini 3"
+    assert thinking_config["includeThoughts"] is True
+
+    optional_params_2 = {}
+    result_2 = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params_2,
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert "thinkingConfig" in result_2, "Should have thinkingConfig in optional_params"
+    thinking_config_2 = result_2["thinkingConfig"]
+    assert (
+        "thinkingBudget" in thinking_config_2
+    ), "Should have thinkingBudget for Gemini 2"
+    assert (
+        "thinkingLevel" not in thinking_config_2
+    ), "Should NOT have thinkingLevel for Gemini 2"
+    assert thinking_config_2["includeThoughts"] is True
+    assert thinking_config_2["thinkingBudget"] == 10000
+
+
+def test_gemini_31_flash_lite_reasoning_effort_minimal():
+    """
+    Test that reasoning_effort='minimal' correctly maps to thinkingLevel='minimal'
+    for gemini-3.1-flash-lite-preview (not 'low').
+
+    Regression test for: "minimal" reasoning_effort not supported for gemini-3.1-flash-lite-preview
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        reasoning_effort="minimal",
+        model="gemini-3.1-flash-lite-preview",
+    )
+    assert (
+        result["thinkingLevel"] == "minimal"
+    ), f"Expected thinkingLevel='minimal' for gemini-3.1-flash-lite-preview, got '{result['thinkingLevel']}'"
+    assert result["includeThoughts"] is True
+
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+
+    raw_request = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": "gemini/gemini-3.1-flash-lite-preview",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "reasoning_effort": "minimal",
+        },
+    )
+    generation_config = raw_request["raw_request_body"]["generationConfig"]
+    thinking_config = generation_config["thinkingConfig"]
+    assert (
+        thinking_config.get("thinkingLevel") == "minimal"
+    ), f"Expected thinkingLevel='minimal' via full flow, got {thinking_config}"
+    assert (
+        "thinkingBudget" not in thinking_config
+    ), "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_gemini_image_size_limit_exceeded(monkeypatch):
+    """
+    Test that large images exceeding MAX_IMAGE_URL_DOWNLOAD_SIZE_MB are rejected.
+
+    This validates that the 50MB default limit prevents downloading very large images
+    that could cause memory issues and pod crashes.
+
+    The image fetch is mocked (mirroring the LargeImageClient pattern in
+    tests/unit/litellm_core_utils/test_image_handling.py) so the test
+    deterministically exercises the size-limit rejection path without any
+    external network dependency.
+    """
+    from httpx import Request, Response
+
+    from litellm.litellm_core_utils.prompt_templates import image_handling
+
+    class LargeImageClient:
+        """Returns a response whose Content-Length exceeds the 50MB limit."""
+
+        def get(self, url, follow_redirects=True):
+            size_bytes = int(100 * 1024 * 1024)  # 100MB > 50MB default limit
+            return Response(
+                status_code=200,
+                headers={
+                    "Content-Type": "image/jpeg",
+                    "Content-Length": str(size_bytes),
+                },
+                # Empty body: the Content-Length header check in
+                # _process_image_response rejects the image before the body
+                # is ever streamed, so there's no need to allocate 100MB.
+                content=b"",
+                request=Request("GET", url),
+            )
+
+    # Bypass SSRF validation (which would resolve DNS / hit the network) and
+    # route straight to our mocked client.
+    monkeypatch.setattr(
+        image_handling,
+        "safe_get",
+        lambda client, url, **kw: client.get(url, follow_redirects=True),
+    )
+    monkeypatch.setattr(litellm, "module_level_client", LargeImageClient())
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": "https://example.com/large-image.jpg",
+                },
+            ],
+        }
+    ]
+
+    with pytest.raises(litellm.ImageFetchError) as excinfo:
+        completion(model="gemini/gemini-2.5-flash-lite", messages=messages)
+
+    error_message = str(excinfo.value)
+    assert "Image size" in error_message
+    assert "exceeds maximum allowed size" in error_message
+
+
+@pytest.fixture
+def tool_call_no_arguments():
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_2c384bc6-de46-4f29-8adc-60dd5805d305",
+                "function": {"name": "Get-FAQ", "arguments": "{}"},
+                "type": "function",
+            }
+        ],
+    }
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_tool_call_no_arguments(tool_call_no_arguments):
+    """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    result = convert_to_gemini_tool_call_invoke(tool_call_no_arguments)
+    print(result)
+    assert result == [{"function_call": {"name": "Get-FAQ", "args": {}}}]
+
+
+def vertex_httpx_mock_post_valid_response(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "text": '{\n                            "recipes": [\n                                {"recipe_name": "Chocolate Chip Cookies"},\n                                {"recipe_name": "Oatmeal Raisin Cookies"},\n                                {"recipe_name": "Peanut Butter Cookies"},\n                                {"recipe_name": "Sugar Cookies"},\n                                {"recipe_name": "Snickerdoodles"}\n                            ]\n                            }'
+                        }
+                    ],
+                },
+                "finishReason": "STOP",
+                "safetyRatings": [
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.09790669,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.11736965,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.1261379,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.08601588,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.083441176,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.0355444,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.071981624,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.08108212,
+                    },
+                ],
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 60, "candidatesTokenCount": 55, "totalTokenCount": 115},
+    }
+    return mock_response
+
+
+def vertex_httpx_mock_post_valid_response_anthropic(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "id": "msg_vrtx_013Wki5RFQXAspL7rmxRFjZg",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20240620",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_01YMnYZrToPPfcmY2myP2gEB",
+                "name": "json_tool_call",
+                "input": {
+                    "values": {
+                        "recipes": [
+                            {"recipe_name": "Chocolate Chip Cookies"},
+                            {"recipe_name": "Oatmeal Raisin Cookies"},
+                            {"recipe_name": "Peanut Butter Cookies"},
+                            {"recipe_name": "Snickerdoodle Cookies"},
+                            {"recipe_name": "Sugar Cookies"},
+                        ]
+                    }
+                },
+            }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 368, "output_tokens": 118},
+    }
+    return mock_response
+
+
+def vertex_httpx_mock_post_invalid_schema_response(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": '[{"recipe_world": "Chocolate Chip Cookies"}]\n'}]},
+                "finishReason": "STOP",
+                "safetyRatings": [
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.09790669,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.11736965,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.1261379,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.08601588,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.083441176,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.0355444,
+                    },
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "probability": "NEGLIGIBLE",
+                        "probabilityScore": 0.071981624,
+                        "severity": "HARM_SEVERITY_NEGLIGIBLE",
+                        "severityScore": 0.08108212,
+                    },
+                ],
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 60, "candidatesTokenCount": 55, "totalTokenCount": 115},
+    }
+    return mock_response
+
+
+def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "id": "msg_vrtx_013Wki5RFQXAspL7rmxRFjZg",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20240620",
+        "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 368, "output_tokens": 118},
+    }
+    return mock_response
+
+
+def mock_gemini_request(*args, **kwargs):
+    request_url: Final = str(kwargs.get("url", args[0] if args else ""))
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    if "cachedContents" in request_url:
+        mock_response.json.return_value = {
+            "name": "cachedContents/4d2kd477o3pg",
+            "model": "models/gemini-2.5-flash-lite-001",
+            "createTime": "2024-08-26T22:31:16.147190Z",
+            "updateTime": "2024-08-26T22:31:16.147190Z",
+            "expireTime": "2024-08-26T22:36:15.548934784Z",
+            "displayName": "",
+            "usageMetadata": {"totalTokenCount": 323383},
+        }
+    else:
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"text": "Please provide me with the text of the legal agreement"}],
+                        "role": "model",
+                    },
+                    "finishReason": "MAX_TOKENS",
+                    "index": 0,
+                    "safetyRatings": [
+                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "probability": "NEGLIGIBLE"},
+                        {"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"},
+                        {"category": "HARM_CATEGORY_HARASSMENT", "probability": "NEGLIGIBLE"},
+                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "NEGLIGIBLE"},
+                    ],
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 40049,
+                "candidatesTokenCount": 10,
+                "totalTokenCount": 40059,
+                "cachedContentTokenCount": 40012,
+            },
+        }
+    return mock_response
+
+
+@pytest.mark.parametrize(
+    "model, vertex_location, supports_response_schema",
+    [
+        ("gemini/gemini-2.0-flash", None, True),
+    ],
+)
+@pytest.mark.parametrize("invalid_response", [True, False])
+@pytest.mark.parametrize("enforce_validation", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_pro_json_schema_args_sent_httpx(
+    model,
+    supports_response_schema,
+    vertex_location,
+    invalid_response,
+    enforce_validation,
+    isolate_litellm_state,
+    monkeypatch,
+):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-api-key")
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "recipes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"recipe_name": {"type": "string"}},
+                    "required": ["recipe_name"],
+                },
+            }
+        },
+        "required": ["recipes"],
+        "additionalProperties": False,
+    }
+    client = HTTPHandler()
+    httpx_response = MagicMock()
+    if invalid_response is True:
+        if "claude" in model:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response_anthropic
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response
+    elif "claude" in model:
+        httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+    else:
+        httpx_response.side_effect = vertex_httpx_mock_post_valid_response
+    resp = None
+    with (
+        patch.object(
+            VertexBase,
+            "_ensure_access_token",
+            side_effect=lambda **kwargs: (
+                ("", "") if kwargs["custom_llm_provider"] == "gemini" else ("fake-token", "test-project")
+            ),
+        ),
+        patch.object(client, "post", new=httpx_response) as mock_call,
+    ):
+        monkeypatch.setattr(litellm, "set_verbose", True)
+        print(f"model entering completion: {model}")
+        try:
+            resp = completion(
+                model=model,
+                messages=messages,
+                response_format={
+                    "type": "json_object",
+                    "response_schema": response_schema,
+                    "enforce_validation": enforce_validation,
+                },
+                vertex_location=vertex_location,
+                client=client,
+            )
+            print("Received={}".format(resp))
+            if invalid_response is True and enforce_validation is True:
+                pytest.fail("Expected this to fail")
+        except litellm.JSONSchemaValidationError as e:
+            if invalid_response is False:
+                pytest.fail("Expected this to pass. Got={}".format(e))
+        mock_call.assert_called_once()
+        if "claude" not in model:
+            print(mock_call.call_args.kwargs)
+            print(mock_call.call_args.kwargs["json"]["generationConfig"])
+            if supports_response_schema:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
+                assert "response_schema" in gen_config or "response_json_schema" in gen_config, (
+                    f"Expected response_schema or response_json_schema in {gen_config}"
+                )
+            else:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
+                assert "response_schema" not in gen_config and "response_json_schema" not in gen_config
+                assert "Use this JSON schema:" in mock_call.call_args.kwargs["json"]["contents"][0]["parts"][1]["text"]
+        elif resp is not None:
+            assert resp.model == model.split("/")[1]
+
+
+@pytest.mark.parametrize(
+    "model, vertex_location, supports_response_schema",
+    [
+        ("gemini/gemini-2.0-flash", None, True),
+    ],
+)
+@pytest.mark.parametrize("invalid_response", [True, False])
+@pytest.mark.parametrize("enforce_validation", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
+    model,
+    supports_response_schema,
+    vertex_location,
+    invalid_response,
+    enforce_validation,
+    isolate_litellm_state,
+    monkeypatch,
+):
+    from typing import List
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-api-key")
+    if enforce_validation:
+        monkeypatch.setattr(litellm, "enable_json_schema_validation", True)
+    from pydantic import BaseModel
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    class Recipe(BaseModel):
+        recipe_name: str
+
+    class ResponseSchema(BaseModel):
+        recipes: List[Recipe]
+
+    client = HTTPHandler()
+    httpx_response = MagicMock()
+    if invalid_response is True:
+        if "claude" in model:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response_anthropic
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response
+    elif "claude" in model:
+        httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+    else:
+        httpx_response.side_effect = vertex_httpx_mock_post_valid_response
+    with (
+        patch.object(
+            VertexBase,
+            "_ensure_access_token",
+            side_effect=lambda **kwargs: (
+                ("", "") if kwargs["custom_llm_provider"] == "gemini" else ("fake-token", "test-project")
+            ),
+        ),
+        patch.object(client, "post", new=httpx_response) as mock_call,
+    ):
+        print("SENDING CLIENT POST={}".format(client.post))
+        try:
+            resp = completion(
+                model=model,
+                messages=messages,
+                response_format=ResponseSchema,
+                vertex_location=vertex_location,
+                client=client,
+            )
+            print("Received={}".format(resp))
+            if invalid_response is True and enforce_validation is True:
+                pytest.fail("Expected this to fail")
+        except litellm.JSONSchemaValidationError as e:
+            if invalid_response is False:
+                pytest.fail("Expected this to pass. Got={}".format(e))
+        mock_call.assert_called_once()
+        if "claude" not in model:
+            print(mock_call.call_args.kwargs)
+            print(mock_call.call_args.kwargs["json"]["generationConfig"])
+            if supports_response_schema:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
+                assert "response_schema" in gen_config or "response_json_schema" in gen_config, (
+                    f"Expected response_schema or response_json_schema in {gen_config}"
+                )
+                assert "response_mime_type" in mock_call.call_args.kwargs["json"]["generationConfig"]
+                assert (
+                    mock_call.call_args.kwargs["json"]["generationConfig"]["response_mime_type"] == "application/json"
+                )
+            else:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
+                assert "response_schema" not in gen_config and "response_json_schema" not in gen_config
+                assert "Use this JSON schema:" in mock_call.call_args.kwargs["json"]["contents"][0]["parts"][1]["text"]
+
+
+def test_tool_name_conversion():
+    messages = [
+        {"role": "system", "content": "Your name is Litellm Bot, you are a helpful assistant"},
+        {"role": "user", "content": "Hello, what is your name and can you tell me the weather?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "index": 0,
+                    "function": {"name": "get_weather", "arguments": '{"location":"San Francisco, CA"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "27 degrees celsius and clear in San Francisco, CA"},
+    ]
+    translated_messages = gemini_convert_messages_with_history(messages=messages)
+    print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
+    assert translated_messages[-1]["parts"][0]["function_response"]["name"] == "get_weather"
+
+
+def test_prompt_factory_nested():
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hi! 👋 \n\nHow can I help you today? 😊 \n"}]},
+        {"role": "user", "content": [{"type": "text", "text": "hi 2nd time"}]},
+    ]
+    translated_messages = gemini_convert_messages_with_history(messages=messages)
+    print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
+    for message in translated_messages:
+        assert len(message["parts"]) == 1
+        assert "text" in message["parts"][0], "Missing 'text' from 'parts'"
+        assert isinstance(message["parts"][0]["text"], str), "'text' value not a string."
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
+@pytest.mark.asyncio
+async def test_gemini_context_caching_disabled_flag(sync_mode):
+    """
+    Test that disable_anthropic_gemini_context_caching_transform flag properly disables context caching.
+
+    When the flag is set to True, messages with cache_control should not trigger caching API calls.
+    """
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    litellm.set_verbose = True
+
+    # Store original value to restore later
+    original_flag_value = litellm.disable_anthropic_gemini_context_caching_transform
+
+    try:
+        # Enable the disable flag
+        litellm.disable_anthropic_gemini_context_caching_transform = True
+
+        gemini_context_caching_messages = [
+            # System Message with cache_control
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Here is the full text of a complex legal agreement {}".format(
+                            uuid.uuid4()
+                        )
+                        * 4000,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            # User message with cache_control
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What are the key terms and conditions in this agreement?",
+                    }
+                ],
+            },
+        ]
+
+        if sync_mode:
+            client = HTTPHandler(concurrent_limit=1)
+        else:
+            client = AsyncHTTPHandler(concurrent_limit=1)
+
+        with patch.object(
+            client, "post", side_effect=mock_gemini_request
+        ) as mock_client:
+            try:
+                if sync_mode:
+                    response = litellm.completion(
+                        model="gemini/gemini-2.5-flash-lite-001",
+                        messages=gemini_context_caching_messages,
+                        temperature=0.2,
+                        max_tokens=10,
+                        client=client,
+                    )
+                else:
+                    response = await litellm.acompletion(
+                        model="gemini/gemini-2.5-flash-lite-001",
+                        messages=gemini_context_caching_messages,
+                        temperature=0.2,
+                        max_tokens=10,
+                        client=client,
+                    )
+
+            except Exception as e:
+                print(e)
+
+            # When caching is disabled, should only make 1 call (no separate cache creation call)
+            assert (
+                mock_client.call_count == 1
+            ), f"Expected 1 call when caching is disabled, got {mock_client.call_count}"
+
+            first_call_args = mock_client.call_args_list[0].kwargs
+            first_call_positional_args = mock_client.call_args_list[0].args
+
+            print(f"first_call_args with caching disabled: {first_call_args}")
+            print(
+                f"first_call_positional_args with caching disabled: {first_call_positional_args}"
+            )
+
+            # Assert that cachedContents is NOT in the URL when caching is disabled
+            url = first_call_args.get(
+                "url",
+                first_call_positional_args[0] if first_call_positional_args else "",
+            )
+            assert (
+                "cachedContents" not in url
+            ), "cachedContents should not be in URL when caching is disabled"
+
+    finally:
+        # Restore original flag value
+        litellm.disable_anthropic_gemini_context_caching_transform = original_flag_value
+
+
+def test_gemini_function_call_parameter_in_messages():
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "Executes searches.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "queries": {
+                            "type": "array",
+                            "description": "A list of queries to search for.",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["queries"],
+                },
+            },
+        },
+    ]
+
+    # Set up the messages
+    messages = [
+        {"role": "system", "content": """Use search for most queries."""},
+        {"role": "user", "content": """search for weather in boston (use `search`)"""},
+        {
+            "role": "assistant",
+            "content": None,
+            "function_call": {
+                "name": "search",
+                "arguments": '{"queries": ["weather in boston"]}',
+            },
+        },
+        {
+            "role": "function",
+            "name": "search",
+            "content": "The current weather in Boston is 22°F.",
+        },
+    ]
+
+    client = HTTPHandler(concurrent_limit=1)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "test"}], "role": "model"},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 0,
+            "candidatesTokenCount": 0,
+            "totalTokenCount": 0,
+        },
+    }
+
+    with patch(
+        "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+        return_value=({"Authorization": "Bearer fake"}, "test-project"),
+    ):
+        with patch.object(client, "post", new=MagicMock()) as mock_client:
+            mock_client.return_value = mock_response
+            try:
+                completion(
+                    model="vertex_ai/gemini-2.5-flash-preview-09-2025",
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    client=client,
+                )
+            except Exception as e:
+                print(e)
+
+            assert mock_client.called
+            assert {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": "search for weather in boston (use `search`)"}
+                        ],
+                    },
+                    {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "function_call": {
+                                    "name": "search",
+                                    "args": {"queries": ["weather in boston"]},
+                                }
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "function_response": {
+                                    "name": "search",
+                                    "response": {
+                                        "content": "The current weather in Boston is 22°F."
+                                    },
+                                }
+                            }
+                        ],
+                    },
+                ],
+                "system_instruction": {
+                    "parts": [{"text": "Use search for most queries."}]
+                },
+                "tools": [
+                    {
+                        "function_declarations": [
+                            {
+                                "name": "search",
+                                "description": "Executes searches.",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {
+                                        "queries": {
+                                            "type": "array",
+                                            "description": "A list of queries to search for.",
+                                            "items": {"type": "string"},
+                                        }
+                                    },
+                                    "required": ["queries"],
+                                },
+                            }
+                        ]
+                    }
+                ],
+                "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
+            } == mock_client.call_args.kwargs["json"]
+
+
+def test_gemini_function_call_parameter_in_messages_2():
+    litellm.set_verbose = True
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {"role": "user", "content": "search for weather in boston (use `search`)"},
+        {
+            "role": "assistant",
+            "content": "Sure, let me check.",
+            "function_call": {
+                "name": "search",
+                "arguments": '{"queries": ["weather in boston"]}',
+            },
+        },
+        {
+            "role": "function",
+            "name": "search",
+            "content": "The weather in Boston is 100 degrees.",
+        },
+    ]
+
+    returned_contents = gemini_convert_messages_with_history(messages=messages)
+
+    print(f"returned_contents: {returned_contents}")
+    assert returned_contents == [
+        {
+            "role": "user",
+            "parts": [{"text": "search for weather in boston (use `search`)"}],
+        },
+        {
+            "role": "model",
+            "parts": [
+                {"text": "Sure, let me check."},
+                {
+                    "function_call": {
+                        "name": "search",
+                        "args": {"queries": ["weather in boston"]},
+                    }
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "function_response": {
+                        "name": "search",
+                        "response": {
+                            "content": "The weather in Boston is 100 degrees."
+                        },
+                    }
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.parametrize("api_base", ["", None, "my-custom-proxy-base"])
+def test_custom_api_base(api_base):
+    stream = None
+    test_endpoint = "my-fake-endpoint"
+    vertex_base = VertexBase()
+    auth_header, url = vertex_base._check_custom_proxy(
+        api_base=api_base,
+        custom_llm_provider="gemini",
+        gemini_api_key="12324",
+        endpoint="",
+        stream=stream,
+        auth_header=None,
+        url="my-fake-endpoint",
+        model="gemini-1.5-pro",
+    )
+    if api_base:
+        expected_url = f"{api_base}/models/gemini-1.5-pro:"
+        assert url == expected_url
+    else:
+        assert url == test_endpoint
+
+
+@pytest.mark.parametrize(
+    ("provider", "route"),
+    [
+        ("gemini", "completion"),
+        ("gemini", "embedding"),
+        ("vertex_ai", "image_generation"),
+    ],
+    ids=["completion-gemini", "embedding-gemini", "image_generation-vertex_ai"],
+)
+def test_litellm_api_base(monkeypatch, provider, route):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    import litellm
+
+    monkeypatch.setattr(litellm, "api_base", "https://litellm.com")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-api-key")
+    if route == "image_generation" and provider == "gemini":
+        pytest.skip("Gemini does not support image generation")
+    with (
+        patch.object(
+            VertexBase,
+            "_ensure_access_token",
+            side_effect=lambda **kwargs: (
+                ("", "") if kwargs["custom_llm_provider"] == "gemini" else ("fake-token", "test-project")
+            ),
+        ),
+        patch.object(client, "post", new=MagicMock()) as mock_client,
+    ):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json.return_value = {
+            "candidates": [
+                {"content": {"parts": [{"text": "test response"}], "role": "model"}, "finishReason": "STOP"}
+            ],
+            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            "embedding": {"values": [0.1, 0.2]},
+            "embeddings": [{"values": [0.1, 0.2]}],
+            "predictions": [
+                {
+                    "embeddings": {"values": [0.1, 0.2], "statistics": {"token_count": 1}},
+                    "bytesBase64Encoded": "dGVzdA==",
+                }
+            ],
+        }
+        mock_client.return_value = mock_response
+        if route == "completion":
+            completion(
+                model=f"{provider}/gemini-2.0-flash-001",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                client=client,
+            )
+        elif route == "embedding":
+            embedding(model=f"{provider}/gemini-2.0-flash-001", input=["Hello, world!"], client=client)
+        elif route == "image_generation":
+            image_generation(model=f"{provider}/gemini-2.0-flash-001", prompt="Hello, world!", client=client)
+        mock_client.assert_called()
+        assert mock_client.call_args.kwargs["url"].startswith("https://litellm.com")
+
+
+def test_gemini_tool_calling_working_demo():
+    """
+    Regression test: tool params with anyOf containing a `{"type": "array"}`
+    branch (no items field at all) must synthesize items before the request
+    is sent to Vertex (Vertex rejects array types missing items).
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    args = {
+        "messages": [
+            {
+                "content": "\n    You are a helpful assistant who can help with questions on customers business or personal finances.\n    Use the results from the available tools to answer the question.\n    ",
+                "role": "system",
+            },
+            {"content": "Hello", "role": "user"},
+        ],
+        "max_completion_tokens": 1000,
+        "temperature": 0.0,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "test_agent",
+                    "description": "This tool helps find relevant help content",
+                    "parameters": {
+                        "properties": {
+                            "state": {
+                                "properties": {
+                                    "messages": {"items": {"type": "object"}, "type": "array"},
+                                    "conversation_id": {"type": "string"},
+                                },
+                                "required": ["messages", "conversation_id"],
+                                "type": "object",
+                            },
+                            "config": {
+                                "description": "Configuration for a Runnable.",
+                                "properties": {
+                                    "tags": {"items": {"type": "string"}, "type": "array"},
+                                    "metadata": {"type": "object"},
+                                    "callbacks": {"anyOf": [{"type": "array"}, {"type": "object"}, {"type": "null"}]},
+                                    "run_name": {"type": "string"},
+                                    "max_concurrency": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+                                    "recursion_limit": {"type": "integer"},
+                                    "configurable": {"type": "object"},
+                                    "run_id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "null"}]},
+                                },
+                                "type": "object",
+                            },
+                            "kwargs": {"default": None, "type": "object"},
+                        },
+                        "required": ["state", "config"],
+                        "type": "object",
+                    },
+                },
+            }
+        ],
+        "vertex_location": "global",
+    }
+    client = HTTPHandler()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "Hello!"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+    }
+    with (
+        patch.object(client, "post", return_value=mock_response) as mock_post,
+        patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")),
+    ):
+        completion(model="vertex_ai/gemini-3-flash-preview", client=client, **args)
+    sent_body = mock_post.call_args.kwargs.get("json") or mock_post.call_args.kwargs.get("data")
+    assert sent_body is not None, "expected request body to be sent"
+    if isinstance(sent_body, str):
+        sent_body = json.loads(sent_body)
+    function_decl = sent_body["tools"][0]["function_declarations"][0]
+    callbacks_schema = function_decl["parameters"]["properties"]["config"]["properties"]["callbacks"]
+    array_branches = [branch for branch in callbacks_schema["anyOf"] if branch.get("type", "").lower() == "array"]
+    assert array_branches, "expected an array branch in callbacks anyOf"
+    for branch in array_branches:
+        assert "items" in branch and branch["items"], (
+            f"array branch in callbacks.anyOf must include non-empty items (Vertex rejects array types missing items). Got: {branch}"
+        )
+
+
+def test_gemini_tool_calling_not_working():
+    """
+    Regression test: tool params with anyOf containing both an empty-items
+    array branch and a null branch must serialize with items present on the
+    array branch (Vertex rejects array types missing `items`).
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    args = {
+        "messages": [
+            {
+                "content": "\n    You are a helpful assistant who can help with questions on customers business or personal finances.\n    Use the results from the available tools to answer the question.\n    ",
+                "role": "system",
+            },
+            {"content": "Hello", "role": "user"},
+        ],
+        "max_completion_tokens": 1000,
+        "temperature": 0.0,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "test_agent",
+                    "description": "This tool helps find relevant help content",
+                    "parameters": {
+                        "properties": {
+                            "state": {
+                                "properties": {
+                                    "messages": {"items": {}, "type": "array"},
+                                    "conversation_id": {"type": "string"},
+                                },
+                                "required": ["messages", "conversation_id"],
+                                "type": "object",
+                            },
+                            "config": {
+                                "description": "Configuration for a Runnable.",
+                                "properties": {
+                                    "tags": {"items": {"type": "string"}, "type": "array"},
+                                    "metadata": {"type": "object"},
+                                    "callbacks": {"anyOf": [{"items": {}, "type": "array"}, {}, {"type": "null"}]},
+                                    "run_name": {"type": "string"},
+                                    "max_concurrency": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+                                    "recursion_limit": {"type": "integer"},
+                                    "configurable": {"type": "object"},
+                                    "run_id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "null"}]},
+                                },
+                                "type": "object",
+                            },
+                            "kwargs": {"default": None, "type": "object"},
+                        },
+                        "required": ["state", "config"],
+                        "type": "object",
+                    },
+                },
+            }
+        ],
+        "vertex_location": "global",
+    }
+    client = HTTPHandler()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "Hello!"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+    }
+    with (
+        patch.object(client, "post", return_value=mock_response) as mock_post,
+        patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")),
+    ):
+        completion(model="vertex_ai/gemini-3-flash-preview", client=client, **args)
+    sent_body = mock_post.call_args.kwargs.get("json") or mock_post.call_args.kwargs.get("data")
+    assert sent_body is not None, "expected request body to be sent"
+    if isinstance(sent_body, str):
+        sent_body = json.loads(sent_body)
+    function_decl = sent_body["tools"][0]["function_declarations"][0]
+    callbacks_schema = function_decl["parameters"]["properties"]["config"]["properties"]["callbacks"]
+    array_branches = [branch for branch in callbacks_schema["anyOf"] if branch.get("type", "").lower() == "array"]
+    assert array_branches, "expected an array branch in callbacks anyOf"
+    for branch in array_branches:
+        assert "items" in branch and branch["items"], (
+            f"array branch in callbacks.anyOf must include non-empty items (Vertex rejects array types missing items). Got: {branch}"
+        )
+
+
+def test_vertex_ai_streaming_response_id():
+    """Test that litellm preserves the response ID from Vertex AI's API for streaming responses"""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        make_sync_call,
+    )
+
+    load_vertex_ai_credentials()
+
+    client = HTTPHandler()
+
+    def mock_post(url, **kwargs):
+        def stream_response():
+            chunk = {
+                "responseId": "vertex_ai_response_stream_123",
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "Hello streaming!"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 10,
+                    "candidatesTokenCount": 8,
+                    "totalTokenCount": 18,
+                },
+            }
+            yield json.dumps(chunk)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_lines = MagicMock(return_value=stream_response())
+        return mock_response
+
+    logging_obj = MagicMock()
+
+    with patch.object(client, "post", side_effect=mock_post):
+        iterator = make_sync_call(
+            client=client,
+            gemini_client=None,
+            api_base="https://mock-vertex-ai-api.com",
+            headers={},
+            data="{}",
+            model="gemini-pro",
+            messages=[],
+            logging_obj=logging_obj,
+        )
+        iterator = iter(iterator)
+        first_chunk = next(iterator)
+        assert first_chunk.id == "vertex_ai_response_stream_123"
+
+
+def test_vertex_ai_gemini_audio_ogg():
+    """
+    Test that OGG audio files are correctly formatted as file_data with audio/ogg mime type
+    in the request sent to Vertex AI. Uses mocked HTTP and auth to avoid flaky external
+    URL fetches and credential requirements.
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {"content": {"parts": [{"text": "public domain audio file"}], "role": "model"}, "finishReason": "STOP"}
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+    }
+    client = HTTPHandler()
+    httpx_mock = MagicMock(return_value=mock_response)
+    with (
+        patch.object(client, "post", new=httpx_mock),
+        patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")),
+    ):
+        response = completion(
+            model="vertex_ai/gemini-2.0-flash",
+            messages=[
+                {"content": [{"text": "generate a transcript of the speech.", "type": "text"}], "role": "user"},
+                {
+                    "content": [
+                        {
+                            "file": {"file_id": "https://upload.wikimedia.org/wikipedia/commons/5/5f/En-us-public.ogg"},
+                            "type": "file",
+                        }
+                    ],
+                    "role": "user",
+                },
+            ],
+            client=client,
+        )
+    httpx_mock.assert_called_once()
+    request_body = httpx_mock.call_args.kwargs["json"]
+    file_data_parts = [part for content in request_body["contents"] for part in content["parts"] if "file_data" in part]
+    assert len(file_data_parts) == 1, f"Expected 1 file_data part, got: {file_data_parts}"
+    file_data = file_data_parts[0]["file_data"]
+    assert file_data["mime_type"] == "audio/ogg", f"Expected audio/ogg, got: {file_data['mime_type']}"
+    assert "En-us-public.ogg" in file_data["file_uri"], f"Unexpected file_uri: {file_data['file_uri']}"
+    print(response)
+
+
+def load_vertex_ai_credentials():
+    # Define the path to the vertex_key.json file
+    print("loading vertex ai credentials")
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    vertex_key_path = filepath + "/vertex_key.json"
+
+    # Read the existing content of the file or create an empty dictionary
+    try:
+        with open(vertex_key_path, "r") as file:
+            # Read the file content
+            print("Read vertexai file path")
+            content = file.read()
+
+            # If the file is empty or not valid JSON, create an empty dictionary
+            if not content or not content.strip():
+                service_account_key_data = {}
+            else:
+                # Attempt to load the existing JSON content
+                file.seek(0)
+                service_account_key_data = json.load(file)
+    except FileNotFoundError:
+        # If the file doesn't exist, create an empty dictionary
+        service_account_key_data = {}
+
+    # Update the service_account_key_data with environment variables
+    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+    private_key = private_key.replace("\\n", "\n")
+    service_account_key_data["private_key_id"] = private_key_id
+    service_account_key_data["private_key"] = private_key
+
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+        # Write the updated content to the temporary files
+        json.dump(service_account_key_data, temp_file, indent=2)
+
+    # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)

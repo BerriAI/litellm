@@ -6,6 +6,7 @@ Tests PII detection and masking for different message formats
 import asyncio
 import copy
 import json
+import os
 import re
 from contextlib import asynccontextmanager
 from typing import Final, Literal
@@ -17,9 +18,11 @@ import pytest
 
 
 import litellm
+from litellm import mock_completion
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+    PresidioPerRequestConfig,
     _OPTIONAL_PresidioPIIMasking,
 )
 from litellm.exceptions import GuardrailRaisedException
@@ -4288,3 +4291,287 @@ async def test_standalone_restoration_preserves_post_call_selection(event_hook: 
         data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
     )
     assert response.choices[0].message.content == "Jane"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "presidio-analyzer-s3pa:10000",
+        "https://presidio-analyzer-s3pa:10000",
+        "http://presidio-analyzer-s3pa:10000",
+    ],
+)
+def test_validate_environment_missing_http(base_url):
+    pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+
+    env_vars = {
+        "PRESIDIO_ANALYZER_API_BASE": f"{base_url}/analyze",
+        "PRESIDIO_ANONYMIZER_API_BASE": f"{base_url}/anonymize",
+    }
+    with patch.dict(os.environ, env_vars):
+        pii_masking.validate_environment()
+
+        expected_url = base_url
+        if not (base_url.startswith("https://") or base_url.startswith("http://")):
+            expected_url = "http://" + base_url
+
+        assert (
+            pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
+        ), "Got={}, Expected={}".format(
+            pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
+        )
+        assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
+
+
+@pytest.mark.asyncio
+async def test_output_parsing():
+    """
+    - have presidio pii masking - mask an input message
+    - make llm completion call
+    - have presidio pii masking - output parse message
+    - assert that no masked tokens are in the input message
+    """
+    litellm.set_verbose = True
+    litellm.output_parse_pii = True
+    pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+
+    initial_message = [
+        {
+            "role": "user",
+            "content": "hello world, my name is Jane Doe. My number is: 034453334",
+        }
+    ]
+
+    filtered_message = [
+        {
+            "role": "user",
+            "content": "hello world, my name is <PERSON>. My number is: <PHONE_NUMBER>",
+        }
+    ]
+
+    response = mock_completion(
+        model="gpt-5-mini",
+        messages=filtered_message,
+        mock_response="Hello <PERSON>! How can I assist you today?",
+    )
+    new_response = await pii_masking.async_post_call_success_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        data={
+            "messages": [
+                {"role": "system", "content": "You are an helpfull assistant"}
+            ],
+            "metadata": {
+                "pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}
+            },
+        },
+        response=response,
+    )
+
+    assert (
+        new_response.choices[0].message.content
+        == "Hello Jane Doe! How can I assist you today?"
+    )
+
+
+input_a_anonymizer_results = {
+    "text": "hello world, my name is <PERSON>. My number is: <PHONE_NUMBER>",
+    "items": [
+        {
+            "start": 48,
+            "end": 62,
+            "entity_type": "PHONE_NUMBER",
+            "text": "<PHONE_NUMBER>",
+            "operator": "replace",
+        },
+        {
+            "start": 24,
+            "end": 32,
+            "entity_type": "PERSON",
+            "text": "<PERSON>",
+            "operator": "replace",
+        },
+    ],
+}
+
+
+input_b_anonymizer_results = {
+    "text": "My name is <PERSON>, who are you? Say my name in your response",
+    "items": [
+        {
+            "start": 11,
+            "end": 19,
+            "entity_type": "PERSON",
+            "text": "<PERSON>",
+            "operator": "replace",
+        }
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_input_a():
+    """
+    Tests to see if correct parts of sentence anonymized
+    """
+    pii_masking = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, mock_redacted_text=input_a_anonymizer_results
+    )
+
+    _api_key = "sk-98765"
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+    local_cache = DualCache()
+
+    new_data = await pii_masking.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello world, my name is Jane Doe. My number is: 23r323r23r2wwkl",
+                }
+            ]
+        },
+        call_type="completion",
+    )
+
+    assert "<PERSON>" in new_data["messages"][0]["content"]
+    assert "<PHONE_NUMBER>" in new_data["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_input_b():
+    """
+    Tests to see if correct parts of sentence anonymized
+    """
+    pii_masking = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, mock_redacted_text=input_b_anonymizer_results
+    )
+
+    _api_key = "sk-98765"
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+    local_cache = DualCache()
+
+    new_data = await pii_masking.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "My name is Jane Doe, who are you? Say my name in your response",
+                }
+            ]
+        },
+        call_type="completion",
+    )
+
+    assert "<PERSON>" in new_data["messages"][0]["content"]
+    assert "<PHONE_NUMBER>" not in new_data["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_presidio_pii_masking_logging_output_only_no_pre_api_hook():
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    pii_masking = _OPTIONAL_PresidioPIIMasking(
+        logging_only=True,
+        mock_testing=True,
+        mock_redacted_text=input_b_anonymizer_results,
+    )
+
+    _api_key = "sk-98765"
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
+    local_cache = DualCache()
+
+    test_messages = [
+        {
+            "role": "user",
+            "content": "My name is Jane Doe, who are you? Say my name in your response",
+        }
+    ]
+
+    assert (
+        pii_masking.should_run_guardrail(
+            data={"messages": test_messages},
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_presidio_language_configuration():
+    """Test that presidio_language parameter is properly set and used in analyze requests"""
+    litellm.turn_on_debug()
+
+    presidio_guardrail_de = _OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={},
+        presidio_language="de",
+        mock_testing=True,
+    )
+
+    test_text = "Meine Telefonnummer ist +49 30 12345678"
+
+    analyze_request = presidio_guardrail_de._get_presidio_analyze_request_payload(
+        text=test_text, presidio_config=None, request_data={}
+    )
+
+    assert analyze_request["language"] == "de"
+    assert analyze_request["text"] == test_text
+
+    presidio_guardrail_es = _OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={}, presidio_language="es", mock_testing=True
+    )
+
+    test_text_es = "Mi número de teléfono es +34 912 345 678"
+
+    analyze_request_es = presidio_guardrail_es._get_presidio_analyze_request_payload(
+        text=test_text_es, presidio_config=None, request_data={}
+    )
+
+    assert analyze_request_es["language"] == "es"
+    assert analyze_request_es["text"] == test_text_es
+
+    presidio_guardrail_default = _OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={}, mock_testing=True
+    )
+
+    test_text_en = "My phone number is +1 555-123-4567"
+
+    analyze_request_default = (
+        presidio_guardrail_default._get_presidio_analyze_request_payload(
+            text=test_text_en, presidio_config=None, request_data={}
+        )
+    )
+
+    assert analyze_request_default["language"] == "en"
+    assert analyze_request_default["text"] == test_text_en
+
+
+@pytest.mark.asyncio
+async def test_presidio_language_configuration_with_per_request_override():
+    """Test that per-request language configuration overrides the default configured language"""
+    litellm.turn_on_debug()
+
+    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+        pii_entities_config={}, presidio_language="de", mock_testing=True
+    )
+
+    test_text = "Test text with PII"
+
+    presidio_config = PresidioPerRequestConfig(language="fr")
+
+    analyze_request = presidio_guardrail._get_presidio_analyze_request_payload(
+        text=test_text, presidio_config=presidio_config, request_data={}
+    )
+
+    assert analyze_request["language"] == "fr"
+    assert analyze_request["text"] == test_text
+
+    analyze_request_default = presidio_guardrail._get_presidio_analyze_request_payload(
+        text=test_text, presidio_config=None, request_data={}
+    )
+
+    assert analyze_request_default["language"] == "de"
+    assert analyze_request_default["text"] == test_text

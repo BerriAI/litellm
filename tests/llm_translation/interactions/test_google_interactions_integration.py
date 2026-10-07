@@ -14,7 +14,6 @@ import os
 import openai
 import pytest
 
-import litellm
 import litellm.interactions as interactions
 
 # Test API key - should be set in environment
@@ -162,15 +161,13 @@ class TestGoogleInteractionsStreaming:
 class TestGoogleInteractionsMultiTurn:
     """Tests for multi-turn conversations using Step[] input."""
 
+
 class TestGoogleInteractionsAgent:
     """Tests for agent interactions (per OpenAPI spec)."""
 
 
-
 class TestGoogleInteractionsGetDelete:
     """Tests for get and delete operations."""
-
-
 
 
 class TestGoogleInteractionsErrorHandling:
@@ -181,14 +178,6 @@ class TestGoogleInteractionsErrorHandling:
         with pytest.raises(openai.APIError):
             interactions.create(
                 model="gemini/invalid-model-name-xyz",
-                input="Hello",
-                api_key=api_key,
-            )
-
-    def test_missing_model_and_agent(self, api_key):
-        """Test error when neither model nor agent is provided."""
-        with pytest.raises((ValueError, litellm.APIConnectionError)):
-            interactions.create(
                 input="Hello",
                 api_key=api_key,
             )
