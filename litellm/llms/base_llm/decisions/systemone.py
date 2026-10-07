@@ -7,9 +7,10 @@ Predicates are `noul` questions, choice options are a `criteria` map, score leve
 
 import itertools
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal, TypeAlias, assert_never
+from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import assert_never
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
