@@ -1,10 +1,10 @@
 "use client";
 
-import { ExternalLink } from "lucide-react";
+import { MessagesSquare } from "lucide-react";
 
 import githubLogo from "../../../../../public/assets/logos/github.svg";
+import jiraLogo from "../../../../../public/assets/logos/jira.svg";
 import linearLogo from "../../../../../public/assets/logos/linear.svg";
-import notionLogo from "../../../../../public/assets/logos/notion.svg";
 import slackLogo from "../../../../../public/assets/logos/slack.svg";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
@@ -12,6 +12,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import type { TraceSummary } from "../types";
 
 type Source = NonNullable<TraceSummary["source"]>;
+type SourceType = Source["type"];
 
 interface SourceApp {
   readonly label: string;
@@ -19,38 +20,34 @@ interface SourceApp {
   readonly logo: string | null;
 }
 
-const APPS: readonly (SourceApp & { readonly host: RegExp })[] = [
-  { host: /(^|\.)slack\.com$/, label: "Slack", link: "Slack thread", logo: slackLogo.src },
-  { host: /(^|\.)linear\.app$/, label: "Linear", link: "Linear issue", logo: linearLogo.src },
-  { host: /(^|\.)github\.com$/, label: "GitHub", link: "GitHub", logo: githubLogo.src },
-  { host: /(^|\.)notion\.(so|site)$/, label: "Notion", link: "Notion page", logo: notionLogo.src },
-];
+const APPS: Readonly<Record<SourceType, SourceApp>> = {
+  slack: { label: "Slack", link: "Slack thread", logo: slackLogo.src },
+  teams: { label: "Microsoft Teams", link: "Teams thread", logo: null },
+  discord: { label: "Discord", link: "Discord thread", logo: null },
+  linear: { label: "Linear", link: "Linear issue", logo: linearLogo.src },
+  github: { label: "GitHub", link: "GitHub thread", logo: githubLogo.src },
+  jira: { label: "Jira", link: "Jira issue", logo: jiraLogo.src },
+  custom: { label: "Conversation", link: "Agent conversation", logo: null },
+};
 
-export function sourceApp(url: string): SourceApp | null {
-  const parsed = URL.canParse(url) ? new URL(url) : null;
+export function sourceApp(source: Pick<Source, "type" | "url">): SourceApp | null {
+  const parsed = URL.canParse(source.url) ? new URL(source.url) : null;
   if (parsed?.protocol !== "https:") return null;
-  return (
-    APPS.find((app) => app.host.test(parsed.hostname)) ?? {
-      label: parsed.hostname,
-      link: parsed.hostname,
-      logo: null,
-    }
-  );
+  return APPS[source.type] ?? APPS.custom;
 }
 
 function AppMark({ app, className }: { app: SourceApp; className: string }) {
   return app.logo ? (
     <Logo src={app.logo} label={app.label} className={className} />
   ) : (
-    <ExternalLink aria-hidden className={className} />
+    <MessagesSquare aria-hidden className={className} />
   );
 }
 
-/** Links a run back to where it started, e.g. the Slack thread that asked for it. */
+/** Links a run back to the conversation that started it, e.g. a Slack thread. */
 export function RunSourceLink({ source }: { source: Source }) {
-  const app = sourceApp(source.url);
+  const app = sourceApp(source);
   if (!app) return null;
-  const title = source.title || `Open in ${app.label}`;
   return (
     <HoverCard>
       <HoverCardTrigger
@@ -64,7 +61,9 @@ export function RunSourceLink({ source }: { source: Source }) {
       </HoverCardTrigger>
       <HoverCardContent align="start" className="w-72 p-3">
         <a href={source.url} target="_blank" rel="noopener noreferrer" className="flex flex-col gap-1.5">
-          <span className="line-clamp-2 text-sm font-medium text-foreground">{title}</span>
+          <span className="line-clamp-2 text-sm font-medium text-foreground">
+            {source.title || `Open in ${app.label}`}
+          </span>
           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
             <AppMark app={app} className="size-3 shrink-0" />
             {app.label}
