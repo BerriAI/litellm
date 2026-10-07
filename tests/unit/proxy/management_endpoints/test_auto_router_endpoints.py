@@ -770,6 +770,7 @@ class TestAutoRouterBenchmarks:
         ttl_5m_turns=30,
         ttl_1h_turns=5,
         total_tokens=4000,
+        day_total_tokens=2500,
         spend=10.0,
         saved_spend=30.0,
         savings_estimated_turns=40,
@@ -798,6 +799,7 @@ class TestAutoRouterBenchmarks:
         assert totals.avg_turns_per_session == 10.0
         assert totals.avg_session_seconds == 100.0
         assert totals.avg_tokens_per_session == 1000.0
+        assert totals.total_tokens == 2500
         assert totals.baseline_spend == 40.0
         assert totals.saved_pct == 75.0
         assert totals.savings_estimated_classifier_cost == 0.4
@@ -817,6 +819,20 @@ class TestAutoRouterBenchmarks:
         assert totals.baseline_spend == 5.0
         assert totals.saved_pct == -100.0
         assert totals.classifier_cost == 0.4
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("historical_tokens, expected_total", [(None, None), (0, 2500), (750, 3250)])
+    async def test_daily_token_totals_preserve_missing_coverage_in_any_router(
+        self, historical_tokens: int | None, expected_total: int | None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        historical: Final = self.ROW.model_copy(
+            update={"router_name": "historical-auto", "day_total_tokens": historical_tokens}
+        )
+        response: Final = await self._benchmarks(
+            monkeypatch, rows=[self.ROW.model_dump(), historical.model_dump()], model_list=[]
+        )
+        assert [group.total_tokens for group in response.groups] == [2500, historical_tokens]
+        assert response.totals.total_tokens == expected_total
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("estimated_turns", [0, 4])
@@ -921,6 +937,7 @@ class TestAutoRouterBenchmarks:
         totals = _benchmark_totals(_summed_agg_row([]))
         assert totals.sessions == 0
         assert totals.turns == 0
+        assert totals.total_tokens == 0
         assert totals.saved_pct == 0.0
         assert totals.cache.hit_rate_pct == 0.0
         assert totals.classifier_cost == 0.0
@@ -1164,6 +1181,7 @@ class TestAutoRouterBenchmarks:
             assert idle.cache.same_model.turns == idle.cache.return_to_tier.hits == 0
             assert idle.tier_turns == {}
             assert idle.classifier_cost == 0.0
+            assert idle.total_tokens == 0
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
