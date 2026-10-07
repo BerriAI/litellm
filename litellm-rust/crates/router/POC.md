@@ -94,7 +94,7 @@ The Rust backend serves these by building a new `Snapshot` and swapping it in wi
 - `update_settings`: only the keys in `RUNTIME_UPDATABLE_ROUTER_SETTINGS`, with Python's int casting and `RetryPolicy` validation
 - the Python side (the discarded `PythonRouter` used for normalization and attempt kwargs, and its OpenAI client cache) is updated in the same call, so both sides stay in step
 
-Open question: the backend is chosen once, at construction. An upsert or settings update can add something the Rust backend declines (a deployment with `tpm`, a wildcard model, a non-shuffle `routing_strategy`, tag filtering, ...). It cannot decline the whole instance at that point. Options: reject the change and keep the old config (the call raises), or swap the instance to `PythonRouter` (Redis state carries over, in-memory counters do not)
+Decided 2026-10-07 (deferred, revisit only if it matters in practice): the backend is chosen once, at construction, but an upsert or settings update can add something the Rust backend declines (a deployment with `tpm`, a wildcard model, a non-shuffle `routing_strategy`, tag filtering, ...). When that happens the instance permanently falls back to `PythonRouter`, built from the updated config. Redis state carries over; in-memory state (local counters, in-memory cooldowns) is lost, and that is accepted
 
 ### Increment 3: Python-only features, called from Rust
 
@@ -114,7 +114,7 @@ Today the proxy always gets `PythonRouter`, because it builds `Router(...)` with
 - serve the proxy's reads. 116 proxy files use about 109 distinct router members, about 386 times. Most uses read the model list (`get_model_list`, `get_deployment`, `model_list`, `get_model_names`, `get_model_group_info`, `get_model_access_groups`, `get_deployment_credentials_with_provider`, ...), and those become views of the snapshot. The rest reach into live internals (`cache`, `pattern_router`, `adaptive_routers`, `deployment_latency_map`, `health_state_cache`, `model_name_to_deployment_indices`, ...). Each of those gets a stand-in, or becomes a typed method on the facade, which is where the provisional full-surface decision gets settled
 - serve the request path. `route_llm_request` calls `getattr(llm_router, route_type)(**data)` for every operation, so one instance serves chat, embeddings, files, batches, passthrough and the rest
 
-Open question: the backlog keeps every operation except chat, Responses API and Anthropic messages on Python, but the proxy sends all of them to one router instance. Either a Rust-backed instance hands backlogged operations to an inner `PythonRouter` that shares its registry and Redis state (this relaxes "one backend per instance"), or the proxy only switches over once the backlogged operations are done
+Decided 2026-10-07 (deferred, same rule): a Rust-backed instance that is asked for an operation it does not serve yet permanently falls back to `PythonRouter` for the whole instance, losing in-memory state. So the proxy can switch over now and runs on Rust until the first backlogged operation arrives
 
 ## Backlog (not part of the POC)
 
@@ -177,6 +177,6 @@ Design notes made while implementing:
 
 Streaming (async chat): `RoutedCall` reads the stream until the first chunk with content (Python's `_stream_chunks_have_generated_content`) and returns a `ReplayStream` (a `FallbackAwareStreamWrapper`) that replays the buffered chunks. A `MidStreamFallbackError` before content is classified `stream_failure: before_content` and goes straight to the fallback chain without in-group retries, matching Python's chat wrapper (spec section 9) rather than retrying in the group; any other pre-content stream error is `terminal` and raised as is; after content a mid-stream fallback error surfaces as its original exception. Not done: the sync stream path, and combining the failed attempt's partial usage into the fallback's
 
-Next, following the revised POC scope: finish increment 1 (sync streaming, partial usage on fallback, `aresponses`, `aanthropic_messages`, and more suites opted into `router_backend`, starting with `tests/unit/test_router_order_fallback.py` and the fallback/cooldown tests in `tests/unit/router_utils` that go through `Router(...)`), then increments 2, 3 and 4. The two open questions under increments 2 and 4 need an answer before those increments start
+Next, following the revised POC scope: finish increment 1 (sync streaming, partial usage on fallback, `aresponses`, `aanthropic_messages`, and more suites opted into `router_backend`, starting with `tests/unit/test_router_order_fallback.py` and the fallback/cooldown tests in `tests/unit/router_utils` that go through `Router(...)`), then increments 2, 3 and 4. Then sketch the options for increment 3
 
 Known gaps to close or decline: CustomLogger fallback-event hooks and `router_cooldown_event_callback` (increment 3), the 200-key `InMemoryCache` eviction, fallback keys containing `/` (provider-prefixed matching needs the cost map)
