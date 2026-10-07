@@ -5,9 +5,11 @@ import subprocess
 import sys
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.rust_bridge import configuration
 
@@ -133,3 +135,18 @@ def test_environment_controls_startup(value: str, expected: str) -> None:
     )
 
     assert result.stdout.strip() == expected
+
+
+_BOOLEAN_FIXTURE: Final = (
+    Path(__file__).resolve().parents[3]
+    / "litellm-rust/crates/serde-compat/tests/fixtures/env-booleans.json"
+)
+_BOOLEAN_CASES: Final = TypeAdapter(dict[str, tuple[str, bool | None]]).validate_json(_BOOLEAN_FIXTURE.read_text())
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (pytest.param(value, expected, id=name) for name, (value, expected) in _BOOLEAN_CASES.items()),
+)
+def test_environment_boolean_decoder_matches_shared_contract(value: str, expected: bool | None) -> None:
+    assert configuration._parse_env_bool(value) is expected

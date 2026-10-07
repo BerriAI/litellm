@@ -53,6 +53,18 @@ The subscriber remains the upstream `tracing_subscriber::Registry` with composab
 
 Normalized `source.target` and `source.timestamp` fields let exporters consume records without interpreting host-specific attributes. Both adapters redact before enqueueing. Delivery is best effort; flush completion does not prove remote receipt. Queue limits bound records rather than bytes, and per-destination drop counters and distributed span export are not implemented
 
+## Built-in analytics
+
+Built-in analytics defaults on for OSS use and off when a license is configured, including an empty, invalid, expired, or unresolved license declaration. It never uses license verification to decide reporting. `DO_NOT_TRACK=1` or `true` always disables it. Valid `LITELLM_TELEMETRY=true` or `false` overrides the license default; invalid control settings fail closed with a local warning. These controls affect built-in analytics only, preserving user-configured diagnostics and Python handlers. Boolean controls use the shared `litellm-serde-compat` decoder, matching the Python SDK’s trimmed `TypeAdapter(bool)` token set (`1/true/t/yes/y/on`, `0/false/f/no/n/off`, case-insensitive). A present empty control is invalid and disables built-in analytics
+
+Release builders can supply `LITELLM_ANALYTICS_PROJECT_TOKEN` and optionally `LITELLM_ANALYTICS_ENDPOINT` as compile-time environment variables. Missing or blank tokens and feature-disabled builds start no analytics client and send nothing. Runtime environment variables do not select the built-in project. PostHog remains internal transport wiring
+
+Python SDK analytics initializes lazily when an API call runs. The proxy blocks SDK initialization during bootstrap and freezes its decision after configuration and secrets load. License keys declared in YAML count even when their secret cannot resolve. Rust gateway applies the same policy after its YAML environment overlay. Host lifetimes own shutdown, and libraries keep scoped dispatch instead of installing a global subscriber
+
+Schema version 1 contains `litellm.runtime.started` and `litellm.api.used`, with the surface, public package version and a closed API route enum. Unknown routes become `other`. Python counts API entry once across nested wrappers; Rust hosts count native route summaries when they close, including abandoned streams. These events do not measure success or latency. No messages, model names, provider names, correlation IDs, credentials, payload values or field paths enter the built-in projection. An ephemeral session ID groups events without persistent user identity. A PostHog before-send allowlist removes automatic OS and SDK fields, disables person creation and disables GeoIP enrichment
+
+For a Rust SDK host, create the scoped logger first, call `diagnostics.analytics().initialize(...)` inside `logger.scope(...)` with `AnalyticsSurface::RustSdk`, the resolved `AnalyticsInputs` decision, your public package version and `AnalyticsProject::builtin()`, then drain with `diagnostics.analytics().shutdown()`. Customer exporters have independent configuration and shutdown. `LoggerRule(Rollout.RUST_OPT_IN)` still controls only the legacy logging backend
+
 Payload shape extraction
 
 `PayloadShape::extract` walks a borrowed JSON value and returns sorted, unique JSONPath expressions containing object keys and array wildcards, with no scalar values or array positions. `ShapeLimits` bounds visited nodes, depth, path count, and path bytes. Exceeding a limit discards partial paths and marks the shape truncated

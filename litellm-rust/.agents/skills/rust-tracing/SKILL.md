@@ -11,6 +11,8 @@ Use upstream `tracing` throughout Rust, including `#[tracing::instrument]`, even
 
 Hosts configure subscribers. Keep Python execution scoped to its captured dispatch rather than installing a process-wide subscriber. Propagate both span context and dispatch across spawned work and returned streams
 
+Built-in analytics defaults on without a configured license and off when a license is declared, regardless of verification. `DO_NOT_TRACK=1` wins over explicit opt-in, and invalid controls fail closed. Freeze the decision after gateway configuration and secret resolution; suppress SDK initialization during gateway bootstrap. Missing build-time analytics project configuration must create no client or network work. Preserve customer diagnostics and Python handlers independently. Queue only the versioned event allowlist, never inherited diagnostic fields, payload shapes, model strings, or messages
+
 In core, instrument execution shared by native calls and hosted machines. Use consistent route, model, provider, streaming, and outcome fields. Put status recording at shared provider boundaries instead of scattering basic logging through handlers. Keep upstream HTTP status separate from route success
 
 Use `skip_all` and explicitly selected fields. Basic tracing excludes bodies, credentials, headers, and raw error strings. Avoid automatic `ret` or `err` capture of sensitive values. Keep payload diagnostics separate and subject to existing redaction

@@ -3722,6 +3722,7 @@ version = "0.1.0"
 dependencies = [
  "fancy-regex 0.19.2",
  "litellm-llms-types",
+ "litellm-serde-compat",
  "litellm-tracing",
  "rstest",
  "serde",
@@ -4489,6 +4490,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-serde-compat"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "litellm-storage-clickhouse"
 version = "0.1.0"
 dependencies = [
@@ -4659,6 +4670,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "fancy-regex 0.19.2",
+ "litellm-serde-compat",
  "opentelemetry 0.33.0",
  "opentelemetry-otlp",
  "opentelemetry-proto",

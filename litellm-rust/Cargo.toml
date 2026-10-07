@@ -51,6 +51,7 @@ litellm-http = { path = "crates/http" }
 litellm-llms = { path = "crates/llms" }
 litellm-llms-types = { path = "crates/llms-types" }
 litellm-core-utils = { path = "crates/core-utils" }
+litellm-serde-compat = { path = "crates/serde-compat" }
 litellm-db = { path = "crates/db" }
 litellm-db-testing = { path = "crates/db-testing" }
 litellm-cache = { path = "crates/cache" }

@@ -11,6 +11,7 @@ posthog = ["dep:posthog-rs", "dep:chrono"]
 
 [dependencies]
 base64.workspace = true
+litellm-serde-compat.workspace = true
 chrono = { version = "0.4", default-features = false, optional = true }
 fancy-regex.workspace = true
 percent-encoding.workspace = true

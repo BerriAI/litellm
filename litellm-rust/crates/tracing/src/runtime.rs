@@ -11,9 +11,14 @@ use crate::{
 #[derive(Clone, Default)]
 pub struct Diagnostics {
     sinks: Arc<RwLock<BTreeMap<String, Arc<dyn ExportSink>>>>,
+    analytics: crate::analytics::Analytics,
 }
 
 impl Diagnostics {
+    pub fn analytics(&self) -> &crate::analytics::Analytics {
+        &self.analytics
+    }
+
     fn snapshot(&self) -> Vec<Arc<dyn ExportSink>> {
         self.sinks
             .read()
@@ -117,10 +122,21 @@ fn drain(results: impl Iterator<Item = Result<(), Error>>) -> Result<(), Error> 
 
 impl Sink for Diagnostics {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        if metadata.target() == crate::analytics::TARGET {
+            return self.analytics.enabled(metadata);
+        }
+        if self.analytics.enabled(metadata) {
+            return true;
+        }
+
         self.snapshot().iter().any(|sink| sink.enabled(metadata))
     }
 
     fn emit(&self, record: &Record) {
+        self.analytics.emit(record);
+        if record.metadata.target() == crate::analytics::TARGET {
+            return;
+        }
         for sink in self.snapshot() {
             sink.emit(record);
         }
@@ -134,12 +150,16 @@ struct Fanout<S> {
 
 impl<S: Sink> Sink for Fanout<S> {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        self.exports.enabled(metadata) || self.compatibility.enabled(metadata)
+        self.exports.enabled(metadata)
+            || (metadata.target() != crate::analytics::TARGET
+                && self.compatibility.enabled(metadata))
     }
 
     fn emit(&self, record: &Record) {
         self.exports.emit(record);
-        if self.compatibility.enabled(record.metadata) {
+        if record.metadata.target() != crate::analytics::TARGET
+            && self.compatibility.enabled(record.metadata)
+        {
             self.compatibility.emit(record);
         }
     }

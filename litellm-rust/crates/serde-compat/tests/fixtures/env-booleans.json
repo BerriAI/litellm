@@ -1,0 +1,122 @@
+{
+  "true": [
+    "true",
+    true
+  ],
+  "false": [
+    "false",
+    false
+  ],
+  "one": [
+    "1",
+    true
+  ],
+  "zero": [
+    "0",
+    false
+  ],
+  "yes": [
+    "yes",
+    true
+  ],
+  "no": [
+    "no",
+    false
+  ],
+  "on": [
+    "on",
+    true
+  ],
+  "off": [
+    "off",
+    false
+  ],
+  "t": [
+    "t",
+    true
+  ],
+  "f": [
+    "f",
+    false
+  ],
+  "y": [
+    "y",
+    true
+  ],
+  "n": [
+    "n",
+    false
+  ],
+  "mixed_true": [
+    "tRuE",
+    true
+  ],
+  "mixed_false": [
+    "FaLsE",
+    false
+  ],
+  "upper_t": [
+    "T",
+    true
+  ],
+  "upper_f": [
+    "F",
+    false
+  ],
+  "upper_y": [
+    "Y",
+    true
+  ],
+  "upper_n": [
+    "N",
+    false
+  ],
+  "padded_true": [
+    " \tTRUE\r\n",
+    true
+  ],
+  "padded_false": [
+    " \tOFF\r\n",
+    false
+  ],
+  "python_controls": [
+    "\u001cY\u001f",
+    true
+  ],
+  "unicode_whitespace": [
+    "\u00a0n\u2003",
+    false
+  ],
+  "empty": [
+    "",
+    null
+  ],
+  "blank": [
+    " \t\r\n",
+    null
+  ],
+  "whitespace_only": [
+    "\u001c\u00a0\u001f",
+    null
+  ],
+  "garbage": [
+    "garbage",
+    null
+  ],
+  "two": [
+    "2",
+    null
+  ],
+  "zero_width_space": [
+    "true\u200b",
+    null
+  ],
+  "null": [
+    "null",
+    null
+  ],
+  "embedded_whitespace": [
+    "tr ue",
+    null
+  ]
+}

@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
+litellm-serde-compat.workspace = true
 litellm-llms-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
