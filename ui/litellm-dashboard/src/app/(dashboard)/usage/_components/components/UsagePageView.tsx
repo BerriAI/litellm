@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { ChevronDown, ChevronRight, Download, Info, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Info, Search, Sparkles, X } from "lucide-react";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -14,6 +14,7 @@ import { BarChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,6 +32,7 @@ import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
+import { filterModelActivity } from "@/components/UsagePage/modelActivityFilter";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { gatewayDailyActivityCall, Organization, tagListCall } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
@@ -108,6 +110,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // For non-admins: always set to their own user ID
   const [selectedUserId, setSelectedUserId] = useState<string | null>(isAdmin ? null : userID || null);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
+  const [modelQuery, setModelQuery] = useState("");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
@@ -408,6 +411,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => processActivityData(userSpendData, modelViewType === "groups" ? "model_groups" : "models", teams),
     [userSpendData, modelViewType, teams],
   );
+  const filteredModelMetrics = useMemo(() => filterModelActivity(modelMetrics, modelQuery), [modelMetrics, modelQuery]);
+  const trimmedModelQuery = modelQuery.trim();
   const mcpServerMetrics = useMemo(
     () => processActivityData(userSpendData, "mcp_servers", teams),
     [userSpendData, teams],
@@ -865,13 +870,43 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
                 {/* Activity Panel */}
                 <TabsContent value="models" keepMounted>
-                  <div className="flex justify-end mt-2 mb-4">
+                  <div className="mt-2 mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <InputGroup className="max-w-md">
+                      <InputGroupAddon>
+                        <Search className="size-4 text-muted-foreground" />
+                      </InputGroupAddon>
+                      <InputGroupInput
+                        aria-label="Search models"
+                        placeholder="Search by model name"
+                        value={modelQuery}
+                        onChange={(event) => setModelQuery(event.target.value)}
+                      />
+                      {trimmedModelQuery !== "" && (
+                        <InputGroupAddon align="inline-end">
+                          <InputGroupButton
+                            size="icon-xs"
+                            aria-label="Clear model search"
+                            onClick={() => setModelQuery("")}
+                          >
+                            <X />
+                          </InputGroupButton>
+                        </InputGroupAddon>
+                      )}
+                    </InputGroup>
                     <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
                   </div>
-                  <ActivityMetrics
-                    modelMetrics={modelMetrics}
-                    fetchTopApiKeys={dailyActivityRequest ? fetchTopApiKeys : undefined}
-                  />
+                  {trimmedModelQuery !== "" &&
+                  Object.keys(modelMetrics).length > 0 &&
+                  Object.keys(filteredModelMetrics).length === 0 ? (
+                    <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
+                      No models match &quot;{trimmedModelQuery}&quot; in this date range
+                    </p>
+                  ) : (
+                    <ActivityMetrics
+                      modelMetrics={filteredModelMetrics}
+                      fetchTopApiKeys={dailyActivityRequest ? fetchTopApiKeys : undefined}
+                    />
+                  )}
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
                   <KeyActivityPanel

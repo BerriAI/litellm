@@ -1,6 +1,6 @@
 import asyncio
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import urlparse
@@ -39,6 +39,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     SpecialEnums,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
@@ -174,8 +175,8 @@ class VertexPassthroughLoggingHandler:
 
             # Set response_cost in _hidden_params to prevent recalculation
             if not hasattr(litellm_video_response, "_hidden_params"):
-                litellm_video_response._hidden_params = {}
-            litellm_video_response._hidden_params["response_cost"] = response_cost
+                litellm_video_response.hidden_params = {}
+            litellm_video_response.hidden_params["response_cost"] = response_cost
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
@@ -629,7 +630,7 @@ class VertexPassthroughLoggingHandler:
                 sync_stream=False,
                 logging_obj=litellm_logging_obj,
             )
-            chunk_parsing_logic: Any = vertex_iterator._common_chunk_parsing_logic
+            chunk_parsing_logic: Callable[..., ModelResponseStream | None] = vertex_iterator._common_chunk_parsing_logic
             parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
         elif "rawPredict" in url_route or "streamRawPredict" in url_route:
             from litellm.llms.anthropic.chat.handler import ModelResponseIterator
@@ -643,7 +644,7 @@ class VertexPassthroughLoggingHandler:
             )
             chunk_parsing_logic = vertex_iterator.chunk_parser
             for chunk in all_chunks:
-                dict_chunk = BaseModelResponseIterator._string_to_dict_parser(chunk)
+                dict_chunk = BaseModelResponseIterator.string_to_dict_parser(chunk)
                 if dict_chunk is None:
                     continue
                 parsed_chunks.append(chunk_parsing_logic(dict_chunk))
@@ -823,7 +824,7 @@ class VertexPassthroughLoggingHandler:
                 )
 
                 # Extract batch ID and model from the response
-                batch_id = VertexAIBatchTransformation._get_batch_id_from_vertex_ai_batch_response(_json_response)
+                batch_id = VertexAIBatchTransformation.get_batch_id_from_vertex_ai_batch_response(_json_response)
                 model_name: Final = _json_response.get("model", "unknown")
 
                 # Create unified object ID for tracking

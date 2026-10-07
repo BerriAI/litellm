@@ -23,25 +23,19 @@ def test_v0_get_openai_compatible_provider_info():
 
     # Test with default values (no env vars set)
     with mock.patch.dict(os.environ, {}, clear=True):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://api.v0.dev/v1"
         assert api_key is None
 
     # Test with environment variables
-    with mock.patch.dict(
-        os.environ, {"V0_API_KEY": "test-key", "V0_API_BASE": "https://custom.v0.ai/v1"}
-    ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+    with mock.patch.dict(os.environ, {"V0_API_KEY": "test-key", "V0_API_BASE": "https://custom.v0.ai/v1"}):
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://custom.v0.ai/v1"
         assert api_key == "test-key"
 
     # Test with explicit parameters (should override env vars)
-    with mock.patch.dict(
-        os.environ, {"V0_API_KEY": "env-key", "V0_API_BASE": "https://env.v0.ai/v1"}
-    ):
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://param.v0.ai/v1", "param-key"
-        )
+    with mock.patch.dict(os.environ, {"V0_API_KEY": "env-key", "V0_API_BASE": "https://env.v0.ai/v1"}):
+        api_base, api_key = config.get_openai_compatible_provider_info("https://param.v0.ai/v1", "param-key")
         assert api_base == "https://param.v0.ai/v1"
         assert api_key == "param-key"
 

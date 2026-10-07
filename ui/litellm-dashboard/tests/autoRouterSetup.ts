@@ -2,9 +2,8 @@ import userEvent from "@testing-library/user-event";
 import { chooseSelectOption, fireEvent, screen } from "./test-utils";
 
 const groups: Record<string, string> = {
-  "Classification Method": "Classifier tuning",
-  "Heuristic Keyword Overrides": "Classifier tuning",
-  "Ignore Custom Tags": "Classifier tuning",
+  "Heuristic Keyword Overrides": "Heuristic tuning",
+  "Ignore Custom Tags": "Request preprocessing",
   Affinity: "Sessions and efficiency",
   "Adaptive Routing": "Sessions and efficiency",
   "Cache-aware routing": "Sessions and efficiency",
@@ -15,12 +14,18 @@ const groups: Record<string, string> = {
 export const openAutoRouterAdvanced = (section: string) => {
   const advanced = screen.getByRole("button", { name: /^Advanced settings/ });
   if (advanced.getAttribute("aria-expanded") !== "true") fireEvent.click(advanced);
-  const group = screen.getByRole("button", { name: groups[section] ?? "Routing rules and recovery" });
-  if (group.getAttribute("aria-expanded") !== "true") fireEvent.click(group);
+  const labels =
+    section === "Classification Method"
+      ? ["Heuristic tuning", "LLM tuning", "Classifier tuning"]
+      : [groups[section] ?? "Routing rules and recovery"];
+  for (const label of labels) {
+    const group = screen.queryByRole("button", { name: label });
+    if (group && group.getAttribute("aria-expanded") !== "true") fireEvent.click(group);
+  }
 };
 
 export const selectAutoRouterOption = async (field: string, option: string) => {
-  if (field === "Heuristic" || field === "Routing approach") {
+  if (field === "Heuristic" || field === "Routing approach" || field === "Heuristic before the judge") {
     const user = userEvent.setup();
     fireEvent.click(screen.getByRole("button", { name: field }));
     await user.click(await screen.findByRole("menuitemradio", { name: new RegExp(`^${option}`) }));

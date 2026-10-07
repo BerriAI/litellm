@@ -2810,7 +2810,7 @@ class TestMCPDelegateAuthToUpstream:
             "type": "http",
             "method": "POST",
             "path": "/mcp/delegated_oauth_server",
-            "headers": [(b"x-litellm-api-key", b"Bearer sk-1234")],
+            "headers": [(b"x-litellm-api-key", b"Bearer sk-9876")],
         }
 
         with (
@@ -2842,7 +2842,7 @@ class TestMCPDelegateAuthToUpstream:
             "type": "http",
             "method": "POST",
             "path": "/mcp/delegated_oauth_server",
-            "headers": [(b"authorization", b"Bearer sk-1234")],
+            "headers": [(b"authorization", b"Bearer sk-9876")],
         }
 
         with (
@@ -2867,7 +2867,7 @@ class TestMCPDelegateAuthToUpstream:
             ) = await MCPRequestHandler.process_mcp_request(scope)
             assert isinstance(auth_result, UserAPIKeyAuth)
             assert auth_result.user_id == "real-user"
-            assert oauth2_headers.get("Authorization") == "Bearer sk-1234"
+            assert oauth2_headers.get("Authorization") == "Bearer sk-9876"
             mock_auth.assert_awaited_once()
 
     async def test_delegate_ignored_for_client_credentials_server(self):
@@ -6789,6 +6789,16 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 503
 
+    async def test_key_envelope_retains_verified_key_identity_for_catalog_reauthorization(self):
+        from litellm.proxy._types import hash_token
+
+        key_hash = hash_token("sk-owned-envelope-key")
+        record = UserAPIKeyAuth(token=key_hash)
+        with self._patch_key_reload(return_value=record):
+            admitted = await MCPRequestHandler._reload_admitted_key(key_hash)
+        assert admitted.api_key == key_hash
+        assert admitted.via_virtual_key is True
+
     async def test_reload_admitted_key_returns_admin_for_master_key_hash(self):
         """An envelope sealed under the master key has no DB row to reload; the reload resolves it
         to the PROXY_ADMIN auth context (api_key is the alias, never the hash) rather than failing.
@@ -7990,9 +8000,13 @@ class TestGatewaySessionAdmission:
                 rpm_limit=rpm_limit,
             )
         )
+        prisma = MagicMock()
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.should_load_db_object", return_value=False),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         ):
             yield get_user_object
@@ -9794,13 +9808,16 @@ class TestGetUserObjectPermission:
             mock_get_perm.assert_not_awaited()
             prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
 
-    async def test_missing_user_row_places_no_ceiling(self):
+    @pytest.mark.parametrize("fresh_policy", [False, True])
+    async def test_missing_user_row_places_no_ceiling(self, fresh_policy):
         """Whether this human is entitled at all is unknown when their row is absent, which is the
         state before the level existed, so it must not deny."""
         from litellm.caching.dual_cache import DualCache
 
         prisma_client = self._prisma_with_user(None)
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="ghost")
+        auth.requires_fresh_policy = fresh_policy
+        prisma_client.writer_db = prisma_client.db
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
@@ -10143,10 +10160,14 @@ class TestScopedSessionAdmission:
                 rpm_limit=None,
             )
         )
+        prisma = MagicMock()
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.should_load_db_object", return_value=False),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         ):
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope_dict)
@@ -10159,7 +10180,8 @@ class TestScopedSessionAdmission:
 
 
 @pytest.mark.asyncio
-async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(monkeypatch):
+@pytest.mark.parametrize("failure", [RuntimeError("unavailable"), ValueError("User doesn't exist in db")])
+async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(monkeypatch, failure):
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_UserTable
@@ -10174,7 +10196,7 @@ async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     assert await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True) == "current"
     database.db.litellm_usertable.find_unique.assert_not_awaited()
-    database.writer_db.litellm_usertable.find_unique.side_effect = RuntimeError("unavailable")
+    database.writer_db.litellm_usertable.find_unique.side_effect = failure
     with pytest.raises(HTTPException) as denied:
         await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True)
     assert denied.value.status_code == 503
@@ -10200,3 +10222,92 @@ async def test_managed_agent_permission_resolution_outage_is_not_an_unrestricted
     )
     with pytest.raises(RuntimeError, match="policy unavailable"):
         await resolution
+
+
+@pytest.mark.asyncio
+async def test_unreadable_empty_key_scope_cannot_gain_additive_grants(monkeypatch):
+    auth = UserAPIKeyAuth(api_key="test-key", object_permission_id="key-scope")
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_allowed_mcp_servers_for_key",
+        AsyncMock(return_value=[SpecialMCPServerNames.no_mcp_servers.value]),
+    )
+    monkeypatch.setattr(MCPRequestHandler, "_key_object_permission_hydrated", AsyncMock(return_value=None))
+    monkeypatch.setattr(MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=["unrelated-server"])
+    )
+    access = await MCPRequestHandler.get_mcp_server_access(auth)
+    assert access.server_ids == ()
+    assert access.scope == "scoped"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["anonymous", "master", "custom"])
+async def test_catalog_refresh_preserves_non_database_admission_and_resource_scope(kind):
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    if kind == "anonymous":
+        assert await MCPRequestHandler.refresh_catalog_authority(None) is None
+        return
+    caller = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS if kind == "master" else "custom-subject")
+    caller.via_virtual_key = kind == "master"
+    caller.authenticated_by_custom_auth = kind == "custom"
+    caller.mcp_session_resource_server_id = "only-this-server"
+    caller.mcp_toolset_id = "only-this-toolset"
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+    assert refreshed is not caller
+    assert refreshed.api_key == caller.api_key
+    assert refreshed.authenticated_by_custom_auth == caller.authenticated_by_custom_auth
+    assert refreshed.mcp_session_resource_server_id == "only-this-server"
+    assert refreshed.mcp_toolset_id == "only-this-toolset"
+    assert refreshed.requires_fresh_policy is True
+    assert caller.requires_fresh_policy is False
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_reads_current_user_org_without_losing_resource_scope(monkeypatch):
+    from types import SimpleNamespace
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    current = LiteLLM_UserTable(user_id="catalog-user", organization_id="current-org", user_role="internal_user", teams=[])
+    table = SimpleNamespace(find_unique=AsyncMock(return_value=current))
+    database = SimpleNamespace(writer_db=SimpleNamespace(litellm_usertable=table))
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    caller = UserAPIKeyAuth(user_id="catalog-user", org_id="previous-org", user_role="proxy_admin")
+    caller.mcp_admitted_user_subject = True
+    caller.mcp_session_resource_server_id = "scoped-server"
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+    assert refreshed.org_id == "current-org"
+    assert refreshed.user_role == "internal_user"
+    assert refreshed.mcp_session_resource_server_id == "scoped-server"
+    assert refreshed.mcp_admitted_user_subject is True
+    assert caller.org_id == "previous-org"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current_groups", [[], ["replacement-group"]])
+async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session_scope(monkeypatch, current_groups):
+    permission = LiteLLM_ObjectPermissionTable(object_permission_id="current-policy", mcp_servers=["current-server"])
+    current = UserAPIKeyAuth(object_permission=permission, object_permission_id="current-policy", team_id="new-team", org_id="new-org", project_id="new-project", user_id="new-owner", access_group_ids=current_groups)
+    reload_key = AsyncMock(return_value=current)
+    monkeypatch.setattr(MCPRequestHandler, "_reload_admitted_key", reload_key)
+    caller = UserAPIKeyAuth(api_key="owned-key-hash", team_id="old-team", org_id="old-org", project_id="old-project", user_id="old-owner", access_group_ids=["original-group"])
+    caller.via_virtual_key = True
+    caller.mcp_session_resource_server_id = "session-server"
+    caller.mcp_toolset_id = "session-toolset"
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+    reload_key.assert_awaited_once_with("owned-key-hash", check_db_only=True)
+    assert refreshed.object_permission == permission
+    assert refreshed.object_permission_id == "current-policy"
+    assert (refreshed.team_id, refreshed.org_id, refreshed.project_id, refreshed.user_id) == ("new-team", "new-org", "new-project", "new-owner")
+    assert refreshed.mcp_session_resource_server_id == "session-server"
+    assert refreshed.mcp_toolset_id == "session-toolset"
+    assert refreshed.via_virtual_key and refreshed.requires_fresh_policy
+    assert caller.team_id == "old-team" and not caller.requires_fresh_policy
+    assert refreshed.access_group_ids == current_groups
+    assert caller.access_group_ids == ["original-group"]

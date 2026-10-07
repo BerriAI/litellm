@@ -281,7 +281,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["model"], str)
 
             # checking we use base_model for azure cost calculation
-            base_model = litellm.utils._get_base_model_from_metadata(
+            base_model = litellm.utils.get_base_model_from_metadata(
                 model_call_details=kwargs
             )
 

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class ActivityAvailability(BaseModel):
+class ActivityAvailability(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
     )
@@ -16,7 +18,7 @@ class ActivityAvailability(BaseModel):
     requests: bool = False
 
 
-class AgentRow(BaseModel):
+class AgentRow(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
     )
@@ -57,7 +59,7 @@ Count1: TypeAlias = Annotated[
 ]
 
 
-class CountRow(BaseModel):
+class CountRow(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
     )
@@ -170,7 +172,7 @@ Selected1: TypeAlias = Annotated[
 ]
 
 
-class ExecutionRow(BaseModel):
+class ExecutionRow(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
     )
@@ -190,7 +192,7 @@ class ExecutionRow(BaseModel):
     selection_key: str = ""
 
 
-class LensAccessParams(BaseModel):
+class LensAccessParams(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -201,7 +203,7 @@ class LensAccessParams(BaseModel):
     key_hash: str
 
 
-class LensContentParams(BaseModel):
+class LensContentParams(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -213,12 +215,13 @@ class LensContentParams(BaseModel):
     source: ContentSource
     id: str
     record_team: str
+    start_time: str
     trace_ref: str
     cursor: str
     offset: int = Field(..., ge=0, le=4294967295)
 
 
-class LensEvidenceParams(BaseModel):
+class LensEvidenceParams(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -230,6 +233,7 @@ class LensEvidenceParams(BaseModel):
     source: ContentSource
     id: str
     record_team: str
+    start_time: str
     trace_ref: str
     span: str
     quote: str
@@ -238,7 +242,7 @@ class LensEvidenceParams(BaseModel):
 ExecutionSource: TypeAlias = Literal["traces", "requests", "both"]
 
 
-class LensSampleParams(BaseModel):
+class LensSampleParams(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -264,7 +268,7 @@ class LensSampleParams(BaseModel):
     offset: int = Field(..., ge=0, le=18446744073709551615)
 
 
-class PartRow(BaseModel):
+class PartRow(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
     )
@@ -282,7 +286,7 @@ class PartRow(BaseModel):
 TraceTableName: TypeAlias = Literal["otel_traces", "agent_traces_by_key", "spend_logs"]
 
 
-class TraceQueryColumn(BaseModel):
+class TraceQueryColumn(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="allow",
         frozen=True,
@@ -292,7 +296,7 @@ class TraceQueryColumn(BaseModel):
     type: str
 
 
-class TraceQueryNormalizedField(BaseModel):
+class TraceQueryNormalizedField(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -317,7 +321,7 @@ MetadataValueType: TypeAlias = Literal["array", "boolean", "integer", "null", "n
 MapValueType: TypeAlias = Literal["String"]
 
 
-class TraceQueryRelationship(BaseModel):
+class TraceQueryRelationship(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -329,7 +333,7 @@ class TraceQueryRelationship(BaseModel):
     meaning: str
 
 
-class TraceQueryExample(BaseModel):
+class TraceQueryExample(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
     )
@@ -338,7 +342,7 @@ class TraceQueryExample(BaseModel):
     sql: str
 
 
-class TraceQueryTable(BaseModel):
+class TraceQueryTable(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -348,7 +352,7 @@ class TraceQueryTable(BaseModel):
     columns: tuple[TraceQueryColumn, ...]
 
 
-class TraceQueryMetadataField(BaseModel):
+class TraceQueryMetadataField(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -359,7 +363,7 @@ class TraceQueryMetadataField(BaseModel):
     expression: str
 
 
-class TraceQueryAttributeField(BaseModel):
+class TraceQueryAttributeField(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -370,7 +374,7 @@ class TraceQueryAttributeField(BaseModel):
     expression: str
 
 
-class TraceQueryMetadata(BaseModel):
+class TraceQueryMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -387,7 +391,7 @@ class TraceQueryMetadata(BaseModel):
     scope: str
 
 
-class TraceQueryAttributes(BaseModel):
+class TraceQueryAttributes(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -402,7 +406,7 @@ class TraceQueryAttributes(BaseModel):
     scope: str
 
 
-class TraceQueryHelp(BaseModel):
+class TraceQueryHelp(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,

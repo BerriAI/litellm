@@ -2,6 +2,7 @@ import { ApiError } from "@/lib/http/client";
 import type { TracesApi } from "@/components/lens/traces/api";
 import type { LensServices } from "../LensServices";
 import type { LensApi } from "../service";
+import { demoDatasetsApi } from "./demoDatasets";
 import { createLensDemoData, type LensDemoData } from "./fixtures";
 
 const notInDemo = (): Promise<never> =>
@@ -14,6 +15,7 @@ function demoLensApi(data: LensDemoData): LensApi {
   const jobs = (lensId: string) => data.lenses.find((lens) => lens.id === lensId)?.jobs;
   return {
     scope: "demo",
+    datasets: demoDatasetsApi(data),
     lenses: async () => ({ lenses: data.lenses, workers: [], tracing_enabled: true }),
     activity: async () => ({ traces: true, requests: false }),
     runs: (lensId, offset) => found(jobs(lensId)?.slice(offset)),
@@ -35,6 +37,8 @@ function demoLensApi(data: LensDemoData): LensApi {
     saveLens: readOnly,
     startRun: readOnly,
     watchAll: async () => ({ watching: [], skipped: [] }),
+    signalConfig: async () => ({ model: "", threshold: 0.5, signals: [] }),
+    saveSignalConfig: readOnly,
     cancelRun: readOnly,
     reviewFinding: readOnly,
     registerWorker: readOnly,
@@ -88,6 +92,8 @@ function demoTracesApi(data: LensDemoData): TracesApi {
         );
         return { ...trace, finding_count: assessed.length ? findings.size : null };
       }),
+    signals: async (traces) =>
+      traces.map((trace) => ({ ...trace, status: "unclassified" as const, flags: [], model: "", classified_at: null })),
     anyRecorded: async () => data.runs.length > 0,
     trace: (traceId) => found(run(traceId)?.trace),
     span: (traceId, spanId) => found(run(traceId)?.details.find((span) => span.span_id === spanId)),

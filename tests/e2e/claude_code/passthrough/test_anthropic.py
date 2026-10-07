@@ -22,6 +22,7 @@ no per-provider transformation is involved.
 
 from __future__ import annotations
 
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._passthrough import (
     ANTHROPIC_PASSTHROUGH_BASE_PATH,
     run_passthrough_cell,
@@ -34,6 +35,15 @@ ANTHROPIC_MODELS = [
 ]
 
 
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.ANTHROPIC,),
+        models=tuple(ANTHROPIC_MODELS),
+        mode=Mode.STREAM,
+    )
+)
 def test_passthrough_anthropic(compat_result):
     """Drive the `claude` CLI through `{proxy}/anthropic` and assert a reply."""
     run_passthrough_cell(

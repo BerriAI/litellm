@@ -24,7 +24,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
-from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET
+from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
@@ -250,11 +250,7 @@ def _is_cooldown_required(
                 # Cool down 429 Rate Limit Errors
                 return True
 
-            elif exception_status == 401:
-                # Cool down 401 Auth Errors
-                return True
-
-            elif exception_status == 408 or exception_status == 404:
+            elif exception_status in (401, 402, 408, 404):
                 return True
 
             else:
@@ -362,8 +358,17 @@ def _should_cooldown_deployment(
             or litellm_router_instance.team_model_has_alternatives(deployment)
         )
 
-    ## CHECK DEPLOYMENT-LEVEL POLICY FIRST (overrides router-level)
+    exception_status_int: Final = cast_exception_status_to_int(exception_status)
     dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
+    if (
+        is_single_deployment_model_group
+        and exception_status_int == 402
+        and _resolve_allowed_fails_from_policy(dep_policy, original_exception) is None
+        and litellm_router_instance.get_allowed_fails_from_policy(original_exception) is None
+    ):
+        return False
+
+    ## CHECK DEPLOYMENT-LEVEL POLICY FIRST (overrides router-level)
     if dep_policy is not None or dep_allowed_fails is not None:
         return _should_cooldown_based_on_deployment_policy(
             litellm_router_instance,
@@ -398,7 +403,6 @@ def _should_cooldown_deployment(
             num_fails_this_minute,
         )
 
-        exception_status_int: Final = cast_exception_status_to_int(exception_status)
         if exception_status_int == 429 and not is_single_deployment_model_group:
             return True
         elif percent_fails == 1.0 and total_requests_this_minute >= SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD:
@@ -412,7 +416,7 @@ def _should_cooldown_deployment(
             # Only apply error rate cooldown when we have enough requests to make the percentage meaningful
             return True
 
-        elif litellm._should_retry(status_code=cast_exception_status_to_int(exception_status)) is False:
+        elif litellm.should_retry(status_code=exception_status_int) is False:
             return True
 
         return False
@@ -426,7 +430,7 @@ def _should_cooldown_deployment(
     return False
 
 
-def _set_cooldown_deployments(
+def set_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
     original_exception: Exception,
     exception_status: str | int,
@@ -491,12 +495,15 @@ def _set_cooldown_deployments(
     return False
 
 
-async def _async_get_cooldown_deployments(
+_set_cooldown_deployments = set_cooldown_deployments
+
+
+async def async_get_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
     parent_otel_span: Span | None,
 ) -> list[str]:
     """
-    Async implementation of '_get_cooldown_deployments'
+    Async implementation of 'get_cooldown_deployments'
     """
     model_ids: Final = litellm_router_instance.get_model_ids()
     cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
@@ -517,12 +524,15 @@ async def _async_get_cooldown_deployments(
     return cached_value_deployment_ids
 
 
-async def _async_get_cooldown_deployments_with_debug_info(
+_async_get_cooldown_deployments = async_get_cooldown_deployments
+
+
+async def async_get_cooldown_deployments_with_debug_info(
     litellm_router_instance: LitellmRouter,
     parent_otel_span: Span | None,
-) -> list[tuple]:
+) -> list[tuple[str, CooldownCacheValue]]:
     """
-    Async implementation of '_get_cooldown_deployments'
+    Async implementation of 'get_cooldown_deployments'
     """
     model_ids: Final = litellm_router_instance.get_model_ids()
     cooldown_models: Final = await litellm_router_instance.cooldown_cache.async_get_active_cooldowns(
@@ -533,7 +543,10 @@ async def _async_get_cooldown_deployments_with_debug_info(
     return cooldown_models
 
 
-def _get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel_span: Span | None) -> list[str]:
+_async_get_cooldown_deployments_with_debug_info = async_get_cooldown_deployments_with_debug_info
+
+
+def get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel_span: Span | None) -> list[str]:
     """
     Get the list of models being cooled down for this minute
     """
@@ -558,6 +571,9 @@ def _get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_ote
         cached_value_deployment_ids = [cv[0] for cv in cooldown_models]
 
     return cached_value_deployment_ids
+
+
+_get_cooldown_deployments = get_cooldown_deployments
 
 
 def should_cooldown_based_on_allowed_fails_policy(

@@ -1,12 +1,11 @@
 #### What this tests ####
 #    This tests if ahealth_check() actually works
 
+import asyncio
 import os
-
-import pytest
 from unittest.mock import AsyncMock, patch
 
-import asyncio
+import pytest
 
 import litellm
 
@@ -79,73 +78,8 @@ async def test_openai_img_gen_health_check():
 # asyncio.run(test_openai_img_gen_health_check())
 
 
-@pytest.mark.skip(
-    reason="Azure DALL-E 3 model deployment is deprecated (410 ModelDeprecated)"
-)
-@pytest.mark.asyncio
-async def test_azure_img_gen_health_check():
-    """
-    Test Azure image generation health check with retry logic for transient errors.
-    Azure sometimes returns internal server errors which are transient and not something we can control.
-    """
-    litellm._turn_on_debug()
-    max_retries = 3
-    retry_delay = 1  # Start with 1 second delay
-
-    for attempt in range(max_retries):
-        response = await litellm.ahealth_check(
-            model_params={
-                "model": "azure/gpt-image-1",
-                "api_base": os.getenv("AZURE_AI_API_BASE"),
-                "api_key": os.getenv("AZURE_AI_API_KEY"),
-            },
-            mode="image_generation",
-            prompt="cute baby sea otter",
-        )
-
-        # Check if response is successful (no error)
-        if isinstance(response, dict) and "error" not in response:
-            return response
-
-        # Check if error is a transient Azure internal server error
-        error_str = str(response.get("error", "")).lower()
-        is_transient_error = (
-            "internalservererror" in error_str
-            or "internal server error" in error_str
-            or "internalfailure" in error_str
-            or "internal failure" in error_str
-        )
-
-        # If it's the last attempt or not a transient error, fail the test
-        if attempt == max_retries - 1 or not is_transient_error:
-            assert (
-                isinstance(response, dict) and "error" not in response
-            ), f"Health check failed: {response.get('error', 'Unknown error')}"
-            return response
-
-        # Wait before retrying with exponential backoff
-        await asyncio.sleep(retry_delay)
-        retry_delay *= 2  # Exponential backoff
-
-    # Should not reach here, but just in case
-    pytest.fail("Health check failed after all retries")
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.asyncio
-async def test_sagemaker_embedding_health_check():
-    response = await litellm.ahealth_check(
-        model_params={
-            "model": "sagemaker/berri-benchmarking-gpt-j-6b-fp16",
-            "messages": [{"role": "user", "content": "Hey, how's it going?"}],
-        },
-        mode="embedding",
-        input=["test from litellm"],
-    )
-    print(f"response: {response}")
-
-    assert isinstance(response, dict)
-    return response
 
 
 # asyncio.run(test_sagemaker_embedding_health_check())
@@ -574,14 +508,15 @@ async def test_perform_health_check_with_health_check_model():
 
 @pytest.mark.asyncio
 async def test_health_check_bad_model():
-    from litellm.proxy.health_check import _perform_health_check
     import time
+
+    from litellm.proxy.health_check import _perform_health_check
 
     model_list = [
         {
             "model_name": "openai-gpt-4o",
             "litellm_params": {
-                "api_key": "sk-1234",
+                "api_key": "sk-9876",
                 "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
                 "model": "openai/my-fake-openai-endpoint",
                 "mock_timeout": True,
@@ -724,7 +659,7 @@ async def test_timeout_does_not_cancel_other_health_checks():
 
 @pytest.mark.asyncio
 async def test_ahealth_check_ocr():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.ahealth_check(
         model_params={
             "model": "mistral/mistral-ocr-latest",
@@ -741,6 +676,7 @@ async def test_image_generation_health_check_prompt(monkeypatch):
     """Health checks should respect default and environment-configured prompts."""
 
     import importlib
+
     import litellm.constants as litellm_constants
     import litellm.proxy.health_check as health_check
 
