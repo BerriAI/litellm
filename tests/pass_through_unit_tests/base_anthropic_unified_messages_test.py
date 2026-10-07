@@ -67,7 +67,7 @@ class BaseAnthropicMessagesTest:
     @pytest.mark.asyncio
     async def test_non_streaming_base(self):
         """Base test for non-streaming requests"""
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         request_params = self.model_config
 
@@ -134,7 +134,7 @@ class BaseAnthropicMessagesTest:
 
         Issue: https://github.com/BerriAI/litellm/issues/20342
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         request_params = self.model_config
 
@@ -196,7 +196,7 @@ class BaseAnthropicMessagesTest:
         """
         test_custom_logger = TestCustomLogger()
         litellm.callbacks = [test_custom_logger]
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         router = Router(
             model_list=[
                 {

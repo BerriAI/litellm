@@ -36,7 +36,7 @@ import logging
 
 def test_get_kwargs_for_cache_key():
     _cache = litellm.Cache()
-    relevant_kwargs = ModelParamHelper._get_all_llm_api_params()
+    relevant_kwargs = ModelParamHelper.get_all_llm_api_params()
     print(relevant_kwargs)
 
 

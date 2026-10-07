@@ -131,7 +131,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
         item_id: Final = item.get("id")
         if item_id and isinstance(item_id, str):
-            decoded: Final = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
+            decoded: Final = ResponsesAPIRequestUtils.decode_encrypted_item_id(item_id)
             if decoded:
                 return decoded.get("model_id")
 
@@ -156,7 +156,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _model_id_from_wrapped_encrypted_content(encrypted_content: str) -> str | None:
-        model_id, _ = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(encrypted_content)
+        model_id, _ = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(encrypted_content)
         return model_id or None
 
     @staticmethod
