@@ -39,6 +39,7 @@ export default function ViewSwitcher() {
   const pathname = usePathname();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
+  const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
 
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
   const isChatRoute = chatEnabled && isRoute(normalizedPathname, uiHref(CHAT));
@@ -96,7 +97,6 @@ export default function ViewSwitcher() {
       ),
       onClick: () => selectMode(e.key),
     })),
-    chatItem,
     {
       key: MOYAI,
       label: (
@@ -111,8 +111,9 @@ export default function ViewSwitcher() {
           {isMoyaiRoute && <Check className="size-4 text-info" />}
         </div>
       ),
-      onClick: () => window.location.assign(uiHref(MOYAI)),
+      onClick: () => window.location.assign(moyaiUrl ?? uiHref(MOYAI)),
     },
+    chatItem,
   ];
 
   return (

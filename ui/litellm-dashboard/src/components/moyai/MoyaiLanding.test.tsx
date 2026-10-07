@@ -13,6 +13,36 @@ vi.mock("./moyaiSky", async (importOriginal) => {
 });
 
 describe("MoyaiLanding", () => {
+  it("shows the admin quick-connect line and validates the dialog input", async () => {
+    const onQuickConnect = vi.fn(async () => {});
+    render(<MoyaiLanding canQuickConnect onQuickConnect={onQuickConnect} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Quick connect" }));
+
+    const input = await screen.findByLabelText("Moyai URL");
+    fireEvent.change(input, { target: { value: "javascript:alert(1)" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("http or https");
+    expect(onQuickConnect).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: "  https://moyai.example.com/  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(onQuickConnect).toHaveBeenCalledWith("https://moyai.example.com");
+  });
+
+  it("shows the non-admin copy when quick connect is unavailable", () => {
+    render(<MoyaiLanding />);
+
+    expect(screen.getByText(/Ask a proxy admin to connect it/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Quick connect" })).not.toBeInTheDocument();
+  });
+
+  it("renders a quick-connect error when provided", () => {
+    render(<MoyaiLanding canQuickConnect onQuickConnect={vi.fn()} quickConnectError="Gateway refused" />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Gateway refused");
+  });
+
   it("links the GitHub, demo, and launch post CTAs to the exported URLs", () => {
     render(<MoyaiLanding />);
 

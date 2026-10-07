@@ -10872,6 +10872,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/moyai/connect/exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Moyai Connect Exchange */
+        post: operations["moyai_connect_exchange_moyai_connect_exchange_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/moyai/connect/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Moyai Connect Start */
+        post: operations["moyai_connect_start_moyai_connect_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/nvidia_nim/{endpoint}": {
         parameters: {
             query?: never;
@@ -38918,6 +38952,34 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** MoyaiConnectExchangeRequest */
+        MoyaiConnectExchangeRequest: {
+            /** Code */
+            code: string;
+            /** Moyai Url */
+            moyai_url: string;
+        };
+        /** MoyaiConnectExchangeResponse */
+        MoyaiConnectExchangeResponse: {
+            /** Api Base */
+            api_base: string;
+            /** Api Key */
+            api_key: string;
+            /** Key Alias */
+            key_alias: string;
+        };
+        /** MoyaiConnectStartRequest */
+        MoyaiConnectStartRequest: {
+            /** Moyai Url */
+            moyai_url: string;
+            /** Return To */
+            return_to: string;
+        };
+        /** MoyaiConnectStartResponse */
+        MoyaiConnectStartResponse: {
+            /** Connect Url */
+            connect_url: string;
+        };
         /**
          * MutualTLSSecurityScheme
          * @description Defines a security scheme using mTLS authentication.
@@ -66027,6 +66089,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    moyai_connect_exchange_moyai_connect_exchange_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoyaiConnectExchangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoyaiConnectExchangeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    moyai_connect_start_moyai_connect_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoyaiConnectStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoyaiConnectStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

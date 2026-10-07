@@ -15,6 +15,8 @@ import openaiLogo from "../../../public/assets/moyai/logos/openai.svg";
 import opencodeLogo from "../../../public/assets/moyai/logos/opencode.svg";
 import xaiLogo from "../../../public/assets/moyai/logos/xai.svg";
 import { PLANET_HORIZON, prefersReducedMotion, startPlanetrise, startStarfield } from "./moyaiSky";
+import { normalizeMoyaiUrl } from "./moyaiConnect";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import styles from "./MoyaiLanding.module.css";
 
 export const MOYAI_GITHUB_URL = "https://github.com/BerriAI/moyai";
@@ -136,7 +138,10 @@ function LogoWall({ title, items, footnote }: { title: string; items: LogoItem[]
       <figcaption className="mb-4 text-xs uppercase tracking-[0.16em] text-[#a6aab3]">{title}</figcaption>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2.5">
         {items.map((item) => (
-          <div key={item.name} className="flex items-center gap-2.5 rounded-xl bg-white/[0.04] px-3 py-2.5 text-[15px] text-[#f5f6fa]">
+          <div
+            key={item.name}
+            className="flex items-center gap-2.5 rounded-xl bg-white/[0.04] px-3 py-2.5 text-[15px] text-[#f5f6fa]"
+          >
             <img src={item.logo.src} alt="" className="size-[30px] rounded-lg bg-[#f4f5fa] object-contain p-[5px]" />
             <span>{item.name}</span>
           </div>
@@ -212,13 +217,95 @@ function DemoPreview() {
   );
 }
 
+function QuickConnectDialog({ onQuickConnect }: { onQuickConnect: (url: string) => Promise<void> | void }) {
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  const connect = async () => {
+    const normalized = normalizeMoyaiUrl(url);
+    if (!normalized) {
+      setError("Enter a full http or https URL, without credentials");
+      return;
+    }
+    setError(null);
+    setPending(true);
+    try {
+      await onQuickConnect(normalized);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start quick connect");
+      setPending(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <button
+            type="button"
+            className="text-[#8b9bff] underline underline-offset-4 transition-colors hover:text-[#cfe3ff]"
+          />
+        }
+      >
+        Quick connect
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Quick connect Moyai</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-2">
+          <label htmlFor="moyai-quick-connect-url" className="text-sm font-medium">
+            Moyai URL
+          </label>
+          <input
+            id="moyai-quick-connect-url"
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://moyai.your-company.com"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+          />
+          <p className="m-0 text-xs text-muted-foreground">
+            You&rsquo;ll confirm on your Moyai workspace as an admin, then come straight back
+          </p>
+          {error && (
+            <p role="alert" className="m-0 text-xs text-red-500">
+              {error}
+            </p>
+          )}
+        </div>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            disabled={pending}
+            onClick={connect}
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+          >
+            {pending ? "Connecting" : "Connect"}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 const STATS = [
   { value: "79%", label: "cheaper than our Devin bill" },
   { value: "100+", label: "providers through LiteLLM" },
   { value: "6", label: "agent harnesses" },
 ];
 
-export default function MoyaiLanding() {
+export default function MoyaiLanding({
+  canQuickConnect = false,
+  onQuickConnect,
+  quickConnectError,
+}: {
+  canQuickConnect?: boolean;
+  onQuickConnect?: (url: string) => Promise<void> | void;
+  quickConnectError?: string;
+}) {
   const heroRef = useRef<HTMLElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
   const starsRef = useCanvasScene(startStarfield);
@@ -232,7 +319,9 @@ export default function MoyaiLanding() {
         <canvas ref={planetRef} aria-hidden="true" className="pointer-events-none absolute inset-0 size-full" />
 
         <div ref={anchorRef} className="relative z-sticky flex flex-col items-center px-6 pt-[4vh] text-center">
-          <div className={`${styles.rise} mb-5 inline-flex items-center gap-2 rounded-full bg-white/[0.06] px-3 py-1 text-[11px] uppercase tracking-[0.22em] text-[rgba(220,228,255,0.75)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12)]`}>
+          <div
+            className={`${styles.rise} mb-5 inline-flex items-center gap-2 rounded-full bg-white/[0.06] px-3 py-1 text-[11px] uppercase tracking-[0.22em] text-[rgba(220,228,255,0.75)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12)]`}
+          >
             <span className="size-1.5 rounded-full bg-[#28c840] shadow-[0_0_8px_#28c840]" />
             Now open source
           </div>
@@ -249,11 +338,32 @@ export default function MoyaiLanding() {
           >
             The open source cloud coding agent
           </p>
-          <div className={`${styles.rise} mt-7 flex flex-wrap items-center justify-center gap-3`} style={{ animationDelay: "0.26s" }}>
+          <div
+            className={`${styles.rise} mt-7 flex flex-wrap items-center justify-center gap-3`}
+            style={{ animationDelay: "0.26s" }}
+          >
             <GithubCta />
             <SecondaryCta href={MOYAI_WALKTHROUGH_URL} icon={<Play className="size-4" />}>
               Watch the demo
             </SecondaryCta>
+          </div>
+          <div
+            className={`${styles.rise} mt-4 text-sm text-[rgba(226,234,255,0.6)]`}
+            style={{ animationDelay: "0.34s" }}
+          >
+            {canQuickConnect && onQuickConnect ? (
+              <span className="flex flex-wrap items-center justify-center gap-1.5">
+                Already have Moyai deployed?
+                <QuickConnectDialog onQuickConnect={onQuickConnect} />
+              </span>
+            ) : (
+              <span>Already have Moyai deployed? Ask a proxy admin to connect it</span>
+            )}
+            {quickConnectError && (
+              <span role="alert" className="mt-1 block text-xs text-[#ff9d9d]">
+                {quickConnectError}
+              </span>
+            )}
           </div>
         </div>
 
@@ -279,7 +389,10 @@ export default function MoyaiLanding() {
       <div className="relative z-raised mx-auto max-w-5xl px-6 pb-24">
         <div className="grid grid-cols-3 gap-3 pt-14 max-sm:grid-cols-1">
           {STATS.map((s) => (
-            <div key={s.value} className="rounded-2xl bg-white/[0.03] px-6 py-5 text-center shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]">
+            <div
+              key={s.value}
+              className="rounded-2xl bg-white/[0.03] px-6 py-5 text-center shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
+            >
               <div className="bg-gradient-to-b from-white to-[#9cc3ff] bg-clip-text text-4xl font-semibold tracking-[-0.03em] text-transparent">
                 {s.value}
               </div>
@@ -292,14 +405,22 @@ export default function MoyaiLanding() {
           See it in action
         </h2>
         <p className="mx-auto mb-8 mt-0 max-w-2xl text-center text-[17px] text-[#c2c6d0]">
-          Give it a task from Slack or the browser. It edits code, runs your tests in its own cloud workspace, and opens a
-          pull request while your laptop is closed.
+          Give it a task from Slack or the browser. It edits code, runs your tests in its own cloud workspace, and opens
+          a pull request while your laptop is closed.
         </p>
         <DemoPreview />
 
         <div className="mt-16 grid gap-4 md:grid-cols-2">
-          <LogoWall title="Any harness" items={HARNESSES} footnote="Pick the harness per session. Same workspace, tools and permissions." />
-          <LogoWall title="Any model, any provider" items={PROVIDERS} footnote="Routed through your LiteLLM gateway, with spend tracked per teammate." />
+          <LogoWall
+            title="Any harness"
+            items={HARNESSES}
+            footnote="Pick the harness per session. Same workspace, tools and permissions."
+          />
+          <LogoWall
+            title="Any model, any provider"
+            items={PROVIDERS}
+            footnote="Routed through your LiteLLM gateway, with spend tracked per teammate."
+          />
         </div>
 
         <div className="relative mt-20 overflow-hidden rounded-3xl px-8 py-14 text-center shadow-[0_0_0_1px_rgba(159,171,255,0.2)]">
@@ -308,9 +429,12 @@ export default function MoyaiLanding() {
             className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_120%,rgba(120,170,255,0.45)_0%,rgba(40,60,140,0.15)_45%,rgba(5,7,13,0)_75%)]"
           />
           <img src={moyaiHead.src} alt="" className={`${styles.mark} relative z-raised mx-auto mb-4 h-14 w-auto`} />
-          <h2 className="relative z-raised m-0 text-[clamp(26px,3vw,40px)] font-medium tracking-[-0.03em] text-white">Run your own cloud agent</h2>
+          <h2 className="relative z-raised m-0 text-[clamp(26px,3vw,40px)] font-medium tracking-[-0.03em] text-white">
+            Run your own cloud agent
+          </h2>
           <p className="relative z-raised mx-auto mb-7 mt-3 max-w-xl text-[16px] text-[#c2c6d0]">
-            Deploy it on your own infrastructure and point it at this gateway. Your code and credentials stay in your accounts.
+            Deploy it on your own infrastructure and point it at this gateway. Your code and credentials stay in your
+            accounts.
           </p>
           <code className="relative z-raised mx-auto mb-8 block w-fit max-w-full overflow-x-auto rounded-xl bg-black/50 px-5 py-3 text-left font-mono text-sm text-[#cfe3ff] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.1)]">
             git clone {MOYAI_GITHUB_URL}.git
