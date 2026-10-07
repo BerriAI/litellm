@@ -20,6 +20,8 @@ interface RunsToolbarProps {
   query: string;
   onQueryChange: (value: string) => void;
   runs: readonly TraceSummary[];
+  /** Agents with a run anywhere in the range, including ones whose runs aren't loaded yet. */
+  agentOptions?: readonly string[];
   /** The range the list shows, for the copied query. */
   range?: TimeWindow;
   /** The list is reloading for a new range; the search box shows a spinner. */
@@ -28,9 +30,17 @@ interface RunsToolbarProps {
   children?: React.ReactNode;
 }
 
-export function RunsToolbar({ query, onQueryChange, runs, range, busy, children }: RunsToolbarProps) {
+export function RunsToolbar({
+  query,
+  onQueryChange,
+  runs,
+  agentOptions = [],
+  range,
+  busy,
+  children,
+}: RunsToolbarProps) {
   const { agent, status, setAgent, setStatus } = useRunFilterRouting();
-  const agents = [...new Set([...runs.flatMap(traceAgentNames), ...(agent ? [agent] : [])])].sort();
+  const agents = [...new Set([...agentOptions, ...runs.flatMap(traceAgentNames), ...(agent ? [agent] : [])])].sort();
   const statuses = [
     { value: "all", label: "All status" },
     { value: "ok", label: "No errors" },
