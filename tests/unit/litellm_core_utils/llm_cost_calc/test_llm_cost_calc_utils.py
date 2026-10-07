@@ -3830,3 +3830,61 @@ def test_azure_gpt_5_6_alias_matches_sol_pricing(_local_model_cost_map, region_p
     assert shared_cost_fields
     for field in shared_cost_fields:
         assert alias[field] == sol[field], field
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "prompt_tokens", "input_rate", "cache_read_rate", "output_rate"),
+    [
+        ("claude-haiku-5-5", "anthropic", 100_000, 1e-07, 1e-08, 5e-07),
+        ("claude-haiku-5-5", "anthropic", 100_001, 5e-07, 5e-08, 2.5e-06),
+        ("azure_ai/claude-haiku-5-5", "azure_ai", 100_000, 1e-07, 1e-08, 5e-07),
+        ("azure_ai/claude-haiku-5-5", "azure_ai", 100_001, 5e-07, 5e-08, 2.5e-06),
+        ("global.anthropic.claude-haiku-5-5", "bedrock", 100_000, 1e-07, 1e-08, 5e-07),
+        ("global.anthropic.claude-haiku-5-5", "bedrock", 100_001, 5e-07, 5e-08, 2.5e-06),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", 100_000, 1.1e-07, 1.1e-08, 5.5e-07),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", 100_001, 5.5e-07, 5.5e-08, 2.75e-06),
+        ("us-gov.anthropic.claude-haiku-5-5", "bedrock", 100_000, 1.2e-07, 1.2e-08, 6e-07),
+        ("us-gov.anthropic.claude-haiku-5-5", "bedrock", 100_001, 6e-07, 6e-08, 3e-06),
+        ("bedrock_mantle/anthropic.claude-haiku-5-5", "bedrock_mantle", 100_001, 5.5e-07, 5.5e-08, 2.75e-06),
+        ("bedrock/us-gov-west-1/anthropic.claude-haiku-5-5", "bedrock", 100_001, 6e-07, 6e-08, 3e-06),
+    ],
+)
+def test_generic_cost_per_token_claude_haiku_5_5_prompt_length_tiers(
+    _local_model_cost_map, model, custom_llm_provider, prompt_tokens, input_rate, cache_read_rate, output_rate
+):
+    """Claude Haiku 5.5 bills every token at 5x the base rates once the prompt is over 100,000 tokens."""
+    cached_tokens = 10_000
+    completion_tokens = 1_000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    expected_prompt = (prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "expected"),
+    [
+        (100_000, (5e-08, 2.5e-07, 5e-09, 6.25e-08)),
+        (100_001, (2.5e-07, 1.25e-06, 2.5e-08, 3.125e-07)),
+    ],
+)
+def test_get_batch_cost_rates_claude_haiku_5_5_prompt_length_tiers(_local_model_cost_map, prompt_tokens, expected):
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        litellm.model_cost["claude-haiku-5-5"],
+        Usage(prompt_tokens=prompt_tokens, completion_tokens=1, total_tokens=prompt_tokens + 1),
+        "anthropic",
+    )
+
+    assert (rates.input, rates.output, rates.cache_read, rates.cache_creation) == expected
