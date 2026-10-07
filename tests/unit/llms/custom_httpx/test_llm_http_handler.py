@@ -3,10 +3,13 @@ import base64
 import inspect
 import json
 import logging
+import ssl
 import threading
 import time
-from typing import Final
+from collections.abc import Awaitable, Callable
+from typing import Final, NoReturn
 from unittest.mock import AsyncMock, Mock, patch
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -4374,6 +4377,87 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     assert events[6]["usage"] == {"type": "duration", "seconds": 2.0}
     assert speech_client.requests[0].streaming_config.config.model == "chirp_3"
     assert [bytes(request.audio) for request in speech_client.requests[1:]] == [b"\x00\x01" * 800, b"\x00\x01" * 800]
+
+
+class _RecordingConnect:
+    def __init__(self) -> None:
+        self.dials: Final[list[tuple[str, object]]] = []
+
+    def __call__(self, uri: str, **kwargs: object) -> NoReturn:
+        self.dials.append((urlsplit(uri).scheme, kwargs["ssl"]))
+        raise RuntimeError("the test ends at the dial")
+
+
+async def _dial_realtime_backend(api_base: str) -> None:
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    await BaseLLMHTTPHandler().async_realtime(
+        model="gemini-3.8-live",
+        websocket=_FakeClientWebSocket(),
+        logging_obj=Mock(),
+        provider_config=GeminiRealtimeConfig(),
+        headers={},
+        api_base=api_base,
+        api_key="test-key",
+    )
+
+
+async def _dial_responses_backend(api_base: str) -> None:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    await BaseLLMHTTPHandler().async_responses_websocket(
+        model="gpt-5.6",
+        websocket=_FakeClientWebSocket(),
+        logging_obj=Mock(),
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        api_base=f"{api_base}/v1",
+        api_key="sk-test",
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dial_backend", [_dial_realtime_backend, _dial_responses_backend], ids=["realtime", "responses_websocket"]
+)
+async def test_a_ws_backend_from_an_http_api_base_is_dialed_without_ssl(
+    dial_backend: Callable[[str], Awaitable[None]],
+):
+    connect: Final = _RecordingConnect()
+    with patch("websockets.connect", connect):
+        await dial_backend("http://backend.test")
+
+    assert connect.dials == [("ws", None)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dial_backend", [_dial_realtime_backend, _dial_responses_backend], ids=["realtime", "responses_websocket"]
+)
+@pytest.mark.parametrize(
+    ("ssl_verify", "verify_mode", "check_hostname"),
+    [("True", ssl.CERT_REQUIRED, True), ("False", ssl.CERT_NONE, False)],
+    ids=["verify_on", "verify_off"],
+)
+async def test_a_wss_backend_from_an_https_api_base_keeps_tls_and_honors_ssl_verify(
+    monkeypatch: pytest.MonkeyPatch,
+    dial_backend: Callable[[str], Awaitable[None]],
+    ssl_verify: str,
+    verify_mode: ssl.VerifyMode,
+    check_hostname: bool,
+):
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._shared_realtime_ssl_context", None)
+    monkeypatch.setenv("SSL_VERIFY", ssl_verify)
+    connect: Final = _RecordingConnect()
+    with patch("websockets.connect", connect):
+        await dial_backend("https://backend.test")
+
+    assert [scheme for scheme, _ in connect.dials] == ["wss"]
+    backend_ssl: Final = connect.dials[0][1]
+    assert isinstance(backend_ssl, ssl.SSLContext), connect.dials
+    assert (backend_ssl.verify_mode, backend_ssl.check_hostname) == (verify_mode, check_hostname)
 
 
 @pytest.mark.asyncio

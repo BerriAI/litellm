@@ -258,7 +258,7 @@ class _WebsocketsModule(Protocol):
         *,
         additional_headers: Mapping[str, str],
         max_size: int | None,
-        ssl: bool | str | ssl.SSLContext,
+        ssl: bool | str | ssl.SSLContext | None,
         open_timeout: float,
     ) -> Awaitable["ClientConnection"]: ...
 
@@ -500,6 +500,19 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
         for callback in callbacks
         if callable(getattr(callback, "enforce_project_io_token_quota_for_frame", None))
     )
+
+
+def _backend_websocket_ssl(url: str) -> bool | str | ssl.SSLContext | None:
+    if url.startswith("ws://"):
+        return None
+    shared_ssl: Final = get_shared_realtime_ssl_context()
+    if shared_ssl is not False:
+        return shared_ssl
+    # Keep TLS for wss:// while honoring SSL_VERIFY=False semantics.
+    unverified_ssl: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    unverified_ssl.check_hostname = False
+    unverified_ssl.verify_mode = ssl.CERT_NONE
+    return unverified_ssl
 
 
 class BaseLLMHTTPHandler:
@@ -6257,7 +6270,7 @@ class BaseLLMHTTPHandler:
         websockets_module: _WebsocketsModule,
         url: str,
         headers: dict,
-        ssl_context: bool | str | ssl.SSLContext,
+        ssl_context: bool | str | ssl.SSLContext | None,
         *,
         open_timeout: float = 8.0,
         max_attempts: int = 3,
@@ -6329,12 +6342,7 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            ssl_context = get_shared_realtime_ssl_context()
-            if url.startswith("wss://") and ssl_context is False:
-                # Keep TLS for wss:// while honoring SSL_VERIFY=False semantics.
-                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
+            ssl_context: Final = _backend_websocket_ssl(url)
             provider_backend: Final = await provider_config.open_backend(url, headers)
             backend_ws: Final = (
                 provider_backend
@@ -6721,11 +6729,7 @@ class BaseLLMHTTPHandler:
                 ws_url = urlunparse(_parsed._replace(query=urlencode({k: v[0] for k, v in _qs.items()})))
 
         try:
-            ssl_context = get_shared_realtime_ssl_context()
-            if ws_url.startswith("wss://") and ssl_context is False:
-                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
+            ssl_context: Final = _backend_websocket_ssl(ws_url)
 
             logging_obj.pre_call(
                 input=None,
