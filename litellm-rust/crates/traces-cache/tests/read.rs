@@ -15,7 +15,9 @@ use litellm_traces::{
         TraceIdentityParams, TracePageSpansParams, TraceSpansParams, TraceSpansRow,
     },
 };
-use litellm_traces_cache::{LIVE_TTL, ReadError, StoreError, TraceReader, TraceStore};
+use litellm_traces_cache::{
+    LIVE_TTL, ReadError, StoreError, TraceListQuery, TraceReader, TraceStore,
+};
 use rstest::rstest;
 
 const START_NS: i64 = 1_790_742_989_000_000_000;
@@ -46,6 +48,7 @@ struct State {
     failures: HashMap<Operation, Failure>,
     trace_refs: Vec<String>,
     list_runs: Vec<ListTracesRow>,
+    list_agents: Vec<String>,
     trace_spans: HashMap<String, Vec<TraceSpansRow>>,
     run_spans: Vec<TraceSpansRow>,
     spend: Vec<SpendByResponseIdsRow>,
@@ -98,6 +101,10 @@ impl FakeStore {
 
     fn set_list_runs(&self, rows: Vec<ListTracesRow>) {
         self.state.lock().unwrap().list_runs = rows;
+    }
+
+    fn list_agents(&self) -> Vec<String> {
+        self.state.lock().unwrap().list_agents.clone()
     }
 
     fn set_list_runs_too_large_above(&self, limit: u32) {
@@ -165,7 +172,8 @@ impl TraceStore for FakeStore {
         params: &ListTracesParams,
     ) -> Result<Vec<ListTracesRow>, StoreError<Self::Error>> {
         self.calls.list_runs.fetch_add(1, Ordering::SeqCst);
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        state.list_agents.push(params.agent.clone());
         Self::failure(&state, Operation::ListRuns)?;
         if state
             .list_runs_too_large_above
@@ -466,18 +474,54 @@ async fn list_run_budget_halves_the_limit_and_cursor_requires_a_full_page() {
     let reader = TraceReader::new(usize::MAX);
     let access = access();
     let page = reader
-        .list_traces(&store, &access, 0, i64::MAX, None, 8)
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: i64::MAX,
+                cursor: None,
+                limit: 8,
+                agent: "claude-code",
+            },
+        )
         .await
         .unwrap();
     assert_eq!(page.data.len(), 2);
     assert!(page.next_cursor.is_some());
     assert_eq!(store.calls(Operation::ListRuns), 3);
+    assert_eq!(store.list_agents(), ["claude-code"; 3]);
+    reader
+        .list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: i64::MAX,
+                cursor: page.next_cursor.as_deref(),
+                limit: 8,
+                agent: "claude-code",
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.list_agents(), ["claude-code"; 4]);
 
     let shorter = FakeStore::default();
     shorter.set_list_runs(vec![run("only", "ref-only")]);
     shorter.set_list_runs_too_large_above(2);
     let page = reader
-        .list_traces(&shorter, &access, 0, i64::MAX, None, 8)
+        .list_traces(
+            &shorter,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: i64::MAX,
+                cursor: None,
+                limit: 8,
+                agent: "",
+            },
+        )
         .await
         .unwrap();
     assert_eq!(page.data.len(), 1);
@@ -498,7 +542,17 @@ async fn oversized_run_batch_falls_back_to_each_run_and_keeps_listed_summaries()
     store.set_failure(Operation::RunSpans, Failure::TooLarge);
     let reader = TraceReader::new(usize::MAX);
     let page = reader
-        .list_traces(&store, &access(), 0, i64::MAX, None, 2)
+        .list_traces(
+            &store,
+            &access(),
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: i64::MAX,
+                cursor: None,
+                limit: 2,
+                agent: "",
+            },
+        )
         .await
         .unwrap();
     assert_eq!(page.data.len(), 2);
@@ -510,7 +564,17 @@ async fn oversized_run_batch_falls_back_to_each_run_and_keeps_listed_summaries()
     assert_eq!(store.calls(Operation::TraceSpans), 2);
 
     let again = reader
-        .list_traces(&store, &access(), 0, i64::MAX, None, 2)
+        .list_traces(
+            &store,
+            &access(),
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: i64::MAX,
+                cursor: None,
+                limit: 2,
+                agent: "",
+            },
+        )
         .await
         .unwrap();
     assert_eq!(again.data, page.data);
@@ -565,7 +629,17 @@ async fn failed_batch_spend_lookup_falls_back_to_each_run_instead_of_losing_ever
     store.set_spend_fails_above_response_ids(1);
 
     let page = TraceReader::new(usize::MAX)
-        .list_traces(&store, &access(), 0, i64::MAX, None, 8)
+        .list_traces(
+            &store,
+            &access(),
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: i64::MAX,
+                cursor: None,
+                limit: 8,
+                agent: "",
+            },
+        )
         .await
         .unwrap();
 
@@ -652,7 +726,17 @@ async fn zero_list_limit_is_rejected() {
     let access = access();
     assert!(matches!(
         reader
-            .list_traces(&store, &access, 0, i64::MAX, None, 0)
+            .list_traces(
+                &store,
+                &access,
+                TraceListQuery {
+                    start_ms: 0,
+                    end_ms: i64::MAX,
+                    cursor: None,
+                    limit: 0,
+                    agent: ""
+                }
+            )
             .await,
         Err(ReadError::InvalidParameters)
     ));
@@ -774,7 +858,19 @@ async fn listed_runs_are_read_once_until_a_live_run_expires() {
     store.set_run_spans(vec![live, settled]);
     let reader = TraceReader::new(usize::MAX);
     let access = access();
-    let list = || reader.list_traces(&store, &access, 0, i64::MAX, None, 2);
+    let list = || {
+        reader.list_traces(
+            &store,
+            &access,
+            TraceListQuery {
+                start_ms: 0,
+                end_ms: i64::MAX,
+                cursor: None,
+                limit: 2,
+                agent: "",
+            },
+        )
+    };
 
     let first = list().await.unwrap();
     assert!(first.data.iter().all(|summary| summary.name == "agent"));
