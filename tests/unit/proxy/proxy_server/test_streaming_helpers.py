@@ -558,6 +558,17 @@ def test_fast_serialize_simple_model_response_stream_with_extra_field_returns_no
     assert _fast_serialize_simple_model_response_stream(chunk) is None
 
 
+def test_fast_serialize_simple_model_response_stream_with_none_extra_uses_fast_path():
+    """The stream wrapper sets ``citations=None`` on every OpenAI-style chunk.
+    ``exclude_none`` drops it on the slow path too, so it must not disable
+    the fast path."""
+    chunk = _simple_chunk()
+    chunk.citations = None
+    fast = _fast_serialize_simple_model_response_stream(chunk)
+    assert fast is not None
+    assert "citations" not in json.loads(fast)
+
+
 def test_serialize_streaming_chunk_keeps_extra_field():
     chunk = _simple_chunk()
     chunk.gateway_metadata = {"served_by": "fallback-model"}
