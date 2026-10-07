@@ -71,3 +71,28 @@ print(Holder(item=validated).model_dump_json(serialize_as_any=True), Holder(item
 
 def test_deferred_instances_created_without_their_own_init_still_serialize_as_any() -> None:
     assert _run_probe(_NESTED_PROBE, None) == '{"item":{"value":1}} {"item":{"value":2}}'
+
+
+_CALLER_LOCALS_PROBE: Final = """
+from litellm.types.llms.base import LiteLLMBaseModel
+
+
+class Probe(LiteLLMBaseModel):
+    value: int
+
+
+def build() -> list[str]:
+    local_vars = locals()
+    later = 1
+    Probe(value=later)
+    return sorted(local_vars)
+
+
+print(build())
+"""
+
+
+def test_deferred_first_use_build_leaves_caller_locals_snapshot_untouched() -> None:
+    # video_generation forwards its locals() snapshot as request params; a frame-walking rebuild
+    # used to sync later locals (including the snapshot itself) into it
+    assert _run_probe(_CALLER_LOCALS_PROBE, "true") == "[]"
