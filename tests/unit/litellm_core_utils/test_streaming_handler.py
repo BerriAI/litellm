@@ -3902,8 +3902,6 @@ def _sdk_connection_error() -> Exception:
 async def test_sdk_wrapped_httpx2_read_error_after_finish_reason_ends_stream_gracefully(
     logging_obj: Logging,
 ):
-    """openai 3.25+ re-raises a dropped connection as APIConnectionError from the httpx2
-    read error; after the finish chunk that must still end the stream cleanly."""
     httpx2 = pytest.importorskip("httpx2")
 
     completion_stream = TransportErrorAfterChunksIterator(
@@ -3940,7 +3938,6 @@ async def test_sdk_wrapped_httpx2_read_error_after_finish_reason_ends_stream_gra
 async def test_httpx2_protocol_error_after_finish_reason_ends_stream_gracefully(
     logging_obj: Logging,
 ):
-    """openai 3.0 hands the raw httpx2 error through; after the finish chunk it ends the stream."""
     httpx2 = pytest.importorskip("httpx2")
 
     completion_stream = TransportErrorAfterChunksIterator(
@@ -3964,7 +3961,6 @@ async def test_httpx2_protocol_error_after_finish_reason_ends_stream_gracefully(
 
 @pytest.mark.asyncio
 async def test_sdk_wrapped_httpx2_read_error_before_finish_reason_raises(logging_obj: Logging):
-    """A wrapped drop before any finish chunk still surfaces as a mid-stream failure."""
     httpx2 = pytest.importorskip("httpx2")
 
     from litellm.exceptions import MidStreamFallbackError

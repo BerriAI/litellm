@@ -183,8 +183,6 @@ def _sdk_httpx() -> ModuleType:
 
 @pytest.mark.asyncio
 async def test_acompletion_ends_a_finished_stream_cleanly_when_the_connection_drops_before_done():
-    """The body drops after the finish chunk and before [DONE], raised by whichever httpx the SDK
-    runs on (httpx2 on openai 3, which 3.25+ wraps in APIConnectionError); the stream still ends cleanly."""
     sdk_httpx: Final = _sdk_httpx()
 
     def chunk(delta: dict[str, str], finish: str | None) -> bytes:

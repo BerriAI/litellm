@@ -2,9 +2,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import cache
+from itertools import accumulate
 from typing import Final
 
 import httpx
+from typing_extensions import assert_never
 
 from litellm.exceptions import APIConnectionError, Timeout
 
@@ -39,10 +41,13 @@ def _transport_classes() -> _TransportClasses:
     )
 
 
-def _explicit_causes(exc: BaseException, depth: int = _MAX_CAUSE_DEPTH) -> Iterator[BaseException]:
-    yield exc
-    if exc.__cause__ is not None and depth > 1:
-        yield from _explicit_causes(exc.__cause__, depth - 1)
+def _next_cause(cause: BaseException | None, _: int) -> BaseException | None:
+    return None if cause is None else cause.__cause__
+
+
+def _explicit_causes(exc: BaseException) -> Iterator[BaseException]:
+    chain: Final = accumulate(range(_MAX_CAUSE_DEPTH - 1), _next_cause, initial=exc)
+    return (cause for cause in chain if cause is not None)
 
 
 def classify_transport_error(exc: BaseException) -> TransportErrorKind | None:
@@ -62,7 +67,8 @@ def classify_transport_error(exc: BaseException) -> TransportErrorKind | None:
 
 
 def as_public_exception(exc: Exception, model: str | None, llm_provider: str | None) -> Exception | None:
-    match classify_transport_error(exc):
+    kind: Final = classify_transport_error(exc)
+    match kind:
         case TransportErrorKind.TIMEOUT:
             return Timeout(
                 message=f"timed out reading the response: {exc}",
@@ -77,3 +83,4 @@ def as_public_exception(exc: Exception, model: str | None, llm_provider: str | N
             )
         case None:
             return None
+    return assert_never(kind)
