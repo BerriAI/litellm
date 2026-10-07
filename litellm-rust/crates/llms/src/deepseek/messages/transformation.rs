@@ -7,6 +7,7 @@ use litellm_llms_types::{
         BuiltinMessagesTool, CustomTool, MessagesOptionalParams, MessagesRequest, MessagesTool,
     },
     recognized::Recognized,
+    serde_compat::Nullable,
 };
 
 use crate::{
@@ -78,10 +79,12 @@ impl BaseMessagesConfig for DeepSeekMessagesConfig {
             transform_messages_request_with(request, context, COMPATIBLE_HOST_REQUEST_POLICY)?;
         Ok(MessagesRequest {
             params: MessagesOptionalParams {
-                tools: request
-                    .params
-                    .tools
-                    .map(|tools| tools.into_iter().map(without_custom_type).collect()),
+                tools: request.params.tools.map(|tools| match tools {
+                    Nullable::Null => Nullable::Null,
+                    Nullable::Value(tools) => {
+                        Nullable::Value(tools.into_iter().map(without_custom_type).collect())
+                    }
+                }),
                 ..request.params
             },
             ..request
@@ -483,13 +486,13 @@ mod tests {
         };
         use litellm_llms_types::recognized::Recognized;
         let params = MessagesOptionalParams {
-            max_tokens: Some(4096),
+            max_tokens: Some(Nullable::Value(4096)),
             thinking: Some(Recognized::Known(thinking)),
             output_config: Some(Recognized::Known(OutputConfig {
                 effort: Some(Recognized::Known(EffortLevel::High)),
                 ..Default::default()
             })),
-            temperature: Some(0.7),
+            temperature: Some(Nullable::Value(0.7)),
             ..Default::default()
         };
         let request = MessagesRequest {
@@ -591,16 +594,16 @@ mod tests {
             model: "deepseek-v4-pro".into(),
             messages: messages.clone(),
             params: MessagesOptionalParams {
-                max_tokens: Some(100),
+                max_tokens: Some(Nullable::Value(100)),
                 thinking: Some(Recognized::Known(ThinkingConfig::enabled(1024))),
-                tools: Some(vec![
+                tools: Some(Nullable::Value(vec![
                     Recognized::Known(MessagesTool::Builtin(BuiltinMessagesTool::Custom(
                         custom.clone(),
                     ))),
                     Recognized::Known(MessagesTool::Builtin(
                         BuiltinMessagesTool::WebSearch20260209(web.clone()),
                     )),
-                ]),
+                ])),
                 ..Default::default()
             },
         };
@@ -612,15 +615,15 @@ mod tests {
             result.params.thinking,
             Some(Recognized::Known(ThinkingConfig::enabled(1024)))
         );
-        assert_eq!(result.params.max_tokens, Some(100));
+        assert_eq!(result.params.max_tokens, Some(Nullable::Value(100)));
         assert_eq!(
             result.params.tools,
-            Some(vec![
+            Some(Nullable::Value(vec![
                 Recognized::Known(MessagesTool::Custom(CustomTool::try_from(custom).unwrap())),
                 Recognized::Known(MessagesTool::Builtin(
                     BuiltinMessagesTool::WebSearch20260209(web)
                 ))
-            ])
+            ]))
         );
     }
 
