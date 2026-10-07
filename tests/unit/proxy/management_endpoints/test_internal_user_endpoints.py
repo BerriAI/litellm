@@ -2646,6 +2646,47 @@ async def test_get_user_daily_activity_aggregated_admin_keeps_requested_key(monk
 
 
 @pytest.mark.asyncio
+async def test_get_user_daily_activity_aggregated_admin_does_not_widen_empty_user_key_filter(monkeypatch):
+    import litellm.proxy.management_endpoints.internal_user_endpoints as endpoints
+
+    prisma_client = MagicMock()
+    repository = object()
+    expected = SimpleNamespace(result="empty-user-scope")
+    calls = {}
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+
+    async def empty_key_filter(client, user_id, api_key):
+        calls["filter"] = (client, user_id, api_key)
+        return []
+
+    monkeypatch.setattr(endpoints, "get_user_api_key_filter", empty_key_filter)
+    monkeypatch.setattr(endpoints, "daily_activity_repository", lambda client: repository)
+
+    async def capture_scope(repository_arg, scope):
+        calls["scope"] = (repository_arg, scope)
+        return expected
+
+    monkeypatch.setattr(endpoints, "get_daily_activity_aggregated", capture_scope)
+
+    result = await endpoints.get_user_daily_activity_aggregated(
+        start_date="2026-01-01",
+        end_date="2026-01-01",
+        model=None,
+        api_key="not-owned-by-selected-user",
+        user_id="selected-user",
+        timezone=None,
+        include_current_utc_day=False,
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert result is expected
+    assert calls["filter"] == (prisma_client, "selected-user", "not-owned-by-selected-user")
+    assert calls["scope"][0] is repository
+    assert calls["scope"][1].api_keys == ()
+
+
+@pytest.mark.asyncio
 async def test_get_user_daily_activity_aggregated_rejects_other_non_admin(monkeypatch):
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         get_user_daily_activity_aggregated,

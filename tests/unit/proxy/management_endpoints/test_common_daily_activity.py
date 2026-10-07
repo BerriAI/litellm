@@ -2560,6 +2560,28 @@ async def test_get_user_api_key_filter_scopes_to_active_and_deleted_user_keys():
 
 
 @pytest.mark.asyncio
+async def test_get_user_api_key_filter_ignores_malformed_and_duplicate_rows():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(token="active-key", user_id="target-user"),
+            SimpleNamespace(token="active-key", user_id="target-user"),
+            SimpleNamespace(token="other-user-key", user_id="other-user"),
+            SimpleNamespace(token=None, user_id="target-user"),
+        ]
+    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(token="deleted-key", user_id="target-user"),
+            SimpleNamespace(token="active-key", user_id="target-user"),
+            SimpleNamespace(token="orphaned-key", user_id=None),
+        ]
+    )
+
+    assert await get_user_api_key_filter(mock_prisma, "target-user", None) == ["active-key", "deleted-key"]
+
+
+@pytest.mark.asyncio
 async def test_get_user_api_key_filter_fails_closed_when_deleted_lookup_fails():
     mock_prisma = MagicMock()
     active_key = SimpleNamespace(token="active-key", user_id="target-user")
