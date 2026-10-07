@@ -967,6 +967,23 @@ class TestOllamaStreamingUsage:
         assert result.usage is not None
         assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (100, 50, 150)
 
+    def test_done_chunk_reports_cached_tokens_ollama_sent(self):
+        result = self._parse(
+            {
+                "model": "qwen3:0.6b",
+                "message": {"role": "assistant", "content": ""},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 6024,
+                "prompt_eval_cached_count": 6016,
+                "eval_count": 50,
+            }
+        )
+
+        assert result.usage is not None
+        assert result.usage.prompt_tokens_details is not None
+        assert result.usage.prompt_tokens_details.cached_tokens == 6016
+
     def test_done_chunk_without_counts_reports_no_usage_instead_of_zeros(self):
         result = self._parse(
             {
