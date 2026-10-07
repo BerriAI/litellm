@@ -29251,7 +29251,7 @@
     },
     "gemini/gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
-        "deprecation_date": "2026-10-02",
+        "deprecation_date": "2027-03-15",
         "input_cost_per_audio_token": 1e-06,
         "input_cost_per_token": 3e-07,
         "input_cost_per_token_batches": 1.5e-07,
@@ -29701,6 +29701,7 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-2.5-flash-preview-tts": {
+        "deprecation_date": "2026-11-17",
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "gemini",
@@ -30274,7 +30275,7 @@
         "supports_video_input": true,
         "supports_vision": true,
         "tpm": 800000,
-        "deprecation_date": "2026-09-30"
+        "deprecation_date": "2026-10-22"
     },
     "gemini/gemini-3.1-pro-preview": {
         "prompt_cache_min_tokens": 4096,
@@ -30781,6 +30782,7 @@
     },
     "gemini/gemini-2.5-pro-preview-tts": {
         "cache_read_input_token_cost": 1.25e-07,
+        "deprecation_date": "2026-11-17",
         "input_cost_per_audio_token": 7e-07,
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_batches": 5e-07,
@@ -39325,48 +39327,6 @@
         "source": "https://docs.mistral.ai/models/mistral-large-3-25-12",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
-    },
-    "mistral/mistral-large-4": {
-        "cache_read_input_token_cost": 6.8e-08,
-        "input_cost_per_token": 6.8e-07,
-        "litellm_provider": "mistral",
-        "max_input_tokens": 524288,
-        "max_tokens": 524288,
-        "mode": "chat",
-        "output_cost_per_token": 2.09e-06,
-        "reasoning_effort_levels": [
-            "none",
-            "high"
-        ],
-        "source": "https://docs.mistral.ai/models/mistral-large-4",
-        "supports_assistant_prefill": true,
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
-    },
-    "mistral/mistral-large-4-0": {
-        "cache_read_input_token_cost": 6.8e-08,
-        "input_cost_per_token": 6.8e-07,
-        "litellm_provider": "mistral",
-        "max_input_tokens": 524288,
-        "max_tokens": 524288,
-        "mode": "chat",
-        "output_cost_per_token": 2.09e-06,
-        "reasoning_effort_levels": [
-            "none",
-            "high"
-        ],
-        "source": "https://docs.mistral.ai/models/mistral-large-4",
-        "supports_assistant_prefill": true,
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -57518,6 +57478,7 @@
         "gemini_native_audio": true
     },
     "gemini-2.5-flash-native-audio-preview-12-2025": {
+        "deprecation_date": "2026-11-17",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
@@ -57548,6 +57509,7 @@
         "supports_web_search": true
     },
     "gemini-3.1-flash-live-preview": {
+        "deprecation_date": "2026-11-17",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_image_token": 1e-06,
         "input_cost_per_token": 7.5e-07,
@@ -57709,6 +57671,7 @@
         "gemini_native_audio": true
     },
     "gemini/gemini-2.5-flash-native-audio-preview-12-2025": {
+        "deprecation_date": "2026-11-17",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
@@ -57742,6 +57705,7 @@
         "supports_reasoning": true
     },
     "gemini/gemini-3.1-flash-live-preview": {
+        "deprecation_date": "2026-11-17",
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_image_token": 1e-06,
         "input_cost_per_token": 7.5e-07,
@@ -57781,6 +57745,7 @@
         "supports_reasoning": true
     },
     "gemini/gemini-3.1-flash-tts-preview": {
+        "deprecation_date": "2026-11-17",
         "input_cost_per_token": 1e-06,
         "input_cost_per_token_batches": 5e-07,
         "litellm_provider": "gemini",
@@ -57852,6 +57817,7 @@
         "supports_prompt_caching": true
     },
     "gemini-2.5-flash-preview-tts": {
+        "deprecation_date": "2026-11-17",
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "gemini",
@@ -75368,23 +75334,6 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": false
-    },
-    "openrouter/mistralai/mistral-large-4-0": {
-        "cache_read_input_token_cost": 7e-08,
-        "input_cost_per_token": 6.8e-07,
-        "litellm_provider": "openrouter",
-        "max_input_tokens": 524288,
-        "max_output_tokens": 262144,
-        "max_tokens": 262144,
-        "mode": "chat",
-        "output_cost_per_token": 2.09e-06,
-        "source": "https://openrouter.ai/api/v1/models",
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
     },
     "openrouter/mistralai/mistral-large-2512:batch": {
         "cache_read_input_token_cost": 2.5e-08,
