@@ -37,6 +37,8 @@ pub struct Span {
     pub output_tokens: u32,
     pub litellm_request_id: Option<String>,
     pub spend: Option<f64>,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub cost_source: Option<CostSource>,
     pub spend_log_request_id: Option<String>,
     pub spend_match: Option<SpendMatch>,
 }
@@ -52,6 +54,14 @@ pub enum SpendMatch {
     IncompleteEvidence,
 }
 
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CostSource {
+    Gateway,
+    Estimated,
+}
+
 /// One distinct agent in a trace: 200 invocations of `researcher` are one node.
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +74,8 @@ pub struct AgentNode {
     pub duration_ms: f64,
     pub spend: Option<f64>,
     pub priced_calls: u64,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub estimated_calls: u64,
 }
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -126,6 +138,8 @@ pub struct TraceSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub source: Option<RunSource>,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub estimated_calls: u64,
 }
 
 #[macro_rules_attribute::apply(response_type)]

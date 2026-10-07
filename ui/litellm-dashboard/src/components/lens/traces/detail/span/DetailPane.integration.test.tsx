@@ -313,6 +313,23 @@ describe("DetailPane", () => {
     expect(screen.getByText("Cost").parentElement).toHaveTextContent("Cost$0.0005");
   });
 
+  it("explains estimated cost without presenting absent gateway evidence as missing cost", async () => {
+    const user = userEvent.setup();
+    const estimated: SpanFields = {
+      ...llmFields,
+      spend: 0.0000255,
+      spend_log_request_id: null,
+      spend_match: "incomplete_evidence",
+      cost_source: "estimated",
+    };
+    renderPane(spanRow(span(estimated)));
+    expect(screen.getByText("Estimated $0.000025")).toBeVisible();
+    expect(screen.getByText("Estimated from usage")).toBeVisible();
+    expect(screen.queryByText("not matched")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Request" }));
+    expect(await screen.findByText(/Estimated from reported token usage/, { selector: "p" })).toBeVisible();
+  });
+
   it("summarizes a ×N group with its failure pattern", () => {
     const members = Array.from({ length: 12 }, (_, i) => {
       const timedOut: SpanFields = {

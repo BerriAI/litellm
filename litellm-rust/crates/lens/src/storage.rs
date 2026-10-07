@@ -1,7 +1,7 @@
 use crate::Error;
 use litellm_http::Client;
 use litellm_traces::{QueryScope, ReadQuery, query::named::ReadAccessParams};
-use litellm_traces_cache::TraceReader;
+use litellm_traces_cache::{CatalogCostEstimator, TraceReader};
 use litellm_traces_clickhouse::{ClickHouseTraces, Config, Parameter, QueryReaders};
 use serde::Deserialize;
 use serde_json::Value;
@@ -81,9 +81,10 @@ impl Storage {
                 config.storage().writer().clone(),
                 config.storage().database().to_owned(),
             ),
-            reader: Arc::new(TraceReader::new(
-                litellm_storage_clickhouse::READ_LIMITS.response_bytes,
-            )),
+            reader: Arc::new(
+                TraceReader::new(litellm_storage_clickhouse::READ_LIMITS.response_bytes)
+                    .with_estimator(Arc::new(CatalogCostEstimator)),
+            ),
             config,
             client,
             query_secret,

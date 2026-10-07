@@ -6384,6 +6384,7 @@ def get_model_info_helper(
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
                 supports_regex_lookaround=_model_info.get("supports_regex_lookaround", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
+                supports_token_only_pricing=_model_info.get("supports_token_only_pricing", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
                 web_search_billing_unit=_model_info.get("web_search_billing_unit", None),
                 google_maps_grounding_cost_per_query=_model_info.get("google_maps_grounding_cost_per_query", None),

@@ -413,6 +413,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
     annotation_cost_per_page: float | None  # for OCR models
     annotation_cost_per_page_batches: ReadOnly[float | None]
+    supports_token_only_pricing: ReadOnly[bool | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None

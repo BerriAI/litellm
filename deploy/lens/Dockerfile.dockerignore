@@ -13,3 +13,9 @@
 !litellm-rust/
 !litellm-rust/**
 litellm-rust/target/
+
+!model_prices_and_context_window.json
+!litellm/integrations/
+!litellm/integrations/otel/
+!litellm/integrations/otel/model/
+!litellm/integrations/otel/model/providers.json

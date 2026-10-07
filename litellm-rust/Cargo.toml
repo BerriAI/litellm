@@ -9,6 +9,8 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
+litellm-cost = { path = "crates/cost" }
+litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-config = { path = "crates/config" }
 litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }

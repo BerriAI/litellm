@@ -76,6 +76,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "estimated_calls": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-python-optional": true
+        },
         "frameworks": {
           "items": {
             "type": "string"
@@ -192,7 +199,8 @@
         "output_tokens",
         "models",
         "spend",
-        "priced_calls"
+        "priced_calls",
+        "estimated_calls"
       ],
       "type": "object"
     }

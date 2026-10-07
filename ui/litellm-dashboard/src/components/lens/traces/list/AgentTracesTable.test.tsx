@@ -115,6 +115,18 @@ describe("AgentTracesTable virtualization", () => {
 });
 
 describe("runCost", () => {
+  it("labels estimates and keeps missing call coverage visible", () => {
+    const complete = { spend: 0.42, priced_calls: 20, llm_calls: 20, estimated_calls: 1 };
+    const partial = { spend: 0, priced_calls: 1, llm_calls: 2, estimated_calls: 1 };
+    expect(runCost(complete)).toEqual({
+      label: "Estimated $0.42",
+      partial: null,
+    });
+    expect(runCost(partial)).toEqual({
+      label: "Estimated $0.00",
+      partial: { short: "1/2 priced", long: "1 of 2 calls priced" },
+    });
+  });
   it.each([
     { spend: 0.42, priced_calls: 20, llm_calls: 20, expected: { label: "$0.42", partial: null } },
     {

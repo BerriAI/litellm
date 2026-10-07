@@ -6,6 +6,8 @@ RUN apk add --no-cache rust build-base cmake perl pkgconf openssl-dev libseccomp
 WORKDIR /src
 COPY .cargo/ .cargo/
 COPY litellm-rust/ litellm-rust/
+COPY model_prices_and_context_window.json model_prices_and_context_window.json
+COPY litellm/integrations/otel/model/providers.json litellm/integrations/otel/model/providers.json
 COPY litellm/proxy/lens/prompts/ litellm/proxy/lens/prompts/
 WORKDIR /src/litellm-rust
 ENV CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_STRIP=symbols

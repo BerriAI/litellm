@@ -103,6 +103,15 @@ def test_schema_rejects_malformed_entries(committed_schema: dict, entry: dict):
     assert not validator.is_valid({"some-model": entry})
 
 
+@pytest.mark.parametrize("value,valid", [(True, True), (False, True), ("false", False), (0, False)])
+def test_additional_pricing_contract_is_boolean(value: object, valid: bool) -> None:
+    schema: Final = json.loads(SCHEMA_PATH.read_text())
+    validator: Final = build_validator(schema)
+    assert validator.is_valid({"example": {
+        "litellm_provider": "openai", "supports_token_only_pricing": value,
+    }}) is valid
+
+
 def test_schema_accepts_minimal_and_unknown_optional_fields(committed_schema: dict):
     validator = build_validator(committed_schema)
     assert validator.is_valid({"some-model": {"litellm_provider": "openai"}})

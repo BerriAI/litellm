@@ -13,6 +13,8 @@ macro_rules_attribute::attribute_alias! {
 mod error;
 mod normalize;
 mod otlp;
+mod pricing;
+pub use pricing::estimate_cost;
 pub mod query;
 mod query_access;
 pub mod request;
@@ -38,12 +40,15 @@ pub use otlp::{
 };
 pub use query::ReadQuery;
 pub use query_access::QueryScope;
-pub use resolve::{SpendLookup, iso_time, listed_summary, resolve_trace};
+pub use resolve::{
+    SpendLookup, estimate_candidates, iso_time, listed_summary, resolve_trace,
+    resolve_trace_with_estimates,
+};
 pub use shared::{Shared, SharedIdentity};
 pub use tenant::Tenant;
 pub use truncate::{truncate_messages, truncate_value};
 pub use ui::{ChatRole, UiContent, UiField, UiMessage, UiToolCall, to_ui_content};
 pub use view::{
-    AgentNode, RunSource, RunSourceType, Span, SpanDetail, SpanErrorPage, SpanStatus, SpendMatch,
-    Trace, TracePage, TraceSummary,
+    AgentNode, CostSource, RunSource, RunSourceType, Span, SpanDetail, SpanErrorPage, SpanStatus,
+    SpendMatch, Trace, TracePage, TraceSummary,
 };

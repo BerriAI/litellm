@@ -16,7 +16,7 @@ use litellm_traces::{
         TraceSpansParams,
     },
     request::{TRACE_PAGE_SIZE_MAX, TRACE_PAGE_SIZE_MIN},
-    resolve_trace, to_ui_content,
+    to_ui_content,
 };
 
 pub const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
@@ -48,6 +48,7 @@ fn settle<T, E>(result: Result<T, Arc<Miss<E>>>) -> Result<Option<T>, ReadError<
 }
 
 pub struct TraceReader {
+    pub(super) estimator: Option<Arc<dyn crate::CostEstimator>>,
     snapshots: SnapshotCache,
     pub(super) lists: ListCache,
     response_bytes: usize,
@@ -56,9 +57,17 @@ pub struct TraceReader {
 impl TraceReader {
     pub fn new(response_bytes: usize) -> Self {
         Self {
+            estimator: None,
             snapshots: SnapshotCache::new(MAX_GRAPH_BYTES, SNAPSHOT_IDLE),
             lists: ListCache::new(),
             response_bytes,
+        }
+    }
+
+    pub fn with_estimator(self, estimator: Arc<dyn crate::CostEstimator>) -> Self {
+        Self {
+            estimator: Some(estimator),
+            ..self
         }
     }
 
@@ -211,12 +220,13 @@ impl TraceReader {
                     .await
                     .map_err(|error| Miss::Read(map_store_error(error)))?;
                 let spend_rows = spend(store, access, &rows).await;
-                resolve_trace(
+                self.resolve(
                     trace_id,
                     trace_ref,
                     &rows,
                     spend_rows.as_deref().unwrap_or_default(),
                 )
+                .await
                 .map(|trace| {
                     let freshness = Freshness::of(&rows, &trace, snapshot_ms);
                     (trace, freshness)

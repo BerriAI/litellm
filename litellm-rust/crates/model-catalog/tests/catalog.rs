@@ -43,6 +43,25 @@ fn fixture_catalog() -> Catalog {
 }
 
 #[rstest]
+fn typed_catalog_preserves_non_token_pricing(#[values(true, false)] required: bool) {
+    let catalog = Catalog::parse(
+        &serde_json::to_vec(&json!({"example": {
+            "litellm_provider":"openai", "aliases":["deployment"],
+            "supports_token_only_pricing":required
+        }}))
+        .unwrap(),
+        Provenance::default(),
+    )
+    .unwrap();
+    let entry = catalog.lookup("deployment").unwrap().entry;
+    assert_eq!(entry.info().supports_token_only_pricing, Some(required));
+    assert_eq!(
+        entry.field("supports_token_only_pricing"),
+        Some(&json!(required))
+    );
+}
+
+#[rstest]
 #[ignore]
 fn preserves_fields_and_metadata(fixture_catalog: Catalog) {
     let catalog = fixture_catalog;

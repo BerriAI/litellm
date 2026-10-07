@@ -1,0 +1,20 @@
+{
+  "openai": "openai",
+  "text-completion-openai": "openai",
+  "azure": "azure.ai.openai",
+  "azure_ai": "azure.ai.inference",
+  "anthropic": "anthropic",
+  "bedrock": "aws.bedrock",
+  "bedrock_converse": "aws.bedrock",
+  "vertex_ai": "gcp.vertex_ai",
+  "vertex_ai_beta": "gcp.vertex_ai",
+  "gemini": "gcp.gemini",
+  "cohere": "cohere",
+  "cohere_chat": "cohere",
+  "mistral": "mistral_ai",
+  "deepseek": "deepseek",
+  "groq": "groq",
+  "perplexity": "perplexity",
+  "xai": "x_ai",
+  "watsonx": "ibm.watsonx.ai"
+}

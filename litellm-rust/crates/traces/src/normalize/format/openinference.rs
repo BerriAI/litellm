@@ -16,6 +16,10 @@ use crate::{
 /// Arize OpenInference: spans carry `openinference.span.kind`.
 pub(crate) struct OpenInference;
 
+pub(crate) const MODEL: &str = "llm.model_name";
+pub(crate) const INPUT_TOKENS: &str = "llm.token_count.prompt";
+pub(crate) const OUTPUT_TOKENS: &str = "llm.token_count.completion";
+
 #[derive(Deserialize)]
 struct ResponseIdentity {
     #[serde(default, deserialize_with = "messages::present")]
@@ -105,9 +109,9 @@ impl Format for OpenInference {
             facts: SpanFacts {
                 role,
                 agent_name: present(attributes, &["agent.name"]),
-                model: present(attributes, &["llm.model_name", "embedding.model_name"]),
-                input_tokens: token_count(attributes, "llm.token_count.prompt", usage_input)?,
-                output_tokens: token_count(attributes, "llm.token_count.completion", usage_output)?,
+                model: present(attributes, &[MODEL, "embedding.model_name"]),
+                input_tokens: token_count(attributes, INPUT_TOKENS, usage_input)?,
+                output_tokens: token_count(attributes, OUTPUT_TOKENS, usage_output)?,
                 input: input.text,
                 output: output.text,
                 tool_call_id: present(attributes, &["tool.id"]),

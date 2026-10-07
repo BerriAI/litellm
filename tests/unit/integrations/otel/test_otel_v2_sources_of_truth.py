@@ -5,10 +5,12 @@ import json
 import logging
 import re
 from collections.abc import Mapping
+from importlib.resources import files
 from pathlib import Path
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
@@ -212,6 +214,19 @@ def test_provider_resolution():
     # unknown providers pass through verbatim (semconv allows provider-specific)
     assert resolve_provider("my_custom_llm") == "my_custom_llm"
     assert resolve_provider(None) == ""
+
+
+@pytest.mark.parametrize(
+    "provider,canonical",
+    tuple(
+        TypeAdapter(dict[str, str])
+        .validate_json(files("litellm.integrations.otel.model").joinpath("providers.json").read_text())
+        .items()
+    ),
+)
+def test_provider_resolution_shares_catalog_mapping(provider: str, canonical: str) -> None:
+    assert resolve_provider(provider) == canonical
+    assert resolve_provider(provider.upper()) == canonical
 
 
 def test_operation_resolution():

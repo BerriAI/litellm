@@ -1135,6 +1135,9 @@
         "supports_thinking_cache_preservation": {
           "type": "boolean"
         },
+        "supports_token_only_pricing": {
+          "type": "boolean"
+        },
         "supports_tool_choice": {
           "type": "boolean"
         },

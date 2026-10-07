@@ -572,3 +572,68 @@ async fn newly_created_key_is_retryable_until_this_replica_has_refreshed() {
     )]);
     assert!(server.state.credentials.tenant(&headers).is_ok());
 }
+
+#[rstest]
+#[tokio::test]
+async fn standalone_trace_read_uses_the_bundled_native_estimator() {
+    let catalog: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../../model_prices_and_context_window.json"
+    ))
+    .unwrap();
+    let (model, prices) = catalog
+        .as_object()
+        .unwrap()
+        .iter()
+        .find(|(name, row)| {
+            name.as_str() != "sample_spec"
+                && row["litellm_provider"] == "openai"
+                && row["mode"] == "chat"
+                && row["input_cost_per_token"]
+                    .as_f64()
+                    .is_some_and(|rate| rate > 0.0)
+                && row["output_cost_per_token"]
+                    .as_f64()
+                    .is_some_and(|rate| rate > 0.0)
+                && row.get("tiered_pricing").is_none()
+                && row.get("off_peak_pricing").is_none()
+        })
+        .unwrap();
+    let expected = 10.0 * prices["input_cost_per_token"].as_f64().unwrap()
+        + 2.0 * prices["output_cost_per_token"].as_f64().unwrap();
+    let store = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("AS pricing_attributes"))
+        .and(query_param("param_user_id", "agent-owner"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [{
+            "trace_id":"trace", "span_id":"span", "parent_span_id":"", "name":"chat",
+            "type":"llm", "agent":"", "status":"STATUS_CODE_OK", "status_message":"",
+            "error_truncated":0, "start_ns":1, "duration_ns":1000000,
+            "service":"agent", "input_preview":"", "model":model,
+            "input_tokens":10, "output_tokens":2, "litellm_request_id":"",
+            "team_id":"", "user_id":"agent-owner", "api_key_hash":"",
+            "pricing_attributes":{
+                "gen_ai.response.model":model, "gen_ai.provider.name":"openai", "gen_ai.usage.input_tokens":"10",
+                "gen_ai.usage.output_tokens":"2", "gen_ai.usage.reasoning.output_tokens":"0"
+            }
+        }]})))
+        .expect(1)
+        .mount(&store)
+        .await;
+    let server = serve(&store.uri(), true).await;
+    let response = http_client()
+        .unwrap()
+        .post(format!("{}/internal/read", server.url))
+        .bearer_auth(SERVICE_TOKEN)
+        .json(
+            &json!({"operation":"trace", "trace_id":"trace", "trace_ref":"ref",
+            "scope":{"all_teams":0, "user_id":"agent-owner", "team_ids":[]}}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let trace = response.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(trace["summary"]["spend"].as_f64(), Some(expected));
+    assert_eq!(trace["summary"]["estimated_calls"], 1);
+    assert_eq!(trace["spans"][0]["cost_source"], "estimated");
+}

@@ -425,3 +425,75 @@ async fn captured_sdk_exports_round_trip_through_clickhouse(
     }
     Ok(())
 }
+
+#[rstest]
+#[case::detail(include_str!("../query/trace_spans.sql"))]
+#[case::page(include_str!("../query/trace_page_spans.sql"))]
+#[case::detail_batch(include_str!("../query/trace_span_batch.sql"))]
+#[case::list_batch(include_str!("../query/trace_list_span_batch.sql"))]
+#[tokio::test]
+async fn every_span_query_preserves_pricing_evidence(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] sql: &str,
+) -> TestResult {
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+
+    let fixture = migrated_database?;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let pricing = json!({
+        "gen_ai.output.type":"speech", "gen_ai.request.model":"text-model",
+        "gen_ai.usage.input_tokens":"100", "gen_ai.usage.output_tokens":"10",
+        "llm.model_name":"text-model", "llm.provider":"azure", "llm.system":"openai",
+        "llm.token_count.prompt":"100", "llm.token_count.completion":"10",
+        "llm.token_count.prompt_details.cache_read":"20", "llm.token_count.prompt_details.cache_write":"10",
+        "llm.token_count.completion_details.reasoning":"4", "gen_ai.usage.details.reasoning_tokens":"4",
+        "gen_ai.usage.reasoning_tokens":"4", "gen_ai.usage.details.web_search_requests":"1",
+        "anthropic.usage.server_tool_use.web_search_requests":"1",
+        "llm.token_count.prompt_details.audio":"2",
+        "llm.token_count.completion_details.audio":"3", "gen_ai.usage.details.audio_tokens":"5"
+    });
+    let mut attributes = pricing.as_object().ok_or("pricing object")?.clone();
+    attributes.insert("gen_ai.input.messages".into(), json!("unselected content"));
+    insert_rows(
+        &fixture.database.client,
+        &writer,
+        fixtures::DATABASE,
+        InsertTable::OtelTraces,
+        vec![BTreeMap::from([
+            ("Timestamp".into(), json!(1)),
+            ("Duration".into(), json!(1)),
+            ("TraceId".into(), json!("trace-a")),
+            ("SpanId".into(), json!("span-a")),
+            ("TeamId".into(), json!("team-a")),
+            ("ApiKeyHash".into(), json!("key-a")),
+            ("SpanAttributes".into(), json!(attributes)),
+        ])],
+    )
+    .await?;
+    let reference = format!("{:X}", Sha256::digest(b"team-a\0key-a\0trace-a"));
+    let params = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(1)),
+        ("user_id".into(), Parameter::Text(String::new())),
+        ("team_ids".into(), Parameter::Strings(Vec::new())),
+        ("trace_id".into(), Parameter::Text("trace-a".into())),
+        ("trace_ref".into(), Parameter::Text(reference.clone())),
+        ("trace_refs".into(), Parameter::Strings(vec![reference])),
+        ("start_ms".into(), Parameter::Integer(0)),
+        ("end_ms".into(), Parameter::Integer(10)),
+        ("snapshot_ms".into(), Parameter::Unsigned(u64::MAX)),
+        ("page_size".into(), Parameter::Unsigned(10)),
+        ("after_span_id".into(), Parameter::Text(String::new())),
+        ("after_team".into(), Parameter::Text(String::new())),
+        ("after_key".into(), Parameter::Text(String::new())),
+        ("after_trace".into(), Parameter::Text(String::new())),
+        ("after_span".into(), Parameter::Text(String::new())),
+    ]);
+    let reader = Connection::reader(&fixture.database.url, fixtures::DATABASE)?;
+    let rows: QueryResult = serde_json::from_str(
+        &execute_read(&fixture.database.client, &reader, sql, &params).await?,
+    )?;
+    assert_eq!(rows.data.len(), 1);
+    assert_eq!(rows.data[0]["pricing_attributes"], pricing);
+    Ok(())
+}

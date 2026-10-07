@@ -20,8 +20,12 @@ const UNMATCHED_REASON: Record<Exclude<NonNullable<Span["spend_match"]>, "matche
 
 const LENS_TRACE = { label: "Lens trace", icon: <Aperture aria-hidden /> };
 
-export const unmatchedReason = (span: Span): string | null =>
-  span.spend_match && span.spend_match !== "matched" ? UNMATCHED_REASON[span.spend_match] : null;
+export const costExplanation = (span: Span): string | null => {
+  if (span.cost_source === "estimated") {
+    return "Estimated from reported token usage and LiteLLM model pricing; no gateway spend log is linked";
+  }
+  return span.spend_match && span.spend_match !== "matched" ? UNMATCHED_REASON[span.spend_match] : null;
+};
 
 export function SpendLogLink({
   span,
@@ -35,13 +39,19 @@ export function SpendLogLink({
   const [open, setOpen] = useState(false);
   const requestId = span.spend_log_request_id ?? null;
   const logQuery = useSpanRequestLog(accessToken, requestId, traceStartMs + span.start_offset_ms, open);
-  const reason = unmatchedReason(span);
+  const reason = costExplanation(span);
 
   if (requestId == null) {
     if (!reason) return null;
     return (
       <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" title={reason}>
-        Cost <span className="font-medium text-foreground">not matched</span>
+        {span.cost_source === "estimated" ? (
+          "Estimated from usage"
+        ) : (
+          <>
+            Cost <span className="font-medium text-foreground">not matched</span>
+          </>
+        )}
       </span>
     );
   }

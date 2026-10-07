@@ -29,6 +29,7 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         model: String::new(),
         input_tokens: 0,
         output_tokens: 0,
+        pricing_attributes: Default::default(),
         litellm_request_id: String::new(),
         call_keys: Vec::new(),
         call_evidence: None,
@@ -54,6 +55,7 @@ fn llm(span_id: &str, parent: &str, agent: &str, response_id: &str) -> TraceSpan
         model: "claude-sonnet-4-5".into(),
         input_tokens: 100,
         output_tokens: 20,
+        pricing_attributes: Default::default(),
         litellm_request_id: response_id.into(),
         call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
         ..at(row(span_id, parent, "ChatOpenAI", "llm", agent), 1, 100)
@@ -275,6 +277,7 @@ fn repeated_subagent_invocations_aggregate_into_one_node() {
             duration_ms: 1000.0,
             spend: None,
             priced_calls: 0,
+            estimated_calls: 0,
         }
     );
     let researcher = &trace.agents[1];
@@ -1965,4 +1968,177 @@ fn provider_request_id_cannot_match_a_message_id_of_the_same_value() {
     let trace = resolve_trace("trace", "ref", &[call], &rows).unwrap();
     assert_eq!(trace.summary.spend, None);
     assert_eq!(trace.spans[0].spend_match, Some(SpendMatch::NoSpendLog));
+}
+
+#[rstest]
+fn estimates_cover_only_unmatched_leaf_calls_and_preserve_recorded_gateway_cost() {
+    use litellm_traces::{CostSource, estimate_candidates, resolve_trace_with_estimates};
+    use std::collections::BTreeMap;
+    let rows = [
+        row("agent", "", "Agent", "agent", "agent"),
+        llm("wrapper", "agent", "agent", ""),
+        TraceSpansRow {
+            pricing_attributes: BTreeMap::from([("gen_ai.response.model".into(), "model".into())]),
+            ..llm("direct", "wrapper", "agent", "direct-response")
+        },
+        llm("gateway", "agent", "agent", "gateway-response"),
+        llm("unknown", "agent", "agent", "unknown-response"),
+    ];
+    let spend_rows = [spend("gateway-request", "gateway-response", 0.75)];
+    assert_eq!(
+        estimate_candidates(&rows, &spend_rows)
+            .iter()
+            .map(|row| row.span_id.as_str())
+            .collect::<Vec<_>>(),
+        ["direct"]
+    );
+    let estimates = BTreeMap::from([
+        ("direct".into(), 0.25),
+        ("wrapper".into(), 9.0),
+        ("gateway".into(), 9.0),
+    ]);
+    let trace = resolve_trace_with_estimates("trace", "", &rows, &spend_rows, &estimates).unwrap();
+    assert_eq!(trace.summary.spend, Some(1.0));
+    assert_eq!(trace.summary.priced_calls, 2);
+    assert_eq!(trace.summary.estimated_calls, 1);
+    assert_eq!(trace.agents[0].spend, Some(1.0));
+    assert_eq!(trace.spans[1].spend, None);
+    assert_eq!(trace.spans[2].cost_source, Some(CostSource::Estimated));
+    assert_eq!(trace.spans[2].spend_match, Some(SpendMatch::NoSpendLog));
+    assert_eq!(trace.spans[3].cost_source, Some(CostSource::Gateway));
+    let reconciled = resolve_trace_with_estimates(
+        "trace",
+        "",
+        &rows,
+        &[spend_rows[0].clone(), spend("late", "direct-response", 0.5)],
+        &estimates,
+    )
+    .unwrap();
+    assert_eq!(reconciled.summary.spend, Some(1.25));
+    assert_eq!(reconciled.summary.estimated_calls, 0);
+}
+
+#[rstest]
+#[case::zero(0.0, 0.0, Some(0.0))]
+#[case::positive(0.25, 0.25, Some(0.25))]
+#[case::conflicting(0.25, 0.5, None)]
+#[case::invalid(-1.0, -1.0, None)]
+#[case::not_finite(f64::INFINITY, f64::INFINITY, None)]
+fn duplicate_observations_never_double_charge_estimates(
+    #[case] amount: f64,
+    #[case] duplicate_amount: f64,
+    #[case] expected: Option<f64>,
+) {
+    use std::collections::BTreeMap;
+    let rows = [
+        llm("first", "", "", "same-response"),
+        llm("second", "", "", "same-response"),
+    ];
+    let estimates = BTreeMap::from([
+        ("first".into(), amount),
+        ("second".into(), duplicate_amount),
+    ]);
+    let trace =
+        litellm_traces::resolve_trace_with_estimates("trace", "", &rows, &[], &estimates).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+}
+
+#[rstest]
+#[case::standard_single_call("chat", true)]
+#[case::no_standard_operation("", false)]
+#[case::agent_wrapper("invoke_agent", false)]
+fn mixed_format_single_call_usage_can_be_estimated_without_claiming_complete_gateway_evidence(
+    #[case] operation: &str,
+    #[case] expected: bool,
+) {
+    let call = TraceSpansRow {
+        call_evidence: Some(litellm_traces::CallEvidenceKind::Partial),
+        pricing_attributes: std::collections::BTreeMap::from([(
+            "gen_ai.operation.name".into(),
+            operation.into(),
+        )]),
+        ..llm("call", "", "", "provider-response")
+    };
+    assert_eq!(
+        !litellm_traces::estimate_candidates(&[call], &[]).is_empty(),
+        expected
+    );
+}
+
+#[rstest]
+#[case::transitive_aliases("response", "100", false, Some(0.25))]
+#[case::conflicting_response("different-response", "100", false, None)]
+#[case::equal_price_conflicting_usage("response", "101", false, None)]
+#[case::incomplete_alias("response", "100", true, None)]
+fn connected_call_identities_require_consistent_usage_and_evidence(
+    #[case] response: &str,
+    #[case] input_tokens: &str,
+    #[case] incomplete: bool,
+    #[case] expected: Option<f64>,
+) {
+    use litellm_traces::{
+        CallEvidenceKind, CallKey, estimate_candidates, resolve_trace_with_estimates,
+    };
+    use std::collections::BTreeMap;
+    let attributes = BTreeMap::from([("gen_ai.usage.input_tokens".into(), "100".into())]);
+    let rows = [
+        TraceSpansRow {
+            call_keys: vec![CallKey::ProviderResponse("response".into())],
+            pricing_attributes: attributes.clone(),
+            ..llm("first", "", "", "")
+        },
+        TraceSpansRow {
+            call_keys: vec![
+                CallKey::ProviderResponse("response".into()),
+                CallKey::ProviderRequest("request".into()),
+            ],
+            pricing_attributes: attributes,
+            ..llm("second", "", "", "")
+        },
+        TraceSpansRow {
+            call_keys: vec![
+                CallKey::ProviderRequest("request".into()),
+                CallKey::ProviderResponse(response.into()),
+            ],
+            call_evidence: incomplete.then_some(CallEvidenceKind::Partial),
+            pricing_attributes: BTreeMap::from([(
+                "gen_ai.usage.input_tokens".into(),
+                input_tokens.into(),
+            )]),
+            ..llm("third", "", "", "")
+        },
+    ];
+    let estimates = BTreeMap::from([
+        ("first".into(), 0.25),
+        ("second".into(), 0.25),
+        ("third".into(), 0.25),
+    ]);
+    let trace = resolve_trace_with_estimates("trace", "", &rows, &[], &estimates).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert!(trace.spans.iter().all(|span| span.spend == expected));
+    assert_eq!(
+        estimate_candidates(&rows, &[]).len(),
+        if expected.is_some() { 3 } else { 0 }
+    );
+    assert_eq!(
+        trace.summary.estimated_calls,
+        if expected.is_some() { 3 } else { 0 }
+    );
+}
+
+#[rstest]
+#[case::no_id(vec![])]
+#[case::transport(vec![litellm_traces::CallKey::Transport])]
+#[case::gateway_attempt(vec![litellm_traces::CallKey::GatewayAttempt])]
+fn marker_keys_do_not_combine_distinct_call_estimates(#[case] keys: Vec<litellm_traces::CallKey>) {
+    let rows = ["first", "second"].map(|id| TraceSpansRow {
+        call_keys: keys.clone(),
+        ..llm(id, "", "", "")
+    });
+    let estimates =
+        std::collections::BTreeMap::from([("first".into(), 0.25), ("second".into(), 0.5)]);
+    let trace =
+        litellm_traces::resolve_trace_with_estimates("trace", "", &rows, &[], &estimates).unwrap();
+    assert_eq!(trace.summary.spend, Some(0.75));
+    assert_eq!(trace.summary.estimated_calls, 2);
 }

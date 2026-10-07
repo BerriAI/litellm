@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_http::ClientVariant;
 use litellm_traces::{QueryScope, ReadQuery, Tenant, query::named::ReadAccessParams};
-use litellm_traces_cache::{ReadError, TraceReader};
+use litellm_traces_cache::{CatalogCostEstimator, ReadError, TraceReader};
 use litellm_traces_clickhouse::{
     ClickHouseTraces, Config, Error, InsertTable, Parameter, QueryReaders,
 };
@@ -137,9 +137,10 @@ impl NativeTraceStorage {
                 config.inner.storage().writer().clone(),
                 config.inner.storage().database().to_owned(),
             ),
-            reader: Arc::new(TraceReader::new(
-                litellm_storage_clickhouse::READ_LIMITS.response_bytes,
-            )),
+            reader: Arc::new(
+                TraceReader::new(litellm_storage_clickhouse::READ_LIMITS.response_bytes)
+                    .with_estimator(Arc::new(CatalogCostEstimator)),
+            ),
             config: config.inner.clone(),
         })
     }

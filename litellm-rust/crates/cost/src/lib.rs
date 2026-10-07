@@ -1,3 +1,6 @@
+pub mod catalog;
+mod schedule;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Rate {
     Missing,
@@ -332,33 +335,7 @@ impl PricingPlan {
 
     pub fn calculate(&self, request: &Request) -> Result<Cost, PricingError> {
         let usage = request.usage;
-        let cached = usage
-            .cache_read_tokens
-            .checked_add(usage.cache_write_tokens)
-            .ok_or(PricingError::TokenCountOverflow)?;
-        let (regular, threshold_tokens) = match usage.prompt_convention {
-            PromptConvention::IncludesCache => (
-                usage
-                    .prompt_tokens
-                    .checked_sub(cached)
-                    .ok_or(PricingError::CacheExceedsPrompt)?,
-                usage.prompt_tokens,
-            ),
-            PromptConvention::ExcludesCache => (
-                usage.prompt_tokens,
-                usage
-                    .prompt_tokens
-                    .checked_add(cached)
-                    .ok_or(PricingError::TokenCountOverflow)?,
-            ),
-        };
-        let writes = match (usage.cache_write_5m_tokens, usage.cache_write_1h_tokens) {
-            (None, None) => (usage.cache_write_tokens, 0),
-            (Some(five), Some(one)) if five.checked_add(one) == Some(usage.cache_write_tokens) => {
-                (five, one)
-            }
-            _ => return Err(PricingError::InvalidCacheWriteDetails),
-        };
+        let (regular, threshold_tokens, writes) = token_counts(usage)?;
         let rates = self.resolve_rates(request, threshold_tokens)?;
         let input = Self::checked_rate(rates.input, PricingError::MissingInputRate)?;
         let output = Self::checked_rate(rates.output, PricingError::MissingOutputRate)?;
@@ -378,28 +355,80 @@ impl PricingPlan {
         if !multiplier.is_finite() || multiplier <= 0.0 {
             return Err(PricingError::InvalidRegionMultiplier);
         }
-        let cost = Cost {
-            uncached_input: regular as f64 * input,
-            cache_read: usage.cache_read_tokens as f64 * read,
-            cache_write_5m: writes.0 as f64 * write,
-            cache_write_1h: writes.1 as f64 * write_1h,
-            output: usage.completion_tokens as f64 * output,
-            multiplier,
-            rates: EffectiveRates {
+        components(
+            usage,
+            regular,
+            writes,
+            EffectiveRates {
                 input,
                 output,
                 cache_read: read,
                 cache_write_5m: write,
                 cache_write_1h: write_1h,
             },
-        };
-        if !cost.total().is_finite() {
-            return Err(PricingError::TokenCountOverflow);
-        }
-        Ok(cost)
+            multiplier,
+            0,
+            output,
+        )
     }
 }
 
 pub fn calculate(pricing: &Pricing<'_>, request: &Request) -> Result<Cost, PricingError> {
     compile(pricing)?.calculate(request)
+}
+
+fn token_counts(usage: Usage) -> Result<(u64, u64, (u64, u64)), PricingError> {
+    let cached = usage
+        .cache_read_tokens
+        .checked_add(usage.cache_write_tokens)
+        .ok_or(PricingError::TokenCountOverflow)?;
+    let (regular, threshold_tokens) = match usage.prompt_convention {
+        PromptConvention::IncludesCache => (
+            usage
+                .prompt_tokens
+                .checked_sub(cached)
+                .ok_or(PricingError::CacheExceedsPrompt)?,
+            usage.prompt_tokens,
+        ),
+        PromptConvention::ExcludesCache => (
+            usage.prompt_tokens,
+            usage
+                .prompt_tokens
+                .checked_add(cached)
+                .ok_or(PricingError::TokenCountOverflow)?,
+        ),
+    };
+    let writes = match (usage.cache_write_5m_tokens, usage.cache_write_1h_tokens) {
+        (None, None) => (usage.cache_write_tokens, 0),
+        (Some(five), Some(one)) if five.checked_add(one) == Some(usage.cache_write_tokens) => {
+            (five, one)
+        }
+        _ => return Err(PricingError::InvalidCacheWriteDetails),
+    };
+    Ok((regular, threshold_tokens, writes))
+}
+
+fn components(
+    usage: Usage,
+    regular: u64,
+    writes: (u64, u64),
+    rates: EffectiveRates,
+    multiplier: f64,
+    reasoning_tokens: u64,
+    reasoning_rate: f64,
+) -> Result<Cost, PricingError> {
+    let cost = Cost {
+        uncached_input: regular as f64 * rates.input,
+        cache_read: usage.cache_read_tokens as f64 * rates.cache_read,
+        cache_write_5m: writes.0 as f64 * rates.cache_write_5m,
+        cache_write_1h: writes.1 as f64 * rates.cache_write_1h,
+        output: (usage.completion_tokens - reasoning_tokens) as f64 * rates.output
+            + reasoning_tokens as f64 * reasoning_rate,
+        multiplier,
+        rates,
+    };
+    if !cost.total().is_finite() {
+        return Err(PricingError::TokenCountOverflow);
+    }
+    Ok(cost)
 }

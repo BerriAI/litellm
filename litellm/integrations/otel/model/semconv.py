@@ -5,8 +5,11 @@ without a semconv equivalent lives under the ``litellm.*`` vendor namespace.
 
 from collections.abc import Mapping
 from enum import Enum
+from importlib.resources import files
 from types import MappingProxyType
 from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 
@@ -368,26 +371,11 @@ class Metric:
 
 
 # litellm ``custom_llm_provider`` -> ``gen_ai.provider.name`` value.
-_PROVIDER_BY_LITELLM: Final[dict[str, GenAIProvider]] = {
-    "openai": GenAIProvider.OPENAI,
-    "text-completion-openai": GenAIProvider.OPENAI,
-    "azure": GenAIProvider.AZURE_AI_OPENAI,
-    "azure_ai": GenAIProvider.AZURE_AI_INFERENCE,
-    "anthropic": GenAIProvider.ANTHROPIC,
-    "bedrock": GenAIProvider.AWS_BEDROCK,
-    "bedrock_converse": GenAIProvider.AWS_BEDROCK,
-    "vertex_ai": GenAIProvider.GCP_VERTEX_AI,
-    "vertex_ai_beta": GenAIProvider.GCP_VERTEX_AI,
-    "gemini": GenAIProvider.GCP_GEMINI,
-    "cohere": GenAIProvider.COHERE,
-    "cohere_chat": GenAIProvider.COHERE,
-    "mistral": GenAIProvider.MISTRAL_AI,
-    "deepseek": GenAIProvider.DEEPSEEK,
-    "groq": GenAIProvider.GROQ,
-    "perplexity": GenAIProvider.PERPLEXITY,
-    "xai": GenAIProvider.X_AI,
-    "watsonx": GenAIProvider.IBM_WATSONX_AI,
-}
+_PROVIDER_BY_LITELLM: Final[Mapping[str, GenAIProvider]] = MappingProxyType(
+    TypeAdapter(dict[str, GenAIProvider]).validate_json(
+        files("litellm.integrations.otel.model").joinpath("providers.json").read_text(encoding="utf-8")
+    )
+)
 
 # litellm ``call_type`` -> ``gen_ai.operation.name``.
 _OPERATION_BY_CALL_TYPE: Final[dict[str, GenAIOperation]] = {

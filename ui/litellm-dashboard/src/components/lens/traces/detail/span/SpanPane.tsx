@@ -31,7 +31,9 @@ const spanFacts = (span: Span): readonly Fact[] => {
   const tokens = span.input_tokens + span.output_tokens;
   const optional: readonly (Fact | null)[] = [
     tokens > 0 ? ["Tokens", fmtTok(tokens)] : null,
-    span.spend != null && span.spend_log_request_id == null ? ["Cost", formatCost(span.spend)] : null,
+    span.spend != null && span.spend_log_request_id == null
+      ? ["Cost", formatCost(span.spend, span.cost_source === "estimated")]
+      : null,
     span.type === "llm" && span.model ? ["Step", span.name] : null,
   ];
   return [["Duration", fmtMs(span.duration_ms)], ...optional.filter((fact): fact is Fact => fact !== null)];

@@ -17,6 +17,8 @@ mod instrumentation;
 mod messages;
 mod metadata;
 
+pub(crate) use format::openinference;
+
 pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
 pub(crate) const CLAUDE_CODE_EVENTS_SCOPE: &str = "com.anthropic.claude_code.events";
 pub(crate) fn visible_claude_response(event: &str, source: &str) -> bool {

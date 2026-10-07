@@ -15,6 +15,7 @@
         "mode": "one of: chat, embedding, completion, image_generation, audio_transcription, audio_speech, image_generation, moderation, rerank, search",
         "output_cost_per_reasoning_token": 0.0,
         "output_cost_per_token": 0.0,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.0,
             "search_context_size_low": 0.0,
@@ -4565,6 +4566,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure_ai/model_router": {
+        "supports_token_only_pricing": false,
         "deprecation_date": "2027-05-20",
         "input_cost_per_token": 1.4e-07,
         "output_cost_per_token": 0,
@@ -4577,6 +4579,7 @@
         "comment": "Flat cost of $0.14 per M input tokens for Azure AI Foundry Model Router infrastructure. Use pattern: azure_ai/model_router/<deployment-name> where deployment-name is your Azure deployment (e.g., azure-model-router)"
     },
     "azure_ai/model-router": {
+        "supports_token_only_pricing": false,
         "deprecation_date": "2027-05-20",
         "input_cost_per_token": 1.4e-07,
         "output_cost_per_token": 0,
@@ -10828,6 +10831,7 @@
         "max_tokens": 100000,
         "mode": "responses",
         "output_cost_per_token": 4e-05,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -27624,6 +27628,7 @@
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
+        "supports_token_only_pricing": false,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -29125,6 +29130,7 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 1.2e-05,
+        "supports_token_only_pricing": false,
         "rpm": 1000,
         "tpm": 4000000,
         "output_cost_per_token_batches": 6e-06,
@@ -29162,6 +29168,7 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 1.2e-05,
+        "supports_token_only_pricing": false,
         "rpm": 1000,
         "tpm": 4000000,
         "output_cost_per_token_batches": 6e-06,
@@ -29493,6 +29500,7 @@
         "max_tokens": 65536,
         "mode": "chat",
         "output_cost_per_token": 1.2e-05,
+        "supports_token_only_pricing": false,
         "rpm": 1000,
         "tpm": 4000000,
         "output_cost_per_token_batches": 6e-06,
@@ -33132,6 +33140,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "output_cost_per_token_batches": 3e-07,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.025,
             "search_context_size_low": 0.025,
@@ -33212,6 +33221,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.025,
             "search_context_size_low": 0.025,
@@ -40940,6 +40950,7 @@
         "max_tokens": 100000,
         "mode": "responses",
         "output_cost_per_token": 4e-05,
+        "supports_token_only_pricing": false,
         "source": "https://developers.openai.com/api/docs/models/o3-deep-research",
         "supported_endpoints": [
             "/v1/batch",
@@ -41170,6 +41181,7 @@
         "max_tokens": 100000,
         "mode": "responses",
         "output_cost_per_token": 8e-06,
+        "supports_token_only_pricing": false,
         "source": "https://developers.openai.com/api/docs/models/o4-mini-deep-research",
         "supported_endpoints": [
             "/v1/batch",
@@ -44812,6 +44824,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-06,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.012,
             "search_context_size_low": 0.005,
@@ -44828,6 +44841,7 @@
         "mode": "chat",
         "output_cost_per_reasoning_token": 3e-06,
         "output_cost_per_token": 8e-06,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.005,
             "search_context_size_low": 0.005,
@@ -44853,7 +44867,8 @@
         "max_output_tokens": 12000,
         "max_tokens": 12000,
         "mode": "chat",
-        "output_cost_per_token": 1.8e-06
+        "output_cost_per_token": 1.8e-06,
+        "supports_token_only_pricing": false
     },
     "perplexity/sonar-pro": {
         "input_cost_per_token": 3e-06,
@@ -44863,6 +44878,7 @@
         "max_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.014,
             "search_context_size_low": 0.006,
@@ -44877,6 +44893,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.014,
             "search_context_size_low": 0.005,
@@ -44892,6 +44909,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 8e-06,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.014,
             "search_context_size_low": 0.006,
@@ -44917,7 +44935,8 @@
         "max_output_tokens": 12000,
         "max_tokens": 12000,
         "mode": "chat",
-        "output_cost_per_token": 2.8e-07
+        "output_cost_per_token": 2.8e-07,
+        "supports_token_only_pricing": false
     },
     "publicai/swiss-ai/apertus-8b-instruct": {
         "input_cost_per_token": 0.0,
@@ -44992,18 +45011,21 @@
         "supports_tool_choice": true
     },
     "perplexity/preset/fast-search": {
+        "supports_token_only_pricing": false,
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
         "supports_function_calling": true
     },
     "perplexity/preset/pro-search": {
+        "supports_token_only_pricing": false,
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
         "supports_function_calling": true
     },
     "perplexity/preset/deep-research": {
+        "supports_token_only_pricing": false,
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
@@ -45012,6 +45034,7 @@
     "perplexity/preset/advanced-deep-research": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_token_only_pricing": false,
         "supports_web_search": true,
         "supports_function_calling": true
     },
@@ -45152,6 +45175,7 @@
     "perplexity/perplexity/sonar": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_token_only_pricing": false,
         "supports_web_search": true,
         "supports_reasoning": false,
         "supports_function_calling": true,
@@ -49360,7 +49384,8 @@
         "max_output_tokens": 8000,
         "max_tokens": 8000,
         "mode": "chat",
-        "output_cost_per_token": 1e-06
+        "output_cost_per_token": 1e-06,
+        "supports_token_only_pricing": false
     },
     "vercel_ai_gateway/perplexity/sonar-pro": {
         "input_cost_per_token": 3e-06,
@@ -49369,7 +49394,8 @@
         "max_output_tokens": 8000,
         "max_tokens": 8000,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05
+        "output_cost_per_token": 1.5e-05,
+        "supports_token_only_pricing": false
     },
     "vercel_ai_gateway/perplexity/sonar-reasoning": {
         "input_cost_per_token": 1e-06,
@@ -49378,7 +49404,8 @@
         "max_output_tokens": 8000,
         "max_tokens": 8000,
         "mode": "chat",
-        "output_cost_per_token": 5e-06
+        "output_cost_per_token": 5e-06,
+        "supports_token_only_pricing": false
     },
     "vercel_ai_gateway/perplexity/sonar-reasoning-pro": {
         "input_cost_per_token": 2e-06,
@@ -49387,7 +49414,8 @@
         "max_output_tokens": 8000,
         "max_tokens": 8000,
         "mode": "chat",
-        "output_cost_per_token": 8e-06
+        "output_cost_per_token": 8e-06,
+        "supports_token_only_pricing": false
     },
     "vercel_ai_gateway/vercel/v0-1.0-md": {
         "input_cost_per_token": 3e-06,
@@ -51089,6 +51117,7 @@
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
+        "supports_token_only_pricing": false,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/jamba-1.5": {
@@ -57263,6 +57292,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -57291,6 +57321,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
+        "supports_token_only_pricing": false,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,
@@ -71628,6 +71659,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 4.4e-05,
+        "supports_token_only_pricing": false,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o4-mini-2025-04-16": {
@@ -71950,6 +71982,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 4.4e-05,
+        "supports_token_only_pricing": false,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/text-embedding-3-large": {
@@ -76531,6 +76564,7 @@
         "max_tokens": 114364,
         "mode": "chat",
         "output_cost_per_token": 1e-06,
+        "supports_token_only_pricing": false,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": false,
@@ -76550,6 +76584,7 @@
         "max_tokens": 115200,
         "mode": "chat",
         "output_cost_per_token": 8e-06,
+        "supports_token_only_pricing": false,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": false,
@@ -76569,6 +76604,7 @@
         "max_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_token_only_pricing": false,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": false,
@@ -76588,6 +76624,7 @@
         "max_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_token_only_pricing": false,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": false,
@@ -76607,6 +76644,7 @@
         "max_tokens": 115200,
         "mode": "chat",
         "output_cost_per_token": 8e-06,
+        "supports_token_only_pricing": false,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": false,
@@ -80562,6 +80600,7 @@
         "supports_audio_output": true
     },
     "azure/model-router": {
+        "supports_token_only_pricing": false,
         "comment": "The flat $0.14 per M input tokens is the router's own fee, the routed model is priced on top of it",
         "deprecation_date": "2027-05-20",
         "input_cost_per_token": 1.4e-07,

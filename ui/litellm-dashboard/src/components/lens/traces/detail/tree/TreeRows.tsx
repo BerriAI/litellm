@@ -180,7 +180,7 @@ export function SpanRow({ row, ctx }: { row: SpanRowData; ctx: RowContext }) {
           {ctx.layout === "tree" && <span className={META}>{fmtMs(span.duration_ms)}</span>}
           {ctx.layout === "tree" && span.spend_match != null && (
             <span className={META} data-testid="step-cost">
-              {span.spend_match === "matched" && span.spend != null ? formatCost(span.spend) : "—"}
+              {span.spend != null ? formatCost(span.spend, span.cost_source === "estimated") : "—"}
             </span>
           )}
           {hint && (

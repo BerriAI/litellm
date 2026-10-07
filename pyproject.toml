@@ -317,6 +317,7 @@ features = ["extension-module"]
 profile = "release"
 editable-profile = "dev"
 include = [
+    { path = "model_prices_and_context_window.json", format = "sdist" },
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
@@ -324,6 +325,7 @@ include = [
     "litellm/proxy/common_utils/codex_base_instructions.md",
     "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
     "litellm/proxy/lens/prompts/*.md",
+    "litellm/integrations/otel/model/providers.json",
 ]
 exclude = [
     "litellm/proxy/enterprise",

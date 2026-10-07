@@ -453,6 +453,8 @@ pub struct ModelInfo {
     pub rules: Option<Vec<Value>>,
     /// USD cost per web search query, keyed by search context size.
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_token_only_pricing: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub search_context_cost_per_query: Option<SearchContextCostPerQuery>,
     /// URL of the provider pricing/model page this entry was taken from.
     #[serde(skip_serializing_if = "Option::is_none")]

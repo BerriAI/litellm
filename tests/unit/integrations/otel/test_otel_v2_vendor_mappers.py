@@ -381,7 +381,7 @@ def test_langtrace_mapper_attrs():
 # --------------------------------------------------------------------------- #
 
 
-def test_resolve_mappers_composition_layers_vocabularies():
+def test_resolve_mappers_composition_layers_vocabularies() -> None:
     """One span, three vocabularies — Arize + Langfuse + canonical together."""
     chain = resolve_mappers(["genai", "openinference", "langfuse"])
     data = _llm_call()
@@ -390,8 +390,10 @@ def test_resolve_mappers_composition_layers_vocabularies():
         union.update(mapper.map(data))
     # Canonical
     assert union["gen_ai.operation.name"] == "chat"
+    assert union["gen_ai.response.model"] == data.response_model
+    assert data.request_model != data.response_model
     # OpenInference
-    assert union["llm.model_name"] == "gpt-4o"
+    assert union["llm.model_name"] == data.request_model
     assert union["openinference.span.kind"] == "LLM"
     # Langfuse
     assert union["langfuse.observation.type"] == "generation"

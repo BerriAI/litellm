@@ -228,6 +228,19 @@ def test_get_model_info_anthropic_compaction(
     assert litellm.get_model_info("claude-sonnet-5")["supports_anthropic_compaction"] is capability
 
 
+@pytest.mark.parametrize("required", [True, False, None])
+def test_get_model_info_preserves_required_additional_pricing(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, required: bool | None
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "catalog-cost-contract", {
+        "litellm_provider": "openai", "mode": "chat",
+        "input_cost_per_token": 1, "output_cost_per_token": 2,
+        "supports_token_only_pricing": required,
+    })
+    info: Final = litellm.get_model_info("catalog-cost-contract", custom_llm_provider="openai")
+    assert info["supports_token_only_pricing"] is required
+
+
 def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
     info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
     assert info["key"] == "ft:gpt-4o-2024-08-06"
@@ -1012,6 +1025,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_tool_search": {"type": "boolean"},
                 "supports_video_input": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
+                "supports_token_only_pricing": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},

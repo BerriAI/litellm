@@ -8,7 +8,7 @@ import type { Span } from "../../types";
 import { fmtMs, fmtTok } from "../../utils";
 import { FieldTree } from "../content/FieldTree";
 import { DetailGroup } from "./DetailGroup";
-import { SpendLogLink, unmatchedReason } from "./SpendLogLink";
+import { SpendLogLink, costExplanation } from "./SpendLogLink";
 
 interface RequestTabProps {
   span: Span;
@@ -24,7 +24,7 @@ export function RequestTab({ span, accessToken, traceStartMs }: RequestTabProps)
 
   const usage = fieldEntries([
     ["model", span.model ?? "—"],
-    ["cost", span.spend == null ? "—" : formatCost(span.spend)],
+    ["cost", span.spend == null ? "—" : formatCost(span.spend, span.cost_source === "estimated")],
     ["input_tokens", fmtTok(span.input_tokens)],
     ["output_tokens", fmtTok(span.output_tokens)],
     ["total_tokens", fmtTok(span.input_tokens + span.output_tokens)],
@@ -49,7 +49,7 @@ export function RequestTab({ span, accessToken, traceStartMs }: RequestTabProps)
           <div className="self-start">
             <SpendLogLink span={span} accessToken={accessToken} traceStartMs={traceStartMs} />
           </div>
-          {unmatchedReason(span) && <p className="text-sm text-muted-foreground">{unmatchedReason(span)}</p>}
+          {costExplanation(span) && <p className="text-sm text-muted-foreground">{costExplanation(span)}</p>}
         </div>
       </DetailGroup>
     </div>

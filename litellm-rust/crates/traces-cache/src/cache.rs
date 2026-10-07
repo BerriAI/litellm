@@ -321,6 +321,7 @@ mod tests {
             model: String::new(),
             input_tokens: 0,
             output_tokens: 0,
+            pricing_attributes: Default::default(),
             litellm_request_id: String::new(),
             call_keys: Vec::new(),
             call_evidence: None,

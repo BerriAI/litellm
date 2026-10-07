@@ -9,6 +9,8 @@ repository.workspace = true
 schema = ["dep:schemars"]
 
 [dependencies]
+litellm-cost.workspace = true
+litellm-model-catalog.workspace = true
 askama.workspace = true
 macro_rules_attribute.workspace = true
 schemars = { workspace = true, optional = true }

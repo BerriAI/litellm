@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::query::named::TraceSpansRow;
+use crate::{CallEvidence, CallKey, query::named::TraceSpansRow};
 
 pub(super) struct Graph<'a> {
     pub(super) rows: &'a [TraceSpansRow],
@@ -82,6 +82,40 @@ impl<'a> Graph<'a> {
             }
         }
         found
+    }
+
+    pub(super) fn call_groups(&self, calls: &[usize]) -> Vec<Vec<usize>> {
+        let mut by_key: BTreeMap<CallKey, Vec<usize>> = BTreeMap::new();
+        for call in calls {
+            for key in CallEvidence::row_keys(&self.rows[*call]) {
+                if matches!(key, CallKey::Transport | CallKey::GatewayAttempt) {
+                    continue;
+                }
+                by_key.entry(key).or_default().push(*call);
+            }
+        }
+        let mut seen = HashSet::new();
+        let mut groups = Vec::new();
+        for call in calls {
+            if seen.contains(call) {
+                continue;
+            }
+            let mut group = Vec::new();
+            let mut stack = vec![*call];
+            while let Some(index) = stack.pop() {
+                if !seen.insert(index) {
+                    continue;
+                }
+                group.push(index);
+                for key in CallEvidence::row_keys(&self.rows[index]) {
+                    if let Some(linked) = by_key.remove(&key) {
+                        stack.extend(linked);
+                    }
+                }
+            }
+            groups.push(group);
+        }
+        groups
     }
 }
 

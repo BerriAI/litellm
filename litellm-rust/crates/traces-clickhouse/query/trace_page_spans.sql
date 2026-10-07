@@ -6,6 +6,12 @@ SELECT o.TraceId AS trace_id, o.SpanAttributes['lens.original_trace_id'] AS orig
        toUnixTimestamp64Nano(o.Timestamp) AS start_ns, o.Duration AS duration_ns,
        o.ServiceName AS service, o.InputPreview AS input_preview, o.Model AS model,
        o.InputTokens AS input_tokens, o.OutputTokens AS output_tokens,
+       mapFilter((k, v) -> startsWith(k, 'gen_ai.usage.') OR startsWith(k, 'anthropic.usage.') OR startsWith(k, 'llm.token_count.')
+           OR k IN ('gen_ai.output.type', 'gen_ai.operation.name', 'gen_ai.response.model', 'gen_ai.request.model', 'gen_ai.provider.name', 'gen_ai.system',
+                    'llm.model_name', 'llm.provider', 'llm.system',
+                    'openai.response.service_tier', 'openai.request.service_tier', 'anthropic.response.service_tier',
+                    'gen_ai.openai.response.service_tier', 'gen_ai.openai.request.service_tier'),
+           o.SpanAttributes) AS pricing_attributes,
        o.LiteLLMRequestId AS litellm_request_id,
        o.CallKeys AS call_keys, o.CallEvidence AS call_evidence,
        -- Rows written before ToolCallId keep the call id only in their attributes.
