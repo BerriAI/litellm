@@ -1,8 +1,8 @@
 #![cfg(feature = "schema")]
 
 use litellm_traces::request::{
-    TraceDetailRequest, TraceErrorPageRequest, TraceListRequest, TraceQueryRequest,
-    TraceSpanRequest,
+    TraceAgentsRequest, TraceDetailRequest, TraceErrorPageRequest, TraceListRequest,
+    TraceQueryRequest, TraceSpanRequest,
 };
 use litellm_traces::schema::request_schemas;
 use rstest::rstest;
@@ -10,6 +10,7 @@ use serde_json::json;
 
 #[rstest]
 #[case::list("TraceListRequest")]
+#[case::agents("TraceAgentsRequest")]
 #[case::detail("TraceDetailRequest")]
 #[case::span("TraceSpanRequest")]
 #[case::error_page("TraceErrorPageRequest")]
@@ -38,6 +39,7 @@ fn request_schemas_preserve_explicit_constraints() {
     assert_eq!(detail["properties"]["page_size"]["minimum"], 1);
     assert_eq!(detail["properties"]["page_size"]["maximum"], 500);
     assert_eq!(list["properties"]["cursor"]["maxLength"], 512);
+    assert_eq!(list["properties"]["agent"]["maxLength"], 256);
     assert_eq!(detail["properties"]["cursor"]["maxLength"], 512);
     assert_eq!(error_page["properties"]["cursor"]["maxLength"], 512);
     assert!(list["properties"]["start_ms"].get("minimum").is_none());
@@ -77,6 +79,16 @@ fn request_models_deserialize_defaults_and_null_cursors() {
 
     let null_cursor: TraceListRequest = serde_json::from_value(json!({"cursor": null})).unwrap();
     assert!(null_cursor.cursor.is_none());
+    assert!(list.agent.is_none());
+    let filtered: TraceListRequest =
+        serde_json::from_value(json!({"agent": "claude-code"})).unwrap();
+    assert_eq!(filtered.agent.as_deref(), Some("claude-code"));
+
+    let agents: TraceAgentsRequest = serde_json::from_value(json!({})).unwrap();
+    assert!(agents.start_ms.is_none() && agents.end_ms.is_none());
+    let bounded: TraceAgentsRequest =
+        serde_json::from_value(json!({"start_ms": -1, "end_ms": 10})).unwrap();
+    assert_eq!((bounded.start_ms, bounded.end_ms), (Some(-1), Some(10)));
 }
 
 #[rstest]
