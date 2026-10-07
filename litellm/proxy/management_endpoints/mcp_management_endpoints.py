@@ -179,6 +179,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         _raise_if_not_oauth2,
         authorize_with_server,
+        client_supplied_application_type,
         client_supplied_redirect_uris,
         exchange_token_with_server,
         get_request_base_url,
@@ -1047,6 +1048,7 @@ if MCP_AVAILABLE:
             available_on_public_internet=payload.available_on_public_internet,
             timeout=payload.timeout,
             max_concurrent_requests=payload.max_concurrent_requests,
+            rpm=payload.rpm,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -2426,6 +2428,7 @@ if MCP_AVAILABLE:
             request_data: Final = await _read_request_body(request=request)
             data: Final[Mapping[str, object]] = {**request_data}
             client_redirect_uris: Final = client_supplied_redirect_uris(data.get("redirect_uris"))
+            client_application_type: Final = client_supplied_application_type(data.get("application_type"))
 
             return await register_client_with_server(
                 request=request,
@@ -2437,6 +2440,7 @@ if MCP_AVAILABLE:
                 fallback_client_id=server_id,
                 persist_credentials=_user_is_full_admin(user_api_key_dict),
                 client_redirect_uris=client_redirect_uris,
+                client_application_type=client_application_type,
             )
 
     @router.delete(

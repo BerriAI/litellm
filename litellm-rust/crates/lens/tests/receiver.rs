@@ -13,7 +13,10 @@ use std::{
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
-use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{body_string_contains, method, query_param},
+};
 
 const KEY: &str = "lens-trace-test-credential";
 const SERVICE_TOKEN: &str = "test-only-service-credential-32-characters";
@@ -72,6 +75,45 @@ fn export() -> serde_json::Value {
         "name": "receiver boundary", "startTimeUnixNano": "1791388800000000000",
         "endTimeUnixNano": "1791388801000000000", "status": {"code": 1}
     }]}]}]})
+}
+
+#[rstest]
+#[tokio::test]
+async fn agent_picker_query_preserves_scope_through_the_internal_read_route() {
+    let store = MockServer::start().await;
+    let result = json!({"data": [{
+        "agent_name": "research-agent", "runs": "3", "failed_runs": "1",
+        "last_seen_ms": "1791405060000", "frameworks": ["openai-agents"]
+    }]});
+    Mock::given(method("POST"))
+        .and(body_string_contains("FROM agent_traces_by_key"))
+        .and(body_string_contains("o.AgentName"))
+        .and(query_param("param_all_teams", "0"))
+        .and(query_param("param_user_id", "agent-owner"))
+        .and(query_param("param_team_ids", "['managed-team']"))
+        .and(query_param("param_start_ms", "123"))
+        .and(query_param("param_end_ms", "456"))
+        .and(query_param("param_limit", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&result))
+        .expect(1)
+        .mount(&store)
+        .await;
+    let server = serve(&store.uri(), true).await;
+    let response = http_client()
+        .unwrap()
+        .post(format!("{}/internal/read", server.url))
+        .bearer_auth(SERVICE_TOKEN)
+        .json(&json!({
+            "operation": "query", "name": "trace_agents", "parameters": {
+                "all_teams": 0, "user_id": "agent-owner", "team_ids": ["managed-team"],
+                "start_ms": 123, "end_ms": 456, "limit": 100
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.json::<serde_json::Value>().await.unwrap(), result);
 }
 
 #[rstest]

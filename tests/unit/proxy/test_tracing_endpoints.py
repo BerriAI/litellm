@@ -2,12 +2,16 @@
 Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 """
 
+import asyncio
+import json
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from types import ModuleType
 from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, call
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -15,7 +19,11 @@ from httpx import Response
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
 
-from litellm.constants import TRACE_READ_RETRY_AFTER_SECONDS
+from litellm.constants import (
+    AGENT_TRACING_AGENT_LIST_LIMIT,
+    DEFAULT_AGENT_TRACING_RETENTION_DAYS,
+    TRACE_READ_RETRY_AFTER_SECONDS,
+)
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import OwnedRows, ReadScope
@@ -29,6 +37,8 @@ from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig
 from litellm.tracing import TraceReceiver
+from litellm.tracing.remote import RemoteTraceStore
+from litellm.tracing.types import TraceAgent, TraceAgentList
 
 SQL_ROWS: Final[tuple[Mapping[str, JsonValue], ...]] = (
     {
@@ -184,6 +194,7 @@ def receiver(client) -> MagicMock:
     fake.list_traces = AsyncMock(return_value={"data": [], "next_cursor": None})
     fake.get_trace = AsyncMock(return_value=None)
     fake.get_span = AsyncMock(return_value=None)
+    fake.list_agents = AsyncMock(return_value=TraceAgentList(agents=()))
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: fake
     return fake
 
@@ -261,6 +272,178 @@ def test_list_traces_resolves_default_bounds_from_injected_clock(
         end_ms=expected_end_ms,
         cursor=None,
     )
+
+
+@pytest.mark.parametrize(
+    ("params", "expected_start_ms", "expected_end_ms"),
+    (
+        ({}, NOW_MS - DEFAULT_AGENT_TRACING_RETENTION_DAYS * tracing_endpoints.MS_PER_DAY, NOW_MS),
+        ({"start_ms": 123, "end_ms": 456}, 123, 456),
+    ),
+)
+def test_list_trace_agents_passes_reader_scope_and_window(
+    client: TestClient,
+    receiver: MagicMock,
+    params: Mapping[str, int],
+    expected_start_ms: int,
+    expected_end_ms: int,
+) -> None:
+    client.app.dependency_overrides[tracing_endpoints.current_time_ms] = lambda: NOW_MS
+    receiver.list_agents.return_value = TraceAgentList(
+        agents=(
+            TraceAgent(
+                name="moyai",
+                runs=3,
+                failed_runs=1,
+                last_seen=datetime(2026, 10, 7, 20, 31, tzinfo=timezone.utc),
+                frameworks=("openai-agents",),
+            ),
+        )
+    )
+    response: Final = client.get("/v1/traces/agents", params=params)
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "agents": [
+            {
+                "name": "moyai",
+                "runs": 3,
+                "failed_runs": 1,
+                "last_seen": "2026-10-07T20:31:00Z",
+                "frameworks": ["openai-agents"],
+            }
+        ]
+    }
+    receiver.list_agents.assert_awaited_once_with(
+        scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+        start_ms=expected_start_ms,
+        end_ms=expected_end_ms,
+    )
+    receiver.get_trace.assert_not_awaited()
+
+
+def test_list_trace_agents_requires_read_access(client: TestClient, receiver: MagicMock) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token="hashed-key", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    response: Final = client.get("/v1/traces/agents")
+    assert response.status_code == 403, response.text
+    receiver.list_agents.assert_not_awaited()
+
+
+def test_list_trace_agents_maps_storage_outage_to_503(client: TestClient, receiver: MagicMock) -> None:
+    receiver.list_agents.side_effect = RuntimeError("private database details")
+    response: Final = client.get("/v1/traces/agents")
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("role", "expected_scope"),
+    (
+        pytest.param(
+            LitellmUserRoles.PROXY_ADMIN,
+            TraceScope(all_teams=1, user_id="", team_ids=()),
+            id="admin",
+        ),
+        pytest.param(
+            LitellmUserRoles.INTERNAL_USER,
+            TraceScope(all_teams=0, user_id="agent-owner", team_ids=("managed-team",)),
+            id="owner-and-permitted-teams",
+        ),
+    ),
+)
+async def test_agent_picker_reads_through_worker_with_authenticated_scope(
+    client: TestClient, role: LitellmUserRoles, expected_scope: TraceScope
+) -> None:
+    requests: Final = asyncio.Queue[httpx.Request]()
+    secret: Final = "test-only-lens-service-secret-32-characters"
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "agent_name": "research-agent",
+                        "runs": "3",
+                        "failed_runs": "1",
+                        "last_seen_ms": "1791405060000",
+                        "frameworks": ["openai-agents"],
+                    }
+                ]
+            },
+        )
+
+    async def lookup(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        return ("managed-team",)
+
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="agent-owner", token="user-key", team_id="unmanaged-team", user_role=role
+    )
+    client.app.dependency_overrides[get_log_team_lookup] = lambda: lookup
+    async with httpx.AsyncClient(
+        base_url="http://lens",
+        headers={"Authorization": f"Bearer {secret}"},
+        transport=httpx.MockTransport(accept),
+    ) as worker:
+        tracing: Final = TraceReceiver(storage=ClickHouseStorage(RemoteTraceStore(worker)))
+        client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app), base_url="http://gateway"
+        ) as gateway:
+            response: Final = await gateway.get("/v1/traces/agents", params={"start_ms": 123, "end_ms": 456})
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "agents": [
+            {
+                "name": "research-agent",
+                "runs": 3,
+                "failed_runs": 1,
+                "last_seen": "2026-10-07T20:31:00Z",
+                "frameworks": ["openai-agents"],
+            }
+        ]
+    }
+    request: Final = requests.get_nowait()
+    assert requests.empty()
+    assert request.method == "POST"
+    assert request.url.path == "/internal/read"
+    assert request.headers["Authorization"] == f"Bearer {secret}"
+    assert json.loads(request.content) == {
+        "operation": "query",
+        "name": "trace_agents",
+        "parameters": {
+            **expected_scope,
+            "team_ids": list(expected_scope["team_ids"]),
+            "start_ms": 123,
+            "end_ms": 456,
+            "limit": AGENT_TRACING_AGENT_LIST_LIMIT,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "code"), ((503, "unavailable"), (413, "too_large")))
+async def test_agent_picker_reports_worker_failures_without_leaking_details(
+    client: TestClient, status: int, code: str
+) -> None:
+    async with httpx.AsyncClient(
+        base_url="http://lens",
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, text="private storage details")),
+    ) as worker:
+        tracing: Final = TraceReceiver(storage=ClickHouseStorage(RemoteTraceStore(worker)))
+        client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app), base_url="http://gateway"
+        ) as gateway:
+            response: Final = await gateway.get("/v1/traces/agents", params={"start_ms": 123, "end_ms": 456})
+    assert response.status_code == status
+    assert response.json()["detail"]["code"] == code
+    assert "private storage details" not in response.text
+    if status == 503:
+        assert response.headers["Retry-After"] == str(TRACE_READ_RETRY_AFTER_SECONDS)
 
 
 def test_list_traces_forwards_large_and_negative_bounds_unchanged(client: TestClient, receiver: MagicMock) -> None:
