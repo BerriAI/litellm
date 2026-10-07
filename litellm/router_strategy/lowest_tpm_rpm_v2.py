@@ -91,6 +91,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
 
     def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
+        self.router_cache_id = str(id(router_cache))
         self.routing_args = RoutingArgs(**routing_args)
         BaseRoutingStrategy.__init__(
             self,
@@ -253,7 +254,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     @with_service_target("router_usage")
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -286,7 +287,27 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # update cache
 
             ## TPM
-            self.router_cache.increment_cache(key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl)
+            is_serving_router: bool = True
+            if isinstance(kwargs, Mapping):
+                for key in ("litellm_params", "metadata", "litellm_metadata"):
+                    if key in kwargs and isinstance(kwargs[key], Mapping):
+                        if "router_cache_id" in kwargs[key] and kwargs[key]["router_cache_id"] != self.router_cache_id:
+                            is_serving_router = False
+                            break
+                        if (
+                            "metadata" in kwargs[key]
+                            and isinstance(kwargs[key]["metadata"], Mapping)
+                            and "router_cache_id" in kwargs[key]["metadata"]
+                            and kwargs[key]["metadata"]["router_cache_id"] != self.router_cache_id
+                        ):
+                            is_serving_router = False
+                            break
+            self.router_cache.increment_cache(
+                key=tpm_key,
+                value=total_tokens,
+                ttl=self.routing_args.ttl,
+                local_only=not is_serving_router,
+            )
             ### TESTING ###
             if self.test_flag:
                 self.logged_success += 1
@@ -296,7 +317,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             )
 
     @with_service_target("router_usage")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -327,12 +348,28 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # update cache
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             ## TPM
-            await self.router_cache.async_increment_cache_post_call(
-                key=tpm_key,
-                value=total_tokens,
-                ttl=self.routing_args.ttl,
-                parent_otel_span=parent_otel_span,
-            )
+            is_serving_router: bool = True
+            if isinstance(kwargs, Mapping):
+                for key in ("litellm_params", "metadata", "litellm_metadata"):
+                    if key in kwargs and isinstance(kwargs[key], Mapping):
+                        if "router_cache_id" in kwargs[key] and kwargs[key]["router_cache_id"] != self.router_cache_id:
+                            is_serving_router = False
+                            break
+                        if (
+                            "metadata" in kwargs[key]
+                            and isinstance(kwargs[key]["metadata"], Mapping)
+                            and "router_cache_id" in kwargs[key]["metadata"]
+                            and kwargs[key]["metadata"]["router_cache_id"] != self.router_cache_id
+                        ):
+                            is_serving_router = False
+                            break
+            if is_serving_router:
+                await self.router_cache.async_increment_cache_post_call(
+                    key=tpm_key,
+                    value=total_tokens,
+                    ttl=self.routing_args.ttl,
+                    parent_otel_span=parent_otel_span,
+                )
 
             ### TESTING ###
             if self.test_flag:

@@ -316,3 +316,31 @@ async def test_generic_api_callback_settings_retry_config():
     finally:
         litellm.callback_settings.pop(callback_name, None)
         _generic_api_logger_cache.pop(callback_name, None)
+
+
+def test_router_cache_logger_deduplication(callback_manager: LoggingCallbackManager) -> None:
+    from typing import Final
+
+    from litellm.caching.caching import DualCache
+
+    cache_1: Final = DualCache()
+    cache_2: Final = DualCache()
+
+    class StrategyLogger(CustomLogger):
+        def __init__(self, router_cache: DualCache) -> None:
+            self.router_cache: Final = router_cache
+
+    logger_1a: Final = StrategyLogger(cache_1)
+    logger_1b: Final = StrategyLogger(cache_1)
+    logger_2: Final = StrategyLogger(cache_2)
+
+    callback_manager.add_litellm_callback(logger_1a)
+    callback_manager.add_litellm_callback(logger_1b)
+    callback_manager.add_litellm_callback(logger_2)
+
+    callbacks_list: Final = litellm.callbacks
+    assert isinstance(callbacks_list, list)
+    assert callbacks_list.count(logger_1a) == 1
+    assert logger_1b not in callbacks_list
+    assert logger_2 in callbacks_list
+    assert len(callbacks_list) == 2

@@ -1396,6 +1396,8 @@ class Router:
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.service_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, self)
 
+        self._unregister_router_selectors(tuple(self._all_strategy_selectors()))
+
         # Remove ForwardClientSideHeadersByModelGroup if it exists
         if self.optional_callbacks is not None:
             for callback in self.optional_callbacks:
@@ -1515,6 +1517,17 @@ class Router:
         if isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(selector)
 
+    def _all_strategy_selectors(self) -> Iterator[object]:
+        for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values():
+            default_selector = getattr(self, attr, None)
+            if default_selector is not None:
+                yield default_selector
+        for override_selector in getattr(self, "_override_selectors", {}).values():
+            if override_selector is not None:
+                yield override_selector
+        for group_map in getattr(self, "_group_selectors", {}).values():
+            yield from group_map.values()
+
     def _unregister_router_selectors(self, selectors: Sequence[object]) -> None:
         """
         Drop router-owned strategy selectors from litellm's global callback
@@ -1525,13 +1538,7 @@ class Router:
         for selector in selectors:
             if isinstance(selector, BaseRoutingStrategy):
                 selector.retire()
-        selector_ids: Final = {id(s) for s in selectors if s is not None}
-        if not selector_ids:
-            return
-        if isinstance(litellm.callbacks, list):
-            litellm.callbacks = [c for c in litellm.callbacks if id(c) not in selector_ids]
-        if isinstance(litellm.input_callback, list):
-            litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
+            litellm.logging_callback_manager.remove_callback_from_all_lists(selector)
 
     def _apply_updated_routing_strategy_args(self) -> None:
         """
@@ -1558,6 +1565,7 @@ class Router:
             rebuilt: Final = self._build_strategy_selector(
                 strategy=strategy or "",
                 routing_strategy_args=self.routing_strategy_args,
+                register_callbacks=False,
             )
         except (TypeError, ValidationError):
             verbose_router_logger.exception(
@@ -1569,6 +1577,8 @@ class Router:
 
         self._unregister_router_selectors((current,))
         setattr(self, attr, rebuilt)
+        if rebuilt is not None:
+            self._register_router_selector(rebuilt)
 
     def routing_strategy_init(self, routing_strategy: RoutingStrategy | str, routing_strategy_args: dict):
         verbose_router_logger.info("Routing strategy: %s", routing_strategy)
@@ -4172,6 +4182,7 @@ class Router:
                 "model_info": model_info,
                 "api_base": deployment_api_base,
                 "deployment_model_name": deployment_model_name,
+                "router_cache_id": str(id(self.cache)),
             }
         )
 

@@ -57,6 +57,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
     def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
+        self.router_cache_id = str(id(router_cache))
         self.routing_args = RoutingArgs(**routing_args)
 
     @with_service_target("router_usage")

@@ -20636,6 +20636,8 @@ async def test_non_chat_surfaces_mark_their_deployment_pick(monkeypatch: pytest.
     router.completion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
 
     assert events == [_pick("embed", "initial", 1), _pick("gpt-4o", "initial", 1)]
+
+
 class TestAutoRouterTraceProvenance:
     @pytest.fixture
     def _tracing(self, monkeypatch: pytest.MonkeyPatch) -> "tuple[OpenTelemetryV2, InMemorySpanExporter]":
@@ -24811,3 +24813,227 @@ async def test_acompletion_keeps_include_fallback_errors_off_the_wire_and_return
             model="primary", messages=[{"role": "user", "content": "hi"}], include_fallback_errors=True
         )
     _assert_fallback_errors_reached_the_caller_and_not_the_wire(response, primary, backup)
+
+
+def test_multiple_routers_latency_callbacks_registered() -> None:
+    router_1: Final = Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+        routing_strategy="latency-based-routing",
+    )
+    router_2: Final = Router(
+        model_list=[{"model_name": "gpt-3.5-turbo", "litellm_params": {"model": "gpt-3.5-turbo"}}],
+        routing_strategy="latency-based-routing",
+    )
+
+    try:
+        assert router_1.lowestlatency_logger is not None
+        assert router_2.lowestlatency_logger is not None
+        assert isinstance(litellm.callbacks, list)
+        assert router_1.lowestlatency_logger in litellm.callbacks
+        assert router_2.lowestlatency_logger in litellm.callbacks
+        assert len(litellm.callbacks) == 2
+
+        now: Final = datetime.now()
+        kwargs_1: Final = {
+            "litellm_params": {
+                "metadata": {"model_group": "gpt-4"},
+                "model_info": {"id": "dep-1"},
+            }
+        }
+        kwargs_2: Final = {
+            "litellm_params": {
+                "metadata": {"model_group": "gpt-3.5-turbo"},
+                "model_info": {"id": "dep-2"},
+            }
+        }
+
+        router_1.lowestlatency_logger.log_success_event(kwargs_1, None, now, now)
+        router_2.lowestlatency_logger.log_success_event(kwargs_2, None, now, now)
+
+        cache_1: Final = router_1.cache.get_cache(key="gpt-4_map")
+        cache_2: Final = router_2.cache.get_cache(key="gpt-3.5-turbo_map")
+
+        assert cache_1 is not None and "dep-1" in cache_1
+        assert cache_2 is not None and "dep-2" in cache_2
+    finally:
+        router_1.discard()
+        router_2.discard()
+
+    assert isinstance(litellm.callbacks, list)
+    assert len(litellm.callbacks) == 0
+
+
+def test_router_discard_unregisters_strategy_selectors() -> None:
+    router: Final = Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+        routing_strategy="latency-based-routing",
+    )
+    selectors: Final = list(router._all_strategy_selectors())
+    assert router.lowestlatency_logger in selectors
+    assert isinstance(litellm.callbacks, list)
+    assert router.lowestlatency_logger in litellm.callbacks
+
+    router.discard()
+
+    assert router.lowestlatency_logger not in litellm.callbacks
+    assert len(litellm.callbacks) == 0
+
+
+def test_router_discard_after_model_call_cleans_all_callback_lists() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "fake", "mock_response": "hi"},
+            }
+        ],
+        routing_strategy="latency-based-routing",
+    )
+    selector: Final = router.lowestlatency_logger
+    assert selector is not None
+
+    router.completion(model="gpt-4", messages=[{"role": "user", "content": "hi"}])
+
+    router.discard()
+
+    for callback_list in (
+        litellm.callbacks,
+        litellm.input_callback,
+        litellm._async_input_callback,
+        litellm.success_callback,
+        litellm.failure_callback,
+        litellm._async_success_callback,
+        litellm._async_failure_callback,
+    ):
+        if isinstance(callback_list, list):
+            assert selector not in callback_list
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        "latency-based-routing",
+        "least-busy",
+        "usage-based-routing",
+        "cost-based-routing",
+    ],
+)
+def test_router_update_settings_preserves_strategy_callbacks(strategy: str) -> None:
+    router: Final = Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+        routing_strategy=strategy,
+        routing_strategy_args={"ttl": 10},
+    )
+
+    try:
+        norm_strategy: Final = router._normalize_strategy(strategy)
+        attr: Final = router._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(norm_strategy or "")
+        assert attr is not None
+
+        old_selector: Final = getattr(router, attr)
+        callbacks_active: Final = (isinstance(litellm.callbacks, list) and old_selector in litellm.callbacks) or (
+            isinstance(litellm.input_callback, list) and old_selector in litellm.input_callback
+        )
+        assert callbacks_active
+
+        router.update_settings(routing_strategy_args={"ttl": 20})
+
+        new_selector: Final = getattr(router, attr)
+        assert new_selector is not None
+        new_callbacks_active: Final = (isinstance(litellm.callbacks, list) and new_selector in litellm.callbacks) or (
+            isinstance(litellm.input_callback, list) and new_selector in litellm.input_callback
+        )
+        assert new_callbacks_active
+    finally:
+        router.discard()
+
+    if isinstance(litellm.callbacks, list):
+        assert len(litellm.callbacks) == 0
+    if isinstance(litellm.input_callback, list):
+        assert len(litellm.input_callback) == 0
+
+
+def test_router_discard_unregisters_group_selectors() -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}},
+            {"model_name": "gpt-3.5-turbo", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        routing_groups=[
+            {
+                "group_name": "group-latency",
+                "models": ["gpt-4"],
+                "routing_strategy": "latency-based-routing",
+            },
+            {
+                "group_name": "group-busy",
+                "models": ["gpt-3.5-turbo"],
+                "routing_strategy": "least-busy",
+            },
+        ],
+    )
+
+    try:
+        selectors_count: Final = len(list(router._all_strategy_selectors()))
+        assert selectors_count >= 2
+    finally:
+        router.discard()
+
+    if isinstance(litellm.callbacks, list):
+        assert len(litellm.callbacks) == 0
+    if isinstance(litellm.input_callback, list):
+        assert len(litellm.input_callback) == 0
+
+
+def test_multiple_usage_v2_routers_shared_cache_increment_not_doubled() -> None:
+    router_1: Final = Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+        routing_strategy="usage-based-routing-v2",
+    )
+    router_2: Final = Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    try:
+        selector_1: Final = router_1.lowesttpm_logger_v2
+        selector_2: Final = router_2.lowesttpm_logger_v2
+        assert selector_1 is not None and selector_2 is not None
+
+        shared_writes: Final[list[bool]] = []
+        original_increment_1: Final = router_1.cache.increment_cache
+        original_increment_2: Final = router_2.cache.increment_cache
+
+        def wrapped_increment_1(key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
+            shared_writes.append(local_only)
+            return original_increment_1(key, value, local_only=local_only, **kwargs)
+
+        def wrapped_increment_2(key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
+            shared_writes.append(local_only)
+            return original_increment_2(key, value, local_only=local_only, **kwargs)
+
+        setattr(router_1.cache, "increment_cache", wrapped_increment_1)
+        setattr(router_2.cache, "increment_cache", wrapped_increment_2)
+
+        now: Final = datetime.now()
+        kwargs: Final = {
+            "standard_logging_object": {
+                "model_group": "gpt-4",
+                "model_id": "dep-1",
+                "total_tokens": 100,
+                "hidden_params": {"litellm_model_name": "gpt-4"},
+            },
+            "litellm_params": {
+                "metadata": {
+                    "router_cache_id": str(id(router_1.cache)),
+                }
+            },
+        }
+
+        selector_1.log_success_event(kwargs, None, now, now)
+        selector_2.log_success_event(kwargs, None, now, now)
+
+        assert shared_writes == [False, True]
+    finally:
+        router_1.discard()
+        router_2.discard()
