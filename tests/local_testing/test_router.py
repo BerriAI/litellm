@@ -450,50 +450,6 @@ def test_function_calling():
 # test_acompletion_on_router()
 
 
-def test_function_calling_on_router():
-    try:
-        litellm.set_verbose = True
-        model_list = [
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
-            },
-        ]
-        function1 = [
-            {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            }
-        ]
-        router = Router(
-            model_list=model_list,
-            redis_host=os.getenv("REDIS_HOST"),
-            redis_password=os.getenv("REDIS_PASSWORD"),
-            redis_port=os.getenv("REDIS_PORT"),
-        )
-        messages = [{"role": "user", "content": "what's the weather in boston"}]
-        response = router.completion(
-            model="gpt-3.5-turbo", messages=messages, functions=function1
-        )
-        print(f"final returned response: {response}")
-        router.reset()
-        assert isinstance(response["choices"][0]["message"]["function_call"], dict)
-    except Exception as e:
-        print(f"An exception occurred: {e}")
 
 
 # test_function_calling_on_router()

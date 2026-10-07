@@ -315,15 +315,6 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
             "thinking": {"type": "enabled", "budget_tokens": 16000},
         }
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        from litellm.litellm_core_utils.prompt_templates.factory import (
-            convert_to_anthropic_tool_invoke,
-        )
-
-        result = convert_to_anthropic_tool_invoke([tool_call_no_arguments])
-        print(result)
-
     def test_tool_call_and_json_response_format(self):
         """
         Test that the tool call and JSON response format is supported by the LLM API

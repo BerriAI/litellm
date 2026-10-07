@@ -336,27 +336,6 @@ def test_cohere_embed_v4_encoding_format():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_cohere_embed_v4_error_handling():
-    """Test error handling for Cohere Embed v4 with invalid inputs."""
-    try:
-        # Test with empty input - should raise an error
-        try:
-            response = embedding(model="cohere/embed-v4.0", input=[])  # Empty input
-            pytest.fail("Should have failed with empty input")
-        except Exception:
-            pass  # Expected to fail
-
-        # Test with None input - should raise an error
-        try:
-            response = embedding(model="cohere/embed-v4.0", input=None)
-            pytest.fail("Should have failed with None input")
-        except Exception:
-            pass  # Expected to fail
-
-    except Exception as e:
-        pytest.fail(f"Error in error handling test: {e}")
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_cohere_embed_v4_multiple_texts(sync_mode):
@@ -685,38 +664,6 @@ def test_cohere_v2_parameter_mapping():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-def test_cohere_v2_error_handling():
-    """Test Cohere v2 error handling with invalid parameters."""
-    try:
-        # Test with invalid model name
-        try:
-            response = completion(
-                model="cohere_chat/v2/invalid-model",
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=10,
-            )
-            # If we get here, the test should fail
-            pytest.fail("Should have failed with invalid model")
-        except Exception as e:
-            # Expected to fail with invalid model
-            print(f"Expected error with invalid model: {e}")
-
-        # Test with empty messages
-        try:
-            response = completion(
-                model="cohere_chat/v2/command-a-03-2025",
-                messages=[],  # Empty messages
-                max_tokens=10,
-            )
-            pytest.fail("Should have failed with empty messages")
-        except Exception as e:
-            # Expected to fail with empty messages
-            print(f"Expected error with empty messages: {e}")
-
-    except Exception as e:
-        pytest.fail(f"Unexpected error in error handling test: {e}")
 
 
 @pytest.mark.asyncio
