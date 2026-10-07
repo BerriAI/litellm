@@ -69,6 +69,12 @@ def _error_status_and_message(exc: Exception) -> tuple[int, str]:
     return 500, str(exc) or "Upstream stream ended before completion"
 
 
+def _provider_error(exc: Exception) -> Exception:
+    if isinstance(exc, MidStreamFallbackError) and exc.original_exception is not None:
+        return exc.original_exception
+    return exc
+
+
 def _mid_stream_error_sse_event(exc: Exception) -> bytes:
     from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
         anthropic_error_sse_frame,
@@ -1044,12 +1050,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
             verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
             logging_obj: Final = self.litellm_logging_obj
+            provider_error: Final = _provider_error(e)
             if logging_obj is not None and logging_obj.on_detached_stream_failure is not None:
-                raise
+                if provider_error is e:
+                    raise
+                raise provider_error from e
             if logging_obj is not None:
                 try:
                     await logging_obj.dispatch_failure_handlers(
-                        exception=e,
+                        exception=provider_error,
                         traceback_exception=traceback.format_exc(),
                         prefer_async_handlers=True,
                     )

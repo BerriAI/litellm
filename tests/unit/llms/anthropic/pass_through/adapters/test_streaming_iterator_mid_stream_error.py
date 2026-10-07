@@ -20,6 +20,7 @@ import os
 import sys
 import threading
 from datetime import datetime
+from collections.abc import Callable
 from typing import List, Optional
 from unittest.mock import MagicMock
 
@@ -195,43 +196,90 @@ async def _wait_for_sync_failure(sync_recorder: _SyncFailureRecorder) -> None:
         await asyncio.sleep(0.01)
 
 
-def _failing_wrapper(logging_obj: LiteLLMLoggingObj | None) -> AnthropicStreamWrapper:
+def _bedrock_drop() -> BedrockError:
+    return BedrockError(status_code=500, message="ConverseStream ended without messageStop")
+
+
+def _chat_wrapper_envelope() -> MidStreamFallbackError:
+    provider_error = _bedrock_drop()
+    return MidStreamFallbackError(
+        message=str(provider_error),
+        model="bedrock-converse-sonnet-4-6",
+        llm_provider="bedrock",
+        original_exception=provider_error,
+        is_pre_first_chunk=False,
+    )
+
+
+_RAISED_ERRORS = pytest.mark.parametrize(
+    "raised",
+    [_bedrock_drop, _chat_wrapper_envelope],
+    ids=["provider_error", "chat_wrapper_envelope"],
+)
+
+
+def _failing_wrapper(
+    logging_obj: LiteLLMLoggingObj | None,
+    raised: Callable[[], Exception] = _bedrock_drop,
+) -> AnthropicStreamWrapper:
     return AnthropicStreamWrapper(
-        completion_stream=_AsyncStreamThenRaise(
-            [_make_chunk(Delta(content="partial"))],
-            BedrockError(status_code=500, message="ConverseStream ended without messageStop"),
-        ),
+        completion_stream=_AsyncStreamThenRaise([_make_chunk(Delta(content="partial"))], raised()),
         model="bedrock-converse-sonnet-4-6",
         litellm_logging_obj=logging_obj,
     )
 
 
+@_RAISED_ERRORS
 @pytest.mark.asyncio
-async def test_mid_stream_error_reraises_for_proxy_managed_stream():
+async def test_mid_stream_error_reraises_the_provider_error_for_proxy_managed_stream(raised):
     async_recorder = _AsyncFailureRecorder()
     sync_recorder = _SyncFailureRecorder()
     logging_obj = _make_logging_obj("proxy-managed", async_recorder, sync_recorder)
     logging_obj.on_detached_stream_failure = _proxy_boundary_hook
 
-    with pytest.raises(BedrockError):
-        await _drain_sse(_failing_wrapper(logging_obj))
+    with pytest.raises(BedrockError) as raised_info:
+        await _drain_sse(_failing_wrapper(logging_obj, raised))
 
+    assert str(raised_info.value) == "ConverseStream ended without messageStop"
     await asyncio.sleep(0.1)
     assert async_recorder.exceptions == []
     assert sync_recorder.exceptions == []
 
 
+@_RAISED_ERRORS
 @pytest.mark.asyncio
-async def test_mid_stream_error_dispatches_failure_handlers_for_standalone_stream():
+async def test_mid_stream_error_dispatches_the_provider_error_to_failure_handlers_for_standalone_stream(raised):
     async_recorder = _AsyncFailureRecorder()
     sync_recorder = _SyncFailureRecorder()
-    wrapper = _failing_wrapper(_make_logging_obj("standalone", async_recorder, sync_recorder))
+    wrapper = _failing_wrapper(_make_logging_obj("standalone", async_recorder, sync_recorder), raised)
 
     events = await _drain_sse(wrapper)
     await _wait_for_sync_failure(sync_recorder)
 
     assert [str(exc) for exc in async_recorder.exceptions] == ["ConverseStream ended without messageStop"]
     assert [str(exc) for exc in sync_recorder.exceptions] == ["ConverseStream ended without messageStop"]
+    assert _parse_sse(events[-1])[0] == "error"
+
+
+class _BrokenFailureDispatchLogging(LiteLLMLoggingObj):
+    async def dispatch_failure_handlers(self, *args, **kwargs):
+        raise RuntimeError("failure sink is down")
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_error_frame_survives_a_raising_failure_dispatch():
+    logging_obj = _BrokenFailureDispatchLogging(
+        model="bedrock-converse-sonnet-4-6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="broken-dispatch",
+        function_id="broken-dispatch",
+    )
+
+    events = await _drain_sse(_failing_wrapper(logging_obj))
+
     assert _parse_sse(events[-1])[0] == "error"
 
 
