@@ -104,9 +104,9 @@ def test_boostrail_api_base_autodetects_provider(monkeypatch: pytest.MonkeyPatch
 
 
 def test_boostrail_is_available_in_add_model_form():
-    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    providers = json.loads(fields_path.read_text())
-    boostrail = next(provider for provider in providers if provider["litellm_provider"] == "boostrail")
+    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    providers: Final = json.loads(fields_path.read_text())
+    boostrail: Final = next(provider for provider in providers if provider["litellm_provider"] == "boostrail")
 
     assert boostrail["provider"] == "BOOSTRAIL"
     assert boostrail["provider_display_name"] == "BoostRail"
@@ -132,8 +132,8 @@ def test_boostrail_supported_endpoints():
         "a2a": False,
         "interactions": False,
     }
-    backup_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    root_path = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
+    backup_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
+    root_path: Final = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
 
     assert json.loads(backup_path.read_text())["providers"]["boostrail"]["endpoints"] == expected
     assert json.loads(root_path.read_text())["providers"]["boostrail"]["endpoints"] == expected
