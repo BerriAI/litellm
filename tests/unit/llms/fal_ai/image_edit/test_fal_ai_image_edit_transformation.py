@@ -165,18 +165,37 @@ def test_transform_request_requires_an_image(image):
 
 @pytest.mark.parametrize("model", ["fal-ai/nano-banana-2", "fal-ai/nano-banana-pro/edit"])
 @pytest.mark.parametrize(
-    "size,expected_aspect_ratio",
-    [("1792x1024", "16:9"), ("1024x768", "4:3"), ("auto", "auto"), (None, None)],
+    "size,expected_aspect_ratio,expected_resolution",
+    [
+        ("1792x1024", "16:9", "1K"),
+        ("1024x768", "4:3", "1K"),
+        ("928x1152", "4:5", "1K"),
+        ("512x512", "1:1", "0.5K"),
+        ("767x767", "1:1", "0.5K"),
+        ("768x768", "1:1", "1K"),
+        ("1535x1535", "1:1", "1K"),
+        ("1536x1536", "1:1", "2K"),
+        ("2752x1536", "16:9", "2K"),
+        ("3071x3071", "1:1", "2K"),
+        ("3072x3072", "1:1", "4K"),
+        ("5504x3072", "16:9", "4K"),
+        ("auto", "auto", None),
+        ("not-a-size", "1:1", None),
+        (None, None, None),
+    ],
 )
-def test_nano_banana_edit_maps_size_to_aspect_ratio(
-    model: str, size: str | None, expected_aspect_ratio: str | None
+def test_nano_banana_edit_maps_size_to_aspect_ratio_and_resolution(
+    model: str, size: str | None, expected_aspect_ratio: str | None, expected_resolution: str | None
 ) -> None:
+    resolution: Final = "1K" if expected_resolution == "0.5K" and "nano-banana-pro" in model else expected_resolution
+
     def respond(request: httpx.Request) -> httpx.Response:
         assert TypeAdapter(dict[str, object]).validate_json(request.content) == {
             "prompt": "Make the wall blue",
             "image_urls": ["https://example.com/room.png"],
             "num_images": 1,
             **({"aspect_ratio": expected_aspect_ratio} if expected_aspect_ratio else {}),
+            **({"resolution": resolution} if resolution else {}),
         }
         return httpx.Response(200, json={"images": [{"url": "https://example.com/edited.png"}]})
 
@@ -198,12 +217,13 @@ def test_nano_banana_edit_maps_size_to_aspect_ratio(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["fal-ai/nano-banana-2/edit", "fal-ai/nano-banana-pro"])
 @pytest.mark.parametrize("use_extra_body", [False, True])
+@pytest.mark.parametrize("overrides", [("aspect_ratio", "resolution"), ("aspect_ratio",), ("resolution",)])
 async def test_nano_banana_edit_forwards_native_controls_and_preserves_inline_images(
-    model: str, use_extra_body: bool
+    model: str, use_extra_body: bool, overrides: tuple[str, ...]
 ) -> None:
     controls: Final = {
-        "aspect_ratio": "4:3",
-        "resolution": "2K",
+        **({"aspect_ratio": "4:3"} if "aspect_ratio" in overrides else {}),
+        **({"resolution": "2K"} if "resolution" in overrides else {}),
         "system_prompt": "Preserve the room",
         "sync_mode": use_extra_body,
     }
@@ -217,6 +237,8 @@ async def test_nano_banana_edit_forwards_native_controls_and_preserves_inline_im
             "prompt": "Apply the swatch to the wall",
             "image_urls": [image_url, "https://example.com/swatch.png"],
             "num_images": 2,
+            "aspect_ratio": "1:1",
+            "resolution": "4K",
             **controls,
         }
         return httpx.Response(200, json={"images": [{"url": output_url}]})
@@ -228,7 +250,7 @@ async def test_nano_banana_edit_forwards_native_controls_and_preserves_inline_im
             image=[PNG_BYTES, "https://example.com/swatch.png"],
             prompt="Apply the swatch to the wall",
             n=2,
-            size="1024x1024",
+            size="4096x4096",
             api_key="test-key",
             client=client,
             **(
@@ -245,7 +267,8 @@ async def test_nano_banana_edit_forwards_native_controls_and_preserves_inline_im
 def test_nano_banana_2_edit_maps_extreme_sizes(size: str, expected_ratio: str) -> None:
     config: Final = get_fal_ai_image_edit_config("fal-ai/nano-banana-2/edit")
     assert config.map_openai_params(ImageEditOptionalRequestParams(size=size), "fal-ai/nano-banana-2/edit", False) == {
-        "aspect_ratio": expected_ratio
+        "aspect_ratio": expected_ratio,
+        "resolution": "2K",
     }
 
 

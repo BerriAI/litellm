@@ -5,6 +5,7 @@ from litellm.llms.fal_ai.image_generation.nano_banana_transformation import (
     FalAINanoBananaConfig,
     map_nano_banana_aspect_ratio,
 )
+from litellm.llms.gemini.common_utils import map_openai_size_to_gemini_image_config
 from litellm.types.images.main import ImageEditOptionalRequestParams
 
 from .transformation import FalAIImageEditConfig
@@ -25,18 +26,34 @@ class FalAINanoBananaImageEditConfig(FalAIImageEditConfig):
     ) -> dict[str, object]:  # mutable-ok: base class contract returns a dict
         params: Final[Mapping[str, object]] = image_edit_optional_params
         size: Final = params.get("size")
+        is_nano_banana_2: Final = model.removesuffix("/edit") == "fal-ai/nano-banana-2"
+        size_config: Final = map_openai_size_to_gemini_image_config(size, model) if isinstance(size, str) else None
+        size_aspect_ratio: Final = (size_config or {}).get("aspectRatio")
+        size_resolution: Final = (size_config or {}).get("imageSize")
+        resolution: Final = ("0.5K" if is_nano_banana_2 else "1K") if size_resolution == "512" else size_resolution
         supported_aspect_ratios: Final = (
             (*FalAINanoBananaConfig.SUPPORTED_ASPECT_RATIOS, "4:1", "1:4", "8:1", "1:8")
-            if model.removesuffix("/edit") == "fal-ai/nano-banana-2"
+            if is_nano_banana_2
             else tuple(FalAINanoBananaConfig.SUPPORTED_ASPECT_RATIOS)
         )
         size_params: Final[Mapping[str, str]] = (
-            {"aspect_ratio": "auto" if size == "auto" else map_nano_banana_aspect_ratio(size, supported_aspect_ratios)}
+            {
+                "aspect_ratio": (
+                    "auto"
+                    if size == "auto"
+                    else (
+                        size_aspect_ratio
+                        if size_aspect_ratio is not None and size_aspect_ratio in supported_aspect_ratios
+                        else map_nano_banana_aspect_ratio(size, supported_aspect_ratios)
+                    )
+                )
+            }
             if isinstance(size, str) and params.get("aspect_ratio") is None
             else {}
         )
         return {
             **size_params,
+            **({"resolution": resolution} if resolution is not None and params.get("resolution") is None else {}),
             **{
                 "num_images" if key == "n" else key: value
                 for key, value in params.items()
