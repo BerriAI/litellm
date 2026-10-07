@@ -8827,9 +8827,8 @@ async def ahealth_check(
 
         if mode in mode_handlers:
             _response: Final = await mode_handlers[mode]()
-            # Only process headers for chat mode
             _response_headers: Final = cast(  # cast-ok: provider headers are stored as a string-keyed mapping
-                dict[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
+                Mapping[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
             )
             return create_health_check_response(_response_headers)
         else:

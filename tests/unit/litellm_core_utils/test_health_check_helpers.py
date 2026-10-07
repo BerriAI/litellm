@@ -21,7 +21,13 @@ from litellm.litellm_core_utils.health_check_helpers import (
 )
 from litellm.main import ahealth_check
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
+from litellm.types.llms.base import HiddenParams
+from litellm.types.utils import (
+    LIST_BATCHES_SUPPORTED_PROVIDERS,
+    TextChoices,
+    TextCompletionResponse,
+    Usage,
+)
 
 
 def _png_chunks(png: bytes, offset: int = 8) -> tuple[tuple[bytes, bytes], ...]:
@@ -144,6 +150,28 @@ async def test_ahealth_check_supports_image_edit_mode():
 
     assert "error" not in result
     assert "Mode image_edit not supported" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_completion_includes_headers_from_hidden_params_model() -> None:
+    response: Final = TextCompletionResponse(
+        id="cmpl-test",
+        object="text_completion",
+        created=1,
+        model="gpt-3.5-turbo-instruct",
+        choices=[TextChoices(text="hello", index=0, logprobs=None, finish_reason="stop")],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+    response.hidden_params = HiddenParams(headers={"x-ratelimit-remaining-requests": "5"})
+
+    with patch("litellm.atext_completion", new_callable=AsyncMock, return_value=response) as mock_atext_completion:
+        result: Final = await ahealth_check(
+            {"model": "gpt-3.5-turbo-instruct", "api_key": "sk-test"},
+            mode="completion",
+        )
+
+    mock_atext_completion.assert_awaited_once()
+    assert result == {"x-ratelimit-remaining-requests": "5"}
 
 
 def test_update_model_params_with_health_check_tracking_information():

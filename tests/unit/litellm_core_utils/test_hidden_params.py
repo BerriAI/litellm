@@ -112,19 +112,32 @@ def test_set_hidden_param_rejects_unsupported_storage_without_replacing_it() -> 
     assert getattr(response, HIDDEN_PARAMS_ATTR) is storage
 
 
-def test_get_or_create_hidden_params_rejects_hidden_params_storage_without_replacing_it() -> None:
+def test_get_or_create_hidden_params_wraps_hidden_params_storage() -> None:
     class PlainResponse:
         pass
 
-    storage: Final = HiddenParams(response_cost=0.25)
+    storage: Final = HiddenParams(
+        response_cost=0.25,
+        headers={"x-ratelimit-remaining-requests": "5"},
+    )
     response: Final = PlainResponse()
     setattr(response, HIDDEN_PARAMS_ATTR, storage)
 
-    with pytest.raises(TypeError, match="unsupported hidden params storage: HiddenParams"):
-        get_or_create_hidden_params(response)
+    hidden_params: Final = get_or_create_hidden_params(response)
 
     assert getattr(response, HIDDEN_PARAMS_ATTR) is storage
-    assert storage["response_cost"] == 0.25
+    assert hidden_params["response_cost"] == 0.25
+    assert hidden_params["headers"] == {"x-ratelimit-remaining-requests": "5"}
+    assert "headers" in hidden_params
+    assert "headers" in tuple(hidden_params)
+
+    nested: Final = hidden_params.setdefault("nested", {})
+    assert hidden_params.setdefault("nested", {}) is nested
+    assert storage.nested is nested
+
+    del hidden_params["headers"]
+    assert "headers" not in hidden_params
+    assert "headers" not in tuple(hidden_params)
 
 
 def test_openai_text_completion_conversion_preserves_hidden_params_storage() -> None:
@@ -159,7 +172,7 @@ def test_get_hidden_params_preserves_model_response_identity() -> None:
 def test_get_hidden_params_returns_none_for_non_dict_storage() -> None:
     class PlainResponse:
         def __init__(self) -> None:
-            self._hidden_params = HiddenParams(response_cost=0.25)
+            self._hidden_params = object()
 
     response: Final = PlainResponse()
 
