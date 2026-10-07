@@ -95,7 +95,7 @@ class _ImageGenerationTestLogger(CustomLogger):
 
 class TestAimlImageGeneration:
     @pytest.mark.asyncio
-    async def test_basic_image_generation(self):
+    async def test_basic_image_generation(self, monkeypatch: pytest.MonkeyPatch):
         mock_aiml_response = {
             "created": 1703658209,
             "data": [{"url": "https://example.com/generated_image.png"}],
@@ -119,8 +119,7 @@ class TestAimlImageGeneration:
             litellm.turn_on_debug()
             custom_logger = _ImageGenerationTestLogger()
             litellm.logging_callback_manager._reset_all_callbacks()
-            litellm.callbacks = [custom_logger]
-            litellm.set_verbose = True
+            monkeypatch.setattr(litellm, "callbacks", [custom_logger])
             response = await litellm.aimage_generation(
                 model="aiml/flux-pro/v1.1",
                 prompt="A image of a otter",

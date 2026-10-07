@@ -496,7 +496,6 @@ def test_basic_caching_import():
 def test_cache_override():
     litellm.cache = Cache()
     print("Testing cache override")
-    litellm.set_verbose = True
 
     response1 = embedding(
         model="text-embedding-ada-002",
@@ -516,9 +515,8 @@ def test_cache_override():
 
 
 @pytest.mark.usefixtures("preserve_litellm_set_verbose")
-def test_caching_v2():
+def test_caching_v2(monkeypatch: pytest.MonkeyPatch):
     try:
-        litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
             model="gpt-3.5-turbo",
@@ -534,8 +532,8 @@ def test_caching_v2():
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         litellm.cache = None
-        litellm.success_callback = []
-        litellm._async_success_callback = []
+        monkeypatch.setattr(litellm, "success_callback", [])
+        monkeypatch.setattr(litellm, "_async_success_callback", [])
         if response2["choices"][0]["message"]["content"] != response1["choices"][0]["message"]["content"]:
             print(f"response1: {response1}")
             print(f"response2: {response2}")
@@ -546,9 +544,8 @@ def test_caching_v2():
 
 
 @pytest.mark.usefixtures("preserve_litellm_set_verbose")
-def test_caching_with_ttl():
+def test_caching_with_ttl(monkeypatch: pytest.MonkeyPatch):
     try:
-        litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
             model="gpt-3.5-turbo",
@@ -566,8 +563,8 @@ def test_caching_with_ttl():
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         litellm.cache = None
-        litellm.success_callback = []
-        litellm._async_success_callback = []
+        monkeypatch.setattr(litellm, "success_callback", [])
+        monkeypatch.setattr(litellm, "_async_success_callback", [])
         assert response2["choices"][0]["message"]["content"] != response1["choices"][0]["message"]["content"]
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
@@ -575,9 +572,8 @@ def test_caching_with_ttl():
 
 
 @pytest.mark.usefixtures("preserve_litellm_set_verbose")
-def test_caching_with_default_ttl():
+def test_caching_with_default_ttl(monkeypatch: pytest.MonkeyPatch):
     try:
-        litellm.set_verbose = True
         litellm.cache = Cache(ttl=0)
         response1 = completion(
             model="gpt-3.5-turbo",
@@ -594,8 +590,8 @@ def test_caching_with_default_ttl():
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         litellm.cache = None
-        litellm.success_callback = []
-        litellm._async_success_callback = []
+        monkeypatch.setattr(litellm, "success_callback", [])
+        monkeypatch.setattr(litellm, "_async_success_callback", [])
         assert response2["id"] != response1["id"]
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
@@ -603,11 +599,10 @@ def test_caching_with_default_ttl():
 
 
 @pytest.mark.usefixtures("preserve_litellm_set_verbose")
-def test_caching_with_models_v2():
+def test_caching_with_models_v2(monkeypatch: pytest.MonkeyPatch):
     messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
     litellm.cache = Cache()
     print("test2 for caching")
-    litellm.set_verbose = True
     response1 = completion(
         model="gpt-3.5-turbo",
         messages=messages,
@@ -625,8 +620,8 @@ def test_caching_with_models_v2():
     print(f"response2: {response2}")
     print(f"response3: {response3}")
     litellm.cache = None
-    litellm.success_callback = []
-    litellm._async_success_callback = []
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
     if response3["choices"][0]["message"]["content"] == response2["choices"][0]["message"]["content"]:
         print(f"response2: {response2}")
         print(f"response3: {response3}")

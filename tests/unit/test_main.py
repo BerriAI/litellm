@@ -4831,7 +4831,6 @@ def test_completion_perplexity_api() -> None:
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("preserve_litellm_completion_state")
 async def test_openai_compatible_custom_api_base(provider: str) -> None:
-    litellm.set_verbose = True
     messages: Final = [{"role": "user", "content": "Hello world"}]
     openai_client: Final = OpenAI(api_key="fake-key")
 
@@ -4861,7 +4860,6 @@ async def test_openai_compatible_custom_api_base(provider: str) -> None:
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("preserve_litellm_completion_state")
 async def test_openai_compatible_custom_api_video(provider: str) -> None:
-    litellm.set_verbose = True
     messages: Final = [
         {
             "role": "user",
@@ -5030,7 +5028,6 @@ def gemini_mock_post(*args: object, **kwargs: object) -> MagicMock:
 async def test_completion_functions_param(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    litellm.set_verbose = True
     monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-api-key")
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-google-api-key")
     function1: Final = [
@@ -5207,7 +5204,6 @@ def test_bedrock_deepseek_known_tokenizer_config(
 
 @pytest.mark.usefixtures("preserve_litellm_completion_state")
 def test_completion_anthropic_hanging() -> None:
-    litellm.set_verbose = True
     litellm.modify_params = True
     messages: Final = [
         {
@@ -5239,7 +5235,6 @@ def test_completion_anthropic_hanging() -> None:
 @pytest.mark.parametrize("drop_params", [True, False])
 @pytest.mark.usefixtures("preserve_litellm_completion_state")
 def test_completion_deep_infra(drop_params: bool) -> None:
-    litellm.set_verbose = False
     model_name: Final = "deepinfra/meta-llama/Llama-2-70b-chat-hf"
     tools: Final = [
         {
@@ -5621,7 +5616,6 @@ def test_openai_hallucinated_tool_call_util(
 
 @pytest.mark.usefixtures("preserve_litellm_completion_state")
 def test_completion_novita_ai() -> None:
-    litellm.set_verbose = True
     messages: Final = [
         {"role": "system", "content": "You're a good bot"},
         {"role": "user", "content": "Hey"},
@@ -5654,7 +5648,6 @@ def test_completion_novita_ai() -> None:
 @pytest.mark.parametrize("api_key", ["my-bad-api-key"])
 @pytest.mark.usefixtures("preserve_litellm_completion_state")
 def test_completion_novita_ai_dynamic_params(api_key: str) -> None:
-    litellm.set_verbose = True
     messages: Final = [
         {"role": "system", "content": "You're a good bot"},
         {"role": "user", "content": "Hey"},
@@ -5687,7 +5680,6 @@ def test_completion_openai_metadata(
     enable_preview_features: bool,
 ) -> None:
     client: Final = OpenAI()
-    litellm.set_verbose = True
     monkeypatch.setattr(litellm, "enable_preview_features", enable_preview_features)
 
     mock_completion: Final = MagicMock(return_value=MagicMock())

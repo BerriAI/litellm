@@ -309,8 +309,8 @@ def test_azure_ai_mistral_optional_params():
     assert "user" not in optional_params
 
 
-def test_vertex_ai_llama_3_optional_params():
-    litellm.vertex_llama3_models = ["meta/llama3-405b-instruct-maas"]
+def test_vertex_ai_llama_3_optional_params(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_llama3_models", ["meta/llama3-405b-instruct-maas"])
     litellm.drop_params = True
     optional_params = get_optional_params(
         model="meta/llama3-405b-instruct-maas",
@@ -322,8 +322,8 @@ def test_vertex_ai_llama_3_optional_params():
     assert "user" not in optional_params
 
 
-def test_vertex_ai_mistral_optional_params():
-    litellm.vertex_mistral_models = ["mistral-large@2407"]
+def test_vertex_ai_mistral_optional_params(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_mistral_models", ["mistral-large@2407"])
     litellm.drop_params = True
     optional_params = get_optional_params(
         model="mistral-large@2407",
@@ -536,25 +536,29 @@ def test_bedrock_optional_params_embeddings_provider_specific_params():
         "vertex_ai_beta",
     ],
 )
-def test_vertex_safety_settings(provider):
-    litellm.vertex_ai_safety_settings = [
-        {
-            "category": "HARM_CATEGORY_HARASSMENT",
-            "threshold": "BLOCK_NONE",
-        },
-        {
-            "category": "HARM_CATEGORY_HATE_SPEECH",
-            "threshold": "BLOCK_NONE",
-        },
-        {
-            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            "threshold": "BLOCK_NONE",
-        },
-        {
-            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-            "threshold": "BLOCK_NONE",
-        },
-    ]
+def test_vertex_safety_settings(provider, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        litellm,
+        "vertex_ai_safety_settings",
+        [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE",
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE",
+            },
+        ],
+    )
 
     optional_params = get_optional_params(model="gemini-1.5-pro", custom_llm_provider=provider)
     assert len(optional_params) == 1

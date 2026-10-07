@@ -527,13 +527,13 @@ async def test_azure_image_edit_litellm_sdk():
         ImageResponse.model_validate(result)
 
 @pytest.mark.asyncio
-async def test_openai_image_edit_cost_tracking():
+async def test_openai_image_edit_cost_tracking(monkeypatch: pytest.MonkeyPatch):
     """Test OpenAI image edit cost tracking with custom logger"""
     from litellm import aimage_edit, image_edit
 
     test_custom_logger = _ImageEditTestLogger()
     litellm.logging_callback_manager._reset_all_callbacks()
-    litellm.callbacks = [test_custom_logger]
+    monkeypatch.setattr(litellm, "callbacks", [test_custom_logger])
 
     mock_response = {
         "created": 1589478378,

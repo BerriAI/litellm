@@ -784,11 +784,11 @@ class TestDeepKeepGuardrail:
 
 
 @pytest.mark.asyncio
-async def test_empty_texts():
+async def test_empty_texts(monkeypatch: pytest.MonkeyPatch):
     """Test handling of empty texts input."""
-    os.environ["DEEPKEEP_API_KEY"] = "test-key"
-    os.environ["DEEPKEEP_API_BASE"] = "https://test.deepkeep.ai"
-    os.environ["DEEPKEEP_FIREWALL_ID"] = "fw-123"
+    monkeypatch.setenv("DEEPKEEP_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPKEEP_API_BASE", "https://test.deepkeep.ai")
+    monkeypatch.setenv("DEEPKEEP_FIREWALL_ID", "fw-123")
 
     deepkeep_guardrail = DeepKeepGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -822,17 +822,13 @@ async def test_empty_texts():
 
     assert result["texts"] == []
 
-    del os.environ["DEEPKEEP_API_KEY"]
-    del os.environ["DEEPKEEP_API_BASE"]
-    del os.environ["DEEPKEEP_FIREWALL_ID"]
-
 
 @pytest.mark.asyncio
-async def test_api_error_handling():
+async def test_api_error_handling(monkeypatch: pytest.MonkeyPatch):
     """Test handling of API errors (fail-closed by default)."""
-    os.environ["DEEPKEEP_API_KEY"] = "test-key"
-    os.environ["DEEPKEEP_API_BASE"] = "https://test.deepkeep.ai"
-    os.environ["DEEPKEEP_FIREWALL_ID"] = "fw-123"
+    monkeypatch.setenv("DEEPKEEP_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPKEEP_API_BASE", "https://test.deepkeep.ai")
+    monkeypatch.setenv("DEEPKEEP_FIREWALL_ID", "fw-123")
 
     deepkeep_guardrail = DeepKeepGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -870,17 +866,13 @@ async def test_api_error_handling():
     assert "DeepKeep guardrail API failed" in str(excinfo.value)
     assert "API timeout" in str(excinfo.value)
 
-    del os.environ["DEEPKEEP_API_KEY"]
-    del os.environ["DEEPKEEP_API_BASE"]
-    del os.environ["DEEPKEEP_FIREWALL_ID"]
-
 
 @pytest.mark.asyncio
-async def test_api_error_fail_open():
+async def test_api_error_fail_open(monkeypatch: pytest.MonkeyPatch):
     """Test handling of API errors with fail-open mode."""
-    os.environ["DEEPKEEP_API_KEY"] = "test-key"
-    os.environ["DEEPKEEP_API_BASE"] = "https://test.deepkeep.ai"
-    os.environ["DEEPKEEP_FIREWALL_ID"] = "fw-123"
+    monkeypatch.setenv("DEEPKEEP_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPKEEP_API_BASE", "https://test.deepkeep.ai")
+    monkeypatch.setenv("DEEPKEEP_FIREWALL_ID", "fw-123")
 
     deepkeep_guardrail = DeepKeepGuardrail(
         guardrail_name="test-guard",
@@ -905,17 +897,13 @@ async def test_api_error_fail_open():
 
     assert result["texts"] == ["Hello, how are you?"]
 
-    del os.environ["DEEPKEEP_API_KEY"]
-    del os.environ["DEEPKEEP_API_BASE"]
-    del os.environ["DEEPKEEP_FIREWALL_ID"]
-
 
 @pytest.mark.asyncio
-async def test_firewall_id_sent_in_payload():
+async def test_firewall_id_sent_in_payload(monkeypatch: pytest.MonkeyPatch):
     """Test that the firewall_id is correctly sent in the API payload."""
-    os.environ["DEEPKEEP_API_KEY"] = "test-key"
-    os.environ["DEEPKEEP_API_BASE"] = "https://test.deepkeep.ai"
-    os.environ["DEEPKEEP_FIREWALL_ID"] = "my-special-firewall"
+    monkeypatch.setenv("DEEPKEEP_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPKEEP_API_BASE", "https://test.deepkeep.ai")
+    monkeypatch.setenv("DEEPKEEP_FIREWALL_ID", "my-special-firewall")
 
     deepkeep_guardrail = DeepKeepGuardrail(
         guardrail_name="test-guard", event_hook="pre_call", default_on=True
@@ -956,17 +944,13 @@ async def test_firewall_id_sent_in_payload():
         assert payload["input_type"] == "request"
         assert payload["texts"] == ["Hello"]
 
-    del os.environ["DEEPKEEP_API_KEY"]
-    del os.environ["DEEPKEEP_API_BASE"]
-    del os.environ["DEEPKEEP_FIREWALL_ID"]
-
 
 @pytest.mark.asyncio
-async def test_post_call_response_direction():
+async def test_post_call_response_direction(monkeypatch: pytest.MonkeyPatch):
     """Test that post-call (response) direction is correctly sent."""
-    os.environ["DEEPKEEP_API_KEY"] = "test-key"
-    os.environ["DEEPKEEP_API_BASE"] = "https://test.deepkeep.ai"
-    os.environ["DEEPKEEP_FIREWALL_ID"] = "fw-123"
+    monkeypatch.setenv("DEEPKEEP_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPKEEP_API_BASE", "https://test.deepkeep.ai")
+    monkeypatch.setenv("DEEPKEEP_FIREWALL_ID", "fw-123")
 
     deepkeep_guardrail = DeepKeepGuardrail(
         guardrail_name="test-guard", event_hook="post_call", default_on=True
@@ -1001,7 +985,3 @@ async def test_post_call_response_direction():
         call_kwargs = mock_post.call_args
         payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
         assert payload["input_type"] == "response"
-
-    del os.environ["DEEPKEEP_API_KEY"]
-    del os.environ["DEEPKEEP_API_BASE"]
-    del os.environ["DEEPKEEP_FIREWALL_ID"]

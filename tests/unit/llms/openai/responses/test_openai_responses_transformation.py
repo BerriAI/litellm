@@ -2736,7 +2736,6 @@ async def test_openai_o1_pro_response_api(sync_mode):
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
-        litellm.set_verbose = True
 
         response = await litellm.aresponses(
             model="openai/o1-pro",
@@ -2826,7 +2825,6 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
-        litellm.set_verbose = True
 
         if sync_mode:
             with patch(
@@ -2929,7 +2927,6 @@ def test_basic_computer_use_preview_tool_call():
         return_value=MockResponse(mock_response, 200),
     ) as mock_post:
         litellm.turn_on_debug()
-        litellm.set_verbose = True
 
         litellm.responses(
             model="openai/computer-use-preview",
@@ -3114,7 +3111,6 @@ async def test_aresponses_service_tier_and_safety_identifier():
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
-        litellm.set_verbose = True
 
         await litellm.aresponses(
             model="openai/gpt-5.5",
@@ -3200,7 +3196,6 @@ async def test_openai_gpt5_reasoning_effort_parameter():
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
-        litellm.set_verbose = True
 
         await litellm.aresponses(
             model="openai/gpt-5-mini",
