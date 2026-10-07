@@ -184,7 +184,7 @@ def test_hidden_params_model_view_excludes_unset_fields() -> None:
     assert "model_id" in storage.model_fields_set
     assert "extra" in (storage.model_extra or {})
     assert storage.model_id == "m"
-    assert storage.extra == 1
+    assert storage.model_extra == {"extra": 1}
 
     fallback_response: Final = PlainResponse()
     setattr(fallback_response, HIDDEN_PARAMS_ATTR, HiddenParams())
