@@ -117,11 +117,11 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
                 except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                     try:
                         await self._response.aread()
-                    except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                    except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                         pass
                     try:
                         await self._response.aclose()
-                    except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                    except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                         pass
                     raise
             return self
@@ -164,7 +164,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             self._start_flush()
             try:
                 await self._response.aclose()
-            except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+            except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                 pass
             raise
         else:
@@ -191,7 +191,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             if self._initialized:
                 await self._iterator.aclose()
                 await self._response.aclose()
-        except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+        except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
             pass
 
 
@@ -239,7 +239,7 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
             self._start_flush()
             try:
                 self._response.close()
-            except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+            except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                 pass
             raise
         else:
@@ -260,7 +260,7 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
         self._start_flush()
         try:
             self._response.close()
-        except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+        except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
             pass
 
 
@@ -375,7 +375,7 @@ async def allm_passthrough_route(
                     provider=LlmProviders(resolved_custom_llm_provider),
                     model=model,
                 )
-            except Exception:  # noqa: BLE001 S110
+            except Exception:  # noqa: BLE001, S110  # provider config is optional
                 # If we can't get provider config, pass None
                 pass
 
@@ -428,9 +428,7 @@ def llm_passthrough_route(
 
     _is_async: Final = bool(kwargs.get("allm_passthrough_route", False))
 
-    litellm_logging_obj: Final = cast(
-        LiteLLMLoggingObj, kwargs.get("litellm_logging_obj")
-    )  # cast-ok: logging obj is constructed upstream; tests inject mocks
+    litellm_logging_obj: Final = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
 
     model, custom_llm_provider, api_key, api_base = get_llm_provider(
         model=model,
@@ -516,9 +514,7 @@ def llm_passthrough_route(
         forward_headers=False,
     )
 
-    _request_data: dict | None = (
-        data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
-    )  # rebind-ok: conditional
+    _request_data: dict | None = data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
     headers, signed_json_body = provider_config.sign_request(
         headers=headers,
         litellm_params=litellm_params_dict,
@@ -544,9 +540,9 @@ def llm_passthrough_route(
     )
 
     ## IS STREAMING REQUEST
-    _streaming_request_data: dict = (
+    _streaming_request_data: Final[dict[str, object]] = (
         data if isinstance(data, dict) else (json if isinstance(json, dict) else {})
-    )  # rebind-ok: conditional
+    )
     is_streaming_request: Final = provider_config.is_streaming_request(
         endpoint=endpoint,
         request_data=_streaming_request_data,
@@ -585,11 +581,11 @@ def llm_passthrough_route(
             except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                 try:
                     response.read()
-                except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                     pass
                 try:
                     response.close()
-                except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                     pass
                 raise
 

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import TypeAdapter
 
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
@@ -45,7 +45,7 @@ def _move_betas_into_header(request: Mapping[str, object], headers: dict[str, st
     if betas:
         headers["anthropic-beta"] = ",".join(betas)  # rebind-ok: the handler signs and sends this same dict
         return
-    headers.pop("anthropic-beta", None)  # rebind-ok: a caller header Mantle rejects in full must not reach it
+    headers.pop("anthropic-beta", None)
 
 
 class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
@@ -104,13 +104,13 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
             {
                 name: value
                 for name, value in (
-                    ("anthropic-workspace", project_id),
+                    ("anthropic-workspace-id", project_id),
                     ("anthropic-version", None if has_version else DEFAULT_ANTHROPIC_API_VERSION),
                 )
                 if value
             }
         )
-        return {  # mutable-ok: the base class contract returns a dict the handler signs into in place
+        return {
             **merged_headers,
             **mantle_headers,
         }, resolved_api_base
@@ -141,7 +141,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         mantle_fields: Final = MappingProxyType(
             {key: value for key, value in (("model", model_id), ("stream", streaming)) if value}
         )
-        return {  # mutable-ok: the base class contract returns the dict the handler serializes as the body
+        return {
             **body,
             **mantle_fields,
         }

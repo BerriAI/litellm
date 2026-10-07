@@ -109,6 +109,7 @@ class _BaseChunk(TypedDict, total=False):
     created: ReadOnly[int]
     model: ReadOnly[str]
     system_fingerprint: ReadOnly[str | None]
+    service_tier: ReadOnly[str | None]
     choices: ReadOnly[Required[Sequence[StreamingChoices]]]
     _hidden_params: ReadOnly[_ChunkHiddenParams]
 
@@ -163,6 +164,14 @@ class _UsageSummary(TypedDict):
     completion_tokens_details: CompletionTokensDetails | None
     prompt_tokens_details: PromptTokensDetailsWrapper | None
     cost: float | None
+
+
+def _reports_prompt_side_usage(usage_summary: "_UsageSummary") -> bool:
+    return (
+        (usage_summary["prompt_tokens"] or 0) > 0
+        or (usage_summary["cache_creation_input_tokens"] or 0) > 0
+        or (usage_summary["cache_read_input_tokens"] or 0) > 0
+    )
 
 
 def capture_cache_creation_token_details(
@@ -361,6 +370,13 @@ class ChunkProcessor:
         # Fall back to first chunk's model if no different model found
         return first_chunk_model
 
+    @staticmethod
+    def _get_service_tier_from_chunks(chunks: Sequence["_BaseChunk"]) -> str | None:
+        return next(
+            (tier for chunk in reversed(chunks) if isinstance(tier := chunk.get("service_tier"), str) and tier),
+            None,
+        )
+
     def build_base_response(self, chunks: Sequence["_BaseChunk"]) -> ModelResponse:
         chunk = self.first_chunk
         id: Final = ChunkProcessor._get_chunk_id(chunks)
@@ -370,6 +386,7 @@ class ChunkProcessor:
         # Get the actual model - for Azure Model Router, this finds the real model from later chunks
         model: Final = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint: Final = chunk.get("system_fingerprint", None)
+        service_tier: Final = ChunkProcessor._get_service_tier_from_chunks(chunks)
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
@@ -391,6 +408,11 @@ class ChunkProcessor:
                 "created": created,
                 "model": model,
                 "system_fingerprint": system_fingerprint,
+                **(
+                    MappingProxyType({"service_tier": service_tier})
+                    if service_tier is not None
+                    else MappingProxyType({})
+                ),
                 "choices": [
                     {
                         "index": 0,
@@ -467,12 +489,8 @@ class ChunkProcessor:
 
     def get_combined_tool_content(
         self, tool_call_chunks: Sequence["_ToolCallChunk"]
-    ) -> list[
-        ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-    ]:  # mutable-ok: assigned verbatim to Message.tool_calls, a list field
-        tool_calls_list: list[
-            ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-        ] = []  # mutable-ok: see return type
+    ) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall]:
+        tool_calls_list: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] = []
         tool_call_map: Final[dict[_ToolCallKey, dict[str, Any]]] = {}
 
         for chunk in tool_call_chunks:
@@ -679,7 +697,7 @@ class ChunkProcessor:
 
         def _flush_thinking_block() -> None:
             nonlocal current_thinking_text_parts, current_signature
-            if len(current_thinking_text_parts) > 0 and current_signature:
+            if current_signature:
                 thinking_blocks.append(
                     ChatCompletionThinkingBlock(
                         type="thinking",
@@ -888,11 +906,11 @@ class ChunkProcessor:
                 if usage_chunk_dict["completion_tokens"] is not None and usage_chunk_dict["completion_tokens"] > 0:
                     completion_usage_updates += 1
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_creation_input_tokens"] > 0 or cache_creation_input_tokens is None
+                    _reports_prompt_side_usage(usage_chunk_dict) or cache_creation_input_tokens is None
                 ):
                     cache_creation_input_tokens = usage_chunk_dict["cache_creation_input_tokens"]
                 if usage_chunk_dict["cache_read_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_read_input_tokens"] > 0 or cache_read_input_tokens is None
+                    _reports_prompt_side_usage(usage_chunk_dict) or cache_read_input_tokens is None
                 ):
                     cache_read_input_tokens = usage_chunk_dict["cache_read_input_tokens"]
                 if usage_chunk_dict["completion_tokens_details"] is not None:

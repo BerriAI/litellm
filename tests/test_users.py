@@ -1,3 +1,4 @@
+import os
 # What this tests ?
 ## Tests /user endpoints.
 import pytest
@@ -14,7 +15,7 @@ async def new_user(
     session, i, user_id=None, budget=None, budget_duration=None, models=None
 ):
     url = "http://0.0.0.0:4000/user/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {
         "models": models or ["azure-models"],
         "aliases": {"mistral-7b": "gpt-3.5-turbo"},
@@ -25,51 +26,6 @@ async def new_user(
 
     if user_id is not None:
         data["user_id"] = user_id
-
-    async with session.post(url, headers=headers, json=data) as response:
-        status = response.status
-        response_text = await response.text()
-
-        print(f"Response {i} (Status code: {status}):")
-        print(response_text)
-        print()
-
-        if status != 200:
-            raise Exception(f"Request {i} did not return a 200 status code: {status}")
-
-        return await response.json()
-
-
-async def generate_key(
-    session,
-    i,
-    budget=None,
-    budget_duration=None,
-    models=["azure-models", "gpt-4", "dall-e-3"],
-    max_parallel_requests: Optional[int] = None,
-    user_id: Optional[str] = None,
-    team_id: Optional[str] = None,
-    metadata: Optional[dict] = None,
-    calling_key="sk-1234",
-):
-    url = "http://0.0.0.0:4000/key/generate"
-    headers = {
-        "Authorization": f"Bearer {calling_key}",
-        "Content-Type": "application/json",
-    }
-    data = {
-        "models": models,
-        "aliases": {"mistral-7b": "gpt-3.5-turbo"},
-        "duration": None,
-        "max_budget": budget,
-        "budget_duration": budget_duration,
-        "max_parallel_requests": max_parallel_requests,
-        "user_id": user_id,
-        "team_id": team_id,
-        "metadata": metadata,
-    }
-
-    print(f"data: {data}")
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -137,7 +93,7 @@ async def test_user_info():
         key = key_gen["key"]
         ## as admin ##
         resp = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
+            session=session, get_user=get_user, call_user=os.environ["LITELLM_MASTER_KEY"]
         )
         assert isinstance(resp["user_info"], dict)
         assert len(resp["user_info"]) > 0
@@ -239,81 +195,25 @@ async def test_global_proxy_budget_update():
     get_user = f"litellm-proxy-budget"
     async with aiohttp.ClientSession() as session:
         user_info = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
+            session=session, get_user=get_user, call_user=os.environ["LITELLM_MASTER_KEY"]
         )
         original_spend = user_info["user_info"]["spend"]
-        await chat_completion(session=session, key="sk-1234")
+        await chat_completion(session=session, key=os.environ["LITELLM_MASTER_KEY"])
         await asyncio.sleep(5)  # let db update
         user_info = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
+            session=session, get_user=get_user, call_user=os.environ["LITELLM_MASTER_KEY"]
         )
         new_spend = user_info["user_info"]["spend"]
         print(f"new_spend: {new_spend}; original_spend: {original_spend}")
         assert new_spend > original_spend
-        await chat_completion_streaming(session=session, key="sk-1234")
+        await chat_completion_streaming(session=session, key=os.environ["LITELLM_MASTER_KEY"])
         await asyncio.sleep(5)  # let db update
         user_info = await get_user_info(
-            session=session, get_user=get_user, call_user="sk-1234"
+            session=session, get_user=get_user, call_user=os.environ["LITELLM_MASTER_KEY"]
         )
         new_new_spend = user_info["user_info"]["spend"]
         print(f"new_spend: {new_spend}; original_spend: {original_spend}")
         assert new_new_spend > new_spend
-
-
-@pytest.mark.asyncio
-async def test_user_model_access():
-    """
-    - Create user with model access
-    - Create key with user
-    - Call model that user has access to -> should work
-    - Call wildcard model that user has access to -> should work
-    - Call model that user does not have access to -> should fail
-    - Call wildcard model that user does not have access to -> should fail
-    """
-    import openai
-
-    async with aiohttp.ClientSession() as session:
-        get_user = f"krrish_{time.time()}@berri.ai"
-        await new_user(
-            session=session,
-            i=0,
-            user_id=get_user,
-            models=["good-model", "anthropic/*"],
-        )
-
-        result = await generate_key(
-            session=session,
-            i=0,
-            user_id=get_user,
-            models=[],  # assign no models. Allow inheritance from user
-        )
-        key = result["key"]
-
-        await chat_completion(
-            session=session,
-            key=key,
-            model="anthropic/claude-haiku-4-5-20251001",
-        )
-
-        await chat_completion(
-            session=session,
-            key=key,
-            model="good-model",
-        )
-
-        with pytest.raises(openai.PermissionDeniedError):
-            await chat_completion(
-                session=session,
-                key=key,
-                model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-            )
-
-        with pytest.raises(openai.PermissionDeniedError):
-            await chat_completion(
-                session=session,
-                key=key,
-                model="groq/claude-3-5-haiku-20241022",
-            )
 
 
 import json

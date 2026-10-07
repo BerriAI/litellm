@@ -5,9 +5,9 @@ from typing import Final
 
 import litellm
 from litellm.utils import (
-    _supports_factory,
     declared_value_factory,
     is_explicitly_disabled_factory,
+    supports_factory,
 )
 
 from .gpt_transformation import OpenAIGPTConfig
@@ -69,7 +69,7 @@ GPT_REASONING_SERIES_MARKERS: Final = ("gpt-5", "gpt-6")
 
 def is_gpt_reasoning_series_name(model: str) -> bool:
     normalized: Final = model.split("/")[-1]
-    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and not normalized.startswith("gpt-5-chat")
+    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and "gpt-5-chat" not in normalized
 
 
 class OpenAIGPT5Config(OpenAIGPTConfig):
@@ -157,7 +157,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         the shared ``_supports_factory`` helper.
         Returns False for unknown models (safe fallback).
         """
-        return _supports_factory(
+        return supports_factory(
             model=cls._model_map_lookup_name(model),
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",

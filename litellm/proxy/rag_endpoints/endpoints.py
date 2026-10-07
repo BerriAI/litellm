@@ -426,7 +426,7 @@ async def parse_rag_ingest_request(
     file_data: tuple[str, bytes, str] | None = None
     file_url: str | None = None
     file_id: str | None = None
-    ingest_options: dict[str, Any] = {}
+    ingest_options: dict[str, object] = {}
 
     if "multipart/form-data" in content_type:
         # Form upload
@@ -550,7 +550,7 @@ async def rag_ingest(
     ## Form upload (for files):
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -F file="@document.pdf" \\
         -F 'ingest_options={"vector_store": {"custom_llm_provider": "openai"}}'
     ```
@@ -558,7 +558,7 @@ async def rag_ingest(
     ## JSON body (for URLs):
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -H "Content-Type: application/json" \\
         -d '{
             "file_url": "https://example.com/document.pdf",
@@ -569,7 +569,7 @@ async def rag_ingest(
     ## Bedrock:
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -F file="@document.pdf" \\
         -F 'ingest_options={"vector_store": {"custom_llm_provider": "bedrock"}}'
     ```
@@ -618,11 +618,11 @@ async def rag_ingest(
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
         managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
-        merged_vector_store_config: Final = {  # mutable-ok: ingestion classes mutate it when loading credentials
+        merged_vector_store_config: Final = {
             **_caller_vector_store_options(request_vector_store_config, managed_store),
             **_managed_store_overrides(managed_store),
         }
-        merged_ingest_options: Final = {  # mutable-ok: litellm.aingest takes a plain dict payload
+        merged_ingest_options: Final = {
             **ingest_options,
             "vector_store": merged_vector_store_config,
         }
@@ -631,7 +631,7 @@ async def rag_ingest(
         if provider_error is not None:
             raise HTTPException(
                 status_code=400,
-                detail={"error": provider_error},  # mutable-ok: FastAPI serializes the detail as JSON
+                detail={"error": provider_error},
             )
 
         # Add litellm data
@@ -725,7 +725,7 @@ async def rag_query(
     ## Example Request:
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/query" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -H "Content-Type: application/json" \\
         -d '{
             "model": "gpt-4o-mini",
@@ -741,7 +741,7 @@ async def rag_query(
     ## With Reranking:
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/query" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -H "Content-Type: application/json" \\
         -d '{
             "model": "gpt-4o-mini",
@@ -824,7 +824,7 @@ async def rag_query(
         merged_retrieval_config: Final = {
             **retrieval_config,
             **store_data,
-        }  # mutable-ok: litellm.aquery requires a plain dict payload
+        }
 
         # Add litellm data
         request_data: dict[str, object] = {}

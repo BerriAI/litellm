@@ -25,6 +25,21 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
+VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS: Final = frozenset(
+    {
+        "audio",
+        "max_retries",
+        "modalities",
+        "prediction",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+        "safety_identifier",
+        "service_tier",
+        "store",
+        "web_search_options",
+    }
+)
+
 
 class VertexAILyriaModelInfo(TypedDict):
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"]]
@@ -368,6 +383,27 @@ def get_vertex_base_model_name(model: str) -> str:
             return model.replace(route, "", 1)
 
     return model
+
+
+def vertex_model_garden_model_id_in_json_body(model: str) -> bool:
+    """
+    Vertex catalog / publisher models are addressed as publisher/model (e.g.
+    xai/grok-4.1-fast-reasoning) on the shared OpenAPI URL, with the id in the JSON body.
+
+    Deployed Model Garden endpoints are typically a single segment (often numeric)
+    and use .../endpoints/{ENDPOINT_ID}/chat/completions with an empty model field.
+    """
+    return "/" in model
+
+
+def is_vertex_self_deployed_openai_compatible_endpoint(model: str) -> bool:
+    local_model: Final = model.removeprefix("vertex_ai/")
+    route: Final = get_vertex_ai_model_route(local_model)
+    if route == VertexAIModelRoute.GEMMA:
+        return True
+    return route == VertexAIModelRoute.MODEL_GARDEN and not vertex_model_garden_model_id_in_json_body(
+        get_vertex_base_model_name(local_model)
+    )
 
 
 def get_vertex_ai_fine_tuned_endpoint_id(model: str) -> str | None:
@@ -1205,6 +1241,9 @@ class VertexAITokenCounter(BaseTokenCounter):
         import copy
 
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+            VertexAIError as PartnerVertexAIError,
+        )
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIPartnerModels,
         )
 
@@ -1233,14 +1272,32 @@ class VertexAITokenCounter(BaseTokenCounter):
                 "vertex_ai_credentials"
             )
 
-            result = await partner_models_handler.count_tokens(
-                model=model_to_use,
-                messages=messages or [],
-                litellm_params=partner_litellm_params,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-                vertex_credentials=vertex_credentials,
-            )
+            try:
+                result = await partner_models_handler.count_tokens(
+                    model=model_to_use,
+                    messages=messages or [],
+                    litellm_params=partner_litellm_params,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    vertex_credentials=vertex_credentials,
+                    system=system,
+                    tools=tools,
+                )
+            except (PartnerVertexAIError, httpx.HTTPStatusError) as e:
+                status_code: Final = e.response.status_code
+                error_message: Final = e.message if isinstance(e, PartnerVertexAIError) else e.response.text
+                verbose_logger.warning(
+                    "Vertex AI partner CountTokens API error: status=%s, message=%s", status_code, error_message
+                )
+                return TokenCountResponse(
+                    total_tokens=0,
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type="vertex_ai_partner_models",
+                    error=True,
+                    error_message=error_message,
+                    status_code=status_code,
+                )
 
             if result is not None:
                 return TokenCountResponse(
@@ -1257,11 +1314,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             )
 
             resolved_contents: Final = (
-                contents
-                if contents is not None
-                else _gemini_convert_messages_with_history(
-                    messages=messages or []  # mutable-ok: fallback for None messages; helper signature requires list
-                )
+                contents if contents is not None else _gemini_convert_messages_with_history(messages=messages or [])
             )
 
             count_tokens_params: Final = {
