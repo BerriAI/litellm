@@ -225,8 +225,17 @@ class AutoRouterBaselineCache(CustomLogger):
             params: Final = (
                 _METADATA.validate_python(deployment.litellm_params.model_dump(mode="json")) if deployment else {}
             )
-            estimated: Final = call_type != CallTypes.anthropic_messages or not isinstance(
-                target, NativePredictionTarget
+            selected_model: Final = kwargs.get("model")
+            selected_provider: Final = kwargs.get("custom_llm_provider")
+            selected: Final = _resolve_model(
+                selected_model if isinstance(selected_model, str) else logging_obj.model,
+                selected_provider if isinstance(selected_provider, str) else None,
+            )
+            estimated: Final = (
+                call_type != CallTypes.anthropic_messages
+                or not isinstance(target, NativePredictionTarget)
+                or selected is None
+                or selected.provider != "anthropic"
             )
             native: Final = call_type == CallTypes.anthropic_messages and not _uses_messages_adapter(
                 identity.model,
@@ -284,7 +293,6 @@ class AutoRouterBaselineCache(CustomLogger):
                     else "duration",
                 ),
             )
-            selected_model: Final = kwargs.get("model")
             selected_body: Final = (
                 prepare_native_baseline_body(
                     kwargs, selected_model if isinstance(selected_model, str) else logging_obj.model
