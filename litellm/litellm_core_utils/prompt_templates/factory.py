@@ -5188,7 +5188,7 @@ def function_call_prompt(
     messages: list[dict[str, object]],
     functions: list[object],
 ) -> list[dict[str, object]]:
-    function_prompt = """Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:"""
+    function_prompt = """To call a function, reply with JSON ONLY in this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}}. Once a function result answers the request, reply to the user in plain text instead of calling a function again. The following functions are available to you:"""
     for function in functions:
         function_prompt += f"""\n{function}\n"""
 

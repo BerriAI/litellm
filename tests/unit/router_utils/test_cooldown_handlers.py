@@ -1,10 +1,20 @@
+import asyncio
+import importlib
+import random
+import time
+from typing import Final
 from unittest.mock import MagicMock, patch
 
-import asyncio, importlib, litellm, pytest, time
+import pytest
+
+import litellm
+from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.router_utils.cooldown_handlers import(
+from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
+from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
     _has_explicit_allowed_fails_policy_for_exception,
     _increment_allowed_fails,
@@ -13,21 +23,23 @@ from litellm.router_utils.cooldown_handlers import(
     _should_cooldown_based_on_deployment_policy,
     _should_cooldown_deployment,
     _should_run_cooldown_logic,
+    async_get_cooldown_deployments,
     cast_exception_status_to_int,
     mark_advisor_orchestration_failure,
     should_cooldown_based_on_allowed_fails_policy,
 )
-from litellm import Router
-from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
-from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
-from litellm.router_utils.fallback_event_handlers import(
+from litellm.router_utils.fallback_event_handlers import (
     _trigger_cooldown_for_failed_deployment,
 )
-from litellm.router_utils.router_callbacks.track_deployment_metrics import(
+from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
-from litellm.types.router import AllowedFailsPolicy
+from litellm.types.router import (
+    AllowedFailsPolicy,
+    DeploymentTypedDict,
+    LiteLLMParamsTypedDict,
+)
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -1869,3 +1881,585 @@ def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_ro
     assert should_cooldown is True, (
         f"Should cooldown when we have {DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS} failed requests (100% failure rate)"
     )
+
+@pytest.mark.asyncio
+async def test_dynamic_cooldowns():
+    """
+    Assert kwargs for completion/embedding have 'cooldown_time' as a litellm_param
+    """
+    # litellm.set_verbose = True
+    tmp_mock = MagicMock()
+
+    litellm.failure_callback = [tmp_mock]
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-fake-model",
+                "litellm_params": {
+                    "model": "openai/gpt-1",
+                    "api_key": "my-key",
+                    "mock_response": Exception("this is an error"),
+                },
+            }
+        ],
+        cooldown_time=60,
+    )
+
+    try:
+        _ = router.completion(
+            model="my-fake-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            cooldown_time=0,
+            num_retries=0,
+        )
+    except Exception:
+        pass
+
+    tmp_mock.assert_called_once()
+
+    print(tmp_mock.call_count)
+
+    assert "cooldown_time" in tmp_mock.call_args[0][0]["litellm_params"]
+    assert tmp_mock.call_args[0][0]["litellm_params"]["cooldown_time"] == 0
+
+@pytest.mark.asyncio
+async def test_cooldown_time_zero_uses_zero_not_default():
+    """
+    Test that when cooldown_time=0 is passed, it uses 0 instead of the default cooldown time
+    AND that the early exit logic prevents cooldown entirely
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "cooldown_time": 0,
+                },
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                },
+            },
+        ],
+        cooldown_time=300,
+        num_retries=0,
+    )
+
+    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown") as mock_add_cooldown:
+        try:
+            await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response="litellm.RateLimitError",
+            )
+        except litellm.RateLimitError:
+            pass
+
+        mock_add_cooldown.assert_not_called()
+
+    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    assert len(cooldown_list) == 0
+
+    healthy_deployments, _ = await router._async_get_healthy_deployments(model="gpt-3.5-turbo", parent_otel_span=None)
+    assert len(healthy_deployments) == 1
+
+def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
+    """
+    Unit test for _should_run_cooldown_logic to verify early exit when time_to_cooldown is 0
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+                "model_info": {
+                    "id": "test-deployment-id",
+                },
+            }
+        ],
+        cooldown_time=300,
+    )
+
+    result = _should_run_cooldown_logic(
+        litellm_router_instance=router,
+        deployment="test-deployment-id",
+        exception_status=429,
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
+        time_to_cooldown=0.0,
+    )
+    assert result is False, "Should not run cooldown logic when time_to_cooldown is 0"
+
+    result = _should_run_cooldown_logic(
+        litellm_router_instance=router,
+        deployment="test-deployment-id",
+        exception_status=429,
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
+        time_to_cooldown=1e-10,
+    )
+    assert result is False, "Should not run cooldown logic when time_to_cooldown is effectively 0"
+
+    result = _should_run_cooldown_logic(
+        litellm_router_instance=router,
+        deployment="test-deployment-id",
+        exception_status=429,
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
+        time_to_cooldown=None,
+    )
+    assert result is True, "Should run cooldown logic when time_to_cooldown is None"
+
+    result = _should_run_cooldown_logic(
+        litellm_router_instance=router,
+        deployment="test-deployment-id",
+        exception_status=429,
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
+        time_to_cooldown=60.0,
+    )
+    assert result is True, "Should run cooldown logic when time_to_cooldown is positive"
+
+@pytest.mark.parametrize("num_deployments", [1, 2])
+def test_single_deployment_no_cooldowns(num_deployments: int):
+    """
+    Do not cooldown on single deployment.
+
+    Cooldown on multiple deployments.
+    """
+    model_list = []
+    for i in range(num_deployments):
+        model = DeploymentTypedDict(
+            model_name="gpt-3.5-turbo",
+            litellm_params=LiteLLMParamsTypedDict(
+                model="gpt-3.5-turbo",
+            ),
+        )
+        model_list.append(model)
+
+    router = Router(model_list=model_list, num_retries=0)
+
+    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()) as mock_client:
+        try:
+            router.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response="litellm.RateLimitError",
+            )
+        except litellm.RateLimitError:
+            pass
+
+        if num_deployments == 1:
+            mock_client.assert_not_called()
+        else:
+            mock_client.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_single_deployment_no_cooldowns_test_prod():
+    """
+    Do not cooldown on single deployment.
+
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                },
+            },
+            {
+                "model_name": "gpt-12",
+                "litellm_params": {
+                    "model": "openai/gpt-12",
+                },
+            },
+        ],
+        num_retries=0,
+    )
+
+    with patch.object(
+        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
+    ) as mock_client:
+        try:
+            await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response="litellm.RateLimitError",
+            )
+        except litellm.RateLimitError:
+            pass
+
+        await asyncio.sleep(2)
+
+        mock_client.assert_not_called()
+
+
+@pytest.mark.asyncio()
+async def test_high_traffic_cooldowns_all_healthy_deployments():
+    """
+    PROD TEST - 3 deployments, each deployment fails 25% requests. Assert that no deployments get put into cooldown
+    """
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_base": "https://api.openai.com",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_base": "https://api.openai.com-2",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_base": "https://api.openai.com-3",
+                },
+            },
+        ],
+        set_verbose=True,
+        debug_level="DEBUG",
+    )
+
+    all_deployment_ids = router.get_model_ids()
+
+    from collections import defaultdict
+
+    # Create a defaultdict to track successes and failures for each model ID
+    model_stats = defaultdict(lambda: {"successes": 0, "failures": 0})
+
+    litellm.set_verbose = True
+    for _ in range(100):
+        try:
+            model_id = random.choice(all_deployment_ids)
+
+            num_successes = model_stats[model_id]["successes"]
+            num_failures = model_stats[model_id]["failures"]
+            total_requests = num_failures + num_successes
+            if total_requests > 0:
+                print(
+                    "num failures= ",
+                    num_failures,
+                    "num successes= ",
+                    num_successes,
+                    "num_failures/total = ",
+                    num_failures / total_requests,
+                )
+
+            if total_requests == 0:
+                mock_response = "hi"
+            elif num_failures / total_requests <= 0.25:
+                # Randomly decide between fail and succeed
+                if random.random() < 0.5:
+                    mock_response = "hi"
+                else:
+                    mock_response = "litellm.InternalServerError"
+            else:
+                mock_response = "hi"
+
+            await router.acompletion(
+                model=model_id,
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response=mock_response,
+            )
+            model_stats[model_id]["successes"] += 1
+
+            await asyncio.sleep(0.0001)
+        except litellm.InternalServerError:
+            model_stats[model_id]["failures"] += 1
+            pass
+        except Exception as e:
+            print("Failed test model stats=", model_stats)
+            raise e
+    print("model_stats: ", model_stats)
+
+    cooldown_list = await async_get_cooldown_deployments(
+        litellm_router_instance=router, parent_otel_span=None
+    )
+    assert len(cooldown_list) == 0
+
+@pytest.mark.asyncio()
+async def test_high_traffic_cooldowns_one_bad_deployment():
+    """
+    PROD TEST - 3 deployments, 1- deployment fails 6/10 requests, assert that bad deployment gets put into cooldown
+    """
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_base": "https://api.openai.com",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_base": "https://api.openai.com-2",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_base": "https://api.openai.com-3",
+                },
+            },
+        ],
+        set_verbose=True,
+        debug_level="DEBUG",
+    )
+
+    all_deployment_ids = router.get_model_ids()
+
+    from collections import defaultdict
+
+    # Create a defaultdict to track successes and failures for each model ID
+    model_stats = defaultdict(lambda: {"successes": 0, "failures": 0})
+    bad_deployment_id = random.choice(all_deployment_ids)
+    litellm.set_verbose = True
+    for _ in range(100):
+        try:
+            model_id = random.choice(all_deployment_ids)
+
+            num_successes = model_stats[model_id]["successes"]
+            num_failures = model_stats[model_id]["failures"]
+            total_requests = num_failures + num_successes
+            if total_requests > 0:
+                print(
+                    "num failures= ",
+                    num_failures,
+                    "num successes= ",
+                    num_successes,
+                    "num_failures/total = ",
+                    num_failures / total_requests,
+                )
+
+            if total_requests == 0:
+                mock_response = "hi"
+            elif bad_deployment_id == model_id:
+                if num_failures / total_requests <= 0.6:
+
+                    mock_response = "litellm.InternalServerError"
+
+            elif num_failures / total_requests <= 0.25:
+                # Randomly decide between fail and succeed
+                if random.random() < 0.5:
+                    mock_response = "hi"
+                else:
+                    mock_response = "litellm.InternalServerError"
+            else:
+                mock_response = "hi"
+
+            await router.acompletion(
+                model=model_id,
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response=mock_response,
+            )
+            model_stats[model_id]["successes"] += 1
+
+            await asyncio.sleep(0.0001)
+        except litellm.InternalServerError:
+            model_stats[model_id]["failures"] += 1
+            pass
+        except Exception as e:
+            print("Failed test model stats=", model_stats)
+            raise e
+    print("model_stats: ", model_stats)
+
+    cooldown_list = await async_get_cooldown_deployments(
+        litellm_router_instance=router, parent_otel_span=None
+    )
+    assert len(cooldown_list) == 1
+
+@pytest.mark.asyncio()
+async def test_high_traffic_cooldowns_one_rate_limited_deployment():
+    """
+    PROD TEST - 3 deployments, 1- deployment fails 6/10 requests, assert that bad deployment gets put into cooldown
+    """
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_base": "https://api.openai.com",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_base": "https://api.openai.com-2",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_base": "https://api.openai.com-3",
+                },
+            },
+        ],
+        set_verbose=True,
+        debug_level="DEBUG",
+    )
+
+    all_deployment_ids = router.get_model_ids()
+
+    from collections import defaultdict
+
+    # Create a defaultdict to track successes and failures for each model ID
+    model_stats = defaultdict(lambda: {"successes": 0, "failures": 0})
+    bad_deployment_id = random.choice(all_deployment_ids)
+    litellm.set_verbose = True
+    for _ in range(100):
+        try:
+            model_id = random.choice(all_deployment_ids)
+
+            num_successes = model_stats[model_id]["successes"]
+            num_failures = model_stats[model_id]["failures"]
+            total_requests = num_failures + num_successes
+            if total_requests > 0:
+                print(
+                    "num failures= ",
+                    num_failures,
+                    "num successes= ",
+                    num_successes,
+                    "num_failures/total = ",
+                    num_failures / total_requests,
+                )
+
+            if total_requests == 0:
+                mock_response = "hi"
+            elif bad_deployment_id == model_id:
+                if num_failures / total_requests <= 0.6:
+
+                    mock_response = "litellm.RateLimitError"
+
+            elif num_failures / total_requests <= 0.25:
+                # Randomly decide between fail and succeed
+                if random.random() < 0.5:
+                    mock_response = "hi"
+                else:
+                    mock_response = "litellm.InternalServerError"
+            else:
+                mock_response = "hi"
+
+            await router.acompletion(
+                model=model_id,
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response=mock_response,
+            )
+            model_stats[model_id]["successes"] += 1
+
+            await asyncio.sleep(0.0001)
+        except litellm.InternalServerError:
+            model_stats[model_id]["failures"] += 1
+            pass
+        except litellm.RateLimitError:
+            model_stats[bad_deployment_id]["failures"] += 1
+            pass
+        except Exception as e:
+            print("Failed test model stats=", model_stats)
+            raise e
+    print("model_stats: ", model_stats)
+
+    cooldown_list = await async_get_cooldown_deployments(
+        litellm_router_instance=router, parent_otel_span=None
+    )
+    assert len(cooldown_list) == 1
+
+def test_router_fallbacks_with_cooldowns_and_model_id():
+    """
+    Test that after a RateLimitError, the router can still route subsequent
+    requests to the same deployment (i.e., mock errors don't permanently
+    cool down the deployment).
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {
+                    "id": "123",
+                },
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+    )
+
+    try:
+        router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="litellm.RateLimitError",
+        )
+    except litellm.RateLimitError:
+        pass
+
+    response = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hello",
+    )
+    assert response is not None
+
+@pytest.mark.asyncio()
+async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
+    """
+    A 429 answered to a caller-supplied credential cools down none of the shared deployments,
+    so the next credential still reaches them, while a 429 owned by a shared deployment does
+    """
+    from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("123", "456")
+        ],
+        num_retries=0,
+    )
+    messages = [{"role": "user", "content": "hi"}]
+
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(
+            model="gpt-3.5-turbo", messages=messages, api_key="my-bad-key-1", mock_response="litellm.RateLimitError"
+        )
+    await asyncio.sleep(1)
+    assert await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
+
+    response = await router.acompletion(
+        model="gpt-3.5-turbo", messages=messages, api_key="my-good-key-2", mock_response="served with credential 2"
+    )
+    assert response.choices[0].message.content == "served with credential 2"
+
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(model="gpt-3.5-turbo", messages=messages, mock_response="litellm.RateLimitError")
+    await asyncio.sleep(1)
+    cooled_down = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    assert len(cooled_down) == 1 and cooled_down[0] in {"123", "456"}

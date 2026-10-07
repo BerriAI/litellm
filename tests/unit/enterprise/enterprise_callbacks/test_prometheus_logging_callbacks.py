@@ -433,6 +433,7 @@ def test_set_latency_metrics(prometheus_logger):
         team_alias="test_team_alias",
         org_id=None,
         org_alias=None,
+        model_group="openai-gpt",
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
@@ -453,6 +454,7 @@ def test_set_latency_metrics(prometheus_logger):
         team_alias="test_team_alias",
         org_id=None,
         org_alias=None,
+        model_group="openai-gpt",
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
@@ -473,6 +475,7 @@ def test_set_latency_metrics(prometheus_logger):
         team_alias="test_team_alias",
         org_id=None,
         org_alias=None,
+        model_group="openai-gpt",
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
@@ -1054,6 +1057,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
 
     # Verify latency per output token metric
     prometheus_logger.litellm_deployment_latency_per_output_token.labels.assert_called_once_with(
+        model_group="my_custom_model_group",
         litellm_model_name="gpt-5-mini",
         model_id="model-123",
         api_base="https://api.openai.com",

@@ -1,11 +1,17 @@
 "use client";
 
 import { CircleHelp } from "lucide-react";
-import React, { useId } from "react";
+import React, { useEffect, useId } from "react";
 import { useController, type Control, type ControllerRenderProps, type RegisterOptions } from "react-hook-form";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  getLoggingOnlyScopeOptions,
+  modeIncludesLoggingOnly,
+  normalizeLoggingOnlyScopeChoice,
+  type LoggingOnlyScopeChoice,
+} from "./guardrail_info_helpers";
 
 export interface GuardrailCriterion {
   name: string;
@@ -15,6 +21,7 @@ export interface GuardrailCriterion {
 
 export interface GuardrailFormValues extends Record<string, unknown> {
   criteria?: GuardrailCriterion[];
+  logging_only_scope_choice?: LoggingOnlyScopeChoice;
 }
 export type GuardrailFormControl = Control<GuardrailFormValues>;
 export type GuardrailFieldRules = Pick<RegisterOptions<GuardrailFormValues, string>, "validate">;
@@ -37,6 +44,13 @@ export const asText = (value: unknown): string => {
   if (typeof value === "number") return String(value);
   return "";
 };
+
+const LOGGING_ONLY_SCOPE_CHOICES: ReadonlySet<string> = new Set(
+  getLoggingOnlyScopeOptions(true).map(({ value }) => value),
+);
+
+const isLoggingOnlyScopeChoice = (value: unknown): value is LoggingOnlyScopeChoice =>
+  typeof value === "string" && LOGGING_ONLY_SCOPE_CHOICES.has(value);
 
 export const asStringArray = (value: unknown): string[] => {
   if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === "string");
@@ -121,5 +135,57 @@ export const SkipMessageSelect: React.FC<{ control: GuardrailFieldControlProps }
         ))}
       </SelectContent>
     </Select>
+  );
+};
+
+export const LoggingOnlyScopeSelect: React.FC<{
+  control: GuardrailFieldControlProps;
+  directionalScopeSupported: boolean;
+}> = ({ control, directionalScopeSupported }) => {
+  const { id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy } = control;
+  const items = getLoggingOnlyScopeOptions(directionalScopeSupported);
+
+  useEffect(() => {
+    const currentChoice = isLoggingOnlyScopeChoice(value) ? value : "default";
+    const choice = normalizeLoggingOnlyScopeChoice(currentChoice, directionalScopeSupported);
+    if (choice !== value) onChange(choice);
+  }, [value, directionalScopeSupported, onChange]);
+
+  return (
+    <Select items={items} value={asText(value) || "default"} onValueChange={onChange}>
+      <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy} className="w-full">
+        <SelectValue placeholder="Select an option" />
+      </SelectTrigger>
+      <SelectContent>
+        {items.map((item) => (
+          <SelectItem key={item.value} value={item.value}>
+            {item.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+};
+
+export const LoggingOnlyScopeField: React.FC<{
+  control: GuardrailFormControl;
+  mode: unknown;
+  directionalScopeSupported: boolean;
+}> = ({ control, mode, directionalScopeSupported }) => {
+  if (!modeIncludesLoggingOnly(mode)) return null;
+
+  return (
+    <GuardrailField
+      control={control}
+      name="logging_only_scope_choice"
+      label={labelWithHint(
+        "Logging only scope",
+        "Which direction a logging_only scan observes. Observe-only scans never block; pre_call and post_call on this guardrail still block.",
+      )}
+    >
+      {(fieldControl) => (
+        <LoggingOnlyScopeSelect control={fieldControl} directionalScopeSupported={directionalScopeSupported} />
+      )}
+    </GuardrailField>
   );
 };
