@@ -3280,7 +3280,8 @@ def _should_skip_budget_checks(
         team_id=team_id,
     )
     if model is not None and llm_router is not None:
-        return _is_model_cost_zero(model=[model, *invoked_agent_models], llm_router=llm_router)
+        request_models: Final = [model] if isinstance(model, str) else list(model)
+        return _is_model_cost_zero(model=[*request_models, *invoked_agent_models], llm_router=llm_router)
     return False
 
 
