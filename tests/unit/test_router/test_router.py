@@ -1246,8 +1246,53 @@ def test_sync_deployment_callback_on_success_skips_batch_retrieves(
         == expected_successes
     )
 
-    get_parent_otel_span_from_kwargs,
-    is_batch_line_item_event,
+
+@pytest.mark.asyncio
+async def test_deployment_callbacks_skip_batch_line_items(monkeypatch: pytest.MonkeyPatch):
+    """
+    Batch line-item callbacks carry call_type=acompletion plus
+    litellm_params.batch_parent_id, so the call-type-only batch guards do not fire.
+    They describe historical batch traffic already reported by the aggregate
+    aretrieve_batch event and must not consume live TPM/RPM quota.
+    """
+    monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {"model": _BATCH_DEPLOYMENT_MODEL, "api_base": _BATCH_API_BASE, "api_key": "sk-fake"},
+                "model_info": {"id": "batch-dep"},
+            }
+        ]
+    )
+    now = datetime.now()
+    line_item_kwargs = {
+        "call_type": "acompletion",
+        "standard_logging_object": {"total_tokens": _BATCH_TOKENS_PER_ROW},
+        "litellm_params": {
+            "batch_parent_id": _BATCH_ID,
+            "metadata": {"model_group": _BATCH_GROUP, "deployment": _BATCH_DEPLOYMENT_MODEL},
+            "model_info": {"id": "batch-dep"},
+        },
+    }
+
+    await router.deployment_callback_on_success(
+        kwargs=line_item_kwargs, completion_response=None, start_time=now, end_time=now
+    )
+    sync_key = router.sync_deployment_callback_on_success(
+        kwargs=line_item_kwargs, completion_response=None, start_time=now, end_time=now
+    )
+    await router.async_deployment_callback_on_failure(
+        kwargs=line_item_kwargs, completion_response=None, start_time=now, end_time=now
+    )
+
+    assert sync_key is None
+    assert (
+        get_deployment_successes_for_current_minute(litellm_router_instance=router, deployment_id="batch-dep") == 0
+    )
+    assert await _moved_routing_counters(router) == []
+    assert await _router_usage_keys(router) == []
+
 _ROUTING_STRATEGY_CACHE_MARKERS = ("_map", "_request_count", ":tpm:", ":rpm:")
 
 

@@ -464,7 +464,9 @@ def _provider_output_file_id(output_file_id: str) -> str:
 
 async def _fetch_batch_managed_file_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"
+    ] = "openai",
     litellm_params: Mapping[str, object] | None = None,
 ) -> bytes:
     """
@@ -495,7 +497,9 @@ async def _fetch_batch_managed_file_content(
 
 async def _fetch_batch_output_file_content(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"
+    ] = "openai",
     litellm_params: Mapping[str, object] | None = None,
 ) -> bytes:
     """
