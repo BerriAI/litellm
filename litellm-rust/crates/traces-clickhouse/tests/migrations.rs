@@ -756,6 +756,145 @@ async fn listed_agent_names_preserve_scope_and_cursor(
 
 #[rstest]
 #[tokio::test]
+async fn trace_agents_count_runs_and_failures_within_scope_and_window(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let now = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let old = now - 3 * 86_400_000_000_000_i64;
+    for (team, trace, span, parent, agent, status, framework, timestamp) in [
+        (
+            "alpha",
+            "run-1",
+            "root",
+            "",
+            "moyai",
+            "STATUS_CODE_OK",
+            "pi",
+            now,
+        ),
+        (
+            "alpha",
+            "run-1",
+            "tool",
+            "root",
+            "moyai",
+            "STATUS_CODE_ERROR",
+            "pi",
+            now,
+        ),
+        (
+            "alpha",
+            "run-2",
+            "root",
+            "",
+            "moyai",
+            "STATUS_CODE_OK",
+            "",
+            now - 1_000_000,
+        ),
+        (
+            "alpha",
+            "run-3",
+            "root",
+            "",
+            "research",
+            "STATUS_CODE_OK",
+            "",
+            now - 2_000_000,
+        ),
+        (
+            "alpha",
+            "old-run",
+            "root",
+            "",
+            "moyai",
+            "STATUS_CODE_ERROR",
+            "",
+            old,
+        ),
+        (
+            "beta",
+            "other-team",
+            "root",
+            "",
+            "moyai",
+            "STATUS_CODE_ERROR",
+            "",
+            now,
+        ),
+        (
+            "beta",
+            "other-agent",
+            "root",
+            "",
+            "hidden_agent",
+            "STATUS_CODE_OK",
+            "",
+            now,
+        ),
+    ] {
+        insert_rows(
+            &database,
+            "otel_traces",
+            vec![serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp, "TraceId": trace, "SpanId": span, "ParentSpanId": parent,
+                "ServiceName": "app", "SpanName": span, "AgentName": agent, "UserId": "owner",
+                "StatusCode": status, "Framework": framework, "ObservationType": "agent",
+                "ResourceAttributes": {"litellm.team_id": team, "litellm.api_key_hash": "key"}
+            }))?],
+        )
+        .await?;
+    }
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("user_id".into(), Parameter::Text(String::new())),
+        ("team_ids".into(), Parameter::Strings(vec!["alpha".into()])),
+        (
+            "start_ms".into(),
+            Parameter::Integer(now / 1_000_000 - 86_400_000),
+        ),
+        ("end_ms".into(), Parameter::Integer(now / 1_000_000 + 1000)),
+        ("limit".into(), Parameter::Integer(10)),
+    ]);
+    let agents: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &connection,
+            ReadQuery::TraceAgents,
+            &parameters,
+        )
+        .await?,
+    )?;
+    let rows = agents["data"].as_array().ok_or("missing agents")?;
+    let summary = rows
+        .iter()
+        .map(|row| {
+            (
+                row["agent_name"].as_str().unwrap_or_default(),
+                (
+                    row["runs"].to_string().trim_matches('"').to_owned(),
+                    row["failed_runs"].to_string().trim_matches('"').to_owned(),
+                    row["frameworks"].clone(),
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summary,
+        vec![
+            ("moyai", ("2".into(), "1".into(), serde_json::json!(["pi"]))),
+            ("research", ("1".into(), "0".into(), serde_json::json!([]))),
+        ]
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn rollup_merges_spans_across_days_without_losing_root_fields(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {

@@ -90,7 +90,7 @@ class TraceScope(typing_extensions.TypedDict):
     team_ids: ReadOnly[tuple[str, ...]]
 
 
-ReadQueryName: TypeAlias = Literal["availability", "agents", "sample", "content", "evidence"]
+ReadQueryName: TypeAlias = Literal["trace_agents", "availability", "agents", "sample", "content", "evidence"]
 
 
 class UIFields(typing_extensions.TypedDict):

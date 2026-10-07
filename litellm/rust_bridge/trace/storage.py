@@ -16,6 +16,8 @@ from litellm.rust_bridge.trace.generated.models import (
     LensEvidenceParams,
     LensSampleParams,
     PartRow,
+    TraceAgentRow,
+    TraceAgentsParams,
 )
 from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import ReadQueryName
@@ -25,6 +27,7 @@ from litellm.rust_bridge.trace.queries import (
     LENS_CONTENT,
     LENS_EVIDENCE,
     LENS_SAMPLE,
+    TRACE_AGENTS,
     ClickHouseSQLEnvelope,
     ParamsT,
     ReadQuery,
@@ -228,6 +231,9 @@ class ClickHouseStorage:
     async def query_help(self, scope: QueryScope, secret: str) -> TraceQueryHelp:
         result: Final = await self._native.query_help(scope, secret)
         return _validate_query_response(_HELP_RESPONSE, result)
+
+    async def trace_agents(self, parameters: TraceAgentsParams) -> tuple[TraceAgentRow, ...]:
+        return await self.query(TRACE_AGENTS, parameters)
 
     async def lens_sample(self, parameters: LensSampleParams) -> tuple[ExecutionRow, ...]:
         return await self.query(LENS_SAMPLE, parameters)

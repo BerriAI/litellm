@@ -631,7 +631,7 @@ describe("AgentTracesPage", () => {
     const live = screen.getByRole("button", { name: "Live" });
     expect(live).toHaveAttribute("aria-pressed", "true");
     expect(trigger).toHaveTextContent("Last 24 hours");
-    expect(screen.getByRole("combobox", { name: "Filter traces by agent" })).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Filter traces by agent" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Filter traces by status" })).toBeVisible();
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh traces" })).toBeEnabled());
     expect(screen.getByRole("button", { name: "Set up tracing" })).toBeEnabled();

@@ -6,6 +6,7 @@ import { readRequest, requestPath } from "@/../tests/lens-test-utils";
 import { LensWorkspace } from "./LensWorkspace";
 import { createLensDemoData } from "./data/demo/fixtures";
 import type { LensList } from "./model/types";
+import { rollUpAgents } from "./agents/agentRollup";
 
 const network = vi.fn<typeof fetch>();
 const list = vi.fn<() => Promise<LensList>>();
@@ -26,6 +27,8 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
       return enabled
         ? Response.json({ data: traces ? [data.runs[0].trace.summary] : [] })
         : Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+    if (path === "/v1/traces/agents")
+      return Response.json({ agents: traces ? rollUpAgents([data.runs[0].trace.summary]) : [] });
     if (path === "/lens/activity/available") return Response.json({ traces, requests });
     if (path === "/lens/traces/findings") return Response.json([]);
     if (path === "/lens" && method === "POST") {
@@ -305,8 +308,10 @@ describe("Lens setup journey", () => {
         within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Investigations" }),
       ).toHaveAttribute("aria-selected", "true");
       await waitFor(() => expect(setupParam(onUrlUpdate)).toBeNull());
-      const requests = await Promise.all(network.mock.calls.map(([input, init]) => readRequest(input, init)));
-      const create = requests.find((request) => request.path === "/lens" && request.method === "POST");
+      const creates = network.mock.calls.filter(
+        ([input, init]) => requestPath(input) === "/lens" && (init?.method ?? (input as Request).method) === "POST",
+      );
+      const [create] = await Promise.all(creates.map(([input, init]) => readRequest(input, init)));
       expect(create).toBeDefined();
       expect(create?.body).toEqual(expect.objectContaining({ name: "My first review", source }));
     },

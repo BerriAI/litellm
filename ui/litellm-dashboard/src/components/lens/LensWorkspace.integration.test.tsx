@@ -108,6 +108,7 @@ describe("Lens interactive demo", () => {
       expect([...url.entries()]).toEqual([
         ["tab", "traces"],
         ["demo", "true"],
+        ["agent", "support_agent"],
       ]),
     );
     expect(screen.queryByText(/Could not load trace/)).not.toBeInTheDocument();
@@ -499,4 +500,48 @@ it("keeps trace quick filters in links and clears them when leaving demo data", 
   expect(within(table).queryByText("Where is order #1042?")).not.toBeInTheDocument();
   await user.click(screen.getByRole("switch", { name: "Demo data" }));
   await expectUrl(onUrlUpdate, (url) => expect([...url.keys()]).toEqual(["tab"]));
+});
+
+describe("Lens agent selector", () => {
+  it("scopes traces to one agent, switches from the header, and reopens the pick after a refresh", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    const first = renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
+      searchParams: "?demo=true",
+      onUrlUpdate,
+    });
+    const picker = await screen.findByRole("button", { name: "Agent: support_agent" });
+    const runs = await screen.findByRole("table", { name: "Agent runs" });
+    expect(await within(runs).findByText("Where is order #1042?")).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Filter traces by agent" })).not.toBeInTheDocument();
+
+    await user.click(picker);
+    await user.type(screen.getByRole("textbox", { name: "Find agent" }), "release");
+    const options = screen.getByRole("list", { name: "Agents" });
+    expect(
+      within(options)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual([expect.stringContaining("release_agent")]);
+    await user.click(within(options).getByRole("button", { name: /release_agent/ }));
+    expect(await screen.findByRole("button", { name: "Agent: release_agent" })).toBeVisible();
+    await waitFor(() => expect(within(runs).queryByText("Where is order #1042?")).not.toBeInTheDocument());
+    await expectUrl(onUrlUpdate, (url) => expect(url.get("agent")).toBe("release_agent"));
+    expect(window.localStorage.getItem("litellm.lens.agent.demo")).toBe("release_agent");
+    expect(window.localStorage.getItem("litellm.lens.agent")).toBeNull();
+
+    first.unmount();
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
+      searchParams: "?demo=true",
+    });
+    expect(await screen.findByRole("button", { name: "Agent: release_agent" })).toBeVisible();
+  });
+
+  it("lets a shared link choose the agent over the remembered one", async () => {
+    window.localStorage.setItem("litellm.lens.agent.demo", "release_agent");
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
+      searchParams: "?demo=true&agent=research_agent",
+    });
+    expect(await screen.findByRole("button", { name: "Agent: research_agent" })).toBeVisible();
+  });
 });

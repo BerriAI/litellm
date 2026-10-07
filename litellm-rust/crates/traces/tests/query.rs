@@ -3,6 +3,7 @@ use rstest::rstest;
 
 #[rstest]
 #[case::list_traces("list_traces", ReadQuery::ListTraces)]
+#[case::trace_agents("trace_agents", ReadQuery::TraceAgents)]
 #[case::trace_spans("trace_spans", ReadQuery::TraceSpans)]
 #[case::span_detail("span_detail", ReadQuery::SpanDetail)]
 #[case::span_error("span_error", ReadQuery::SpanError)]

@@ -22591,6 +22591,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/traces/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Trace Agents */
+        get: operations["list_trace_agents_v1_traces_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/traces/query": {
         parameters: {
             query?: never;
@@ -47699,6 +47716,33 @@ export interface components {
             /** Spans */
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
+        };
+        /**
+         * TraceAgent
+         * @description One agent seen in the caller's traces, for picking which agent's runs to look at.
+         */
+        TraceAgent: {
+            /** Failed Runs */
+            failed_runs: number;
+            /**
+             * Frameworks
+             * @default []
+             */
+            frameworks: string[];
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /** Name */
+            name: string;
+            /** Runs */
+            runs: number;
+        };
+        /** TraceAgentList */
+        TraceAgentList: {
+            /** Agents */
+            agents: components["schemas"]["TraceAgent"][];
         };
         /** TraceFindingCount */
         TraceFindingCount: {
@@ -81283,6 +81327,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_trace_agents_v1_traces_agents_get: {
+        parameters: {
+            query?: {
+                start_ms?: number | null;
+                end_ms?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceAgentList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
