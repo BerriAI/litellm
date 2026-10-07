@@ -5,6 +5,10 @@ use rstest::rstest;
 use serde_json::Value;
 
 #[path = "queries/support.rs"]
+#[expect(
+    dead_code,
+    reason = "load tests share the query fixture but do not read through QueryReaders"
+)]
 mod fixtures;
 mod support;
 
