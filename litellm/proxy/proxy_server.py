@@ -4550,7 +4550,7 @@ async def _adaptive_router_flusher_loop():
                     ar = tagged.strategy
                     # Lazy state load: covers adaptive routers registered via
                     # `/config/reload` after proxy boot.
-                    if not getattr(ar, "state_loaded", False):
+                    if not ar.state_loaded:
                         try:
                             await ar.load_state_from_db(prisma_client)
                         finally:
