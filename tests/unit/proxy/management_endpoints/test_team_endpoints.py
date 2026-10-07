@@ -1170,6 +1170,32 @@ def test_team_member_add_duplication_check_raises_proxy_exception():
     assert "already in team" in str(exc_info.value.message)
 
 
+def _team_with_member_sharing_email() -> MagicMock:
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.team_id = "test-team-123"
+    team.members_with_roles = [Member(user_id="dup-user-1", user_email="shared@example.com", role="user")]
+    return team
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        Member(user_id="dup-user-1", user_email="shared@example.com", role="user"),
+        Member(user_id="dup-user-1", role="user"),
+        Member(user_email="shared@example.com", role="user"),
+        Member(user_id="dup-user-2", user_email="shared@example.com", role="user"),
+    ],
+    ids=["id_and_email", "id_only", "email_only", "other_user_same_email"],
+)
+def test_team_member_add_duplication_check_rejects_member_already_in_team(member: Member):
+    data = TeamMemberAddRequest(team_id="test-team-123", member=member)
+
+    with pytest.raises(ProxyException) as exc_info:
+        team_member_add_duplication_check(data=data, existing_team_row=_team_with_member_sharing_email())
+
+    assert exc_info.value.type == ProxyErrorTypes.team_member_already_in_team
+
+
 def test_team_member_add_duplication_check_allows_new_member():
     """
     Test that team_member_add_duplication_check allows adding a new member who is not already in the team

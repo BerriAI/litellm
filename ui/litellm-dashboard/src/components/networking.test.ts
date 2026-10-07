@@ -118,6 +118,39 @@ describe("loginCall - storeLoginToken integration", () => {
   });
 });
 
+describe("teamMemberAddCall error message", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const rejectWith = (body: string) => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, text: async () => body }) as any;
+  };
+
+  const member: Networking.Member = { user_id: "dup-user-1", role: "user" };
+
+  it.each([
+    ["the proxy error envelope", { error: { message: "User already in team. Member: user_id=dup-user-1" } }],
+    ["an HTTPException detail", { detail: { error: "User already in team. Member: user_id=dup-user-1" } }],
+  ])("surfaces the backend message from %s", async (_shape, body) => {
+    rejectWith(JSON.stringify(body));
+
+    await expect(Networking.teamMemberAddCall("token", "team-1", member)).rejects.toThrow(
+      "User already in team. Member: user_id=dup-user-1",
+    );
+  });
+
+  it("falls back to a generic message when the body is not JSON", async () => {
+    rejectWith("<html>bad gateway</html>");
+
+    await expect(Networking.teamMemberAddCall("token", "team-1", member)).rejects.toThrow(
+      "Failed to add team member",
+    );
+  });
+});
+
 describe("modelInfoCall", () => {
   let currentFetch: typeof global.fetch;
 
