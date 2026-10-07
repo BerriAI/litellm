@@ -705,9 +705,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @staticmethod
     def target_consumes_tool_error(model: str | None, custom_llm_provider: str | None) -> bool:
-        if not model or "gemini" not in model.lower():
-            return False
-        provider: Final = custom_llm_provider or model.split("/", 1)[0]
+        # Decide on the provider alone: aliased model names ("prod-model" routed to
+        # gemini) carry no "gemini" substring.
+        provider: Final = custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
         return provider in ("gemini", "vertex_ai", "vertex_ai_beta")
 
     @staticmethod

@@ -2703,6 +2703,7 @@ def test_cache_control_not_preserved_in_tool_result_for_non_claude():
         ("gemini-3.5-flash-lite", "vertex_ai", True),
         ("gpt-4", "openai", False),
         ("openrouter/google/gemini-3.5-flash-lite", None, False),
+        ("prod-model", "gemini", True),
     ],
 )
 def test_tool_result_is_error_kept_only_for_gemini_targets(model, custom_llm_provider, keeps_is_error):
@@ -2727,7 +2728,7 @@ def test_tool_result_is_error_kept_only_for_gemini_targets(model, custom_llm_pro
 
     tool_message = next(msg for msg in result if msg.get("role") == "tool")
     assert tool_message["content"] == "exit code 1: migration failed"
-    assert ("is_error" in tool_message) is keeps_is_error
+    assert tool_message.get("is_error") is (True if keeps_is_error else None)
 
 
 def test_cache_control_preserved_in_assistant_text_for_claude():
