@@ -166,8 +166,8 @@ export function RunHeader({
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
         <StatusPill failed={failed} />
-        {summary.source && <RunSourceLink source={summary.source} />}
         {signals.length > 0 && <SignalPills flags={signals} showScore className="flex-wrap" />}
+        {summary.source && <RunSourceLink source={summary.source} />}
         <Stat label="Duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="Steps" value={summary.span_count.toLocaleString()} />
         <Stat label="Tokens" value={fmtTok(summary.input_tokens + summary.output_tokens)} />
