@@ -4396,7 +4396,7 @@ class TestCaptureMessageContent:
         assert exported.attributes["gen_ai.usage.input_tokens"] == 12
         assert exported.attributes["gen_ai.usage.output_tokens"] == 8
 
-    def test_a_span_only_team_lifts_global_no_content_only_for_its_destination(self):
+    def test_a_span_only_team_lifts_global_no_content_only_for_its_destination(self) -> None:
         operator_exporter, team_exporter, sibling_exporter = (
             InMemorySpanExporter(),
             InMemorySpanExporter(),
@@ -4444,8 +4444,10 @@ class TestCaptureMessageContent:
         ids=["model_call", "mcp_tool_call"],
     )
     def test_no_content_removes_exactly_what_global_capture_adds_in_every_mapper_vocabulary(
-        self, with_content, without_content
-    ):
+        self,
+        with_content: LLMCallSpanData | MCPToolCallSpanData,
+        without_content: LLMCallSpanData | MCPToolCallSpanData,
+    ) -> None:
         captured, uncaptured = mapped(with_content), mapped(without_content)
         assert frozenset(captured) - frozenset(uncaptured), "the fixture must exercise captured content"
         operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
@@ -4456,7 +4458,7 @@ class TestCaptureMessageContent:
         assert dict(exported.attributes) == recorded(uncaptured), "only content goes, every other attribute stays"
         assert not carries_content(exported)
 
-    def test_restricting_one_destination_leaves_the_original_span_and_the_other_destination_alone(self):
+    def test_restricting_one_destination_leaves_the_original_span_and_the_other_destination_alone(self) -> None:
         attributes = mapped(_MODEL_CALL_WITH_CONTENT)
         operator, restricted, inheriting = InMemorySpanExporter(), InMemorySpanExporter(), InMemorySpanExporter()
         exporters = {NO_CONTENT_DEST.endpoint: restricted, INHERITING_DEST.endpoint: inheriting}
@@ -4475,7 +4477,7 @@ class TestCaptureMessageContent:
                 assert span.parent == original[name].parent, "same place in the tree"
             assert [e.name for e in copy["chat gpt-4o"].events] == [e.name for e in original["chat gpt-4o"].events]
 
-    def test_an_omitted_setting_and_span_only_export_the_same_span(self):
+    def test_an_omitted_setting_and_span_only_export_the_same_span(self) -> None:
         attributes = mapped(_MODEL_CALL_WITH_CONTENT)
         span_only = INHERITING_DEST.model_copy(update={"capture_message_content": CaptureMessageContent.SPAN_ONLY})
         omitted_exporter, span_only_exporter = InMemorySpanExporter(), InMemorySpanExporter()
@@ -4539,7 +4541,9 @@ class TestCaptureMessageContent:
         assert carries_content(model_calls[0]) is content_exported
 
     @pytest.mark.parametrize("mode", ["override", "additive"])
-    def test_an_operator_collector_on_the_teams_account_does_not_bypass_no_content(self, monkeypatch, mode):
+    def test_an_operator_collector_on_the_teams_account_does_not_bypass_no_content(
+        self, monkeypatch: pytest.MonkeyPatch, mode: str
+    ) -> None:
         monkeypatch.setattr(litellm, "otel_tenant_destination_mode", mode, raising=False)
         shared = InMemorySpanExporter()
         kind = f"lit8244_collector_{mode}"
@@ -4699,14 +4703,14 @@ class TestCaptureMessageContent:
 
         assert saved.callback_vars["capture_message_content"] == value
 
-    def test_a_team_wide_callback_vars_map_cannot_carry_the_setting(self):
+    def test_a_team_wide_callback_vars_map_cannot_carry_the_setting(self) -> None:
         """The flattened map is shared by every callback, so a value there would apply to all of them."""
         with pytest.raises(ValueError, match="Invalid callback variable: capture_message_content"):
             TeamCallbackMetadata(
                 success_callback=["langfuse_otel", "signoz"], callback_vars={"capture_message_content": "span_only"}
             )
 
-    def test_flattening_the_entries_leaves_the_setting_on_its_own_entry(self):
+    def test_flattening_the_entries_leaves_the_setting_on_its_own_entry(self) -> None:
         flattened = convert_key_logging_metadata_to_callback(
             AddTeamCallback(
                 callback_name="langfuse_otel",

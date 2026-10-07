@@ -481,7 +481,9 @@ def test_a_request_without_trace_controls_stamps_none_of_them():
     logger, exporter = _logger()
 
     root_attrs, generation_attrs = _run_named_request(
-        logger, exporter, {"metadata": {"user_api_key_team_id": "t1", "tags": []}, "proxy_server_request": {"headers": {}}}
+        logger,
+        exporter,
+        {"metadata": {"user_api_key_team_id": "t1", "tags": []}, "proxy_server_request": {"headers": {}}},
     )
 
     assert set(TRACE_CONTROL_ATTRS).isdisjoint(root_attrs)
@@ -492,7 +494,7 @@ def test_a_request_without_trace_controls_stamps_none_of_them():
     ("capture", "mappers"),
     [("no_content", ("genai", "langfuse")), ("span_only", ("genai",))],
 )
-def test_langfuse_root_io_requires_global_or_destination_capture(capture, mappers):
+def test_langfuse_root_io_requires_global_or_destination_capture(capture: str, mappers: tuple[str, ...]) -> None:
     logger, exporter = _logger(capture=capture, mappers=mappers)
 
     _run_request(logger, CHAT_DATA, "acompletion", ModelResponse())
@@ -508,7 +510,9 @@ def test_langfuse_root_io_requires_global_or_destination_capture(capture, mapper
         ("span_only", ("genai",), False),
     ],
 )
-def test_langfuse_mapper_relays_streams_for_per_request_content_capture(monkeypatch, capture, mappers, relays_streams):
+def test_langfuse_mapper_relays_streams_for_per_request_content_capture(
+    monkeypatch: pytest.MonkeyPatch, capture: str, mappers: tuple[str, ...], relays_streams: bool
+) -> None:
     logger, _ = _logger(capture=capture, mappers=mappers)
     monkeypatch.setattr(litellm, "callbacks", [logger])
 
