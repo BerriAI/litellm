@@ -45,7 +45,7 @@ jobs:
     env:
       UV_PYTHON: "3.12"
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -64,7 +64,7 @@ jobs:
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: ${{ env.UV_PYTHON }}
 
@@ -79,7 +79,7 @@ jobs:
         id: rust-bridge-cache
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: rust-bridge-dist
           key: ${{ steps.rust-bridge-key.outputs.key }}
@@ -102,7 +102,7 @@ jobs:
       - name: Upload Rust bridge artifact
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 10
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rust-bridge-${{ github.run_id }}-${{ github.run_attempt }}
           path: rust-bridge-dist/
@@ -111,7 +111,7 @@ jobs:
       - name: Save editable Rust bridge
         if: steps.changes.outputs.decision != 'skip' && github.ref == 'refs/heads/main' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
         timeout-minutes: 10
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: rust-bridge-dist
           key: ${{ steps.rust-bridge-key.outputs.key }}
