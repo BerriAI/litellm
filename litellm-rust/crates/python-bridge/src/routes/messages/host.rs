@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     errors::route_error_to_pyerr,
-    marshal::{optional_timeout, python_timeout_seconds},
+    marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
@@ -108,14 +108,7 @@ impl MessagesPythonHost {
         let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
         let messages =
             argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
-        let fields = BODY_FIELDS
-            .iter()
-            .filter_map(|name| match argument(name) {
-                Ok(Some(value)) => Some(from_py(&value).map(|value| ((*name).to_string(), value))),
-                Ok(None) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect::<PyResult<Vec<(String, Value)>>>()?;
+        let fields = project_optional_fields(BODY_FIELDS, argument)?;
         let body = [
             ("model".to_string(), Value::String(model.clone())),
             ("messages".to_string(), from_py(&messages)?),
@@ -248,10 +241,7 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
     ) -> PyResult<Py<PyAny>> {
-        py.import(ROUTE_HOST_MODULE)?
-            .getattr("response")?
-            .call1((to_py(py, response.as_ref())?,))
-            .map(Bound::unbind)
+        public_response(py, ROUTE_HOST_MODULE, response.as_ref())
     }
 
     fn encode_stream_head(
