@@ -5652,6 +5652,10 @@ class Router:
 
         source_iterator: Final = response
 
+        async def close_source() -> None:
+            with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                await aclose_if_supported(source_iterator)
+
         async def stream_with_fallbacks() -> AsyncGenerator[bytes, None]:
             from litellm.exceptions import MidStreamFallbackError
 
@@ -5731,6 +5735,7 @@ class Router:
                 for buffered_chunk in buffered_lifecycle_chunks:
                     yield buffered_chunk
             except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
+                await close_source()
                 async for item in self._aanthropic_messages_recover_stream_error(
                     stream_error,
                     has_generated_content,
@@ -5741,8 +5746,7 @@ class Router:
                 ):
                     yield item
             finally:
-                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
-                    await aclose_if_supported(source_iterator)
+                await close_source()
 
         # Referenced by stream_with_fallbacks via closure - assigned here, before
         # the generator body ever runs, so the reference resolves fine despite

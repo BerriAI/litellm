@@ -165,6 +165,7 @@ class PassThroughStreamingHandler:
             )
 
         logging_scheduled = False
+        stream_ended = False  # rebind-ok: flipped once the upstream ran to its end, so the finally can tell a close-at-frame from a completed stream
         model_name: Final = PassThroughStreamingHandler._extract_model_for_cost_injection(
             request_body=request_body,
             url_route=url_route,
@@ -224,6 +225,7 @@ class PassThroughStreamingHandler:
                         )
                 if pending:
                     yield pending
+            stream_ended = True
             # Stream completed cleanly.  When the proxy armed deferred
             # dispatch (post-call guardrails active), park the logging
             # coroutine on logging_obj instead of enqueueing now, so
@@ -267,12 +269,43 @@ class PassThroughStreamingHandler:
             # a success would double-log the same request.
             if not logging_scheduled and raw_bytes and response.status_code < 400:
                 logging_scheduled = True
+                superseded_error_event: Final = (
+                    None
+                    if stream_ended
+                    else PassThroughStreamingHandler._error_frame_closed_at(endpoint_type, raw_bytes)
+                )
                 try:
-                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=_build_logging_coroutine())
+                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                        async_coroutine=(
+                            _build_logging_coroutine()
+                            if superseded_error_event is None
+                            else AnthropicPassthroughLoggingHandler.log_error_frame_as_failure(
+                                attempt_logging_obj=litellm_logging_obj.attempt_scoped_copy(),
+                                request_body=resolved_request_body,
+                                all_chunks=tuple(raw_bytes),
+                                error_event=superseded_error_event,
+                            )
+                        )
+                    )
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
                 else:
                     bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
+
+    @staticmethod
+    def _error_frame_closed_at(endpoint_type: EndpointType, raw_bytes: Sequence[bytes]) -> tuple[str, str, int] | None:
+        """The provider `event: error` frame a stream was closed at before it ended: the router closes a
+        /v1/messages stream there when a retry or fallback takes the request over, and that attempt is logged
+        as its own failure, on a copy taken now so the retry's rebinding of the shared logging object never
+        reaches it. A stream that ran to its end, error frame or not, keeps logging through the success route."""
+        if endpoint_type != EndpointType.ANTHROPIC:
+            return None
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+            parse_anthropic_error_event,
+        )
+
+        complete_frames, _ = split_complete_sse_frames(b"".join(raw_bytes))
+        return parse_anthropic_error_event(complete_frames)
 
     @staticmethod
     async def _route_streaming_logging_to_handler(

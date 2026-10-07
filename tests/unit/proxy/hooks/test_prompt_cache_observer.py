@@ -204,6 +204,10 @@ class RecordingObserver(PromptCacheObserver):
         await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
         self.finished.set()
 
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        await super().async_log_failure_event(kwargs, response_obj, start_time, end_time)
+        self.finished.set()
+
 
 def native_response():
     return {

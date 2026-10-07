@@ -8,7 +8,7 @@ import httpx
 import litellm
 import pytest
 
-
+import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
@@ -2641,6 +2641,58 @@ class TestRecordPartialUsageForFailure:
 
         assert "combined_usage_object" not in logging_obj.model_call_details
         assert "response_cost" not in logging_obj.model_call_details
+
+
+class _FailureRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.failure_kwargs = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failure_kwargs.append(kwargs)
+
+
+class TestLogErrorFrameAsFailure:
+    """A stream closed at the provider's `event: error` frame is one failed attempt: its failure log bills the
+    usage streamed before the frame on the attempt-scoped copy its caller hands it, and the request's shared
+    logging state stays as it was, so the attempt the router opens next logs with nothing left behind."""
+
+    @pytest.mark.asyncio
+    async def test_logs_a_failure_with_the_usage_streamed_before_the_frame_and_leaves_the_request_state_alone(self):
+        recorder = _FailureRecorder()
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-sonnet-5",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id="test-error-frame-failure",
+            function_id="test-error-frame-failure",
+            dynamic_async_failure_callbacks=[recorder],
+        )
+        chunks = [
+            *TestRecordPartialUsageForFailure()._interrupted_chunks()[:1],
+            TestRecordPartialUsageForFailure._sse(
+                "error", {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+            ),
+        ]
+
+        await AnthropicPassthroughLoggingHandler.log_error_frame_as_failure(
+            attempt_logging_obj=logging_obj.attempt_scoped_copy(),
+            request_body={"model": "claude-sonnet-5", "stream": True},
+            all_chunks=chunks,
+            error_event=("overloaded_error", "Overloaded", 529),
+        )
+
+        assert len(recorder.failure_kwargs) == 1
+        failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
+        assert failure_payload["status"] == "failure"
+        assert failure_payload["prompt_tokens"] == 52
+        assert failure_payload["response_cost"] > 0
+        assert isinstance(recorder.failure_kwargs[0]["exception"], litellm.InternalServerError)
+        assert "combined_usage_object" not in logging_obj.model_call_details
+        assert "response_cost" not in logging_obj.model_call_details
+        assert logging_obj.should_run_logging("async_failure")
 
 
 @pytest.mark.parametrize(
