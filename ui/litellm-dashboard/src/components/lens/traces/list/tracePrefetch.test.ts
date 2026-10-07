@@ -184,6 +184,14 @@ describe("createTracePrefetcher", () => {
     expect(trace).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry a step read that failed during an outage", async () => {
+    const { api, span } = fakeTraces(async () => research);
+    span.mockRejectedValue(new ApiError("unavailable", 503, { detail: { code: "unavailable" } }, 0));
+    const retrying = new QueryClient({ defaultOptions: { queries: { retry: 3, retryDelay: 0 } } });
+    await prefetcherFor(api, retrying).prefetcher.warm(rows(1, true));
+    expect(span).toHaveBeenCalledTimes(1);
+  });
+
   it("warms the hovered run and its default span once the pointer rests on it", async () => {
     vi.useFakeTimers();
     const { api, trace, span } = fakeTraces(async () => research);
