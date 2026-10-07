@@ -79,7 +79,13 @@ function itemStep(item: ConversationItem): DigestStep {
   const said = item.messages.filter((message) => message.role === "assistant");
   const calls = said.flatMap((message) => message.tool_calls?.map((call) => call.name) ?? []);
   const detail = [textOf(said), calls.length ? `calls: ${calls.join(", ")}` : ""].filter(Boolean).join(" | ");
-  return { span_id: item.span.span_id, kind: "model", name: item.model || item.span.name, detail: clip(detail, STEP_CHARS), ...error };
+  return {
+    span_id: item.span.span_id,
+    kind: "model",
+    name: item.model || item.span.name,
+    detail: clip(detail, STEP_CHARS),
+    ...error,
+  };
 }
 
 function flatItems(groups: readonly ConversationGroup[]): ConversationItem[] {
@@ -95,7 +101,10 @@ function workSteps(work: ThreadWork): DigestStep[] {
       span_id: work.id,
       kind: "subagent",
       name: work.name,
-      detail: clip(`${items.length} steps${tools.length ? `, tools: ${[...new Set(tools)].join(", ")}` : ""}`, STEP_CHARS),
+      detail: clip(
+        `${items.length} steps${tools.length ? `, tools: ${[...new Set(tools)].join(", ")}` : ""}`,
+        STEP_CHARS,
+      ),
       ...(items.some((item) => item.span.status === "error") ? { error: true as const } : {}),
     },
   ];

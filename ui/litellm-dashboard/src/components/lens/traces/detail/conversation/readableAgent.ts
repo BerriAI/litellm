@@ -45,7 +45,13 @@ export interface ReadableRun {
   signal?: AbortSignal;
 }
 
-export async function runReadableAgent({ trace, turns, accessToken, api, signal }: ReadableRun): Promise<ReadableThread> {
+export async function runReadableAgent({
+  trace,
+  turns,
+  accessToken,
+  api,
+  signal,
+}: ReadableRun): Promise<ReadableThread> {
   const spanIds = new Set(trace.spans.map((span) => span.span_id));
   const readStepOptions = {
     name: "read_step",

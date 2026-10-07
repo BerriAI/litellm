@@ -8,7 +8,10 @@ import type { ThreadTurn } from "./thread";
 const span = (id: string, type: Span["type"], status: Span["status"] = "ok") =>
   ({ span_id: id, name: id, type, status, start_offset_ms: 0, duration_ms: 1 }) as Span;
 
-const user: TraceMessage = { role: "user", content: `<system-reminder>noise</system-reminder> Fix it ${"x".repeat(3_000)}` };
+const user: TraceMessage = {
+  role: "user",
+  content: `<system-reminder>noise</system-reminder> Fix it ${"x".repeat(3_000)}`,
+};
 const toolStep: ConversationItem = {
   id: "tool",
   span: span("tool", "tool", "error"),
