@@ -41,13 +41,14 @@ def _changed_files_selected_by(tmp_path: Path, pathspecs: tuple[str, ...], files
     )
 
 
-def test_workflow_still_carries_the_ruff_format_e2e_basedpyright_and_claude_code_harness_diff_gates() -> None:
-    assert frozenset(_scoped_root(gate[0]) for gate in GATES) == frozenset(
-        {"litellm/", "tests/e2e/", "tests/e2e/claude_code/"}
-    )
+def test_workflow_still_carries_the_ruff_format_e2e_basedpyright_and_e2e_harness_diff_gates() -> None:
+    assert frozenset(_scoped_root(gate[0]) for gate in GATES) == frozenset({"litellm/", "tests/e2e/", "tests/e2e"})
 
 
-@pytest.mark.parametrize("pathspecs", GATES, ids=" ".join)
+PYTHON_ONLY_GATES: Final = tuple(gate for gate in GATES if "*.py" in gate[0])
+
+
+@pytest.mark.parametrize("pathspecs", PYTHON_ONLY_GATES, ids=" ".join)
 def test_diff_gate_selects_top_level_and_nested_python_files_only(tmp_path: Path, pathspecs: tuple[str, ...]) -> None:
     root = _scoped_root(pathspecs[0])
     top_level = f"{root}top_level_module.py"
@@ -64,15 +65,17 @@ def test_diff_gate_selects_top_level_and_nested_python_files_only(tmp_path: Path
     "trigger",
     (
         "tests/e2e/claude_code/cron_vm/install_claude_code.sh",
+        "tests/e2e/notes.md",
+        "tests/e2e_harness/runner.py",
         "pyproject.toml",
         "uv.lock",
         ".github/workflows/test-linting.yml",
     ),
 )
-def test_claude_code_gate_also_fires_on_its_installer_dependency_manifests_and_workflow(
+def test_e2e_harness_gate_fires_on_e2e_harness_installer_dependency_manifests_and_workflow(
     tmp_path: Path, trigger: str
 ) -> None:
     selected = _changed_files_selected_by(
-        tmp_path, _gate_rooted_at("tests/e2e/claude_code/"), (trigger, "elsewhere/pyproject.toml", "tests/e2e/notes.md")
+        tmp_path, _gate_rooted_at("tests/e2e"), (trigger, "elsewhere/pyproject.toml", "tests/e2e/ui/spec.ts")
     )
     assert selected == frozenset({trigger})
