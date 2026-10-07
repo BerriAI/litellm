@@ -1987,7 +1987,8 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
 
     assert stateful_handle.await_count == (1 if stateful else 0)
     assert stateless_handle.await_count == (0 if stateful else 1)
-    observe_start.assert_awaited_once_with(0 if debug and method == "POST" else 1)
+    deferred: Final = method == "POST" and (debug or (bool(request_body) and not stateful))
+    observe_start.assert_awaited_once_with(0 if deferred else 1)
     assert send.await_count == 2
     assert send.call_args_list[0].args[0]["status"] == 200
     assert send.call_args_list[1].args[0] == body
@@ -2822,7 +2823,7 @@ async def test_initialize_request_tracks_active_session_after_response_header():
             patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
                 "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
-                return_value=[MagicMock()],
+                return_value=[MCPServer(server_id="available", name="available", transport=MCPTransport.http)],
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
@@ -2975,7 +2976,7 @@ async def test_initialize_request_records_client_name_in_gateway_sessions_report
             patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
                 "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
-                return_value=[MagicMock()],
+                return_value=[MCPServer(server_id="available", name="available", transport=MCPTransport.http)],
             ),
             patch(  # test-quality-ok: session manager init is a module-level flag; the suite's only seam
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
@@ -9869,6 +9870,58 @@ async def test_aggregate_listing_reports_per_server_outcomes():
     assert "broken_server" not in listing.outcomes
 
 
+def _aliased_server(server_id: str, alias: str, *, caller_owns_credential: bool) -> MagicMock:
+    server = MagicMock()
+    server.name = server_id
+    server.server_name = server_id
+    server.server_id = server_id
+    server.alias = alias
+    server.short_prefix = None
+    server.allowed_tools = None
+    server.disallowed_tools = None
+    server.auth_type = None
+    server.extra_headers = None
+    server.tool_name_to_display_name = None
+    server.tool_name_to_description = None
+    server.is_client_forwarded_token = caller_owns_credential
+    return server
+
+
+@pytest.mark.asyncio
+async def test_listing_challenge_never_discards_a_healthy_server_sharing_the_display_prefix():
+    """Outcome rows on the wire are keyed by display prefix, so two servers with the same alias
+    collapse into one row and the later fault overwrites the healthy outcome there; escalating the
+    whole listing to a 401 from that collapsed view would throw away the healthy server's tools."""
+    try:
+        from litellm.proxy._experimental.mcp_server import operations
+        from litellm.proxy._experimental.mcp_server.server import set_auth_context
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    from mcp.types import ListToolsRequest, ListToolsResult, Tool
+
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+    from litellm.proxy._experimental.mcp_server.operations import prepare_context
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    set_auth_context(user_api_key_auth)
+    healthy = _aliased_server("srv-1-healthy", "github", caller_owns_credential=True)
+    challenged = _aliased_server("srv-2-challenged", "github", caller_owns_credential=True)
+
+    async def mock_get_tools_page(server, **kwargs):
+        if server is healthy:
+            return ListToolsResult(tools=[Tool(name="github-search", inputSchema={"type": "object"})])
+        raise MCPUpstreamAuthError(401, 'Bearer realm="github"', server.name)
+
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[healthy, challenged])),
+        patch.object(operations.global_mcp_server_manager, "get_tools_page", mock_get_tools_page),
+    ):
+        result = await operations.GatewayOperations().execute(ListToolsRequest(), prepare_context(user_api_key_auth))
+
+    assert [tool.name for tool in result.tools] == ["github-search"]
+
+
 @pytest.mark.asyncio
 async def test_outcome_keys_use_display_prefix_never_canonical_names():
     """Outcome keys are client-visible and must use the same display naming (alias or short prefix)
@@ -9913,6 +9966,7 @@ async def test_handle_list_tools_attaches_outcome_meta(_mcp_request_ctx):
     listing = AggregateToolListing(
         tools=[tool],
         outcomes={"healthy": ServerListOk(tool_count=1), "broken": ServerListFault(tag="unreachable")},
+        outcomes_by_server_id={"srv-healthy": ServerListOk(tool_count=1), "srv-broken": ServerListFault(tag="unreachable")},
     )
 
     async def fake_auth_context():
@@ -11023,7 +11077,7 @@ async def test_legacy_sse_mount_emits_message_endpoint(
             assert await post(b'{"jsonrpc":"2.0","method":"notifications/initialized"}') == 202
             for request_id, marker in ((2, "first-post"), (3, "second-post")):
                 post_auth: Final = UserAPIKeyAuth(api_key="test-owner", user_id=marker)
-                listing: Final = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
+                listing: Final = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}, outcomes_by_server_id={}))
                 with (
                     patch.object(
                         mcp_server,
@@ -11098,3 +11152,254 @@ async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ct
     context = dispatched.await_args.args[1]
     assert context.user_api_key_auth.user_id == "discover-caller"
     assert context.mcp_servers == ("allowed",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "token_states, allowed_ids, expected_status",
+    (
+        ((False,), None, 401),
+        ((False, False), None, 401),
+        ((False, True), None, None),
+        ((True, False), None, None),
+        ((False, False), {"server-1"}, 401),
+        ((False, True), {"server-1"}, None),
+        ((False,), set(), None),
+        ((), None, None),
+    ),
+)
+async def test_unified_preflight_challenges_only_when_all_authorized_servers_need_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+    token_states: tuple[bool, ...],
+    allowed_ids: set[str] | None,
+    expected_status: int | None,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    servers: Final = tuple(
+        _make_oauth2_server(f"server-{index}").model_copy(update={"server_id": f"server-{index}"})
+        for index in range(len(token_states))
+    )
+    auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="reader")
+    lookup: Final = AsyncMock(return_value=servers)
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", lookup)
+    manager: Final = mcp_operations.global_mcp_server_manager
+    monkeypatch.setattr(manager, "get_mcp_server_by_name", lambda name, **kwargs: next(s for s in servers if s.alias == name))
+    tokens: Final = AsyncMock(side_effect=lambda s, user: token_states[int(s.server_id.rsplit("-", 1)[1])])
+    monkeypatch.setattr(manager, "has_user_oauth_token", tokens)
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": [(b"host", b"gateway")]}
+    request: Final = server_module._raise_preemptive_401_for_unauthenticated_servers(
+        scope=scope, mcp_servers=None, oauth2_headers=None, mcp_server_auth_headers=None,
+        user_api_key_auth=auth, client_ip="127.0.0.1", allowed_server_ids=allowed_ids,
+    )
+    if expected_status is not None:
+        with pytest.raises(HTTPException) as caught:
+            await request
+        assert caught.value.status_code == expected_status
+        assert "www-authenticate" in {key.lower() for key in (caught.value.headers or {})}
+    else:
+        await request
+    lookup.assert_awaited_once_with(user_api_key_auth=auth, mcp_servers=None, client_ip="127.0.0.1")
+    assert {call.args[0].server_id for call in tokens.await_args_list} == {
+        s.server_id for s in servers if allowed_ids is None or s.server_id in allowed_ids
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", (HTTPException(status_code=503, detail="unavailable"), RuntimeError("discovery failed"), asyncio.CancelledError()))
+async def test_unified_preflight_does_not_misclassify_discovery_failure_as_oauth(
+    monkeypatch: pytest.MonkeyPatch, failure: BaseException
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    upstream: Final = _make_oauth2_server("unavailable")
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream]))
+    manager: Final = mcp_operations.global_mcp_server_manager
+    monkeypatch.setattr(manager, "get_mcp_server_by_name", lambda *args, **kwargs: upstream)
+    discovery: Final = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(manager, "ensure_oauth_metadata_discovered", discovery)
+    request: Final = server_module._raise_preemptive_401_for_unauthenticated_servers(
+        scope={"type": "http", "path": "/mcp", "method": "POST", "headers": []},
+        mcp_servers=None, oauth2_headers=None, mcp_server_auth_headers=None,
+        user_api_key_auth=UserAPIKeyAuth(user_id="reader"), client_ip=None,
+    )
+    with pytest.raises(type(failure)) as caught:
+        await request
+    if not isinstance(failure, asyncio.CancelledError):
+        assert caught.value is failure
+    discovery.assert_awaited_once_with(upstream)
+
+
+@pytest.mark.asyncio
+async def test_unified_preflight_preserves_delegated_oauth_challenge(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    upstream: Final = _make_oauth2_server("delegated", delegate_auth_to_upstream=True)
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream]))
+    monkeypatch.setattr(
+        mcp_operations.global_mcp_server_manager, "get_mcp_server_by_name", lambda *args, **kwargs: upstream
+    )
+    with pytest.raises(HTTPException) as caught:
+        await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "path": "/mcp", "method": "POST", "headers": [(b"host", b"gateway")]},
+            mcp_servers=None, oauth2_headers=None, mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(user_id="reader"), client_ip=None,
+        )
+    assert caught.value.status_code == 401
+    assert (caught.value.headers or {})["www-authenticate"] == (
+        'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/delegated"'
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unified", (False, True))
+@pytest.mark.parametrize(
+    "auth_type,bridge,upstream_status,expected_challenge",
+    (
+        (MCPAuth.none, False, 401, "gateway"),
+        (MCPAuth.oauth_delegate, False, 401, "gateway"),
+        (MCPAuth.true_passthrough, True, 401, "gateway"),
+        (MCPAuth.true_passthrough, False, 401, "upstream"),
+        (MCPAuth.true_passthrough, False, 200, None),
+    ),
+)
+async def test_preflight_preserves_client_forwarded_auth_challenges(
+    monkeypatch: pytest.MonkeyPatch,
+    unified: bool,
+    auth_type: MCPAuth,
+    bridge: bool,
+    upstream_status: int,
+    expected_challenge: str | None,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    upstream: Final = _client_forwarded_mode_server("forwarded", auth_type).model_copy(
+        update={
+            "dcr_bridge": bridge,
+            "oauth_passthrough": auth_type == MCPAuth.none,
+            "extra_headers": ["Authorization"] if auth_type == MCPAuth.none else None,
+        }
+    )
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream]))
+    monkeypatch.setattr(mcp_operations.global_mcp_server_manager, "get_mcp_server_by_name", lambda *args, **kwargs: upstream)
+    probe: Final = AsyncMock(return_value=(upstream_status, "Bearer realm=upstream"))
+    monkeypatch.setattr(server_module, "_probe_upstream_auth", probe)
+    request: Final = server_module._raise_preemptive_401_for_unauthenticated_servers(
+        scope={"type": "http", "path": "/mcp", "method": "POST", "headers": [(b"host", b"gateway")]},
+        mcp_servers=None if unified else [upstream.name],
+        oauth2_headers=None,
+        mcp_server_auth_headers=None,
+        user_api_key_auth=UserAPIKeyAuth(user_id="reader"),
+        client_ip=None,
+    )
+    if expected_challenge is None:
+        await request
+    else:
+        with pytest.raises(HTTPException) as caught:
+            await request
+        assert caught.value.status_code == 401
+        expected: Final = (
+            'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/forwarded"'
+            if expected_challenge == "gateway"
+            else "Bearer realm=upstream"
+        )
+        assert (caught.value.headers or {})["www-authenticate"] == expected
+    assert probe.await_count == int(auth_type == MCPAuth.true_passthrough and not bridge)
+
+
+@pytest.mark.asyncio
+async def test_preflight_gateway_subject_uses_server_resource_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    upstream: Final = _make_oauth2_server("managed")
+    auth: Final = UserAPIKeyAuth(user_id="reader")
+    auth.mcp_admitted_user_subject = True
+    manager: Final = mcp_operations.global_mcp_server_manager
+    monkeypatch.setattr(manager, "get_mcp_server_by_name", lambda *args, **kwargs: upstream)
+    monkeypatch.setattr(manager, "has_user_oauth_token", AsyncMock(return_value=False))
+    with pytest.raises(HTTPException) as caught:
+        await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "path": "/mcp/managed", "method": "POST", "headers": [(b"host", b"gateway")]},
+            mcp_servers=["managed"],
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=auth,
+            client_ip=None,
+        )
+    assert caught.value.status_code == 401
+    assert (caught.value.headers or {})["www-authenticate"] == (
+        'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/managed"'
+    )
+
+
+@pytest.mark.asyncio
+async def test_preflight_does_not_request_oauth_for_excluded_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    upstream: Final = _make_oauth2_server("excluded")
+    manager: Final = mcp_operations.global_mcp_server_manager
+    monkeypatch.setattr(manager, "get_mcp_server_by_name", lambda *args, **kwargs: upstream)
+    discovery: Final = AsyncMock(return_value=upstream)
+    tokens: Final = AsyncMock(return_value=False)
+    monkeypatch.setattr(manager, "ensure_oauth_metadata_discovered", discovery)
+    monkeypatch.setattr(manager, "has_user_oauth_token", tokens)
+    await server_module._raise_preemptive_401_for_unauthenticated_servers(
+        scope={"type": "http", "path": "/mcp/excluded", "method": "POST", "headers": []},
+        mcp_servers=["excluded"],
+        oauth2_headers=None,
+        mcp_server_auth_headers=None,
+        user_api_key_auth=UserAPIKeyAuth(user_id="reader"),
+        client_ip=None,
+        allowed_server_ids={"other"},
+    )
+    discovery.assert_not_awaited()
+    tokens.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("healthy_peer", (False, True))
+@pytest.mark.parametrize("failure_first", (False, True))
+@pytest.mark.parametrize("failure", (HTTPException(503, "unavailable"), RuntimeError("discovery failed"), asyncio.CancelledError()))
+async def test_unified_preflight_preserves_usable_peer_during_discovery_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    healthy_peer: bool,
+    failure_first: bool,
+    failure: BaseException,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    unavailable: Final = _make_oauth2_server("unavailable")
+    peer: Final = _make_oauth2_server("peer")
+    servers: Final = [unavailable, peer] if failure_first else [peer, unavailable]
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=servers))
+    manager: Final = mcp_operations.global_mcp_server_manager
+
+    async def discover(server: MCPServer) -> MCPServer:
+        if server.server_id == unavailable.server_id:
+            raise failure
+        return server
+
+    monkeypatch.setattr(manager, "ensure_oauth_metadata_discovered", discover)
+    tokens: Final = AsyncMock(return_value=healthy_peer)
+    monkeypatch.setattr(manager, "has_user_oauth_token", tokens)
+    request: Final = server_module._raise_preemptive_401_for_unauthenticated_servers(
+        scope={"type": "http", "path": "/mcp", "method": "POST", "headers": [(b"host", b"gateway")]},
+        mcp_servers=None,
+        oauth2_headers=None,
+        mcp_server_auth_headers=None,
+        user_api_key_auth=UserAPIKeyAuth(user_id="reader"),
+        client_ip=None,
+    )
+    if healthy_peer and not isinstance(failure, asyncio.CancelledError):
+        with caplog.at_level("WARNING", logger="LiteLLM"):
+            await request
+        assert any("unavailable" in record.getMessage() for record in caplog.records)
+        assert str(failure) not in caplog.text
+    else:
+        with pytest.raises(type(failure)) as caught:
+            await request
+        if not isinstance(failure, asyncio.CancelledError):
+            assert caught.value is failure
+    tokens.assert_awaited_once()
+    assert tokens.await_args.args[0].server_id == peer.server_id

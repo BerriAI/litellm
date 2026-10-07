@@ -749,7 +749,7 @@ async def test_tools_listing_preserves_explicit_spend_log_policy(log_enabled):
     from mcp.types import PaginatedRequestParams
     from litellm.proxy._experimental.mcp_server import operations
 
-    listing = AsyncMock(return_value=operations.AggregateToolListing(tools=[], outcomes={}))
+    listing = AsyncMock(return_value=operations.AggregateToolListing(tools=[], outcomes={}, outcomes_by_server_id={}))
     with patch.object(operations, "_list_mcp_tools", listing):
         result = await operations._execute_handle_list_tools(
             prepare_context(UserAPIKeyAuth(user_id="caller")), PaginatedRequestParams(),

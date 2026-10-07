@@ -125,7 +125,7 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
     vi.mocked(fetchMCPServers).mockResolvedValue(connectServers);
     vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
 
-    renderConnectPanel(true, ["reachable_srv", "unreachable_srv"]);
+    renderConnectPanel(true, ["s-reach", "s-unreach"]);
 
     expect(await screen.findByText("reachable_srv")).toBeInTheDocument();
     expect(vi.mocked(fetchMCPServers)).toHaveBeenCalledWith("tok", undefined, true);
@@ -299,4 +299,27 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
 
     expect(screen.queryByText("revoked_srv")).not.toBeInTheDocument();
   });
+});
+
+it.each([true, false])("selects an unambiguous upstream in connect mode=%s", async (connectMode) => {
+  const onChange = vi.fn();
+  vi.mocked(fetchMCPServers).mockResolvedValue([
+    {
+      server_id: "selected-id",
+      server_name: "github",
+      alias: "github-selected",
+      auth_type: "none",
+      connected_app_reachable: true,
+    },
+    { server_id: "other-id", server_name: "other", alias: "github", auth_type: "none", connected_app_reachable: true },
+  ] as MCPServer[]);
+  vi.mocked(listMCPTools).mockResolvedValue({ tools: [] });
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <MCPAppsPanel accessToken="tok" selectedServers={[]} onChange={onChange} connectMode={connectMode} />
+    </QueryClientProvider>,
+  );
+  fireEvent.click(await screen.findByText("github"));
+  fireEvent.click(await screen.findByRole("button", { name: "Connect", exact: true }));
+  await waitFor(() => expect(onChange).toHaveBeenCalledWith([connectMode ? "selected-id" : "github"]));
 });

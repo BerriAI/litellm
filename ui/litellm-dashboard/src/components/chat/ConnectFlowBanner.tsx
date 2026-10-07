@@ -11,6 +11,7 @@ interface Props {
   accessToken: string;
   onConnected: () => void;
   failed: boolean;
+  selectedServers?: readonly string[];
 }
 
 /** Finish remains an explicit POST because a cross-site navigation must never mint a code. */
@@ -51,11 +52,17 @@ const copyFor = (flow: ConnectFlowStatus | undefined, failed: boolean): readonly
   ];
 };
 
-const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onConnected, failed }) => {
+const ConnectFlowBanner: React.FC<Props> = ({
+  flowHandle,
+  flow,
+  accessToken,
+  onConnected,
+  failed,
+  selectedServers = [],
+}) => {
   const action = `${getProxyBaseUrl()}/authorize/complete`;
   const state = failed || flow === undefined ? "stale" : flow.state;
-  const canFinish = state === "unscoped" || (state !== "stale" && flow?.connected === true);
-  const canCancel = state !== "unscoped";
+  const canFinish = state === "unscoped" ? selectedServers.length > 0 : state !== "stale" && flow?.connected === true;
   const loopbackClient = isLoopbackOrigin(flow?.client_origin ?? null);
   const vendorServer =
     state === "interactive" && flow?.connected === false && flow.server_id !== null
@@ -85,6 +92,10 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
           )}
           <form method="POST" action={action}>
             <input type="hidden" name="flow" value={flowHandle} />
+            {state === "unscoped" &&
+              selectedServers.map((server) => (
+                <input key={server} type="hidden" name="selected_servers" value={server} />
+              ))}
             {canFinish && (
               <button
                 type="submit"
@@ -93,16 +104,14 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
                 Finish connecting
               </button>
             )}
-            {canCancel && (
-              <button
-                type="submit"
-                name="decision"
-                value="deny"
-                className="ml-2 h-[38px] rounded-md border px-4 text-sm font-semibold text-foreground hover:bg-accent/40"
-              >
-                Cancel
-              </button>
-            )}
+            <button
+              type="submit"
+              name="decision"
+              value="deny"
+              className="ml-2 h-[38px] rounded-md border px-4 text-sm font-semibold text-foreground hover:bg-accent/40"
+            >
+              Cancel
+            </button>
             {loopbackClient && (
               <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">
                 <input type="checkbox" name="delivery" value="manual" />

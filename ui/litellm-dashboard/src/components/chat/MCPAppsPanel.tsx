@@ -140,6 +140,11 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
 
   const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
 
+  const selectionOf = useCallback(
+    (server: MCPServer) => (connectMode ? server.server_id : nameOf(server)),
+    [connectMode],
+  );
+
   const detailServer = servers.find((s) => s.server_id === detailServerId);
 
   const connectUnavailabilityLabel = useCallback(
@@ -239,19 +244,20 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
       .filter(
         (s) =>
           oauthConnected.has(s.server_id) &&
-          !selectedServersRef.current.includes(nameOf(s)) &&
+          !selectedServersRef.current.includes(selectionOf(s)) &&
           connectUnavailabilityLabel(s) === null,
       )
-      .map(nameOf);
+      .map(selectionOf);
     if (namesToAdd.length > 0) {
       onChangeRef.current([...selectedServersRef.current, ...namesToAdd]);
     }
-  }, [oauthConnected, connectUnavailabilityLabel]);
+  }, [oauthConnected, connectUnavailabilityLabel, selectionOf]);
 
   const handleToggle = async (server: MCPServer, checked: boolean) => {
     const serverName = nameOf(server);
+    const selection = selectionOf(server);
     if (!checked) {
-      onChange(selectedServers.filter((s) => s !== serverName));
+      onChange(selectedServers.filter((s) => s !== selection));
       setOauthConnected((prev) => {
         const next = new Set(prev);
         next.delete(server.server_id);
@@ -268,8 +274,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         return;
       }
       if (connectableNow(server.server_id) === undefined) return;
-      if (!selectedServersRef.current.includes(serverName)) {
-        onChange([...selectedServersRef.current, serverName]);
+      if (!selectedServersRef.current.includes(selection)) {
+        onChange([...selectedServersRef.current, selection]);
       }
     } catch {
       toast.warning(`Could not load tools for ${serverName}`);
@@ -308,7 +314,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         />
       );
     }
-    if (selectedServers.includes(nameOf(server))) {
+    if (selectedServers.includes(selectionOf(server))) {
       return <span className="w-[7px] h-[7px] rounded-full bg-success shrink-0" />;
     }
     return null;
@@ -328,12 +334,12 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
       name.toLowerCase().includes(query.toLowerCase()) ||
       (s.description ?? "").toLowerCase().includes(query.toLowerCase());
     const matchesTab =
-      activeTab === "all" || (selectedServers.includes(name) && connectUnavailabilityLabel(s) === null);
+      activeTab === "all" || (selectedServers.includes(selectionOf(s)) && connectUnavailabilityLabel(s) === null);
     return matchesQuery && matchesTab;
   });
 
   const connectedCount = servers.filter(
-    (s) => selectedServers.includes(nameOf(s)) && connectUnavailabilityLabel(s) === null,
+    (s) => selectedServers.includes(selectionOf(s)) && connectUnavailabilityLabel(s) === null,
   ).length;
 
   const emptyStateText = () => {
@@ -348,7 +354,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
 
   if (detailServer) {
     const name = nameOf(detailServer);
-    const isConnected = selectedServers.includes(name);
+    const isConnected = selectedServers.includes(selectionOf(detailServer));
     const isTogglingOn = togglingOn.has(name);
     const color = getAvatarColor(name);
 
@@ -388,7 +394,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
                 n.delete(detailServer.server_id);
                 return n;
               });
-              onChangeRef.current(selectedServersRef.current.filter((s) => s !== name));
+              onChangeRef.current(selectedServersRef.current.filter((s) => s !== selectionOf(detailServer)));
             }}
             className="font-semibold h-[38px] min-w-[110px]"
           >

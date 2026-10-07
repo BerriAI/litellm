@@ -3,6 +3,7 @@ from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 
 import logging
 import sys
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -498,3 +499,508 @@ def test_passthrough_admission_recognizes_only_matching_authorization(oauth_head
 
     server = MCPServer(server_id="catalog", name="catalog", alias="catalog", transport=MCPTransport.http)
     assert _client_has_passthrough_authorization(server, oauth_headers, server_headers) is authorized
+
+
+@pytest.mark.asyncio
+async def test_listing_transport_preserves_auth_challenge_before_sse_success() -> None:
+    from starlette.exceptions import HTTPException
+    from litellm.proxy._experimental.mcp_server.server import MCPAuthResponse
+
+    send: Final = AsyncMock()
+    response: Final = MCPAuthResponse(send)
+    await response.send(
+        {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]}
+    )
+    send.assert_not_awaited()
+    response.challenge = HTTPException(
+        401, "Unauthorized", headers={"WWW-Authenticate": 'Bearer resource_metadata="http://localhost/mcp-metadata"'}
+    )
+    await response.send(
+        {
+            "type": "http.response.body",
+            "body": b'event: message\r\ndata: {"jsonrpc":"2.0","id":1,"result":{"tools":[]}}\r\n\r\n',
+            "more_body": True,
+        }
+    )
+    await response.send({"type": "http.response.body", "body": b"", "more_body": False})
+    sent: Final = tuple(call.args[0] for call in send.await_args_list)
+    assert [m["status"] for m in sent if m["type"] == "http.response.start"] == [401]
+    assert dict(sent[0]["headers"])[b"www-authenticate"] == b'Bearer resource_metadata="http://localhost/mcp-metadata"'
+    assert b'"tools"' not in b"".join(m.get("body", b"") for m in sent)
+    assert sent[-1].get("more_body", False) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 400, 403])
+async def test_listing_transport_preserves_non_auth_responses(status: int) -> None:
+    from litellm.proxy._experimental.mcp_server.server import MCPAuthResponse
+
+    send: Final = AsyncMock()
+    response: Final = MCPAuthResponse(send)
+    start: Final = {
+        "type": "http.response.start",
+        "status": status,
+        "headers": [(b"content-type", b"application/json")],
+    }
+    body: Final = {
+        "type": "http.response.body",
+        "body": b'{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}',
+        "more_body": False,
+    }
+    await response.send(start)
+    await response.send(body)
+    assert tuple(call.args[0] for call in send.await_args_list) == (start, body)
+
+
+@pytest.mark.asyncio
+async def test_protocol_listing_does_not_report_success_when_every_server_requires_auth() -> None:
+    from unittest.mock import patch
+    from mcp.types import ListToolsRequest
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing, ServerListFault
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    context: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="reader"))
+    fault: Final = ServerListFault(tag="auth_required", status_code=401, relayable=True)
+    listing: Final = AggregateToolListing([], {"github": fault}, {"github": fault})
+    with patch.object(operations, "_list_mcp_tools", AsyncMock(return_value=listing)):
+        with pytest.raises(MCPUpstreamAuthError) as caught:
+            await operations.GatewayOperations().execute(ListToolsRequest(), context)
+    assert caught.value.status_code == 401
+    assert caught.value.server_name == "github"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("tools/list", "prompts/list", "resources/list", "resources/templates/list"))
+@pytest.mark.parametrize("protocol", ("2025-06-18", "2025-11-25"))
+@pytest.mark.parametrize("json_response", (False, True))
+@pytest.mark.parametrize("stateful", (False, True))
+@pytest.mark.parametrize("path", ("/mcp", "/github/mcp"))
+async def test_streamable_http_listing_returns_late_oauth_challenge(
+    monkeypatch: pytest.MonkeyPatch, stateful: bool, path: str, json_response: bool, protocol: str, method: str
+) -> None:
+    from litellm.proxy._experimental.mcp_server import catalog, server
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing, ServerListFault
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    auth: Final = UserAPIKeyAuth(api_key="test-owner", user_id="test-user")
+    monkeypatch.setattr(
+        server, "extract_mcp_auth_context", AsyncMock(return_value=(auth, None, None, None, None, None))
+    )
+    monkeypatch.setattr(server, "_raise_preemptive_401_for_unauthenticated_servers", AsyncMock())
+    monkeypatch.setattr(server, "_check_passthrough_upstream_auth", AsyncMock())
+    fault: Final = ServerListFault(
+        tag="auth_required",
+        status_code=401,
+        www_authenticate='Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/github"',
+        relayable=True,
+    )
+    listing: Final = AsyncMock(return_value=AggregateToolListing([], {"github": fault}, {"github": fault}))
+    monkeypatch.setattr(server.operations, "_list_mcp_tools", listing)
+    challenged: Final = MagicMock()
+    challenged.server_id = "github"
+    challenged.name = "github"
+    challenged.server_name = "github"
+    challenged.alias = "github"
+    challenged.short_prefix = None
+    challenged.extra_headers = None
+    challenged.is_client_forwarded_token = True
+    optional_page: Final = AsyncMock(
+        side_effect=MCPUpstreamAuthError(
+            401, 'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/github"', "github"
+        )
+    )
+    monkeypatch.setattr(catalog, "fetch_optional_catalog_page", optional_page)
+    monkeypatch.setattr(server.operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[challenged]))
+    monkeypatch.setattr(server.operations, "_raise_if_initialize_grants_no_mcp_servers", AsyncMock())
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    monkeypatch.setattr(
+        server,
+        "session_manager_stateless",
+        StreamableHTTPSessionManager(app=server.server, stateless=True, json_response=json_response),
+    )
+    monkeypatch.setattr(
+        server,
+        "session_manager_stateful",
+        StreamableHTTPSessionManager(app=server.server, stateless=False, json_response=json_response),
+    )
+    await server.initialize_session_managers()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app), base_url="http://gateway"
+        ) as client:
+            headers: Final = {"accept": "application/json, text/event-stream", "mcp-protocol-version": protocol}
+            if stateful:
+                initialized: Final = await client.post(
+                    path,
+                    headers=headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 0,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": protocol,
+                            "capabilities": {},
+                            "clientInfo": {"name": "test", "version": "1"},
+                        },
+                    },
+                )
+                assert initialized.status_code == 200, initialized.text
+                client.headers["mcp-session-id"] = initialized.headers["mcp-session-id"]
+                notification: Final = await client.post(
+                    path, headers=headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"}
+                )
+                assert notification.status_code == 202
+            malformed: Final = await client.post(
+                path, headers={**headers, "content-type": "application/json"}, content=b"{"
+            )
+            assert malformed.status_code == 400
+            listing.assert_not_awaited()
+            response: Final = await client.post(
+                path, headers=headers, json={"jsonrpc": "2.0", "id": 1, "method": method}
+            )
+        assert response.status_code == 401, response.text
+        assert (
+            response.headers["www-authenticate"]
+            == 'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/github"'
+        )
+        (listing if method == "tools/list" else optional_page).assert_awaited_once()
+    finally:
+        await server.shutdown_session_managers()
+
+
+@pytest.mark.asyncio
+async def test_late_auth_failure_does_not_rewrite_committed_stream() -> None:
+    from fastapi import HTTPException
+    from litellm.proxy._experimental.mcp_server.server import MCPAuthResponse
+
+    send: Final = AsyncMock()
+    response: Final = MCPAuthResponse(send)
+    start: Final = {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]}
+    progress: Final = {
+        "type": "http.response.body",
+        "body": b'data: {"method":"notifications/progress"}\n\n',
+        "more_body": True,
+    }
+    error: Final = {
+        "type": "http.response.body",
+        "body": b'data: {"error":{"code":-32600,"message":"Upstream authorization failed (HTTP 401)"}}\n\n',
+        "more_body": False,
+    }
+    await response.send(start)
+    await response.send(progress)
+    response.challenge = HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
+    await response.send(error)
+    assert tuple(call.args[0] for call in send.await_args_list) == (start, progress, error)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "resource_templates"))
+async def test_optional_listing_propagates_auth_without_discarding_healthy_servers(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy._experimental.mcp_server import operations
+
+    blocked: Final = _http_server("blocked", "blocked", auth_type=MCPAuth.true_passthrough)
+    healthy: Final = _http_server("healthy", "healthy")
+    fetch: Final = AsyncMock(side_effect=MCPUpstreamAuthError(401, "Bearer", "blocked"))
+    manager: Final = MagicMock()
+    setattr(manager, f"get_{kind}_from_server", fetch)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None)))
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[blocked]))
+    listing: Final = getattr(operations, f"_list_mcp_{kind}")
+    with pytest.raises(MCPUpstreamAuthError) as failure:
+        await listing()
+    assert failure.value.www_authenticate == "Bearer"
+    fetch.assert_awaited_once()
+    fetch.reset_mock(side_effect=True)
+    fetch.side_effect = [MCPUpstreamAuthError(401, "Bearer", "blocked"), []]
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[blocked, healthy]))
+    assert await listing() == []
+    assert fetch.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    (
+        "get_prompts_from_server",
+        "get_resources_from_server",
+        "get_resource_templates_from_server",
+        "get_prompt_from_server",
+        "read_resource_from_server",
+    ),
+)
+@pytest.mark.parametrize("status", (401, 403))
+@pytest.mark.parametrize("dcr_bridge", (False, True))
+async def test_manager_preserves_auth_failures_for_prompts_and_resources(
+    operation: str, status: int, dcr_bridge: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fastapi import HTTPException
+    from pydantic import AnyUrl
+
+    manager: Final = MCPServerManager()
+    upstream: Final = _http_server("upstream", "upstream", auth_type=MCPAuth.oauth_delegate, dcr_bridge=dcr_bridge)
+    create: Final = AsyncMock(side_effect=HTTPException(status, headers={"WWW-Authenticate": "Bearer"}))
+    monkeypatch.setattr(manager, "_create_mcp_client", create)
+    kwargs: Final = (
+        {"prompt_name": "example"}
+        if operation == "get_prompt_from_server"
+        else {"url": AnyUrl("https://example.com/resource")}
+        if operation == "read_resource_from_server"
+        else {}
+    )
+    with pytest.raises(MCPUpstreamAuthError) as failure:
+        await getattr(manager, operation)(server=upstream, user_api_key_auth=None, **kwargs)
+    assert failure.value.status_code == status
+    assert failure.value.www_authenticate == (None if dcr_bridge else "Bearer")
+    assert failure.value.server_name == "upstream"
+    create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_optional_listing_preserves_cancellation() -> None:
+    import asyncio
+    from litellm.proxy._experimental.mcp_server.operations import _collect_mcp_listing
+
+    fetch: Final = AsyncMock(side_effect=asyncio.CancelledError())
+    with pytest.raises(asyncio.CancelledError):
+        await _collect_mcp_listing((_http_server("upstream", "upstream"),), fetch)
+    fetch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("get_prompt_from_server", "read_resource_from_server"))
+@pytest.mark.parametrize("extra_headers", (None, {"x-forwarded": "caller"}))
+async def test_prompt_and_resource_calls_preserve_static_headers_and_non_auth_failures(
+    operation: str, extra_headers: dict[str, str] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pydantic import AnyUrl
+
+    manager: Final = MCPServerManager()
+    upstream: Final = _http_server("upstream", "upstream", static_headers={"x-upstream": "configured"})
+    failure: Final = RuntimeError("Upstream unavailable")
+    create: Final = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(manager, "_create_mcp_client", create)
+    kwargs: Final = (
+        {"prompt_name": "example"}
+        if operation == "get_prompt_from_server"
+        else {"url": AnyUrl("https://example.com/resource")}
+    )
+    with pytest.raises(RuntimeError) as caught:
+        await getattr(manager, operation)(server=upstream, user_api_key_auth=None, extra_headers=extra_headers, **kwargs)
+    assert caught.value is failure
+    assert create.await_args.kwargs["extra_headers"] == {**(extra_headers or {}), "x-upstream": "configured"}
+    create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_transport_keepalive_ping_commits_the_stream_before_the_result() -> None:
+    """A keepalive ping reaches the client the moment the SDK writes it, carrying the 200 with it:
+    holding it would let the upstream header wait time out a slow tool call. A challenge raised
+    after that point can no longer rewrite the committed stream, so the SDK's own in-band error
+    result is what the client sees, as before this wrapper existed."""
+    from starlette.exceptions import HTTPException
+    from litellm.proxy._experimental.mcp_server.server import MCPAuthResponse
+
+    send: Final = AsyncMock()
+    response: Final = MCPAuthResponse(send)
+    start: Final = {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]}
+    ping: Final = {"type": "http.response.body", "body": b": ping\r\n\r\n", "more_body": True}
+    result: Final = {
+        "type": "http.response.body",
+        "body": b'data: {"jsonrpc":"2.0","id":1,"result":{"isError":true,"content":[]}}\n\n',
+        "more_body": True,
+    }
+    await response.send(start)
+    await response.send(ping)
+    assert tuple(call.args[0] for call in send.await_args_list) == (start, ping)
+    response.challenge = HTTPException(401, "Unauthorized", headers={"WWW-Authenticate": "Bearer"})
+    await response.send(result)
+    assert tuple(call.args[0] for call in send.await_args_list) == (start, ping, result)
+
+
+@pytest.mark.asyncio
+async def test_tool_call_preserves_resolver_http_challenge(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+    from mcp.types import CallToolRequest, CallToolRequestParams
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+
+    challenge: Final = HTTPException(401, "Unauthorized", headers={"WWW-Authenticate": "Bearer"})
+    call: Final = AsyncMock(side_effect=challenge)
+    monkeypatch.setattr(operations, "call_mcp_tool", call)
+    with pytest.raises(HTTPException) as failure:
+        await operations.GatewayOperations().execute(
+            CallToolRequest(params=CallToolRequestParams(name="upstream-tool", arguments={})),
+            OperationContext(_caller=None),
+        )
+    assert failure.value is challenge
+    call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_tool_handler_preserves_unrelated_protocol_errors(
+    _mcp_request_ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mcp import MCPError
+    from mcp.types import CallToolRequestParams
+    from litellm.proxy._experimental.mcp_server import server
+
+    failure: Final = MCPError(code=-32602, message="Invalid tool parameters")
+    execute: Final = AsyncMock(side_effect=failure)
+    gateway: Final = MagicMock()
+    gateway.execute = execute
+    monkeypatch.setattr(server.operations, "GatewayOperations", MagicMock(return_value=gateway))
+    monkeypatch.setattr(
+        server, "get_or_extract_auth_context", AsyncMock(return_value=(None, None, None, None, None, None, None))
+    )
+    with pytest.raises(MCPError) as caught:
+        await server.mcp_server_tool_call(_mcp_request_ctx(), CallToolRequestParams(name="example", arguments={}))
+    assert caught.value is failure
+    execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/mcp", "/github/mcp"))
+@pytest.mark.parametrize("has_token", (False, True))
+@pytest.mark.parametrize("healthy_companion", (False, True))
+async def test_initialize_challenges_missing_upstream_credentials_before_creating_session(
+    monkeypatch: pytest.MonkeyPatch, path: str, has_token: bool, healthy_companion: bool
+) -> None:
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from litellm.proxy._experimental.mcp_server import server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    github: Final = MCPServer(
+        server_id="github-id", name="github", alias="github", server_name="github",
+        url="https://github.example/mcp", transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+        authorization_url="https://github.example/authorize", token_url="https://github.example/token",
+        client_id="registered-client",
+    )
+    auth: Final = UserAPIKeyAuth(api_key="test-owner", user_id="test-user")
+    selected: Final = ["github"] if path != "/mcp" else None
+    monkeypatch.setattr(
+        server, "extract_mcp_auth_context", AsyncMock(return_value=(auth, None, selected, None, None, None))
+    )
+    manager: Final = server.operations.global_mcp_server_manager
+    public: Final = MCPServer(
+        server_id="public-id", name="public", alias="public", server_name="public",
+        url="https://public.example/mcp", transport=MCPTransport.http, auth_type=MCPAuth.none,
+    )
+    eligible: Final = [github, public] if healthy_companion and selected is None else [github]
+    monkeypatch.setattr(manager, "get_mcp_server_by_name", lambda name, **kwargs: next(s for s in eligible if s.alias == name))
+    monkeypatch.setattr(manager, "has_user_oauth_token", AsyncMock(return_value=has_token))
+    monkeypatch.setattr(manager, "_ensure_upstream_initialize_instructions_cached", AsyncMock())
+    monkeypatch.setattr(server.operations, "_get_allowed_mcp_servers", AsyncMock(return_value=eligible))
+    monkeypatch.setattr(server, "_check_passthrough_upstream_auth", AsyncMock())
+    monkeypatch.setattr(
+        server, "session_manager_stateful",
+        StreamableHTTPSessionManager(app=server.server, stateless=False, json_response=True),
+    )
+    monkeypatch.setattr(
+        server, "session_manager_stateless",
+        StreamableHTTPSessionManager(app=server.server, stateless=True, json_response=True),
+    )
+    await server.initialize_session_managers()
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://gateway") as client:
+            response: Final = await client.post(
+                path, headers={"accept": "application/json, text/event-stream"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                    "protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": {"name": "test-client", "version": "1"},
+                }},
+            )
+        can_initialize: Final = has_token or (healthy_companion and selected is None)
+        assert response.status_code == (200 if can_initialize else 401), response.text
+        if can_initialize:
+            assert response.json()["result"]["serverInfo"]["name"]
+            assert response.headers["mcp-session-id"]
+        else:
+            assert response.headers["www-authenticate"].startswith("Bearer ")
+            if path == "/mcp":
+                assert response.headers["www-authenticate"] == (
+                    'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp"'
+                )
+            assert "mcp-session-id" not in response.headers
+    finally:
+        await server.shutdown_session_managers()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "resource_templates"))
+async def test_optional_listing_challenges_auth_when_other_server_times_out(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gateway's own credential resolver challenging at client-build time (its front door asking
+    the caller to connect) escalates the listing whatever the server's auth mode, and a sibling
+    server timing out cannot mask it."""
+    from fastapi import HTTPException
+    from litellm.proxy._experimental.mcp_server import operations
+
+    blocked: Final = _http_server("blocked", "blocked")
+    unavailable: Final = _http_server("unavailable", "unavailable")
+    manager: Final = MCPServerManager()
+    create: Final = AsyncMock(
+        side_effect=[HTTPException(401, "connect first", headers={"WWW-Authenticate": "Bearer"}), TimeoutError()]
+    )
+    monkeypatch.setattr(manager, "_create_mcp_client", create)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None)))
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[blocked, unavailable]))
+    with pytest.raises(MCPUpstreamAuthError) as caught:
+        await getattr(operations, f"_list_mcp_{kind}")()
+    assert caught.value.status_code == 401
+    assert caught.value.www_authenticate == "Bearer"
+    assert caught.value.server_name == "blocked"
+    assert create.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "resource_templates"))
+async def test_optional_listing_absorbs_upstream_rejecting_the_gateway_credential(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An upstream rejecting the static key the gateway sent is not something the caller can fix by
+    re-authenticating, so the listing stays a success with that server absent instead of answering
+    a 401 that points the caller at an upstream it never authenticated to."""
+    from litellm.proxy._experimental.mcp_server import operations
+
+    rejected: Final = _http_server("rejected", "rejected", auth_type=MCPAuth.api_key, authentication_token="k")
+    client: Final = MagicMock()
+    upstream_401: Final = httpx.HTTPStatusError(
+        "401",
+        request=httpx.Request("POST", "https://rejected/mcp"),
+        response=httpx.Response(401, headers={"www-authenticate": "Bearer realm=upstream"}),
+    )
+    for method in ("list_prompts", "list_resources", "list_resource_templates"):
+        setattr(client, method, AsyncMock(side_effect=upstream_401))
+    client.discovery_auth_fingerprint = AsyncMock(return_value="static-key-fingerprint")
+    manager: Final = MCPServerManager()
+    monkeypatch.setattr(manager, "_create_mcp_client", AsyncMock(return_value=client))
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None)))
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[rejected]))
+    assert await getattr(operations, f"_list_mcp_{kind}")() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "resource_templates"))
+@pytest.mark.parametrize("healthy_first", (False, True))
+async def test_optional_listing_preserves_healthy_duplicate_names(kind: str, healthy_first: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server import operations
+    healthy: Final = _http_server("healthy-id", "duplicate")
+    blocked: Final = _http_server("blocked-id", "duplicate")
+    manager: Final = MagicMock()
+    fetch: Final = AsyncMock(side_effect=[[], MCPUpstreamAuthError(401, "Bearer", "duplicate")] if healthy_first else [MCPUpstreamAuthError(401, "Bearer", "duplicate"), []])
+    setattr(manager, f"get_{kind}_from_server", fetch)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None)))
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[healthy, blocked] if healthy_first else [blocked, healthy]))
+    assert await getattr(operations, f"_list_mcp_{kind}")() == []
+    assert fetch.await_count == 2

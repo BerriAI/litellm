@@ -758,7 +758,7 @@ async def get_filtered_server_tools(
     from mcp.types import ListToolsResult
 
     from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
-    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk, classify_list_exception
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk, classify_listing_outcome
     from litellm.proxy._experimental.mcp_server.operations import (
         _get_byok_credential,
         _get_user_oauth_extra_headers_from_db,
@@ -913,10 +913,14 @@ async def get_filtered_server_tools(
         # error). Single-server routes surface it via the request-scope preemptive
         # check in _raise_preemptive_401_for_unauthenticated_servers instead.
         verbose_logger.debug("MCP list_tools: omitting %s; it needs upstream auth", server.name)
-        return ListToolsResult(tools=[]), classify_list_exception(e)
+        return ListToolsResult(tools=[]), classify_listing_outcome(
+            e, caller_owns_credential=server.is_client_forwarded_token
+        )
     except Exception as e:
         verbose_logger.exception("Error getting tools from server %s: %s", server.name, e)
-        return ListToolsResult(tools=[]), classify_list_exception(e)
+        return ListToolsResult(tools=[]), classify_listing_outcome(
+            e, caller_owns_credential=server.is_client_forwarded_token
+        )
 
 
 def _caller_scope(context: OperationContext, servers: Sequence[MCPServer]) -> str:
@@ -968,6 +972,7 @@ async def aggregate_gateway_tools(
     async with global_mcp_server_manager.catalog.operation() as snapshot:
         servers: Final = {server.server_id: server for server in allowed}
         listing_updates: Final = ExitStack()
+        fetched: Final[dict[str, ServerOutcome]] = {}
 
         async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
             result, outcome = await get_filtered_server_tools(
@@ -984,6 +989,7 @@ async def aggregate_gateway_tools(
                 from mcp.types import INVALID_PARAMS
 
                 raise MCPError(code=INVALID_PARAMS, message="Upstream continuation failed; start a fresh listing")
+            fetched[server_id] = outcome
             return result.model_copy(
                 update={
                     "meta": {
@@ -1009,6 +1015,7 @@ async def aggregate_gateway_tools(
             outcomes=TypeAdapter(dict[str, ServerOutcome]).validate_python(
                 (result.meta or {}).get(SERVER_OUTCOMES_META_KEY, {})
             ),
+            outcomes_by_server_id=dict(fetched),
             next_cursor=result.next_cursor,
         )
 
@@ -1018,7 +1025,11 @@ async def list_gateway_tools(
 ) -> ListToolsResult:
     from mcp.types import ListToolsResult
 
-    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY, outcome_wire_value
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+        SERVER_OUTCOMES_META_KEY,
+        listing_auth_error,
+        outcome_wire_value,
+    )
     from litellm.proxy._experimental.mcp_server.operations import _list_mcp_tools
 
     caller, auth, servers, server_headers, oauth_headers, headers, client_ip = context.legacy_auth()
@@ -1036,6 +1047,9 @@ async def list_gateway_tools(
         record_listing=True,
         list_tools_log_source="mcp_protocol",
     )
+    auth_failure: Final = listing_auth_error(listing.outcomes_by_server_id)
+    if auth_failure is not None:
+        raise auth_failure
     return ListToolsResult(
         tools=listing.tools,
         next_cursor=listing.next_cursor,
@@ -1058,7 +1072,16 @@ async def list_gateway_catalog(
     )
 
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+        SERVER_OUTCOMES_META_KEY,
+        ServerListOk,
+        ServerOutcome,
+        classify_listing_outcome,
+        listing_auth_error,
+        outcome_wire_value,
+    )
     from litellm.proxy._experimental.mcp_server.operations import (
+        _aggregate_server_key,
         _get_allowed_mcp_servers,
         global_mcp_server_manager,
         raise_denied_scoped_mcp_access,
@@ -1080,42 +1103,34 @@ async def list_gateway_catalog(
                 requested_names=list(scope), user_api_key_auth=caller, client_ip=client_ip
             )
         servers: Final = {server.server_id: server for server in allowed}
+        fetched: Final[dict[str, ServerOutcome]] = {}
 
         async def fetch(server_id: str, cursor: str | None) -> CatalogListResult:
             server: Final = servers[server_id]
             from mcp.shared.exceptions import MCPError
             from mcp.types import INVALID_PARAMS
 
-            from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
-                SERVER_OUTCOMES_META_KEY,
-                classify_list_exception,
-            )
-            from litellm.proxy._experimental.mcp_server.operations import _aggregate_server_key
-
             try:
                 page: Final = await fetch_optional_catalog_page(context, request, server, allowed, cursor)
-                return page.model_copy(
-                    update={
-                        "meta": {
-                            key: value for key, value in (page.meta or {}).items() if key != SERVER_OUTCOMES_META_KEY
-                        }
-                    }
-                )
             except Exception as error:
                 if cursor is not None:
                     raise MCPError(
                         code=INVALID_PARAMS, message="Upstream continuation failed; start a fresh listing"
                     ) from error
+                fault: Final = classify_listing_outcome(error, caller_owns_credential=server.is_client_forwarded_token)
+                fetched[server_id] = fault
                 return combine_optional_catalog(
                     request,
                     (),
                     None,
-                    {
-                        "litellm.ai/server_outcomes": {
-                            _aggregate_server_key(server): classify_list_exception(error).model_dump(mode="json")
-                        }
-                    },
+                    {SERVER_OUTCOMES_META_KEY: {_aggregate_server_key(server): fault.model_dump(mode="json")}},
                 )
+            fetched[server_id] = ServerListOk(tool_count=_catalog_page_size(page))
+            return page.model_copy(
+                update={
+                    "meta": {key: value for key, value in (page.meta or {}).items() if key != SERVER_OUTCOMES_META_KEY}
+                }
+            )
 
         pages, next_cursor, outcomes = await paginate_catalog(
             method=request.method,
@@ -1126,12 +1141,9 @@ async def list_gateway_catalog(
             fetch=fetch,
             now=int(time.time()),
         )
-        from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
-            SERVER_OUTCOMES_META_KEY,
-            ServerOutcome,
-            outcome_wire_value,
-        )
-
+        auth_failure: Final = listing_auth_error(fetched)
+        if auth_failure is not None:
+            raise auth_failure
         typed_outcomes: Final = TypeAdapter(dict[str, ServerOutcome]).validate_python(outcomes)
         return combine_optional_catalog(
             request,
@@ -1143,6 +1155,20 @@ async def list_gateway_catalog(
             if outcomes
             else None,
         )
+
+
+def _catalog_page_size(page: CatalogListResult) -> int:
+    from mcp.types import ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
+
+    match page:
+        case ListPromptsResult():
+            return len(page.prompts)
+        case ListResourcesResult():
+            return len(page.resources)
+        case ListResourceTemplatesResult():
+            return len(page.resource_templates)
+        case _:
+            return len(page.tools)
 
 
 async def fetch_optional_catalog_page(

@@ -895,6 +895,37 @@ async def describe_connect_flow(
     )
 
 
+async def _selected_connections_refusal(
+    flow: _ConnectFlow,
+    selected_servers: tuple[str, ...],
+    lookup_vendor_credential: LookupVendorCredential,
+    lookup_server_reachability: LookupServerReachability,
+) -> Response | None:
+    if not selected_servers:
+        return _oauth_error(400, "invalid_request", "select and connect an MCP server before finishing")
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # proxy import cycle
+        global_mcp_server_manager,
+    )
+
+    for server in (
+        global_mcp_server_manager.get_mcp_server_by_id(server_id) for server_id in dict.fromkeys(selected_servers)
+    ):
+        if server is None or not await lookup_server_reachability(flow.user_id, server.server_id):
+            return _oauth_error(400, "invalid_request", "a selected MCP server is no longer available")
+        if (
+            server.is_gateway_managed_oauth2
+            and global_mcp_server_manager.effective_oauth2_flow(server) != "client_credentials"
+        ):
+            match await lookup_vendor_credential(flow.user_id, server.server_id):
+                case "unavailable":
+                    return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
+                case "absent":
+                    return _oauth_error(400, "invalid_request", "authorize the selected MCP servers before finishing")
+                case "present":
+                    pass
+    return None
+
+
 async def complete_connect_flow(
     request: Request,
     flow_handle: str,
@@ -905,6 +936,7 @@ async def complete_connect_flow(
     decision: str | None = None,
     lookup_vendor_credential: LookupVendorCredential = _unavailable_vendor_credential,
     lookup_server_reachability: LookupServerReachability = _unreachable_server,
+    selected_servers: tuple[str, ...] = (),
 ) -> Response:
     """Mint the code only after a deliberate POST by the sealed user.
 
@@ -920,6 +952,12 @@ async def complete_connect_flow(
     opened: Final = _open_flow_for(request, flow_handle, session_user_id, now)
     if isinstance(opened, Response):
         return opened
+    if decision != "deny" and opened.resource_server_id is None and opened.audience is None:
+        refusal: Final = await _selected_connections_refusal(
+            opened, selected_servers, lookup_vendor_credential, lookup_server_reachability
+        )
+        if refusal is not None:
+            return refusal
     if decision != "deny":
         described: Final = await _describe_opened_flow(opened, lookup_vendor_credential, lookup_server_reachability)
         if isinstance(described, Response):

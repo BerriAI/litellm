@@ -10,13 +10,14 @@ becomes an outcome, never a second failure.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias
 
 import httpx
 import httpx2
+from fastapi import HTTPException
 from mcp.types import Tool as MCPTool
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
@@ -51,6 +52,13 @@ class ServerListFault(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     tag: ListFaultCategory
     status_code: int | None = None
+    www_authenticate: str | None = Field(default=None, exclude=True, repr=False)
+    server_name: str | None = Field(default=None, exclude=True, repr=False)
+    relayable: bool = Field(default=False, exclude=True, repr=False)
+    """True when the caller can clear this auth fault by re-authenticating: the rejected bearer was
+    the caller's own forwarded token, or the gateway's own credential resolver challenged. An
+    upstream rejecting a static or gateway-minted credential is the gateway's problem to fix, so
+    that fault stays an outcome and never escalates the whole listing to a challenge."""
 
 
 ServerOutcome: TypeAlias = ServerListOk | ServerListFault
@@ -61,9 +69,28 @@ domain per the MCP spec's ``_meta`` key format so it cannot collide with spec-re
 
 
 class AggregateToolListing(NamedTuple):
+    """``outcomes`` is keyed by the caller-visible display prefix for the wire and spend metadata,
+    so two servers sharing an alias collapse into one row there; ``outcomes_by_server_id`` keeps
+    every server's outcome, and it is the only mapping a whole-listing decision may read."""
+
     tools: list[MCPTool]
     outcomes: dict[str, ServerOutcome]
+    outcomes_by_server_id: dict[str, ServerOutcome]
     next_cursor: str | None = None
+
+
+def listing_auth_error(outcomes: Mapping[str, ServerOutcome]) -> MCPUpstreamAuthError | None:
+    blocked: Final = tuple(
+        (name, outcome)
+        for name, outcome in outcomes.items()
+        if isinstance(outcome, ServerListFault) and outcome.relayable
+    )
+    if not blocked or any(isinstance(outcome, ServerListOk) for outcome in outcomes.values()):
+        return None
+    name, outcome = next((entry for entry in blocked if entry[1].tag == "auth_required"), blocked[0])
+    return MCPUpstreamAuthError(
+        401 if outcome.tag == "auth_required" else 403, outcome.www_authenticate, outcome.server_name or name
+    )
 
 
 def _iter_upstream_responses(exc: BaseException) -> Iterator[httpx.Response | httpx2.Response]:
@@ -89,9 +116,20 @@ def upstream_auth_challenge(exc: BaseException) -> tuple[int, str | None] | None
     rides with it can never come from two different responses in the tree. Non-auth responses do not
     end the scan: a causal 401 behind an unrelated 5xx must still be found, or the client never
     receives the challenge it needs to re-authenticate."""
-    for response in _iter_upstream_responses(exc):
-        if response.status_code in (401, 403):
-            return response.status_code, response.headers.get("www-authenticate")
+    return next(
+        (challenge for current in iter_exception_tree(exc) if (challenge := _auth_challenge(current)) is not None), None
+    )
+
+
+def _auth_challenge(exc: BaseException) -> tuple[int, str | None] | None:
+    if isinstance(exc, MCPUpstreamAuthError):
+        return exc.status_code, exc.www_authenticate
+    if isinstance(exc, HTTPException) and exc.status_code in (401, 403):
+        headers: Final = exc.headers or {}
+        return exc.status_code, headers.get("WWW-Authenticate") or headers.get("www-authenticate")
+    response: Final = getattr(exc, "response", None)
+    if isinstance(response, (httpx.Response, httpx2.Response)) and response.status_code in (401, 403):
+        return response.status_code, response.headers.get("www-authenticate")
     return None
 
 
@@ -106,15 +144,47 @@ def raise_classified_list_failure(
     a classified fault. Every fetch site delegates here so the two channels cannot drift apart per
     call site. ``suppress_challenge`` is for dcr_bridge servers, whose upstream challenge points
     clients at the wrong protected-resource metadata and must never relay."""
-    auth: Final = upstream_auth_challenge(exc)
+    auth: Final = upstream_auth_error(exc, server_name, suppress_challenge=suppress_challenge)
     if auth is not None:
-        status_code, challenge = auth
-        raise MCPUpstreamAuthError(
-            status_code=status_code,
-            www_authenticate=None if suppress_challenge else challenge,
-            server_name=server_name,
-        ) from exc
+        raise auth from exc
     raise MCPServerListError(classify_list_exception(exc), server_name) from exc
+
+
+def upstream_auth_error(
+    exc: BaseException, server_name: str, *, suppress_challenge: bool = False
+) -> MCPUpstreamAuthError | None:
+    auth: Final = upstream_auth_challenge(exc)
+    if auth is None:
+        return None
+    status_code, challenge = auth
+    return MCPUpstreamAuthError(status_code, None if suppress_challenge else challenge, server_name)
+
+
+def gateway_challenged(exc: BaseException) -> bool:
+    """True when the gateway's own credential resolver raised the 401/403 (its front door asking the
+    caller to connect), as opposed to the upstream rejecting whatever credential was sent."""
+    return any(
+        isinstance(current, HTTPException) and current.status_code in (401, 403) for current in iter_exception_tree(exc)
+    )
+
+
+def caller_auth_failure(
+    exc: BaseException, server_name: str, *, caller_owns_credential: bool, suppress_challenge: bool
+) -> MCPUpstreamAuthError | None:
+    """The auth failure to relay to the caller, or None when re-authenticating could not clear it:
+    an upstream rejecting the gateway's static or minted credential is not the caller's to fix."""
+    if not caller_owns_credential and not gateway_challenged(exc):
+        return None
+    return upstream_auth_error(exc, server_name, suppress_challenge=suppress_challenge)
+
+
+def classify_listing_outcome(exc: BaseException, *, caller_owns_credential: bool) -> ServerListFault:
+    """Classify one server's failure for the aggregate listing, marking an auth fault relayable only
+    when the caller can clear it (see ``ServerListFault.relayable``)."""
+    fault: Final = classify_list_exception(exc)
+    if fault.tag not in ("auth_required", "forbidden"):
+        return fault
+    return fault.model_copy(update={"relayable": caller_owns_credential or gateway_challenged(exc)})
 
 
 def classify_list_exception(exc: BaseException) -> ServerListFault:
@@ -124,17 +194,20 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
         return exc.fault
     if isinstance(exc, MCPUpstreamAuthError):
         tag: Final = "forbidden" if exc.status_code == 403 else "auth_required"
-        return ServerListFault(tag=tag, status_code=exc.status_code)
+        return ServerListFault(
+            tag=tag, status_code=exc.status_code, www_authenticate=exc.www_authenticate, server_name=exc.server_name
+        )
     if isinstance(exc, TimeoutError):
         return ServerListFault(tag="timeout")
     if isinstance(exc, ConnectionError):
         return ServerListFault(tag="unreachable")
     auth: Final = upstream_auth_challenge(exc)
     if auth is not None:
-        status_code, _ = auth
+        status_code, challenge = auth
         return ServerListFault(
             tag="forbidden" if status_code == 403 else "auth_required",
             status_code=status_code,
+            www_authenticate=challenge,
         )
     response: Final = _find_upstream_response(exc)
     if response is not None:
