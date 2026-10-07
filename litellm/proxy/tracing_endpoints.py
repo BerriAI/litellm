@@ -3,6 +3,7 @@ Agent tracing endpoints. Thin wrappers over `TraceReceiver`: auth -> tenant/scop
 
 POST /v1/traces                              OTLP/HTTP trace export (protobuf or JSON)
 GET  /v1/traces                              TracePage
+GET  /v1/traces/agents                       TraceAgentList
 GET  /v1/traces/{trace_id}                   Trace
 GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 """
@@ -30,13 +31,14 @@ from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
 from litellm.rust_bridge.trace.generated.requests import (
+    TraceAgentsRequest,
     TraceDetailRequest,
     TraceErrorPageRequest,
     TraceListRequest,
     TraceQueryRequest,
     TraceSpanRequest,
 )
-from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
+from litellm.rust_bridge.trace.generated.responses import TraceAgentList, TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import (
     AllQueryScope,
     OwnedQueryScope,
@@ -194,6 +196,10 @@ def read_failure(error: TraceChanged | ValueError | OverflowError | RuntimeError
             return assert_never(error)
 
 
+def _window(start_ms: int | None, end_ms: int | None, now_ms: int) -> tuple[int, int]:
+    return (start_ms if start_ms is not None else now_ms - MS_PER_DAY, end_ms if end_ms is not None else now_ms)
+
+
 @router.get("/v1/traces", response_model=TracePage)
 async def list_agent_traces(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
@@ -202,12 +208,24 @@ async def list_agent_traces(
 ) -> TracePage:
     try:
         tracing, scope = context.reader()
+        start_ms, end_ms = _window(request.start_ms, request.end_ms, now_ms)
         return await tracing.list_traces(
-            scope=scope,
-            start_ms=request.start_ms if request.start_ms is not None else now_ms - MS_PER_DAY,
-            end_ms=request.end_ms if request.end_ms is not None else now_ms,
-            cursor=request.cursor,
+            scope=scope, start_ms=start_ms, end_ms=end_ms, cursor=request.cursor, agent=request.agent or ""
         )
+    except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
+
+
+@router.get("/v1/traces/agents", response_model=TraceAgentList)
+async def list_trace_agents(
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
+    now_ms: Annotated[int, Depends(current_time_ms)],
+    request: Annotated[TraceAgentsRequest, Query()],
+) -> TraceAgentList:
+    try:
+        tracing, scope = context.reader()
+        start_ms, end_ms = _window(request.start_ms, request.end_ms, now_ms)
+        return await tracing.list_agents(scope=scope, start_ms=start_ms, end_ms=end_ms)
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error
 
