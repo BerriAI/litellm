@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ClipboardCopy, X } from "lucide-react";
+import { ChevronRight, ClipboardCopy, X } from "lucide-react";
 
 import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import type { Finding, Sample } from "../model/types";
 import { EvidenceView } from "./Evidence";
 import { FrequencyCard } from "./FrequencyCard";
 import { IssueBrief } from "./IssueBrief";
+import { PriorityPill } from "./PriorityMark";
 import { type EvidenceRef, useEvidenceRoute } from "../route";
 
 export const ownedFindingKey = (owned: OwnedFinding): string => findingKey(owned.lens, owned.finding);
@@ -41,7 +42,7 @@ export interface FindingDetailsProps {
 function TopBar({ finding, onClose }: Pick<FindingDetailsProps, "finding" | "onClose">) {
   const now = useNow(30000);
   return (
-    <div className="sticky top-0 z-raised flex items-center justify-between gap-2 bg-background px-3 py-2">
+    <div className="sticky top-0 z-raised flex h-11 items-center justify-between gap-2 bg-background/95 px-4 backdrop-blur">
       <p className="flex min-w-0 items-center gap-2 font-mono text-xs text-muted-foreground">
         <span className="truncate" title={finding.id}>
           {finding.id.slice(0, 8)}
@@ -51,18 +52,25 @@ function TopBar({ finding, onClose }: Pick<FindingDetailsProps, "finding" | "onC
           {agoLabel(Date.parse(finding.last_seen), now)}
         </span>
       </p>
-      <div className="flex shrink-0 gap-2">
+      <div className="flex shrink-0 gap-1.5">
         <Button
           variant="outline"
-          size="sm"
+          size="xs"
+          className="enabled:active:scale-[0.96]"
           onClick={() => void copyToClipboard(findingMarkdown(finding), "Copied for agent")}
         >
-          <ClipboardCopy className="size-3.5" />
+          <ClipboardCopy />
           Copy for agent
         </Button>
         {onClose && (
-          <Button variant="outline" size="sm" aria-label="Close finding (Esc)" onClick={onClose}>
-            <X className="size-3.5" />
+          <Button
+            variant="ghost"
+            size="xs"
+            className="enabled:active:scale-[0.96]"
+            aria-label="Close finding (Esc)"
+            onClick={onClose}
+          >
+            <X />
             Close
           </Button>
         )}
@@ -71,18 +79,45 @@ function TopBar({ finding, onClose }: Pick<FindingDetailsProps, "finding" | "onC
   );
 }
 
+function Disclosure({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <details className="group rounded-lg">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+        <ChevronRight
+          aria-hidden="true"
+          className="size-4 text-muted-foreground transition-[rotate] duration-150 group-open:rotate-90 motion-reduce:transition-none"
+        />
+        {title}
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
+  );
+}
+
 function ProseSection({ title, children }: { title: string; children: string }) {
   return (
     <section>
-      <h2 className="mb-2 text-base font-medium">{title}</h2>
-      <p className="text-sm leading-relaxed whitespace-pre-wrap text-foreground/90">{children}</p>
+      <h2 className="mb-1.5 text-sm font-semibold">{title}</h2>
+      <p className="max-w-[70ch] text-sm leading-relaxed text-pretty whitespace-pre-wrap text-foreground/85">
+        {children}
+      </p>
     </section>
   );
 }
 
+const FIELD = /^(Input|Output|Status|Error)\s*:/gm;
+const FIELD_LABEL: Readonly<Record<string, string>> = {
+  "Input,Output": "Call and result",
+  Input: "Call input",
+  Output: "Returned output",
+  Status: "Span status",
+  Error: "Error",
+};
+
 function quoteLabel(quote: Quote, isTrace: boolean): string {
   if (quote.role === "counterexample") return "Counterexample";
-  return isTrace ? "Trace step" : "Logged request";
+  const fields = [...new Set(Array.from(quote.quote.matchAll(FIELD), (m) => m[1]))].join(",");
+  return FIELD_LABEL[fields] ?? (isTrace ? "Trace step" : "Logged request");
 }
 
 const MARK = {
@@ -93,10 +128,10 @@ const MARK = {
 function QuoteCard({ quote, onOpen }: { quote: Quote; onOpen: () => void }) {
   const isTrace = evidenceTarget(quote.execution_id)?.source === "traces";
   return (
-    <div className="-mx-1 rounded-md border bg-background p-2">
-      <div className="mb-1 flex items-center justify-between gap-2">
+    <div className="-mx-1 rounded-lg border border-transparent bg-background p-2.5 shadow-finding-ring">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
         <span className="min-w-0 truncate text-sm font-medium">{quoteLabel(quote, isTrace)}</span>
-        <Button variant="outline" size="xs" onClick={onOpen}>
+        <Button variant="outline" size="xs" className="enabled:active:scale-[0.96]" onClick={onOpen}>
           {isTrace ? "View span" : "View request"}
         </Button>
       </div>
@@ -105,9 +140,9 @@ function QuoteCard({ quote, onOpen }: { quote: Quote; onOpen: () => void }) {
         tabIndex={-1}
         title="Open this evidence"
         onClick={onOpen}
-        className="mt-1 block w-full overflow-x-auto bg-muted/70 py-1 text-left font-mono text-xs leading-5 hover:bg-muted"
+        className="block w-full overflow-x-auto rounded-md bg-muted/60 py-1.5 text-left font-mono text-xs leading-5 transition-[background-color] duration-150 hover:bg-muted"
       >
-        <code className="block border-l border-border px-2 py-0.5 break-words whitespace-pre-wrap text-foreground/80">
+        <code className="block border-l-2 border-warning/40 px-2.5 break-words whitespace-pre-wrap text-foreground/85">
           <mark className={MARK[quote.role]}>{quote.quote}</mark>
         </code>
       </button>
@@ -142,14 +177,16 @@ interface ExampleGroup {
 }
 
 function Example({ group, onOpenEvidence }: { group: ExampleGroup; onOpenEvidence: (e: EvidenceRef) => void }) {
-  const name = group.run?.name ?? evidenceTarget(group.id)?.id.slice(0, 12) ?? "Recorded run";
+  const traceId = evidenceTarget(group.id)?.id;
+  const name = group.run?.name ?? (traceId ? `Trace ${traceId.slice(0, 8)}` : "Recorded run");
   return (
-    <article aria-label={name} className="flex w-full flex-col items-start gap-3 rounded-md bg-muted/40 p-3">
+    <article aria-label={name} className="flex w-full flex-col items-start gap-3 rounded-xl bg-muted/50 p-3.5">
       <div className="flex w-full items-baseline justify-between gap-3">
-        <h3 className="min-w-0 truncate text-sm font-medium">{name}</h3>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {group.run?.service && `${group.run.service} · `}
-          {group.run ? runTime(group.run.start_time) : ""}
+        <h3 className="min-w-0 truncate text-sm font-medium" title={traceId}>
+          {name}
+        </h3>
+        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+          {[group.run?.service, group.run && runTime(group.run.start_time)].filter(Boolean).join(" · ")}
         </span>
       </div>
       <div className="w-full">
@@ -173,6 +210,38 @@ function Example({ group, onOpenEvidence }: { group: ExampleGroup; onOpenEvidenc
         )}
       </div>
     </article>
+  );
+}
+
+const VISIBLE_EXAMPLES = 3;
+
+function Examples({
+  groups,
+  onOpenEvidence,
+}: {
+  groups: readonly ExampleGroup[];
+  onOpenEvidence: (e: EvidenceRef) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (groups.length === 0) return <p className="text-sm text-muted-foreground">No examples were recorded.</p>;
+  const shown = expanded ? groups : groups.slice(0, VISIBLE_EXAMPLES);
+  const hidden = groups.length - shown.length;
+  return (
+    <>
+      {shown.map((group) => (
+        <Example key={group.id} group={group} onOpenEvidence={onOpenEvidence} />
+      ))}
+      {hidden > 0 && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="self-start text-muted-foreground"
+          onClick={() => setExpanded(true)}
+        >
+          Show {hidden} more {hidden === 1 ? "example" : "examples"}
+        </Button>
+      )}
+    </>
   );
 }
 
@@ -226,29 +295,39 @@ export function FindingDetails({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <TopBar finding={finding} onClose={onClose} />
-      <article className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pt-6 pb-12">
-        <header className="flex flex-col gap-2">
-          <h1 className="text-2xl font-semibold text-balance">{finding.title}</h1>
-          <p className="text-xs text-muted-foreground">
-            {agents.length > 0 && <span className="font-medium text-foreground">{agents.join(", ")} · </span>}
-            {finding.kind === "issue" ? `${finding.priority} priority` : "Pattern"} · {affected} affected{" "}
-            {affected === 1 ? "trace" : "traces"}
-            {runs > 0 && ` · Found across ${runs} investigation ${runs === 1 ? "run" : "runs"}`}
-          </p>
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-7 px-6 pt-4 pb-16">
+        <header className="flex flex-col gap-3">
+          <h1 className="text-2xl leading-tight font-semibold tracking-tight text-balance">{finding.title}</h1>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+            {finding.kind === "issue" ? (
+              <PriorityPill priority={finding.priority} />
+            ) : (
+              <span className="inline-flex h-5 items-center rounded-full bg-muted px-2 font-medium">Pattern</span>
+            )}
+            {agents.length > 0 && <span className="font-medium text-foreground">{agents.join(", ")}</span>}
+            <span className="tabular-nums">
+              {affected} affected {affected === 1 ? "trace" : "traces"}
+            </span>
+            {runs > 0 && (
+              <span className="tabular-nums">
+                Found across {runs} investigation {runs === 1 ? "run" : "runs"}
+              </span>
+            )}
+          </div>
         </header>
         <ProseSection title="Summary">{finding.description}</ProseSection>
         {finding.suggestion && <ProseSection title="Suggested fix">{finding.suggestion}</ProseSection>}
         {finding.brief && (
-          <details className="group">
-            <summary className="mb-3 cursor-pointer text-base font-medium">Issue brief and test cases</summary>
+          <Disclosure title="Issue brief and test cases">
             <IssueBrief title={finding.title} brief={finding.brief} />
-          </details>
+          </Disclosure>
         )}
         {finding.limitation && (
-          <details className="text-sm">
-            <summary className="cursor-pointer font-medium">Evidence limits</summary>
-            <p className="mt-3 leading-6 text-muted-foreground">{finding.limitation}</p>
-          </details>
+          <Disclosure title="Evidence limits">
+            <p className="max-w-[70ch] text-sm leading-relaxed text-pretty text-muted-foreground">
+              {finding.limitation}
+            </p>
+          </Disclosure>
         )}
         <section>
           <h2 className={`mb-2 ${SECTION_LABEL}`}>Monitors</h2>
@@ -265,13 +344,10 @@ export function FindingDetails({
               />
             )}
           </div>
-          {groups.length === 0 && <p className="text-sm text-muted-foreground">No examples were recorded.</p>}
-          {groups.map((group) => (
-            <Example key={group.id} group={group} onOpenEvidence={onOpenEvidence} />
-          ))}
+          <Examples groups={groups} onOpenEvidence={onOpenEvidence} />
         </section>
         {!readOnly && <ReviewForm finding={finding} busy={busy} onReview={onReview} />}
-      </article>
+      </div>
     </div>
   );
 }
