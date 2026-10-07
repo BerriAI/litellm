@@ -46,6 +46,22 @@ interface Deployment {
   model_info: { id: string };
 }
 
+interface CredentialWrite {
+  credential_name: string;
+  credential_values: CredentialValues;
+  credential_info: { custom_llm_provider: string };
+  credential_values_to_delete?: string[];
+}
+
+interface ModelWrite {
+  model_name: string;
+  litellm_params: Record<string, unknown>;
+}
+
+interface ModelCreated {
+  model_id: string;
+}
+
 const masked = (value: string): string =>
   value.length <= 4 ? "*****" : `${value.slice(0, 2)}****${value.slice(-2)}`;
 
@@ -154,8 +170,8 @@ const submitCredential = (
   method: "POST" | "PATCH",
   urlIncludes: string,
   button: string,
-): Promise<Record<string, any>> =>
-  captureRequestBody(page, { method, urlIncludes }, () =>
+): Promise<CredentialWrite> =>
+  captureRequestBody<CredentialWrite>(page, { method, urlIncludes }, () =>
     dialog.getByRole("button", { name: button, exact: true }).click(),
   );
 
@@ -256,16 +272,16 @@ async function expectStored(
   return last;
 }
 
-async function postAsMaster(
+async function postAsMaster<T = Record<string, unknown>>(
   request: APIRequestContext,
   route: string,
   data: Record<string, unknown>,
-): Promise<Record<string, any>> {
+): Promise<T> {
   const response = await request.post(route, { headers, data });
   expect(response.status(), `POST ${route}: ${await response.text()}`).toBe(
     200,
   );
-  return response.json();
+  return (await response.json()) as T;
 }
 
 test("the Add Credential dialog stores each federation identity source with only the values it needs and refuses the invalid ones", async ({
@@ -574,7 +590,7 @@ test("the Edit Credential dialog sends only the changed values and deletes the k
     expect(moved.credential_info).toEqual({
       custom_llm_provider: OPENAI_LABEL,
     });
-    expect([...moved.credential_values_to_delete].sort()).toEqual([
+    expect([...(moved.credential_values_to_delete ?? [])].sort()).toEqual([
       "anthropic_federation_rule_id",
       "anthropic_identity_token_file",
       "anthropic_organization_id",
@@ -663,7 +679,7 @@ test("a proxy admin saves a federation credential from the Add Model tab and the
       anthropic_identity_token_file: masked(tokenFile),
     });
 
-    const probe = await captureRequestBody(
+    const probe = await captureRequestBody<ModelWrite>(
       page,
       { method: "POST", urlIncludes: "/health/test_connection" },
       () => page.getByTestId("test-connect-btn").click(),
@@ -682,11 +698,23 @@ test("a proxy admin saves a federation credential from the Add Model tab and the
     await page.keyboard.press("Escape");
     await expect(results).toBeHidden();
 
-    const added = await captureRequestBody(
+    const creation = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().includes("/model/new"),
+    );
+    const added = await captureRequestBody<ModelWrite>(
       page,
       { method: "POST", urlIncludes: "/model/new" },
       () => page.getByTestId("add-model-btn").click(),
     );
+    const creationResponse = await creation;
+    expect(
+      creationResponse.status(),
+      `POST /model/new: ${await creationResponse.text()}`,
+    ).toBe(200);
+    deploymentId = ((await creationResponse.json()) as ModelCreated).model_id;
+    expect(deploymentId).not.toBe("");
     expect(added.model_name).toBe(modelName);
     expect(added.litellm_params.litellm_credential_name).toBe(credentialName);
     expect(added.litellm_params.custom_llm_provider).toBe("anthropic");
@@ -705,7 +733,7 @@ test("a proxy admin saves a federation credential from the Add Model tab and the
       })
       .not.toBe("");
     const deployment = await findDeployment();
-    deploymentId = deployment?.model_info.id ?? "";
+    expect(deployment?.model_info.id).toBe(deploymentId);
     expect(deployment?.litellm_params.litellm_credential_name).toBe(
       credentialName,
     );
@@ -738,7 +766,7 @@ test("a team admin who is not a proxy admin gets no federation shortcut on the A
     });
     await setInvitedUserPassword(request, userId, password);
     teamId = (
-      await postAsMaster(request, "/team/new", {
+      await postAsMaster<{ team_id: string }>(request, "/team/new", {
         team_alias: teamAlias,
         members_with_roles: [{ role: "admin", user_id: userId }],
       })
