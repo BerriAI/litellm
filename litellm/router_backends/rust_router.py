@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import copy
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final, Protocol, TypeAlias, cast
+from types import MappingProxyType
+from typing import Final, Protocol, TypeAlias, TypeVar, cast
 from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm import constants
+from litellm._logging import verbose_router_logger
+from litellm.constants import RUNTIME_UPDATABLE_ROUTER_SETTINGS
 from litellm.router_backends.python_router import PythonRouter
 from litellm.router_backends.rust_call import (
     AttemptRouter,
@@ -26,7 +30,7 @@ from litellm.router_utils.cooldown_handlers import (
     _is_allowed_fails_set_on_router,  # pyright: ignore[reportPrivateUsage]  # the rule PythonRouter's cooldowns apply
 )
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.types.router import RetryPolicy
+from litellm.types.router import Deployment, RetryPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,8 +38,18 @@ class RustRouterDeclined:
     reason: str
 
 
+class RustRouterUnsupportedError(ValueError):
+    pass
+
+
+FallBack: TypeAlias = Callable[[PythonRouter], None]
+_T = TypeVar("_T")
+
+
 class NativeRouter(Protocol):
     def route(self, call: Mapping[str, object], driver: RoutedCall, asynchronous: bool) -> object: ...
+
+    def replace(self, deployments: Sequence[Mapping[str, object]], settings: Mapping[str, object]) -> None: ...
 
 
 NativeRouterType: TypeAlias = Callable[..., NativeRouter]
@@ -98,10 +112,28 @@ class NormalizerView(AttemptRouter, Protocol):
 
     def discard(self) -> None: ...
 
+    def upsert_deployment(self, deployment: Deployment) -> Deployment | None: ...
+
+    def add_deployment(self, deployment: Deployment) -> Deployment | None: ...
+
+    def delete_deployment(self, id: str) -> Deployment | None: ...
+
+    def update_settings(self, **kwargs: object) -> None: ...  # kwargs-ok: PythonRouter.update_settings' surface
+
+    def get_settings(self) -> Mapping[str, object]: ...
+
     def _update_kwargs_before_fallbacks(
         self, model: str, kwargs: Kwargs, metadata_variable_name: str = "metadata"
     ) -> None: ...
 
+
+def _raw(deployment: Deployment) -> Mapping[str, object]:
+    return deployment.model_dump(exclude_none=True)
+
+
+_PYTHON_ROUTER: Final = cast(  # cast-ok: Router(...) forwards untyped arguments
+    Callable[..., PythonRouter], PythonRouter
+)
 
 _IS_CLIENTSIDE_CREDENTIAL: Final = cast(  # cast-ok: the helper's dict parameter is unparameterized
     Callable[[Kwargs], bool], clientside_credential_handler.is_clientside_credential
@@ -198,12 +230,22 @@ class RustRouter:
     cooldowns and usage counters belong to the native router.
     """
 
-    def __init__(self, arguments: Mapping[str, object], native: NativeRouterType, seed: int | None = None) -> None:
+    def __init__(
+        self,
+        arguments: Mapping[str, object],
+        native: NativeRouterType,
+        seed: int | None = None,
+        required: bool = False,
+    ) -> None:
         normalizer: Final = _NORMALIZER(
             **{name: value for name, value in arguments.items() if name not in _REDIS_ARGUMENTS}
         )
         normalizer.discard()
         object.__setattr__(self, "_normalizer", normalizer)
+        object.__setattr__(self, "_arguments", MappingProxyType(dict(arguments)))
+        object.__setattr__(self, "_updates", MappingProxyType({}))
+        object.__setattr__(self, "_required", required)
+        object.__setattr__(self, "_fall_back", None)
         object.__setattr__(
             self,
             "_native",
@@ -218,8 +260,15 @@ class RustRouter:
 
     _normalizer: NormalizerView
     _native: NativeRouter
+    _arguments: Mapping[str, object]
+    _updates: Mapping[str, object]
+    _required: bool
+    _fall_back: FallBack | None
 
     def __getattr__(self, name: str) -> object:
+        normalizer: Final[object] = self.__dict__.get("_normalizer")
+        if normalizer is None or not hasattr(normalizer, name):
+            raise AttributeError(name)
         raise NotImplementedError(f"the Rust router backend does not emulate Router.{name} yet")
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -250,6 +299,68 @@ class RustRouter:
 
     def discard(self) -> None:
         return None
+
+    def on_fall_back(self, fall_back: FallBack) -> None:
+        """Where this instance hands over to a `PythonRouter` when a runtime change asks for something
+        the Rust backend does not serve. The hand-over is permanent; in-memory state is not carried."""
+        object.__setattr__(self, "_fall_back", fall_back)
+
+    def upsert_deployment(self, deployment: Deployment) -> Deployment | None:
+        return self._change(lambda: self._normalizer.upsert_deployment(deployment), deployments=(deployment,))
+
+    def add_deployment(self, deployment: Deployment) -> Deployment | None:
+        return self._change(lambda: self._normalizer.add_deployment(deployment), deployments=(deployment,))
+
+    def delete_deployment(self, id: str) -> Deployment | None:
+        return self._change(lambda: self._normalizer.delete_deployment(id))
+
+    def update_settings(self, **kwargs: object) -> None:  # kwargs-ok: PythonRouter.update_settings' surface
+        updatable: Final = {name: value for name, value in kwargs.items() if name in RUNTIME_UPDATABLE_ROUTER_SETTINGS}
+        self._change(lambda: self._normalizer.update_settings(**kwargs), updates=updatable)
+
+    @property
+    def retry_policy(self) -> object:
+        return self._normalizer.retry_policy
+
+    def get_settings(self) -> Mapping[str, object]:
+        return self._normalizer.get_settings()
+
+    def _change(
+        self,
+        apply: Callable[[], _T],
+        deployments: Sequence[Deployment] = (),
+        updates: Mapping[str, object] = MappingProxyType({}),
+    ) -> _T:
+        """Applies a runtime change on the Python side, which normalizes deployments and resolves
+        settings, then swaps the native snapshot. A change the Rust backend cannot serve falls back
+        to `PythonRouter` for good, or raises when Rust is required."""
+        merged: Final = MappingProxyType({**self._updates, **updates})
+        prospective: Final = {
+            **self._arguments,
+            **merged,
+            "model_list": [*self._normalizer.model_list, *(_raw(deployment) for deployment in deployments)],
+        }
+        reason: Final = unsupported_reason(prospective)
+        if reason is not None:
+            return self._hand_over(reason, apply, merged)
+        result: Final = apply()
+        object.__setattr__(self, "_updates", merged)
+        self._native.replace(
+            [_project(deployment) for deployment in self._normalizer.model_list], _settings(self._normalizer)
+        )
+        return result
+
+    def _hand_over(self, reason: str, apply: Callable[[], _T], updates: Mapping[str, object]) -> _T:
+        if self._required or self._fall_back is None:
+            raise RustRouterUnsupportedError(f"the Rust router cannot serve this change: {reason}")
+        result: Final = apply()
+        python: Final = _PYTHON_ROUTER(**{**self._arguments, "model_list": copy.deepcopy(self._normalizer.model_list)})
+        if updates:
+            settings_view: Final = cast(NormalizerView, python)  # cast-ok: PythonRouter's untyped update_settings
+            settings_view.update_settings(**updates)
+        verbose_router_logger.info("Rust router handing over to the Python router for good: %s", reason)
+        self._fall_back(python)
+        return result
 
     async def acompletion(
         self,
@@ -371,7 +482,7 @@ def _flag(value: object) -> bool:
 
 
 def build_rust_router(
-    arguments: Mapping[str, object], native: NativeRouterType | None = None
+    arguments: Mapping[str, object], native: NativeRouterType | None = None, required: bool = False
 ) -> RustRouter | RustRouterDeclined:
     reason: Final = unsupported_reason(arguments)
     if reason is not None:
@@ -379,4 +490,4 @@ def build_rust_router(
     native_type: Final = native if native is not None else NATIVE_ROUTER.load()
     if native_type is None:
         return RustRouterDeclined("the native router is not available in this build")
-    return RustRouter(arguments, native_type)
+    return RustRouter(arguments, native_type, required=required)

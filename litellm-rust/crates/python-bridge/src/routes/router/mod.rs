@@ -115,6 +115,18 @@ impl NativeRouter {
         })
     }
 
+    /// Swaps in the deployments and settings after a runtime change. Calls already running
+    /// keep the snapshot they started with.
+    fn replace(
+        &self,
+        #[pyo3(from_py_with = from_py_argument)] deployments: Vec<RoutedDeployment>,
+        #[pyo3(from_py_with = from_py_argument)] settings: Settings,
+    ) {
+        let registry = self.engine.registry();
+        let providers = registry.load().providers.clone();
+        registry.replace(Snapshot::new(deployments, settings, providers));
+    }
+
     /// One routed call. `call` holds the routing-relevant request fields; `driver` answers
     /// the call's host ops and builds its result. Returns a coroutine when `asynchronous`.
     fn route(

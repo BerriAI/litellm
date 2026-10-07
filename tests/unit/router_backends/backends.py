@@ -18,6 +18,8 @@ from litellm.router_backends.rust_router import NATIVE_ROUTER
 from litellm.router_backends.selection import pinned_backend
 from litellm.rust_bridge.configuration import Decision
 
+_PRE_CALL_CHECKS: Final = "optional pre-call checks are a Python-only feature the Rust backend declines"
+
 RUST_GAPS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "test_set_deployment_num_retries_on_exception": "calls a PythonRouter internal the Rust backend replaces",
@@ -35,6 +37,17 @@ RUST_GAPS: Final[Mapping[str, str]] = MappingProxyType(
         "test_flag_on_masks_fallback_credentials": "dict fallback targets decline at construction",
         "test_include_fallback_errors_propagates_through_router": "include_fallback_errors is not served yet",
         "test_set_response_headers_adds_model_group_to_streaming_wrapper": "calls a PythonRouter internal the Rust backend replaces",
+        "test_update_settings_adds_optional_pre_call_check_once": _PRE_CALL_CHECKS,
+        "test_update_settings_clears_omitted_toggleable_pre_call_checks": _PRE_CALL_CHECKS,
+        "test_set_optional_pre_call_checks_reconciles_callback_types": _PRE_CALL_CHECKS,
+        "test_remove_optional_pre_call_check_removes_local_and_global_callbacks": _PRE_CALL_CHECKS,
+        "test_remove_optional_pre_call_check_keeps_global_callback_for_another_router": _PRE_CALL_CHECKS,
+        "test_remove_optional_pre_call_check_keeps_global_callback_when_second_router_clears_first": _PRE_CALL_CHECKS,
+        "test_update_settings_replaces_toggleable_pre_call_checks": _PRE_CALL_CHECKS,
+        "test_update_settings_clears_omitted_encrypted_content_affinity_check": _PRE_CALL_CHECKS,
+        "test_update_settings_turning_off_encrypted_content_affinity_stops_flagging_requests": _PRE_CALL_CHECKS,
+        "test_update_settings_keeps_per_group_encrypted_content_affinity_when_global_toggle_is_omitted": _PRE_CALL_CHECKS,
+        "test_update_settings_preserves_router_budget_limiting_when_omitted": _PRE_CALL_CHECKS,
     }
 )
 

@@ -8,6 +8,7 @@ from typing import Final, Protocol
 
 from litellm.router_backends.python_router import PythonRouter
 from litellm.router_backends.rust_router import NATIVE_ROUTER, RustRouter
+from litellm.types.router import Deployment
 
 
 class Backend(Protocol):

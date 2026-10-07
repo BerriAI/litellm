@@ -34,6 +34,9 @@ from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check impor
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
+from tests.unit.router_backends.backends import router_backend  # noqa: F401  # fixture import
+
+pytestmark = pytest.mark.usefixtures("router_backend")
 
 
 @pytest.fixture(autouse=True)
@@ -88,9 +91,7 @@ def test_update_router_config_rejects_malformed_model_group_retry_policy():
     """model_group_retry_policy is Dict[str, RetryPolicy], so each per-group
     policy is validated the same way."""
     with pytest.raises(ValidationError):
-        UpdateRouterConfig(
-            model_group_retry_policy={"gpt-4": {"RateLimitErrorRetries": "x"}}
-        )
+        UpdateRouterConfig(model_group_retry_policy={"gpt-4": {"RateLimitErrorRetries": "x"}})
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +256,9 @@ def test_update_settings_keeps_per_group_encrypted_content_affinity_when_global_
     router.update_settings(optional_pre_call_checks=[])
 
     affinity_checks: Final = [
-        callback for callback in (router.optional_callbacks or []) if isinstance(callback, EncryptedContentAffinityCheck)
+        callback
+        for callback in (router.optional_callbacks or [])
+        if isinstance(callback, EncryptedContentAffinityCheck)
     ]
     assert len(affinity_checks) == 1
     assert affinity_checks[0].enable_global_affinity is False
@@ -454,9 +457,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
 
     read_back = (
         await proxy_server.get_config(
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"
-            )
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876")
         )
     )["router_settings"]["retry_policy"]
     assert read_back.BadRequestErrorRetries == 5

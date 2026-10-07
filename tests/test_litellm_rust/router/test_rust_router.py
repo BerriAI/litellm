@@ -172,8 +172,9 @@ async def test_the_facade_serves_a_supported_config_from_the_rust_backend() -> N
     assert isinstance(backend, RustRouter)
     assert _content(await backend.acompletion("g", MESSAGES)) == "from a"
     assert backend.get_model_names() == ["g"]
-    with pytest.raises(NotImplementedError, match=r"Router\.upsert_deployment"):
-        _ = backend.upsert_deployment
+    with pytest.raises(NotImplementedError, match=r"Router\.cooldown_cache"):
+        _ = backend.cooldown_cache
+    assert not hasattr(backend, "not_a_router_member")
 
 
 class _FailingStream(CustomStreamWrapper):

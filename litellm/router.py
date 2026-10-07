@@ -58,7 +58,10 @@ class Router(_RouterSurface):
     if not TYPE_CHECKING:
 
         def __init__(self, *args, **kwargs) -> None:  # kwargs-ok: forwards PythonRouter.__init__'s signature
-            object.__setattr__(self, "backend", select_backend(args, kwargs))
+            backend: Final = select_backend(args, kwargs)
+            object.__setattr__(self, "backend", backend)
+            if isinstance(backend, RustRouter):
+                backend.on_fall_back(lambda python: object.__setattr__(self, "backend", python))
 
         __init__.__signature__ = inspect.signature(PythonRouter.__init__)
 

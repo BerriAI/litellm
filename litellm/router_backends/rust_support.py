@@ -52,8 +52,10 @@ SUPPORTED_ARGUMENTS: Final = frozenset(
         "allowed_fails",
         "cooldown_time",
         "disable_cooldowns",
+        "max_retries",
     }
 )
+_UNSET: Final = object()
 
 _UNSUPPORTED_DEPLOYMENT_KEYS: Final = frozenset({"tpm", "rpm", "max_parallel_requests"})
 _UNSUPPORTED_LITELLM_PARAMS: Final = frozenset(
@@ -109,7 +111,7 @@ def _argument_reason(arguments: Mapping[str, object]) -> str | None:
         (
             f"Router argument {name!r} is not supported by the Rust router yet"
             for name, value in arguments.items()
-            if name not in SUPPORTED_ARGUMENTS and value != _DEFAULTS[name]
+            if name not in SUPPORTED_ARGUMENTS and value != _DEFAULTS.get(name, _UNSET)
         ),
         None,
     )

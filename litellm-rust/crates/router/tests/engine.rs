@@ -611,3 +611,52 @@ async fn an_anthropic_stream_retry_that_opens_reports_its_retry_count() {
         (1, Some(2))
     );
 }
+
+/// Replaces the registry's snapshot during the first attempt, as a runtime model list change
+/// landing while a call is running would.
+struct ReplacingHost {
+    engine: Arc<Engine>,
+    replacement: Mutex<Option<Snapshot>>,
+    inner: ScriptedHost,
+}
+
+impl RouterHost for ReplacingHost {
+    type Response = String;
+    type Error = String;
+    type Fault = ();
+
+    async fn invoke(&self, attempt: Attempt<String>) -> Result<Invoked<String, String>, ()> {
+        if let Some(snapshot) = self.replacement.lock().unwrap().take() {
+            self.engine.registry().replace(snapshot);
+        }
+        self.inner.invoke(attempt).await
+    }
+
+    async fn sleep(&self, seconds: f64) -> Result<(), ()> {
+        self.inner.sleep(seconds).await
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_running_call_keeps_its_snapshot_while_the_next_call_sees_the_new_one() {
+    let engine = Arc::new(engine(vec![deployment("a", "g")], settings()));
+    let host = ReplacingHost {
+        engine: Arc::clone(&engine),
+        replacement: Mutex::new(Some(Snapshot::new(
+            vec![deployment("b", "g")],
+            settings(),
+            vec!["openai".into()],
+        ))),
+        inner: ScriptedHost::default().script("a", &[SERVER]),
+    };
+
+    let running = engine.route(&host, call("g")).await.ok().unwrap();
+    let next = engine.route(&host, call("g")).await.ok().unwrap();
+
+    assert_eq!(host.inner.attempts(), ["a", "a", "b"]);
+    assert_eq!(
+        (running.outcome.deployment_id, next.outcome.deployment_id),
+        ("a".to_owned(), "b".to_owned())
+    );
+}
