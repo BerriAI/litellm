@@ -10,6 +10,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import LITELLM_CHAT_FORMAT_RESPONSE_KEY
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
@@ -41,6 +42,22 @@ ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config",
 _AnthropicMessages: TypeAlias = "list[dict[str, object]]"
 _AnthropicSystem: TypeAlias = "str | list[dict[str, object]] | None"
 _ContextManagementSpec: TypeAlias = "dict[str, object] | list[dict[str, object]] | None"
+
+
+def _stash_chat_format_response(kwargs: Mapping[str, object], completion_response: object) -> None:
+    """
+    Keep the pre-translation chat-format response on the logging object.
+
+    The Anthropic-format response this handler returns drops usage detail the
+    cost calculator prices on (``completion_tokens_details.image_tokens``), so
+    ``_response_cost_from_logging_obj`` recomputes from the original when the
+    success handler has not stored a cost yet. Stashed synchronously beside the
+    conversion, before returning, so the header build can never race it.
+    """
+    logging_obj = litellm_logging_obj_from_kwargs(kwargs)
+    if logging_obj is None:
+        return
+    logging_obj.model_call_details[LITELLM_CHAT_FORMAT_RESPONSE_KEY] = completion_response
 
 
 class _CompletionKwargs(TypedDict, total=False, extra_items=object):
@@ -679,6 +696,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _stash_chat_format_response(kwargs, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
@@ -814,6 +832,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _stash_chat_format_response(kwargs, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,

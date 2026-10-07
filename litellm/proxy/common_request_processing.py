@@ -36,6 +36,7 @@ from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthr
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
+    LITELLM_CHAT_FORMAT_RESPONSE_KEY,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -2450,7 +2451,14 @@ class ProxyBaseLLMRequestProcessing:
         stored_cost: Final = logging_obj.model_call_details.get("response_cost")
         if isinstance(stored_cost, (int, float)):
             return float(stored_cost)
-        recomputed_cost: Final = logging_obj.response_cost_calculator(result=response)
+        # A provider bridge may have translated the response into its native
+        # format before returning it (the Anthropic /v1/messages bridge drops
+        # completion_tokens_details.image_tokens from usage), so recompute from
+        # the original chat-format response it stashed when one exists.
+        chat_format_response: Final = logging_obj.model_call_details.get(LITELLM_CHAT_FORMAT_RESPONSE_KEY)
+        recomputed_cost: Final = logging_obj.response_cost_calculator(
+            result=chat_format_response if chat_format_response is not None else response
+        )
         return recomputed_cost if isinstance(recomputed_cost, (int, float)) else ""
 
     def _debug_log_request_payload(self) -> None:

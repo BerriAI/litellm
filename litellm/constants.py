@@ -658,6 +658,12 @@ DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE: Final = os.getenv(
 
 LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED: Final = 499
 
+# model_call_details key holding the original OpenAI-chat-format response, stashed
+# by provider bridges (e.g. the Anthropic /v1/messages bridge) before translating
+# the response, so cost recomputation can price on usage detail the translated
+# response dropped (e.g. completion_tokens_details.image_tokens).
+LITELLM_CHAT_FORMAT_RESPONSE_KEY: Final = "litellm_chat_format_response"
+
 EMAIL_BUDGET_ALERT_TTL: Final = int(os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60))  # 24 hours in seconds
 EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE: Final = float(
     os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8)

@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.bug_report import (
 )
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    LITELLM_CHAT_FORMAT_RESPONSE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
@@ -2044,6 +2045,115 @@ class TestProxyBaseLLMRequestProcessing:
         assert arrival_time + metadata["queue_time_seconds"] == pytest.approx(
             logging_obj.start_time.timestamp(), abs=1e-6
         )
+
+
+class TestResponseCostFromChatFormatResponse:
+    """
+    x-litellm-response-cost recomputation must price on per-token usage detail.
+
+    Issue #44743: a non-streamed /v1/messages response with image output tokens
+    raced the success handler — recomputing from the Anthropic-format response,
+    whose usage dropped completion_tokens_details.image_tokens, priced every
+    output token at the text rate. The bridge now stashes the original
+    chat-format response and the recompute prefers it.
+    """
+
+    FAKE_MODEL: Final = "test-bridge-image-model"
+    INPUT_RATE_PER_TOKEN: Final = 0.000_003  # $3/1M
+    TEXT_OUTPUT_RATE_PER_TOKEN: Final = 0.000_015  # $15/1M
+    IMAGE_OUTPUT_RATE_PER_TOKEN: Final = 0.000_120  # $120/1M
+
+    @pytest.fixture(autouse=True)
+    def _fake_model_cost(self):
+        original = litellm.model_cost
+        litellm.model_cost = {
+            **original,
+            self.FAKE_MODEL: {
+                "max_tokens": 8192,
+                "input_cost_per_token": self.INPUT_RATE_PER_TOKEN,
+                "output_cost_per_token": self.TEXT_OUTPUT_RATE_PER_TOKEN,
+                "output_cost_per_image_token": self.IMAGE_OUTPUT_RATE_PER_TOKEN,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+        }
+        litellm.get_model_info.cache_clear()
+        try:
+            yield
+        finally:
+            litellm.model_cost = original
+            litellm.get_model_info.cache_clear()
+
+    def _real_logging_obj(self, **extra_details: object):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model=self.FAKE_MODEL,
+            messages=[{"role": "user", "content": "draw a red square"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        )
+        logging_obj.model_call_details.update({"custom_llm_provider": "openai", **extra_details})
+        logging_obj.optional_params = {}  # normally set by the function wrapper before the call
+        return logging_obj
+
+    def _image_model_response(self):
+        from litellm.types.utils import Choices, CompletionTokensDetailsWrapper, Message, ModelResponse, Usage
+
+        return ModelResponse(
+            id="chatcmpl-test",
+            model=self.FAKE_MODEL,
+            usage=Usage(
+                prompt_tokens=7,
+                completion_tokens=1120,
+                completion_tokens_details=CompletionTokensDetailsWrapper(image_tokens=1120),
+            ),
+            choices=[Choices(index=0, message=Message(content="a red square"), finish_reason="stop")],
+        )
+
+    def _anthropic_format_response(self) -> dict:
+        # what the /v1/messages bridge hands back: same totals, no per-token breakdown
+        return {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": self.FAKE_MODEL,
+            "content": [{"type": "text", "text": "a red square"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 7, "output_tokens": 1120},
+        }
+
+    def test_recompute_prefers_stashed_chat_format_response(self):
+        logging_obj = self._real_logging_obj(**{LITELLM_CHAT_FORMAT_RESPONSE_KEY: self._image_model_response()})
+        cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=self._anthropic_format_response(),
+            logging_obj=logging_obj,
+        )
+        expected = 7 * self.INPUT_RATE_PER_TOKEN + 1120 * self.IMAGE_OUTPUT_RATE_PER_TOKEN
+        assert cost == pytest.approx(expected)
+
+    def test_recompute_without_stash_prices_text_rate(self):
+        # documents the pre-fix behavior the race exposed: without the stash the
+        # recomputed header prices every output token at the text rate
+        logging_obj = self._real_logging_obj()
+        cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=self._anthropic_format_response(),
+            logging_obj=logging_obj,
+        )
+        expected = 7 * self.INPUT_RATE_PER_TOKEN + 1120 * self.TEXT_OUTPUT_RATE_PER_TOKEN
+        assert cost == pytest.approx(expected)
+
+    def test_stored_response_cost_wins_over_recompute(self):
+        stored = 7 * self.INPUT_RATE_PER_TOKEN + 1120 * self.IMAGE_OUTPUT_RATE_PER_TOKEN
+        logging_obj = self._real_logging_obj(response_cost=stored)
+        cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=self._anthropic_format_response(),
+            logging_obj=logging_obj,
+        )
+        assert cost == pytest.approx(stored)
 
 
 @pytest.mark.asyncio
