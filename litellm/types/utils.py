@@ -125,8 +125,11 @@ else:
     VectorStoreSearchResponse = Any
 
 
-def _generate_id():  # private helper function
+def generate_id() -> str:
     return "chatcmpl-" + str(uuid.uuid4())
+
+
+_generate_id = generate_id
 
 
 class SafeAttributeModel:
@@ -2130,7 +2133,7 @@ class ModelResponseStream(ModelResponseBase):
             kwargs["choices"] = [StreamingChoices()]
 
         if id is None:
-            id = _generate_id()
+            id = generate_id()
         else:
             id = id
         if created is None:
@@ -2218,7 +2221,7 @@ class ModelResponse(ModelResponseBase):
         else:
             choices = [Choices()]
         if id is None:
-            id = _generate_id()
+            id = generate_id()
         else:
             id = id
         if created is None:
@@ -2483,7 +2486,7 @@ class TextCompletionResponse(OpenAIObject):
         if object is not None:
             object = object
         if id is None:
-            id = _generate_id()
+            id = generate_id()
         else:
             id = id
         if created is None:
@@ -3061,6 +3064,14 @@ RoutingDecisionCause = Literal[
     "keyword",
     "quality_tier",
     "bandit",
+    "semantic_match",
+    "semantic_no_match",
+    "semantic_error",
+]
+
+
+ClassifierFailureReason = Literal[
+    "timeout", "circuit_open", "not_configured", "unsupported_input", "invalid_response", "declined", "classifier_error"
 ]
 
 
@@ -3093,7 +3104,10 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
     router_model_name: str
-    router_type: Literal["complexity", "adaptive", "quality"]
+    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic"]]
+    router_config_id: ReadOnly[str]
+    router_config_updated_at: ReadOnly[str]
+    router_config_fingerprint: ReadOnly[str]
     routed_model: str
     cause: RoutingDecisionCause
     tier: str
@@ -3105,6 +3119,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_failure_reason: ReadOnly[ClassifierFailureReason]
+    classifier_error_type: ReadOnly[str]
     classifier_probabilities: ReadOnly[Mapping[str, float]]
     classifier_confidence: ReadOnly[float]
     heuristic_v2_forecast: ReadOnly[StandardLoggingHeuristicV2Forecast]
@@ -3143,6 +3159,9 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "router_model_name",
         "router_type",
+        "router_config_id",
+        "router_config_updated_at",
+        "router_config_fingerprint",
         "routed_model",
         "cause",
         "tier",
@@ -3151,6 +3170,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_failure_reason",
+        "classifier_error_type",
         "classifier_probabilities",
         "classifier_confidence",
         "heuristic_v2_forecast",

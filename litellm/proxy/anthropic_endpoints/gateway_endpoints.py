@@ -2,8 +2,9 @@
 Claude Code gateway protocol.
 
 Implements the wire contract the Claude Code CLI uses to talk to a gateway:
-OAuth 2.0 device-authorization sign-in (RFC 8414 / RFC 8628), inference via the
-Anthropic Messages API, managed settings, and OTLP telemetry ingestion. See
+OAuth 2.0 device-authorization sign-in (RFC 8414 / RFC 8628) with a rotating
+refresh token (RFC 6749 section 6) and RFC 7009 revocation for sign-out, inference
+via the Anthropic Messages API, managed settings, and OTLP telemetry ingestion. See
 https://code.claude.com/docs/en/claude-apps-gateway.
 
 Everything lives under the ``/claude_code_gateway`` base so operators point
@@ -11,7 +12,9 @@ Claude Code at ``https://<proxy-host>/claude_code_gateway`` via ``/login``. The
 device flow reuses the proxy's existing SSO login machinery: the browser leg is
 served by ``/sso/key/generate`` and the shared ``cli_sso_session_cache`` flow,
 so the bearer token minted here is the same session JWT the LiteLLM CLI uses and
-is accepted by every bearer-authenticated proxy route.
+is accepted by every bearer-authenticated proxy route. The refresh token is the
+MCP gateway's sealed session refresh token bound to a fixed client id, so a renewal
+re-mints that JWT from the live user row and shares the DCR flow's single-use record.
 """
 
 import hashlib
@@ -20,9 +23,9 @@ import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Annotated, Final
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import Field, TypeAdapter, ValidationError
 
@@ -34,6 +37,18 @@ from litellm.constants import (
     CLI_SSO_SESSION_TTL_SECONDS,
     LITELLM_CLI_SOURCE_IDENTIFIER,
 )
+from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    PROXY_API_AUDIENCE,
+    MintedProxyCredential,
+    MintProxyCredential,
+    SessionSigning,
+    proxy_credential_response,
+    refresh_proxy_credential,
+    resolve_session_signing,
+    revoke_session_refresh_token,
+)
+from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
+from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import SessionPrincipal
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -43,6 +58,7 @@ from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
 from litellm.types.llms.base import LiteLLMBaseModel
 
 GATEWAY_PREFIX: Final = "/claude_code_gateway"
+CLAUDE_CODE_CLIENT_ID: Final = "claude_code"
 _DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
 _REFRESH_TOKEN_GRANT: Final = "refresh_token"
 _DEVICE_CODE_SEPARATOR: Final = "."
@@ -77,6 +93,7 @@ class _AuthorizationServerMetadata(LiteLLMBaseModel):
     issuer: str
     device_authorization_endpoint: str
     token_endpoint: str
+    revocation_endpoint: str
     grant_types_supported: tuple[str, ...]
 
 
@@ -87,12 +104,6 @@ class _DeviceAuthorizationBody(LiteLLMBaseModel):
     verification_uri_complete: str | None = None
     expires_in: int
     interval: int
-
-
-class _AccessTokenBody(LiteLLMBaseModel):
-    access_token: str
-    expires_in: int
-    token_type: str = "Bearer"
 
 
 class _ManagedSettingsBody(LiteLLMBaseModel):
@@ -174,6 +185,7 @@ async def oauth_authorization_server(request: Request) -> JSONResponse:
             request_base_url=request_base_url, route="claude_code_gateway/oauth/device_authorization"
         ),
         token_endpoint=get_custom_url(request_base_url=request_base_url, route="claude_code_gateway/oauth/token"),
+        revocation_endpoint=get_custom_url(request_base_url=request_base_url, route="claude_code_gateway/oauth/revoke"),
         grant_types_supported=(_DEVICE_CODE_GRANT, _REFRESH_TOKEN_GRANT),
     )
     return JSONResponse(content=metadata.model_dump())
@@ -274,6 +286,34 @@ def _mint_access_token(login: _GatewayLogin) -> str:
     )
 
 
+def _session_only_credential(login: _GatewayLogin) -> Response:
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "access_token": _mint_access_token(login),
+            "token_type": "Bearer",
+            "expires_in": CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR,
+        },
+        headers=TOKEN_NO_CACHE_HEADERS,
+    )
+
+
+def _renewable_credential(login: _GatewayLogin, signing: SessionSigning) -> Response:
+    user_id: Final = login.user_info.user_id
+    return proxy_credential_response(
+        MintedProxyCredential(
+            key=_mint_access_token(login),
+            expires_in=CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR,
+            user_id=user_id,
+            team_id=login.team_id,
+        ),
+        SessionPrincipal(
+            user_id=user_id, client_id=CLAUDE_CODE_CLIENT_ID, audience=PROXY_API_AUDIENCE, team_id=login.team_id
+        ),
+        signing,
+    )
+
+
 @with_service_target(CLI_SSO_SESSIONS_TARGET)
 async def _claim_device_code(login_id: str, cache: DualCache) -> bool:
     from litellm.proxy.management_endpoints.ui_sso import (
@@ -288,8 +328,14 @@ async def _claim_device_code(login_id: str, cache: DualCache) -> bool:
     return claims == 1
 
 
+def _proxy_credential_minter() -> MintProxyCredential:
+    from litellm.proxy._experimental.mcp_server.proxy_api_credentials import mint_proxy_credential
+
+    return mint_proxy_credential
+
+
 @with_service_target(CLI_SSO_SESSIONS_TARGET)
-async def _handle_device_code_grant(device_code: str | None) -> JSONResponse:
+async def _handle_device_code_grant(device_code: str | None) -> Response:
     from fastapi import HTTPException
 
     from litellm.proxy.management_endpoints.ui_sso import (
@@ -297,7 +343,7 @@ async def _handle_device_code_grant(device_code: str | None) -> JSONResponse:
         _get_cli_sso_flow_or_raise,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
         _verify_cli_sso_poll_secret,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
     )
-    from litellm.proxy.proxy_server import cli_sso_session_cache
+    from litellm.proxy.proxy_server import cli_sso_session_cache, master_key
 
     if not device_code:
         return _oauth_error_response(
@@ -320,17 +366,23 @@ async def _handle_device_code_grant(device_code: str | None) -> JSONResponse:
     if isinstance(login, _OAuthError):
         return _oauth_error_response(login)
 
-    access_token: Final = _mint_access_token(login)
+    signing: Final = resolve_session_signing(master_key, f"{CLAUDE_CODE_CLIENT_ID} token grant")
+    credential: Final = (
+        _session_only_credential(login) if isinstance(signing, Response) else _renewable_credential(login, signing)
+    )
+    if credential.status_code != status.HTTP_200_OK:
+        return credential
     if not await _claim_device_code(login_id, cli_sso_session_cache):
         return _oauth_error_response(_OAuthError(status_code=400, error="expired_token"))
 
     await cli_sso_session_cache.async_delete_cache(key=_get_cli_sso_flow_cache_key(login_id))
-    body: Final = _AccessTokenBody(access_token=access_token, expires_in=CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR)
-    return JSONResponse(content=body.model_dump())
+    return credential
 
 
 @router.post("/oauth/token", include_in_schema=False)
-async def oauth_token(request: Request) -> JSONResponse:
+async def oauth_token(
+    request: Request, mint_proxy_credential: Annotated[MintProxyCredential, Depends(_proxy_credential_minter)]
+) -> Response:
     if not _is_gateway_enabled():
         return _oauth_error_response(_OAuthError(status_code=404, error="not_found"))
 
@@ -342,18 +394,39 @@ async def oauth_token(request: Request) -> JSONResponse:
         return await _handle_device_code_grant(device_code if isinstance(device_code, str) else None)
 
     if grant_type == _REFRESH_TOKEN_GRANT:
-        return _oauth_error_response(
-            _OAuthError(
-                status_code=401,
-                error="invalid_grant",
-                description="This gateway does not issue refresh tokens; sign in again",
-            )
+        from litellm.proxy.proxy_server import master_key, user_api_key_cache
+
+        refresh_token: Final = form.get("refresh_token")
+        return await refresh_proxy_credential(
+            refresh_token=refresh_token if isinstance(refresh_token, str) else None,
+            client_id=CLAUDE_CODE_CLIENT_ID,
+            master_key=master_key,
+            cache=user_api_key_cache,
+            mint_proxy_credential=mint_proxy_credential,
         )
 
     return _oauth_error_response(
         _OAuthError(
             status_code=400, error="unsupported_grant_type", description=f"Unsupported grant_type: {grant_type}"
         )
+    )
+
+
+@router.post("/oauth/revoke", include_in_schema=False)
+async def oauth_revoke(request: Request) -> Response:
+    if not _is_gateway_enabled():
+        return _oauth_error_response(_OAuthError(status_code=404, error="not_found"))
+
+    from litellm.proxy.proxy_server import master_key, user_api_key_cache
+
+    form: Final = await request.form()
+    token: Final = form.get("token")
+    if not isinstance(token, str) or not token:
+        return _oauth_error_response(
+            _OAuthError(status_code=400, error="invalid_request", description="token is required")
+        )
+    return await revoke_session_refresh_token(
+        token=token, client_id=CLAUDE_CODE_CLIENT_ID, master_key=master_key, cache=user_api_key_cache
     )
 
 
