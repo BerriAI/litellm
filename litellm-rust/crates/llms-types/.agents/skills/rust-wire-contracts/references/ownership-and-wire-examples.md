@@ -88,6 +88,8 @@ When promoting a field from `extra` to a typed member, deserialize and serialize
 
 Move canonical definitions and update imports together. A public or serializable execution type such as `MessagesTransformContext`, `MessagesCall` or `StreamShape` remains with its execution owner
 
+When extracting a foundation PR, compile its whole workspace independently. A crate-only check misses downstream constructors: for example, `gateway-inference` must build `ProviderSpecificHeader.extra_headers` as `BTreeMap<String, Recognized<String>>` after that shared header contract becomes typed. Include this mechanical migration in the foundation rather than relying on a later provider PR to restore compilation
+
 # validation
 
 Use named cases to verify missing/null distinctions, unknown fields and discriminators, accepted malformed passthrough where intentional, and strict rejection elsewhere. Compare round-trip values and exact omission rather than only successful deserialization
