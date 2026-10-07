@@ -15,6 +15,8 @@ import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation 
 
 import { SpanIcon } from "../ui/SpanIcon";
 import type { TraceFindingState } from "./useTraceFindings";
+import { flaggedSignals, isFlagged, type TraceSignalState } from "./useTraceSignals";
+import { SignalPills } from "../ui/SignalPills";
 import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
 import type { TraceSummary } from "../types";
 import { traceRefOf } from "../routing";
@@ -24,6 +26,9 @@ interface AgentTracesTableProps {
   traces: TraceSummary[];
   findings: ReadonlyMap<string, TraceFindingState>;
   canViewFindings?: boolean;
+  signals?: ReadonlyMap<string, TraceSignalState>;
+  /** Signals are configured, so every run has a System 1 classification to show. */
+  showSignals?: boolean;
   isLoading: boolean;
   error: Error | null;
   hasMore: boolean;
@@ -79,6 +84,9 @@ const ROW_HEIGHT = 36;
 const MUTED_NUM = "font-mono text-muted-foreground";
 const NUM = "font-mono text-foreground";
 const FindingsContext = createContext<ReadonlyMap<string, TraceFindingState>>(new Map());
+const SignalsContext = createContext<ReadonlyMap<string, TraceSignalState>>(new Map());
+const NO_SIGNALS: ReadonlyMap<string, TraceSignalState> = new Map();
+const FLAGGED_ROW = "bg-destructive/[0.04] shadow-[inset_2px_0_0_var(--color-destructive)] hover:bg-destructive/[0.07]";
 
 function AgentCell({ run }: { run: TraceSummary }) {
   const framework = traceFramework(run);
@@ -118,6 +126,24 @@ function FindingCount({ run }: { run: TraceSummary }) {
   if (state.status === "error") return <span title="Could not load findings">Unavailable</span>;
   if (state.count === null) return <span title="No conclusive investigation for this trace">-</span>;
   return <span title={`${state.count} findings from completed investigations`}>{state.count.toLocaleString()}</span>;
+}
+
+function SignalsCell({ run }: { run: TraceSummary }) {
+  const state = useContext(SignalsContext).get(runKey(run));
+  const muted = (label: string, title: string) => (
+    <span className="text-muted-foreground" title={title}>
+      {label}
+    </span>
+  );
+  if (!state || state.status === "pending") return <Skeleton aria-label="Loading signals" className="h-3 w-16" />;
+  if (state.status === "error") return muted("Unavailable", "Could not load signals");
+  const { status } = state.signals;
+  if (status === "unclassified") return muted("Queued", "Waiting for the System 1 model to check this run");
+  if (status === "pending") return muted("Checking", "The System 1 model is checking this run");
+  if (status === "failed") return muted("Not checked", "The System 1 model could not check this run");
+  const flags = flaggedSignals(state.signals);
+  if (!flags.length) return muted("-", "No signals detected");
+  return <SignalPills flags={flags} max={1} />;
 }
 
 const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
@@ -160,6 +186,13 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     },
   },
   { id: "input", header: "Input", cell: ({ row }) => <InputCell run={row.original} /> },
+  {
+    id: "signals",
+    size: 168,
+    header: "Signals",
+    cell: ({ row }) => <SignalsCell run={row.original} />,
+    meta: { renderSkeleton: () => <Skeleton className="h-3 w-16" /> },
+  },
   {
     id: "agents",
     size: 72,
@@ -248,6 +281,8 @@ export function AgentTracesTable({
   traces,
   findings,
   canViewFindings = true,
+  signals = NO_SIGNALS,
+  showSignals = false,
   isLoading,
   error,
   hasMore,
@@ -265,7 +300,9 @@ export function AgentTracesTable({
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("lens-traces");
   const tableOptions: TableOptions<TraceSummary> = {
     data: traces,
-    columns: RUN_COLUMNS.filter((column) => canViewFindings || column.id !== "findings"),
+    columns: RUN_COLUMNS.filter(
+      (column) => (canViewFindings || column.id !== "findings") && (showSignals || column.id !== "signals"),
+    ),
     defaultColumn: { size: undefined },
     getRowId: runKey,
     autoResetAll: false,
@@ -276,56 +313,62 @@ export function AgentTracesTable({
   const table = useReactTable(tableOptions);
   return (
     <FindingsContext.Provider value={findings}>
-      <InspectorTable.Root table={table} data-testid="runs-table">
-        <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
-          <InspectorTable.Header />
-          <InspectorTable.Body<TraceSummary>
-            className={bodyClassName(isPlaceholder)}
-            rowHeight={() => ROW_HEIGHT}
-            after={
-              <>
-                {isLoading && SKELETON_ROWS.map((row) => <PlaceholderRow key={row} index={row} />)}
-                {autoContinue && <LoadMoreRows isFetching={isFetching} onLoadMore={onLoadMore} />}
-              </>
-            }
-          >
-            {(row) => (
-              <InspectorTable.Row
-                row={row}
-                item={traceRefOf(row.original)}
-                data-testid="agent-trace-row"
-                className="h-9"
-              />
-            )}
-          </InspectorTable.Body>
-        </InspectorTable.Grid>
-        {isLoading && (
-          <p role="status" className="sr-only">
-            Loading runs…
-          </p>
-        )}
-        {error && (
-          <div role="alert" className="flex items-center justify-center gap-3 py-6 text-xs text-muted-foreground">
-            <span>
-              {traces.length ? "Could not load more runs" : "Could not load runs"}: {error.message}
-            </span>
-            {onRetry && (
-              <Button size="xs" variant="outline" disabled={isFetching} onClick={onRetry}>
-                Retry
+      <SignalsContext.Provider value={signals}>
+        <InspectorTable.Root table={table} data-testid="runs-table">
+          <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
+            <InspectorTable.Header />
+            <InspectorTable.Body<TraceSummary>
+              className={bodyClassName(isPlaceholder)}
+              rowHeight={() => ROW_HEIGHT}
+              after={
+                <>
+                  {isLoading && SKELETON_ROWS.map((row) => <PlaceholderRow key={row} index={row} />)}
+                  {autoContinue && <LoadMoreRows isFetching={isFetching} onLoadMore={onLoadMore} />}
+                </>
+              }
+            >
+              {(row) => {
+                const flagged = showSignals && isFlagged(signals.get(runKey(row.original)));
+                return (
+                  <InspectorTable.Row
+                    row={row}
+                    item={traceRefOf(row.original)}
+                    data-testid="agent-trace-row"
+                    data-flagged={flagged || undefined}
+                    className={cn("h-9", flagged && FLAGGED_ROW)}
+                  />
+                );
+              }}
+            </InspectorTable.Body>
+          </InspectorTable.Grid>
+          {isLoading && (
+            <p role="status" className="sr-only">
+              Loading runs…
+            </p>
+          )}
+          {error && (
+            <div role="alert" className="flex items-center justify-center gap-3 py-6 text-xs text-muted-foreground">
+              <span>
+                {traces.length ? "Could not load more runs" : "Could not load runs"}: {error.message}
+              </span>
+              {onRetry && (
+                <Button size="xs" variant="outline" disabled={isFetching} onClick={onRetry}>
+                  Retry
+                </Button>
+              )}
+            </div>
+          )}
+          {canContinue && traces.length === 0 && (
+            <div className="flex items-center justify-center gap-3 py-16 text-xs text-muted-foreground">
+              <span>No loaded runs match these filters.</span>
+              <Button size="xs" variant="outline" disabled={isFetching} onClick={onLoadMore}>
+                Load older runs
               </Button>
-            )}
-          </div>
-        )}
-        {canContinue && traces.length === 0 && (
-          <div className="flex items-center justify-center gap-3 py-16 text-xs text-muted-foreground">
-            <span>No loaded runs match these filters.</span>
-            <Button size="xs" variant="outline" disabled={isFetching} onClick={onLoadMore}>
-              Load older runs
-            </Button>
-          </div>
-        )}
-        {isEmpty && <EmptyRuns rangeEmpty={rangeEmpty} onSetUpTracing={onSetUpTracing} />}
-      </InspectorTable.Root>
+            </div>
+          )}
+          {isEmpty && <EmptyRuns rangeEmpty={rangeEmpty} onSetUpTracing={onSetUpTracing} />}
+        </InspectorTable.Root>
+      </SignalsContext.Provider>
     </FindingsContext.Provider>
   );
 }

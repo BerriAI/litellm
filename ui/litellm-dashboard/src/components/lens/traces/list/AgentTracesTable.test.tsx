@@ -254,3 +254,70 @@ describe("AgentTracesTable column picker", () => {
     expect(within(placeholder).getAllByRole("cell", { hidden: true })).toHaveLength(columnCount);
   });
 });
+
+describe("AgentTracesTable signals", () => {
+  const [flaggedRun, cleanRun, queuedRun] = ((traceList as TracePage).data as TraceSummary[]).slice(0, 3);
+  const key = (run: TraceSummary) => run.trace_ref || run.trace_id;
+  const result = (
+    run: TraceSummary,
+    status: "classified" | "unclassified",
+    flags: { signal_id: string; name: string; score: number }[] = [],
+  ) => ({
+    status: "ready" as const,
+    signals: {
+      trace_id: run.trace_id,
+      trace_ref: run.trace_ref ?? "",
+      status,
+      flags,
+      model: "jev",
+      classified_at: null,
+    },
+  });
+  const renderTable = (showSignals: boolean) =>
+    renderWithProviders(
+      inList(
+        <AgentTracesTable
+          traces={[flaggedRun, cleanRun, queuedRun]}
+          findings={new Map()}
+          signals={
+            new Map([
+              [
+                key(flaggedRun),
+                result(flaggedRun, "classified", [
+                  { signal_id: "user_frustration", name: "User frustration", score: 0.92 },
+                  { signal_id: "repeated_request", name: "Repeated request", score: 0.71 },
+                ]),
+              ],
+              [key(cleanRun), result(cleanRun, "classified")],
+              [key(queuedRun), result(queuedRun, "unclassified")],
+            ])
+          }
+          showSignals={showSignals}
+          isLoading={false}
+          error={null}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+          rangeEmpty={false}
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
+    );
+
+  it("flags matching runs in red and names every detected signal", () => {
+    renderTable(true);
+    const rows = screen.getAllByTestId("agent-trace-row");
+    expect(rows.map((row) => row.hasAttribute("data-flagged"))).toEqual([true, false, false]);
+    const flagged = within(rows[0]).getByRole("list", { name: "Signals" });
+    expect(within(flagged).getByRole("listitem")).toHaveTextContent("User frustration");
+    expect(flagged).toHaveTextContent("+1");
+    expect(flagged).toHaveAttribute("title", "Signals: User frustration (92%), Repeated request (71%)");
+    expect(within(rows[1]).getByTitle("No signals detected")).toBeInTheDocument();
+    expect(within(rows[2]).getByText("Queued")).toBeInTheDocument();
+  });
+
+  it("hides the signals column until signals are configured", () => {
+    renderTable(false);
+    expect(screen.queryByRole("columnheader", { name: "Signals" })).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("agent-trace-row").some((row) => row.hasAttribute("data-flagged"))).toBe(false);
+  });
+});
