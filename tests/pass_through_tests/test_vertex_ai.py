@@ -72,7 +72,7 @@ def get_tracked_spend() -> float:
     treats an unreachable endpoint as "nothing recorded yet" (0.0).
     """
     url = f"{LITE_LLM_ENDPOINT}/global/spend/logs?api_key={SPEND_LOG_API_KEY}"
-    response = requests.get(url, headers={"Authorization": "Bearer sk-1234"})
+    response = requests.get(url, headers={"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"})
     if response.status_code != 200:
         print(f"global spend logs endpoint returned {response.status_code}: {response.text}")
         return 0.0
@@ -104,7 +104,7 @@ def _vertex_access_token() -> str:
 def _spend_log_for_request(call_id: str) -> dict | None:
     response = requests.get(
         f"{LITE_LLM_ENDPOINT}/spend/logs?request_id={call_id}",
-        headers={"Authorization": "Bearer sk-1234"},
+        headers={"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"},
         timeout=30,
     )
     if response.status_code != 200:

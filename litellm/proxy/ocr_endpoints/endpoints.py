@@ -272,7 +272,7 @@ async def ocr(
     **1. JSON body** (Mistral OCR API compatible):
     ```bash
     curl -X POST "http://localhost:4000/v1/ocr" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "model": "mistral-ocr",
@@ -286,7 +286,7 @@ async def ocr(
     **2. Multipart form file upload**:
     ```bash
     curl -X POST "http://localhost:4000/v1/ocr" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F "model=mistral-ocr" \
         -F "file=@document.pdf"
     ```

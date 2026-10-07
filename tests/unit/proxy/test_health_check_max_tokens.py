@@ -11,7 +11,7 @@ from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
     _is_strategy_router_deployment,
     _resolve_health_check_max_tokens,
-    _resolve_health_check_mode,
+    resolve_health_check_mode,
     _update_litellm_params_for_health_check,
 )
 
@@ -406,7 +406,7 @@ def test_update_litellm_params_health_check_reasoning_effort():
 )
 def test_bedrock_embedding_without_explicit_mode_skips_max_tokens(deployment_model, expected_request_model):
     """Embedding mode auto-detected from model cost map -> no max_tokens, provider pinned."""
-    assert _resolve_health_check_mode({}, {"model": deployment_model}) == "embedding"
+    assert resolve_health_check_mode({}, {"model": deployment_model}) == "embedding"
 
     updated = _update_litellm_params_for_health_check({}, {"model": deployment_model})
 
@@ -417,12 +417,12 @@ def test_bedrock_embedding_without_explicit_mode_skips_max_tokens(deployment_mod
 
 def test_resolve_health_check_mode_prefers_explicit_model_info_mode():
     """An operator-set mode wins over model-cost lookup."""
-    assert _resolve_health_check_mode({"mode": "chat"}, {"model": "bedrock/amazon.titan-embed-text-v2:0"}) == "chat"
+    assert resolve_health_check_mode({"mode": "chat"}, {"model": "bedrock/amazon.titan-embed-text-v2:0"}) == "chat"
 
 
 def test_resolve_health_check_mode_unknown_model_returns_none():
-    assert _resolve_health_check_mode({}, {"model": "bedrock/not-a-real-model-xyz"}) is None
-    assert _resolve_health_check_mode({}, {}) is None
+    assert resolve_health_check_mode({}, {"model": "bedrock/not-a-real-model-xyz"}) is None
+    assert resolve_health_check_mode({}, {}) is None
 
 
 def test_bedrock_chat_without_mode_still_injects_max_tokens_and_pins_provider():
@@ -479,6 +479,113 @@ async def test_run_model_health_check_threads_resolved_mode_to_ahealth_check():
     assert "max_tokens" not in probed_params
     assert probed_params["custom_llm_provider"] == "bedrock"
     assert probed_params["model"] == "amazon.titan-embed-text-v2:0"
+
+
+_MANTLE_CLAUDE_DEPLOYMENT_PARAMS = {
+    "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
+    "api_key": "test-bearer",
+    "aws_region_name": "us-east-2",
+}
+
+
+def _mantle_anthropic_response() -> dict[str, object]:
+    return {
+        "id": "msg_health",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic.claude-haiku-4-5",
+        "content": [{"type": "text", "text": "pong"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+
+
+@pytest.mark.parametrize(
+    "deployment_model",
+    ["bedrock_mantle/anthropic.claude-haiku-4-5", "bedrock_mantle/anthropic.claude-opus-5-5"],
+)
+def test_mantle_claude_without_mode_resolves_to_anthropic_messages(deployment_model):
+    """Mantle only serves Claude over /anthropic/v1/messages, so that is the probe surface by default."""
+    assert resolve_health_check_mode({}, {"model": deployment_model}) == "anthropic_messages"
+
+    updated = _update_litellm_params_for_health_check({}, {"model": deployment_model})
+
+    assert updated["max_tokens"] == 16
+    assert [message["role"] for message in updated["messages"]] == ["user"]
+
+
+def test_mantle_claude_with_explicit_provider_param_resolves_to_anthropic_messages():
+    assert (
+        resolve_health_check_mode({}, {"model": "anthropic.claude-haiku-4-5", "custom_llm_provider": "bedrock_mantle"})
+        == "anthropic_messages"
+    )
+
+
+def test_mantle_claude_explicit_chat_mode_wins_over_the_native_default():
+    assert resolve_health_check_mode({"mode": "chat"}, {"model": "bedrock_mantle/anthropic.claude-haiku-4-5"}) == "chat"
+
+
+@pytest.mark.parametrize(
+    "deployment_model",
+    [
+        "bedrock_mantle/openai.gpt-oss-120b",
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic/claude-haiku-4-5",
+    ],
+)
+def test_native_messages_default_is_scoped_to_mantle_claude(deployment_model):
+    """Non-Claude Mantle ids and Claude on other providers keep their chat-completions probe."""
+    assert resolve_health_check_mode({}, {"model": deployment_model}) == "chat"
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_probes_mantle_claude_over_messages(monkeypatch):
+    """The deployment the ticket describes, probed end to end through the proxy's health runner.
+
+    Before the fix the probe went to /v1/chat/completions, which Mantle answers with a
+    validation_error for Claude ids, so every such deployment showed unhealthy.
+    """
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        messages_route = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages").respond(
+            json=_mantle_anthropic_response()
+        )
+        chat_route = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/v1/chat/completions").respond(
+            status_code=400, json={"type": "error", "error": {"type": "validation_error"}}
+        )
+        result = await hc_module._run_model_health_check(
+            {"litellm_params": dict(_MANTLE_CLAUDE_DEPLOYMENT_PARAMS), "model_info": {}}
+        )
+
+    assert "error" not in result, result
+    assert chat_route.call_count == 0
+    assert messages_route.call_count == 1
+    sent = messages_route.calls.last.request
+    assert sent.headers["authorization"] == "Bearer test-bearer"
+    body = json.loads(sent.content)
+    assert body["model"] == "anthropic.claude-haiku-4-5"
+    assert body["max_tokens"] == 16
+    assert [message["role"] for message in body["messages"]] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_honors_an_explicit_chat_mode_on_mantle_claude(monkeypatch):
+    """Negative control: an operator who pins mode=chat still gets the chat completions probe.
+
+    Since #43646 Mantle serves Claude chat completions over its Messages endpoint as well, so
+    the wire no longer tells the two probes apart and the probe mode is read off the health call.
+    """
+    fake_ahealth_check = AsyncMock(return_value={})
+    monkeypatch.setattr(litellm, "ahealth_check", fake_ahealth_check)
+
+    await hc_module._run_model_health_check(
+        {"litellm_params": dict(_MANTLE_CLAUDE_DEPLOYMENT_PARAMS), "model_info": {"mode": "chat"}}
+    )
+
+    assert fake_ahealth_check.call_args.kwargs["mode"] == "chat"
 
 
 def test_autodetected_embedding_skips_reasoning_effort():

@@ -41,9 +41,10 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
@@ -99,6 +100,7 @@ from litellm.proxy.auth.team_grants import TeamModelAliasTable
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
+    is_admin_ui_disabled,
     show_missing_vars_in_env,
 )
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
@@ -106,7 +108,7 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
@@ -114,6 +116,8 @@ from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
 )
 from litellm.proxy.management_endpoints.sso.saml_sso import SAMLAuthHandler
 from litellm.proxy.management_endpoints.sso_helper_utils import (
+    CLI_SSO_SESSIONS_TARGET,
+    SSO_SESSIONS_TARGET,
     check_is_admin_only_access,
     has_admin_ui_access,
 )
@@ -134,7 +138,8 @@ from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.secret_managers.main import get_secret_bool, get_secret_str, str_to_bool
+from litellm.secret_managers.main import get_secret_bool, get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -214,14 +219,14 @@ def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
 _SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-class _TeamRowGrants(BaseModel):
+class _TeamRowGrants(LiteLLMBaseModel):
     team_id: str
     team_alias: str | None = None
     models: tuple[str, ...] = ()
     litellm_model_table: TeamModelAliasTable | None = None
 
 
-class CliSsoTeamDetail(BaseModel):
+class CliSsoTeamDetail(LiteLLMBaseModel):
     """The per-team snapshot cached in the CLI SSO flow and echoed to the CLI on poll."""
 
     team_id: str | None = None
@@ -318,6 +323,7 @@ def _get_cli_sso_start_rate_limit_cache_key(request: Request, use_x_forwarded_fo
     return f"{_CLI_SSO_START_RATE_LIMIT_CACHE_KEY_PREFIX}:{client_ip_hash}"
 
 
+@with_service_target(CLI_SSO_SESSIONS_TARGET)
 def _check_cli_sso_start_rate_limit(
     request: Request,
     cache: DualCache,
@@ -338,6 +344,7 @@ def _check_cli_sso_start_rate_limit(
         )
 
 
+@with_service_target(CLI_SSO_SESSIONS_TARGET)
 def _read_cli_sso_flow(cache: DualCache, cache_key: str) -> object:
     redis_cache: Final = cache.redis_cache
     if redis_cache is None:
@@ -384,6 +391,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
     return flow
 
 
+@with_service_target(CLI_SSO_SESSIONS_TARGET)
 def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
     cache_key: Final = _get_cli_sso_flow_cache_key(login_id)
     redis_cache: Final = cache.redis_cache
@@ -1023,11 +1031,10 @@ async def google_login(
     generic_client_id: Final = os.getenv("GENERIC_CLIENT_ID", None)
 
     ####### Check if UI is disabled #######
-    _disable_ui_flag: Final = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None:
-        is_disabled: Final = str_to_bool(value=_disable_ui_flag)
-        if is_disabled:
-            return admin_ui_disabled()
+    admin_ui_is_disabled: Final = is_admin_ui_disabled()
+    is_cli_sso_login: Final = source == LITELLM_CLI_SOURCE_IDENTIFIER
+    if admin_ui_is_disabled and not is_cli_sso_login:
+        return admin_ui_disabled()
 
     ####### Check if user is a Enterprise / Premium User #######
     if (
@@ -1049,7 +1056,7 @@ async def google_login(
         sso_callback_route="sso/callback",
     )
 
-    if source == LITELLM_CLI_SOURCE_IDENTIFIER:
+    if is_cli_sso_login:
         _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
 
     # Store CLI login handle in state for OAuth flow
@@ -1108,6 +1115,9 @@ async def google_login(
         if sso_redirect is not None:
             _persist_return_to_cookie(sso_redirect, return_to, request)
         return sso_redirect
+
+    if admin_ui_is_disabled:
+        return admin_ui_disabled()
 
     from fastapi.responses import HTMLResponse
 
@@ -1916,6 +1926,7 @@ def _build_sso_user_update_data(
     return update_data
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _sync_user_role_from_jwt_role_map(
     jwt_handler: JWTHandler | None,
     received_response: dict | None,
@@ -2151,8 +2162,7 @@ async def saml_login(request: Request, return_to: str | None = None):
     """SP-initiated SAML login. Redirects the user to the configured IdP."""
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    _disable_ui_flag: Final = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None and str_to_bool(value=_disable_ui_flag):
+    if is_admin_ui_disabled():
         return admin_ui_disabled()
 
     return await SAMLAuthHandler.build_login_redirect(request=request, cache=user_api_key_cache, relay_state=return_to)
@@ -2179,8 +2189,7 @@ async def saml_callback(request: Request):
         user_api_key_cache,
     )
 
-    _disable_ui_flag: Final = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None and str_to_bool(value=_disable_ui_flag):
+    if is_admin_ui_disabled():
         return admin_ui_disabled()
 
     if prisma_client is None:
@@ -2464,6 +2473,7 @@ async def cli_sso_callback(
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
+@with_service_target(CLI_SSO_SESSIONS_TARGET)
 async def cli_poll_key(
     key_id: str,
     team_id: str | None = None,
@@ -2797,6 +2807,7 @@ def _is_same_origin_return_path(return_to: str) -> bool:
     return not any(ord(ch) < 0x20 or ch in (" ", "\x7f") for ch in return_to)
 
 
+@with_service_target(SSO_SESSIONS_TARGET)
 async def _sso_return_to_redirect(
     return_to: str | None,
     jwt_token: str,
@@ -3060,6 +3071,7 @@ class SSOAuthenticationHandler:
         )
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def get_generic_sso_redirect_response(
         generic_sso: Any,
         state: str | None = None,
@@ -3735,6 +3747,7 @@ class SSOAuthenticationHandler:
         return redirect_response
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def prepare_token_exchange_parameters(
         request: Request,
         generic_include_client_id: bool,
@@ -3914,6 +3927,7 @@ class SSOAuthenticationHandler:
             )
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def _delete_pkce_verifier(cache_key: str) -> None:
         """Delete a single-use PKCE verifier from cache after a successful exchange.
 

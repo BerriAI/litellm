@@ -1,7 +1,9 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import ReadOnly, Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class GeminiTranscriptionAudioInput(TypedDict):
@@ -31,7 +33,7 @@ class GeminiTranscriptionInteractionRequest(TypedDict, total=False):
     generation_config: ReadOnly[GeminiTranscriptionGenerationConfig]
 
 
-class GeminiTranscriptionWordAnnotation(BaseModel):
+class GeminiTranscriptionWordAnnotation(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     type: str | None = None
@@ -41,7 +43,7 @@ class GeminiTranscriptionWordAnnotation(BaseModel):
     end_offset: str | None = None
 
 
-class GeminiTranscriptionContent(BaseModel):
+class GeminiTranscriptionContent(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     type: str | None = None
@@ -49,21 +51,21 @@ class GeminiTranscriptionContent(BaseModel):
     annotations: tuple[GeminiTranscriptionWordAnnotation, ...] = ()
 
 
-class GeminiTranscriptionStep(BaseModel):
+class GeminiTranscriptionStep(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     type: str | None = None
     content: tuple[GeminiTranscriptionContent, ...] = ()
 
 
-class GeminiTranscriptionModalityTokens(BaseModel):
+class GeminiTranscriptionModalityTokens(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     modality: str | None = None
     tokens: int = 0
 
 
-class GeminiTranscriptionUsage(BaseModel):
+class GeminiTranscriptionUsage(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     total_tokens: int = 0
@@ -72,7 +74,7 @@ class GeminiTranscriptionUsage(BaseModel):
     input_tokens_by_modality: tuple[GeminiTranscriptionModalityTokens, ...] = ()
 
 
-class GeminiTranscriptionInteractionResponse(BaseModel):
+class GeminiTranscriptionInteractionResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str | None = None

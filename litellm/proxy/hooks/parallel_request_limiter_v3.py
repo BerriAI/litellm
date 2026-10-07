@@ -32,6 +32,7 @@ from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import (
     BatchResult,
@@ -158,6 +159,12 @@ def _fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
     return fail_closed_rate_limit_enforcement_enabled(general_settings)
+
+
+def _force_redis_hash_tag_grouping_from_litellm_settings() -> bool:
+    from litellm import force_redis_hash_tag_grouping
+
+    return force_redis_hash_tag_grouping is True
 
 
 def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
@@ -482,6 +489,22 @@ CacheCounterValue: TypeAlias = int | float | str | bytes
 CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
 
 
+def _values_in_caller_order(
+    keys: Sequence[str],
+    key_groups: Sequence[tuple[str, list[str]]],
+    grouped_values: CacheCounterValues,
+) -> list[CacheCounterValue | None]:
+    tag_by_key: Final = dict(
+        itertools.chain.from_iterable(((key, tag) for key in group_keys) for tag, group_keys in key_groups)
+    )
+    caller_positions: Final = itertools.chain.from_iterable(
+        tuple(position for position, key in enumerate(keys) if tag_by_key[key] == tag)
+        for tag, _group_keys in key_groups
+    )
+    value_by_position: Final = dict(zip(caller_positions, grouped_values))
+    return [value_by_position.get(position) for position in range(len(keys))]
+
+
 def _as_counter_values(reply: object) -> list[CacheCounterValue]:
     """A Lua reply read back off the pipeline is the same array the script returns when called directly."""
     if not isinstance(reply, (list, tuple)):
@@ -765,12 +788,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
         fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
+        force_hash_tag_grouping_resolver: Callable[[], bool] = _force_redis_hash_tag_grouping_from_litellm_settings,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
         self._tag_rate_limit_resolver = tag_rate_limit_resolver
         self._model_group_resolver = model_group_resolver
         self._fail_closed_resolver = fail_closed_resolver
+        self._force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
@@ -1169,6 +1194,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.internal_usage_cache.dual_cache.redis_cache, RedisClusterCache
         )
 
+    @with_service_target("rate_limits")
     async def in_memory_cache_sliding_window(
         self,
         keys: list[str],
@@ -1365,12 +1391,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Group keys by their Redis hash tag to ensure cluster compatibility.
 
         For Redis clusters, uses slot calculation to group keys that belong to the same slot.
-        For regular Redis, no grouping is needed - all keys can be processed together.
+        For regular Redis, grouping is skipped unless forced by configuration.
         """
         groups: Final[dict[str, list[str]]] = {}
 
-        # Use slot calculation for Redis clusters only
-        if self._is_redis_cluster():
+        if self._is_redis_cluster() or self._force_hash_tag_grouping_resolver():
             for key in keys:
                 slot = self.keyslot_for_redis_cluster(key)
                 slot_key = f"slot_{slot}"
@@ -1507,7 +1532,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 all_cache_values.extend(group_cache_values)
 
-        return all_cache_values
+        return _values_in_caller_order(keys_to_fetch, key_groups, all_cache_values)
 
     async def _refund_later_pipelined_groups(
         self,
@@ -1525,6 +1550,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 continue
             await self._refund_counter_increments(self._counter_refunds_from_batch_values(group_keys, group_values))
 
+    @with_service_target("rate_limits")
     async def should_rate_limit(
         self,
         descriptors: Sequence[RateLimitDescriptor],
@@ -2021,6 +2047,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     local_only=True,
                 )
 
+    @with_service_target("rate_limits")
     async def atomic_check_and_increment_by_n(
         self,
         descriptors: list[RateLimitDescriptor],
@@ -2533,6 +2560,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ),
         )
 
+    @with_service_target("rate_limits")
     async def reserve_tpm_tokens(
         self,
         descriptors: list[RateLimitDescriptor],
@@ -2616,6 +2644,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             parent_otel_span=parent_otel_span,
         )
 
+    @with_service_target("rate_limits")
     async def reserve_io_tokens(
         self,
         descriptors: Sequence[RateLimitDescriptor],
@@ -2701,6 +2730,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         assert itpm_response is not None
         return itpm_response, itpm_reserved, 0
 
+    @with_service_target("rate_limits")
     async def enforce_project_io_token_quota_for_frame(
         self,
         user_api_key_dict: UserAPIKeyAuth | None,
@@ -3031,7 +3061,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Resolve the agent_id from either the API key or request metadata.
         Key-level agent_id takes precedence over metadata/header-supplied agent_id.
         """
-        key_agent_id: Final = getattr(user_api_key_dict, "agent_id", None)
+        key_agent_id: Final[str | None] = getattr(user_api_key_dict, "agent_id", None)
         if key_agent_id:
             return key_agent_id
         metadata: Final = data.get("metadata") or {}
@@ -3965,6 +3995,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if cancellation is not None:
                 raise cancellation
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -4217,7 +4248,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return pipeline_operations
 
     def _get_total_tokens_from_usage(
-        self, usage: Any | None, rate_limit_type: Literal["output", "input", "total"]
+        self, usage: object | None, rate_limit_type: Literal["output", "input", "total"]
     ) -> int:
         """
         Get total tokens from response usage for rate limiting.
@@ -4383,6 +4414,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         batch.script(TOKEN_INCREMENT_SCRIPT, script, keys, args).on_settled(fall_back)
         return True
 
+    @with_service_target("rate_limits")
     async def async_increment_tokens_with_ttl_preservation(
         self,
         pipeline_operations: list["RedisPipelineIncrementOperation"],
@@ -4494,6 +4526,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ttl=operation["ttl"],
                 )
 
+    @with_service_target("rate_limits")
     async def async_increment_reservation_aware_tokens(
         self,
         pipeline_operations: Sequence[ReservationAwareIncrementOperation],
@@ -4986,17 +5019,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return pipeline_operations
 
+    @with_service_target("rate_limits")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
         """
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
         rate_limit_type: Final = self.get_rate_limit_type()
 
-        litellm_parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs)
+        litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs)
         try:
             verbose_proxy_logger.debug("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
@@ -5032,6 +5066,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
 
+    @with_service_target("rate_limits")
     async def async_logging_hook(
         self,
         kwargs: dict,
@@ -5102,6 +5137,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             completion_tokens,
         )
 
+    @with_service_target("rate_limits")
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         On failure: decrement max_parallel_requests and refund the upfront
@@ -5112,11 +5148,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         usage instead of refunding it.
         """
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
         try:
-            litellm_parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs)
+            litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs)
 
             pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
 
@@ -5209,6 +5245,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
 
+    @with_service_target("rate_limits")
     async def async_release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -5229,6 +5266,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         await self._release_stashed_parallel_slot(get_request_stash(), None)
 
+    @with_service_target("rate_limits")
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
         Release completed-request slots and update rate limit headers in the response.
@@ -5283,6 +5321,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if popped is not None:
                 await self.batch_enqueued_token_store.refund(reservation=popped, litellm_parent_otel_span=span)
 
+    @with_service_target("rate_limits")
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
