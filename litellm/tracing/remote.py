@@ -12,7 +12,7 @@ from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName, TraceScope
 
 MAX_RESPONSE_BYTES: Final = 64 * 1024 * 1024
-_JSON: Final = TypeAdapter(JsonValue)
+_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -86,7 +86,7 @@ class RemoteTraceStore:
         return await self._read(
             {
                 "operation": "list",
-                "scope": scope.model_dump(),
+                "scope": scope,
                 "start_ms": start_ms,
                 "end_ms": end_ms,
                 "cursor": cursor,
@@ -100,7 +100,7 @@ class RemoteTraceStore:
         return await self._read(
             {
                 "operation": "trace",
-                "scope": scope.model_dump(),
+                "scope": scope,
                 "trace_id": trace_id,
                 "trace_ref": trace_ref,
                 "cursor": cursor,
@@ -112,7 +112,7 @@ class RemoteTraceStore:
         return await self._read(
             {
                 "operation": "span",
-                "scope": scope.model_dump(),
+                "scope": scope,
                 "trace_id": trace_id,
                 "trace_ref": trace_ref,
                 "span_id": span_id,
@@ -125,7 +125,7 @@ class RemoteTraceStore:
         return await self._read(
             {
                 "operation": "span_error",
-                "scope": scope.model_dump(),
+                "scope": scope,
                 "trace_id": trace_id,
                 "trace_ref": trace_ref,
                 "span_id": span_id,
@@ -134,10 +134,10 @@ class RemoteTraceStore:
         )
 
     async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> str:
-        return json.dumps(await self._read({"operation": "sql", "sql": sql, "scope": scope.model_dump()}))
+        return json.dumps(await self._read({"operation": "sql", "sql": sql, "scope": scope}))
 
     async def query_help(self, scope: QueryScope, secret: str) -> JsonValue:
-        return await self._read({"operation": "help", "scope": scope.model_dump()})
+        return await self._read({"operation": "help", "scope": scope})
 
     async def query(self, name: ReadQueryName, parameters: Mapping[str, str | int | float | Sequence[str]]) -> str:
         return json.dumps(await self._read({"operation": "query", "name": name, "parameters": dict(parameters)}))

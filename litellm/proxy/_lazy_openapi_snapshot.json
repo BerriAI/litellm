@@ -34933,6 +34933,11 @@
               "title": "Image",
               "type": "string"
             },
+            "managed": {
+              "default": false,
+              "title": "Managed",
+              "type": "boolean"
+            },
             "token": {
               "title": "Token",
               "type": "string"
@@ -34955,6 +34960,11 @@
               "pattern": "^[a-f0-9]{64}$",
               "title": "Analysis Key Id",
               "type": "string"
+            },
+            "managed": {
+              "default": false,
+              "title": "Managed",
+              "type": "boolean"
             },
             "name": {
               "default": "Lens worker",

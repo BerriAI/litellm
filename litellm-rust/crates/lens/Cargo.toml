@@ -43,3 +43,4 @@ prettyplease = "0.2"
 [dev-dependencies]
 rstest.workspace = true
 wiremock.workspace = true
+uuid.workspace = true

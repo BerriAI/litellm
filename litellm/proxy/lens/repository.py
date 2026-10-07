@@ -173,7 +173,7 @@ class LensRepository:
     async def claim_candidates(self, scope: Scope, now: datetime) -> AsyncIterator[Lens]:
         cursor = ""  # rebind-ok: advance a bounded keyset page
         while True:
-            rows: Final = _ROWS.validate_python(
+            rows = _ROWS.validate_python(  # rebind-ok: fetch the next bounded keyset page
                 await self.db.query_raw(
                     """SELECT data FROM "LiteLLM_Lens"
                     WHERE id > $1 AND ($2::boolean OR (
@@ -183,9 +183,9 @@ class LensRepository:
                     AND (
                         EXISTS (SELECT 1 FROM jsonb_array_elements(data->'jobs') AS job
                             WHERE job->>'status'='queued' OR (job->>'status'='running'
-                                AND (job->>'lease_until' IS NULL OR (job->>'lease_until')::timestamptz<=$5)))
+                                AND (job->>'lease_until' IS NULL OR (job->>'lease_until')::timestamptz<=$5::timestamptz)))
                         OR ((data->'settings'->>'enabled')::boolean
-                            AND (data->>'next_run_at')::timestamptz<=$5
+                            AND (data->>'next_run_at')::timestamptz<=$5::timestamptz
                             AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(data->'jobs') AS job
                                 WHERE job->>'status' IN ('queued', 'running'))))
                     ORDER BY id LIMIT 50""",
@@ -193,10 +193,10 @@ class LensRepository:
                     scope.all_teams,
                     scope.team_id,
                     scope.api_key_hash,
-                    now,
+                    now.isoformat(),
                 )
             )
-            candidates: Final = tuple(Lens.model_validate(row.data) for row in rows)
+            candidates = tuple(Lens.model_validate(row.data) for row in rows)  # rebind-ok: decode this page
             for candidate in candidates:
                 yield candidate
             if len(candidates) < 50:
@@ -395,7 +395,7 @@ class LensRepository:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
                 'INSERT INTO "LiteLLM_LensWorker" AS existing (id,token_hash,data) VALUES ($1,$2,$3::jsonb) '
-                'ON CONFLICT (token_hash) DO UPDATE '
+                "ON CONFLICT (token_hash) DO UPDATE "
                 "SET data=jsonb_set(EXCLUDED.data, '{id}', to_jsonb(existing.id)) RETURNING data",
                 worker.id,
                 token_hash,

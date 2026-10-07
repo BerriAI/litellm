@@ -668,6 +668,7 @@ lensWorker:
   publicUrl: ""
   service:
     port: 4318
+    annotations: {}
   ingress:
     enabled: false
     className: ""

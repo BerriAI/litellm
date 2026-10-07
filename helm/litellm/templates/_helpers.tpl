@@ -514,3 +514,17 @@ shutdown drain window.
   value: {{ .drainTimeoutSeconds | quote }}
 {{- end }}
 {{- end -}}
+
+{{- define "litellm.lensConnectionEnv" -}}
+{{- if .Values.lensWorker.enabled }}
+- name: LITELLM_LENS_URL
+  value: {{ printf "http://%s-lens-worker:%v" (include "litellm.fullname" .) .Values.lensWorker.service.port | quote }}
+- name: LITELLM_LENS_PUBLIC_URL
+  value: {{ required "lensWorker.publicUrl is required" .Values.lensWorker.publicUrl | quote }}
+- name: LITELLM_LENS_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "lensWorker.serviceTokenSecret.name is required" .Values.lensWorker.serviceTokenSecret.name | quote }}
+      key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
+{{- end }}
+{{- end -}}

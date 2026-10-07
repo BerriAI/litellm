@@ -1,10 +1,11 @@
 import asyncio
 import json
 from collections import deque
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
 from io import BytesIO
 from typing import Final
+from typing_extensions import TypeIs
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -22,6 +23,14 @@ SHUTDOWN_SECONDS: Final = 3.0
 _PAYLOAD: Final = TypeAdapter(SpendLogPayload)
 
 
+def _is_mapping(value: object) -> TypeIs[Mapping[object, object]]:
+    return isinstance(value, Mapping)
+
+
+def _is_sequence(value: object) -> TypeIs[Sequence[object]]:
+    return isinstance(value, (tuple, list))
+
+
 def _check_size(value: object, remaining: int, depth: int = 0) -> int:
     if remaining <= 0 or depth > 32:
         raise OverflowError("Trace record exceeds the export budget")
@@ -29,9 +38,9 @@ def _check_size(value: object, remaining: int, depth: int = 0) -> int:
         if len(value) > remaining:
             raise OverflowError("Trace record exceeds the export budget")
         return remaining - len(value.encode())
-    if isinstance(value, Mapping):
+    if _is_mapping(value):
         return _check_sequence(value.items(), remaining, depth)
-    if isinstance(value, (tuple, list)):
+    if _is_sequence(value):
         return _check_sequence(value, remaining, depth)
     return remaining - 32
 
@@ -39,7 +48,7 @@ def _check_size(value: object, remaining: int, depth: int = 0) -> int:
 def _check_sequence(values: Iterable[object], remaining: int, depth: int) -> int:
     budget = remaining  # rebind-ok: consumes a finite serialization budget
     for value in values:
-        budget = _check_size(value, budget - 8, depth + 1)  # rebind-ok: consumes a finite serialization budget
+        budget = _check_size(value, budget - 8, depth + 1)
     if budget < 0:
         raise OverflowError("Trace record exceeds the export budget")
     return budget
@@ -48,10 +57,10 @@ def _check_sequence(values: Iterable[object], remaining: int, depth: int) -> int
 def encode_record(value: Mapping[str, object]) -> bytes:
     _check_size(value, MAX_EVENT_BYTES)
     with BytesIO() as output:
-        for part in json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":")).iterencode(
+        parts: Final = json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":")).iterencode(
             dict(value)
-        ):
-            encoded: Final = part.encode()
+        )
+        for encoded in (part.encode() for part in parts):
             if output.tell() + len(encoded) > MAX_EVENT_BYTES:
                 raise OverflowError("Trace record exceeds the export budget")
             output.write(encoded)
@@ -135,7 +144,7 @@ class LensExporter(CustomLogger):
         size = 2  # rebind-ok: count bytes in a bounded batch without copying records
         records: Final[deque[bytes]] = deque()  # mutable-ok: finite batch drained from the queue
         while self.queue and size + len(self.queue[0]) + 1 <= MAX_BATCH_BYTES:
-            record: Final = self.queue.popleft()
+            record = self.queue.popleft()  # rebind-ok: drain each record into the bounded batch
             size += len(record) + 1
             records.append(record)
         return tuple(records)
@@ -160,7 +169,7 @@ class LensExporter(CustomLogger):
             except httpx.HTTPError:
                 pass
             if attempt < 2:
-                await asyncio.sleep(2**attempt)
+                await asyncio.sleep(float(1 << attempt))
         self._warn("retry limit reached")
         return False
 
@@ -170,18 +179,21 @@ class LensExporter(CustomLogger):
                 self.wake.clear()
                 await self.wake.wait()
                 continue
-            batch: Final = self._batch()
-            try:
-                if await self._send(batch):
-                    self.rows_written += len(batch)
-                else:
-                    self.rows_dropped += len(batch)
-            except asyncio.CancelledError:
+            await self._drain_batch()
+
+    async def _drain_batch(self) -> None:
+        batch: Final = self._batch()
+        try:
+            if await self._send(batch):
+                self.rows_written += len(batch)
+            else:
                 self.rows_dropped += len(batch)
-                raise
-            finally:
-                self.buffered_events -= len(batch)
-                self.buffered_bytes -= sum(len(record) for record in batch)
+        except asyncio.CancelledError:
+            self.rows_dropped += len(batch)
+            raise
+        finally:
+            self.buffered_events -= len(batch)
+            self.buffered_bytes -= sum(len(record) for record in batch)
 
     async def aclose(self) -> None:
         self.closed = True

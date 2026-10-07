@@ -4,6 +4,7 @@ import { ArrowRight, ArrowUpRight, Check, Copy, KeyRound, Loader2, Send } from "
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { components } from "@/lib/http/schema";
+import { createApiClient, type RequestOptions } from "@/lib/http/client";
 import { useTimeout } from "usehooks-ts";
 
 import { cn } from "@/lib/cva.config";
@@ -213,15 +214,15 @@ function SendTestTrace({
     const sample = sampleTraceExport(Date.now());
     try {
       if (!tracingKey) throw new Error("Generate a tracing key first");
-      const response = await fetch(`${traceUrl}/v1/traces`, {
-        method: "POST",
+      const client = createApiClient({ getBaseUrl: () => traceUrl });
+      const options: RequestOptions = {
         credentials: "omit",
         redirect: "error",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tracingKey}` },
-        body: JSON.stringify(sample.body),
+        accessToken: tracingKey,
+        body: sample.body,
         signal: AbortSignal.timeout(15000),
-      });
-      if (!response.ok) throw new Error(`Trace upload failed (HTTP ${response.status})`);
+      };
+      await client.post("/v1/traces", options);
     } catch {
       setState({ kind: "failed", message: "Could not send the test trace." });
       return;
@@ -309,6 +310,7 @@ function TracingKey({
 }) {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const [pendingActivation, setPendingActivation] = useState(false);
   const create = async () => {
     setCreating(true);
     setError("");
@@ -318,6 +320,7 @@ function TracingKey({
         body: TRACING_KEY_REQUEST,
       });
       if (!result.key) throw new Error("The proxy did not return the new key");
+      setPendingActivation(!result.active);
       onCreated(result.key);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not create a key");
@@ -328,6 +331,11 @@ function TracingKey({
   if (tracingKey) {
     return (
       <div className="space-y-2">
+        {pendingActivation && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Key saved. Lens has not confirmed it yet. Once the service is connected, keys sync within 30 seconds.
+          </p>
+        )}
         <CodeBlock code={tracingKey} display={maskSecret(tracingKey)} tabs={<FileLabel>Your tracing key</FileLabel>} />
         <p className="text-sm text-muted-foreground">
           Hidden for safety. Copy copies the full key, and the environment step below includes it. This key can only

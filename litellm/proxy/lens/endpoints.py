@@ -78,7 +78,7 @@ from litellm.proxy.lens.state import (
     summarized,
 )
 from litellm.proxy.tracing_runtime import provide_storage
-from litellm.tracing.remote import LensConnection
+from litellm.tracing.remote import LensConnection, bounded_response
 from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"])
@@ -152,12 +152,14 @@ async def service_connection(auth: Auth) -> ServiceConnection:
     public_url: Final = os.environ.get("LITELLM_LENS_PUBLIC_URL", "").rstrip("/")
     try:
         connection: Final = LensConnection.from_env()
-        async with connection.client() as client:
-            response: Final = await client.get("/internal/status", timeout=2)
+        async with (
+            connection.client() as client,
+            client.stream("GET", "/internal/status", timeout=2) as response,
+        ):
             if response.status_code == 200:
-                status: Final = ServiceStatus.model_validate_json(response.content)
+                status: Final = ServiceStatus.model_validate_json(await bounded_response(response, 16 * 1024))
                 return ServiceConnection(url=public_url, connected=True, status=status)
-    except (ValueError, httpx.HTTPError):
+    except (ValueError, RuntimeError, httpx.HTTPError):
         pass
     return ServiceConnection(url=public_url, connected=False, status=ServiceStatus())
 
@@ -182,7 +184,9 @@ async def publish_credentials() -> bool:
         connection: Final = LensConnection.from_env()
         snapshot: Final = await credential_snapshot()
         async with connection.client() as client:
-            response: Final = await client.post("/internal/credentials", json=snapshot.model_dump(mode="json"), timeout=2)
+            response: Final = await client.post(
+                "/internal/credentials", json=snapshot.model_dump(mode="json"), timeout=2
+            )
             return response.status_code == 204
     except (ValueError, httpx.HTTPError):
         return False
@@ -671,7 +675,15 @@ async def sample(lens_id: str, job_id: str, worker: WorkerAuth, storage: Storage
 
     def freeze(e: Lens) -> Lens:
         active: Final = current_job(e)
-        if active is None or active.id != job_id or active.worker_id != worker.id or active.attempts != attempt:
+        if (
+            active is None
+            or active.id != job_id
+            or active.worker_id != worker.id
+            or active.attempts != attempt
+            or active.status != "running"
+            or active.lease_until is None
+            or active.lease_until <= datetime.now(timezone.utc)
+        ):
             raise HTTPException(409, "Job was cancelled or reassigned")
         return (
             replace_job(e, active.model_copy(update=MappingProxyType({"sample": selected})))
@@ -718,7 +730,13 @@ def model_failure(error: HTTPException | ProxyException) -> HTTPException:
 
 @router.post("/worker/{lens_id}/{job_id}/model", response_model=ModelResult)
 async def model(
-    lens_id: str, job_id: str, body: ModelRequest, worker: WorkerAuth, request: Request, response: Response, attempt: Attempt = 1
+    lens_id: str,
+    job_id: str,
+    body: ModelRequest,
+    worker: WorkerAuth,
+    request: Request,
+    response: Response,
+    attempt: Attempt = 1,
 ) -> ModelResult:
     from litellm.proxy.lens.inference import analyze
 
@@ -733,7 +751,9 @@ async def model(
 
 
 @router.post("/worker/{lens_id}/{job_id}/result", response_model=Lens)
-async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, storage: StorageDep, attempt: Attempt = 1) -> Lens:
+async def result(
+    lens_id: str, job_id: str, body: Result, worker: WorkerAuth, storage: StorageDep, attempt: Attempt = 1
+) -> Lens:
     lens: Final = await get_lens(lens_id, worker.scope)
     old: Final = next((j for j in lens.jobs if j.id == job_id), None)
     if old and old.status in ("completed", "failed") and old.worker_id == worker.id and old.attempts == attempt:
@@ -769,7 +789,15 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
 
     def finish(e: Lens) -> Lens:
         active: Final = current_job(e)
-        if active is None or active.id != job_id or active.worker_id != worker.id or active.attempts != attempt:
+        if (
+            active is None
+            or active.id != job_id
+            or active.worker_id != worker.id
+            or active.attempts != attempt
+            or active.status != "running"
+            or active.lease_until is None
+            or active.lease_until <= datetime.now(timezone.utc)
+        ):
             return e
         restored: Final = e.model_copy(
             update=MappingProxyType(
@@ -836,7 +864,10 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
         )
 
     finished: Final = required(await repository().update(lens_id, finish))
-    if body.review_versions and any(j.id == job_id and j.status == "completed" for j in finished.jobs):
+    if body.review_versions and any(
+        j.id == job_id and j.status == "completed" and j.attempts == attempt and j.worker_id == worker.id
+        for j in finished.jobs
+    ):
         await repository().complete_reviews(lens_id, job, body.review_versions)
     return finished
 

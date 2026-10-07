@@ -4206,6 +4206,7 @@ dependencies = [
  "typify",
  "unicode-casefold",
  "url",
+ "uuid",
  "wiremock",
 ]
 

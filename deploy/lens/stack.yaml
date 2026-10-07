@@ -26,7 +26,7 @@ services:
       - ./config.yaml:/app/lens-config.yaml:ro
     ports:
       - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
-    networks: [proxy, storage]
+    networks: [proxy, database]
     depends_on:
       db:
         condition: service_healthy
@@ -48,6 +48,7 @@ services:
       - "127.0.0.1:${LENS_PORT:-4318}:4318"
     mem_limit: 2g
     cpus: 2
+    pids_limit: 64
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -61,7 +62,7 @@ services:
       POSTGRES_DB: litellm
       POSTGRES_USER: litellm
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    networks: [storage]
+    networks: [database]
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -89,6 +90,8 @@ services:
 
 networks:
   proxy:
+  database:
+    internal: true
   storage:
     internal: true
 

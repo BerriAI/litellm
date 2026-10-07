@@ -98,6 +98,8 @@ pub fn router(state: Arc<State>) -> Router {
                 ]),
         );
     public
+        .clone()
+        .nest("/lens-ingest", public)
         .merge(
             Router::new()
                 .route("/internal/read", post(read))

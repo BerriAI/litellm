@@ -52,10 +52,7 @@ jobs:
       - name: Verify version and unprivileged runtime
         env:
           RELEASE_TAG: sha-${{ github.sha }}
-        run: |
-          version=$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges lens-worker --version)
-          test "$version" = "litellm-lens $RELEASE_TAG protocol=7"
-          test "$(docker run --rm --network none --read-only --entrypoint id lens-worker -u)" = 65532
+        run: bash deploy/lens/smoke.sh lens-worker "$RELEASE_TAG"
       - name: Verify confined Python on the native architecture
         env:
           RELEASE_TAG: sha-${{ github.sha }}

@@ -12,6 +12,7 @@ services:
       - "127.0.0.1:${LENS_PORT:-4318}:4318"
     mem_limit: 2g
     cpus: 2
+    pids_limit: 64
     restart: unless-stopped
     read_only: true
     tmpfs:

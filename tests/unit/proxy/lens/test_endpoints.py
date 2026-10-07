@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -38,6 +39,8 @@ from litellm.proxy.lens.models import (
 )
 from litellm.proxy.lens.repository import Row
 from litellm.proxy.lens.state import claim_job, queue_job, replace_job
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
+from litellm.tracing.remote import RemoteTraceStore
 from tests.unit.proxy.lens.test_agent_workspace import execution
 from tests.unit.proxy.lens.test_state import NOW, lens, worker
 
@@ -62,6 +65,54 @@ class ResultDatabase:
         assert isinstance(payload, str)
         self.completed = TypeAdapter(tuple[ReviewVersion, ...]).validate_json(payload)
         return len(self.completed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ("cancelled", "expired", "reclaimed", "reassigned"))
+async def test_result_cannot_commit_after_losing_ownership_during_evidence_validation(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from tests.unit.proxy.lens.test_state import finding
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution("run"),), eligible=1),
+        }
+    )
+    competing: Final = active.model_copy(
+        update={
+            "status": "cancelled" if change == "cancelled" else "running",
+            "lease_until": NOW if change == "expired" else active.lease_until,
+            "attempts": 2 if change == "reclaimed" else 1,
+            "worker_id": "other-worker" if change == "reassigned" else active.worker_id,
+        }
+    )
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+
+    async def evidence(request: httpx.Request) -> httpx.Response:
+        db.stored = replace_job(db.stored, competing)
+        return httpx.Response(200, json={"data": [{"count": 1}]})
+
+    async with httpx.AsyncClient(base_url="http://lens.test", transport=httpx.MockTransport(evidence)) as client:
+        saved: Final = await result(
+            "lens",
+            "job",
+            Result(
+                coverage=Coverage(screened=1, investigated=1),
+                findings=(finding("run"),),
+                assessments=(RunAssessment(execution_id="run"),),
+                review_versions=(ReviewVersion(execution_id="run", content_version="v1"),),
+            ),
+            worker(),
+            ClickHouseStorage(RemoteTraceStore(client)),
+        )
+    assert saved.jobs[0] == competing
+    assert saved.findings == ()
+    assert db.completed == ()
 
 
 @pytest.mark.asyncio

@@ -109,6 +109,86 @@ async fn ingestion_confirms_storage_and_overwrites_exporter_tenant() {
 }
 
 #[rstest]
+#[tokio::test]
+async fn shared_ingress_prefix_exposes_uploads_without_internal_control_routes() {
+    let store = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&store)
+        .await;
+    let server = serve(&store.uri(), true).await;
+    let client = http_client().unwrap();
+    let upload = client
+        .post(format!("{}/lens-ingest/v1/traces", server.url))
+        .bearer_auth(KEY)
+        .json(&export())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(upload.status(), 200);
+    let internal = client
+        .get(format!("{}/lens-ingest/internal/status", server.url))
+        .bearer_auth(SERVICE_TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(internal.status(), 404);
+    let preflight = client
+        .request(
+            http::Method::OPTIONS,
+            format!("{}/lens-ingest/v1/traces", server.url),
+        )
+        .header("origin", "https://dashboard.example")
+        .header("access-control-request-method", "POST")
+        .header(
+            "access-control-request-headers",
+            "authorization,content-type",
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(preflight.headers()["access-control-allow-origin"], "*");
+    assert!(
+        !preflight
+            .headers()
+            .contains_key("access-control-allow-credentials")
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn only_the_service_secret_can_replace_ingestion_credentials() {
+    let server = serve("http://127.0.0.1:1", true).await;
+    let client = http_client().unwrap();
+    let snapshot = json!({"issued_at": unix_seconds(), "keys": []});
+    let denied = client
+        .post(format!("{}/internal/credentials", server.url))
+        .bearer_auth(KEY)
+        .json(&snapshot)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), 401);
+    let accepted = client
+        .post(format!("{}/internal/credentials", server.url))
+        .bearer_auth(SERVICE_TOKEN)
+        .json(&snapshot)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 204);
+    let revoked = client
+        .post(format!("{}/v1/traces", server.url))
+        .bearer_auth(KEY)
+        .json(&export())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), 401);
+}
+
+#[rstest]
 #[case::refused(503)]
 #[case::disk_full(507)]
 #[tokio::test]
