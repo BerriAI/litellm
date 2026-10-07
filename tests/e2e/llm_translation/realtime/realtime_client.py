@@ -308,7 +308,7 @@ class RealtimeSession:
     connection: Connection
 
     @step("Send the realtime event {event.type} over the websocket")
-    def send(self, event: SessionUpdate | ConversationItemCreate | ResponseCreate) -> None:
+    def send(self, event: SessionUpdate | ConversationItemCreate | ResponseCreate | InputAudioBufferAppend) -> None:
         self.connection.send(event.model_dump_json(by_alias=True, exclude_none=True))
 
     @step("Wait for a {stop_type} event on the realtime websocket")
