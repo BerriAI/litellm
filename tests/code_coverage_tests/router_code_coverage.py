@@ -110,6 +110,7 @@ ignored_function_names = [
     "_anthropic_messages_policy_retries",  # Tested through the retry budget precedence test in test_router.py
     "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
     "_prompt_management_acompletion",  # Tested through the scheduled prompt-management model test in test_router.py
+    "_request_deployment_params",  # Tested through the team-route and deployment-id drop_params priority tests in test_router.py
 ]
 
 

@@ -2919,9 +2919,7 @@ class Router:
                 requested=kwargs.get("priority"),
                 default_priority=self.default_priority,
                 drop_params=request_drops_params(
-                    kwargs,
-                    self.default_litellm_params,
-                    tuple(deployment["litellm_params"] for deployment in self.get_model_list(model_name=model) or ()),
+                    kwargs, self.default_litellm_params, self._request_deployment_params(model=model, kwargs=kwargs)
                 ),
             )
             if isinstance(request_priority, InvalidPriority):
@@ -4634,6 +4632,15 @@ class Router:
 
         split_litellm_model: Final = litellm_model.split("/")[0]
         return split_litellm_model in litellm._known_custom_logger_compatible_callbacks
+
+    def _request_deployment_params(self, model: str, kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+        deployment: Final = self.get_deployment(model_id=model) if model not in self.model_names else None
+        if deployment is not None:
+            return (deployment.litellm_params.model_dump(exclude_none=True),)
+        return tuple(
+            candidate["litellm_params"]
+            for candidate in self.get_model_list(model_name=model, team_id=get_request_team_id(kwargs)) or ()
+        )
 
     async def _prompt_management_acompletion(self, model: str, messages: list[AllMessageValues], **kwargs: object):
         return await self._prompt_management_factory(
