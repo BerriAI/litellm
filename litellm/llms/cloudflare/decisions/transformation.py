@@ -13,8 +13,6 @@ _RESPONSE_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapte
 
 
 class CloudflareDecisionsConfig(BaseDecisionsConfig):
-    """Workers AI runs Clef at POST {account}/ai/run/@cf/cloudflare/<model> and wraps the reply in `result`."""
-
     api_key_env = ("CLOUDFLARE_API_KEY",)
     api_base_env = ("CLOUDFLARE_API_BASE",)
 
