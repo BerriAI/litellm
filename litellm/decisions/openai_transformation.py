@@ -1,5 +1,7 @@
 from collections.abc import Mapping, Sequence
-from typing import Final, assert_never
+from typing import Final
+
+from typing_extensions import assert_never
 
 from litellm.types.decisions import (
     ChoiceAnswer,
@@ -66,9 +68,7 @@ def _systemone_question(question: OpenAIDecisionQuestion) -> Mapping[str, object
             assert_never(question)
 
 
-def to_systemone_request(
-    request_data: Mapping[str, object], body: OpenAIDecisionRequestBody
-) -> Mapping[str, object]:
+def to_systemone_request(request_data: Mapping[str, object], body: OpenAIDecisionRequestBody) -> Mapping[str, object]:
     return {
         **{key: value for key, value in request_data.items() if key not in _OPENAI_ONLY_FIELDS},
         "state": _state(body.input),
