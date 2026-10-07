@@ -1037,19 +1037,23 @@ async def test_service_status_uses_internal_auth_and_only_advertises_the_public_
 ) -> None:
     import respx
 
-    from litellm.proxy.lens.endpoints import service_connection
+    from litellm.proxy.lens.endpoints import service_connection, user_scope
 
     monkeypatch.setenv("LITELLM_LENS_URL", "http://lens/private-prefix")
     monkeypatch.setenv("LITELLM_LENS_PUBLIC_URL", "https://traces.example/lens-ingest/")
     monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "x" * 32)
     with respx.mock as network:
         route: Final = network.get("http://lens/private-prefix/internal/status").respond(status, content=content)
-        result: Final = await service_connection(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+        result: Final = await service_connection(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
     assert result.url == "https://traces.example/lens-ingest"
     assert result.connected is connected
     assert result.status.storage_ready is connected
     assert route.calls[0].request.headers["Authorization"] == "Bearer " + "x" * 32
     assert "private storage details" not in result.model_dump_json()
+
+    with pytest.raises(HTTPException) as denied:
+        user_scope(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
+    assert denied.value.status_code == 403
 
 
 @pytest.mark.asyncio

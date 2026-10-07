@@ -44,6 +44,130 @@ fn client(server: &MockServer) -> JobClient {
 }
 
 #[rstest]
+#[case::budget_exhausted(402, 1)]
+#[case::model_access_denied(403, 1)]
+#[case::model_retries_exhausted(503, 5)]
+#[tokio::test]
+async fn candidate_control_failure_stops_the_run_without_publishing_partial_findings(
+    #[case] status: u16,
+    #[case] failed_requests: usize,
+) {
+    let server = MockServer::start().await;
+    let mut claim = fixture();
+    claim["job"]["settings"]["concurrency"] = 1.into();
+    Mock::given(method("POST"))
+        .and(path("/lens/worker/claim"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(claim))
+        .mount(&server)
+        .await;
+    let sample: Value = serde_json::from_str(include_str!("fixtures/sample.json")).unwrap();
+    Mock::given(method("GET"))
+        .and(path("/lens/worker/lens-test/job-test/sample"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sample))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/lens/worker/lens-test/job-test/reviews"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/lens/worker/lens-test/job-test/content"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "execution": sample["executions"][0],
+            "parts": [{"execution_id": "run-test", "span_id": "span-test", "name": "refund",
+                "kind": "tool", "content": QUOTE, "truncated": false}],
+        })))
+        .mount(&server)
+        .await;
+    let progress = Arc::new(Mutex::new(Vec::<wire::Progress>::new()));
+    let received_progress = progress.clone();
+    Mock::given(method("POST"))
+        .and(path("/lens/worker/lens-test/job-test/progress"))
+        .respond_with(move |request: &Request| {
+            received_progress
+                .lock()
+                .unwrap()
+                .push(request.body_json().unwrap());
+            ResponseTemplate::new(200).set_body_json(json!({}))
+        })
+        .mount(&server)
+        .await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let model_calls = calls.clone();
+    let extraction_calls = AtomicUsize::new(0);
+    let cluster_calls = Arc::new(AtomicUsize::new(0));
+    let clustering = cluster_calls.clone();
+    Mock::given(method("POST"))
+        .and(path("/lens/worker/lens-test/job-test/model"))
+        .respond_with(move |request: &Request| {
+            let model: wire::ModelRequest = request.body_json().unwrap();
+            let content = match model.purpose {
+                wire::ModelRequestPurpose::Extract if extraction_calls.fetch_add(1, Ordering::SeqCst) == 0 => {
+                    json!({"tools": [{"action": "read", "execution_id": "run-test"}]})
+                }
+                wire::ModelRequestPurpose::Extract => json!({"result": {"observations": [
+                    {"check_id": "refund", "summary": "False refund claim", "evidence": [quote()]},
+                    {"check_id": "refund", "summary": "Missing failure recovery", "evidence": [quote()]},
+                    {"check_id": "refund", "summary": "Unverified payment", "evidence": [quote()]},
+                ]}}),
+                wire::ModelRequestPurpose::Cluster => {
+                    clustering.fetch_add(1, Ordering::SeqCst);
+                    json!({"candidates": [
+                        {"check_id": "refund", "title": "False refund claim", "hypothesis": "Failure hidden", "execution_ids": ["p0"]},
+                        {"check_id": "refund", "title": "Missing failure recovery", "hypothesis": "No recovery", "execution_ids": ["p1"]},
+                        {"check_id": "refund", "title": "Unverified payment", "hypothesis": "Not checked", "execution_ids": ["p2"]},
+                    ]})
+                }
+                wire::ModelRequestPurpose::Investigate => {
+                    if model_calls.fetch_add(1, Ordering::SeqCst) != 0 {
+                        return ResponseTemplate::new(status).set_body_json(json!({
+                            "detail": {"lens_error": "Test model access failure"},
+                        }));
+                    }
+                    json!({"result": {"findings": [finding()]}})
+                }
+            };
+            ResponseTemplate::new(200).set_body_json(json!({"content": content.to_string(), "cost": 0}))
+        })
+        .mount(&server)
+        .await;
+    let results = Arc::new(Mutex::new(Vec::<wire::Result>::new()));
+    let received_results = results.clone();
+    Mock::given(method("POST"))
+        .and(path("/lens/worker/lens-test/job-test/result"))
+        .respond_with(move |request: &Request| {
+            received_results
+                .lock()
+                .unwrap()
+                .push(request.body_json().unwrap());
+            ResponseTemplate::new(200).set_body_json(json!({}))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let worker = Worker::new(
+        Control::new(
+            http_client().unwrap(),
+            server.uri().parse().unwrap(),
+            "worker-test".into(),
+        ),
+        "test-release".into(),
+    );
+    assert!(worker.run_once().await.unwrap());
+    let results = results.lock().unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].error.contains(&format!("HTTP {status}")));
+    assert!(results[0].findings.is_empty());
+    assert!(results[0].review_versions.is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 1 + failed_requests);
+    assert_eq!(cluster_calls.load(Ordering::SeqCst), 1);
+    assert!(!progress.lock().unwrap().iter().any(|progress| {
+        progress.stage.as_deref() == Some("Consolidating findings across runs")
+    }));
+}
+
+#[rstest]
 #[tokio::test]
 async fn worker_reviews_original_unicode_content_repairs_citations_and_submits_verified_finding() {
     let server = MockServer::start().await;

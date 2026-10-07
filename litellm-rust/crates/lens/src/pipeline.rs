@@ -331,6 +331,7 @@ pub async fn analyze(
     while let Some(outcome) = calls.next().await {
         let (index, outcome) = match outcome {
             Ok(outcome) => outcome,
+            Err(error) if error.is_control_failure() => return Err(error),
             Err(error) => {
                 errors.insert(error.to_string());
                 result.review_versions.clear();
@@ -343,6 +344,7 @@ pub async fn analyze(
                 result.coverage.inconclusive += i64::from(findings.findings.is_empty());
                 drafts.insert(index, findings.findings);
             }
+            Err(error) if error.is_control_failure() => return Err(error),
             Err(error) => {
                 result.coverage.failed_tasks += 1;
                 result.coverage.inconclusive += 1;

@@ -191,7 +191,6 @@ async def service_connection(auth: Auth) -> ServiceConnection:
 
     import httpx
 
-    user_scope(auth)
     public_url: Final = os.environ.get("LITELLM_LENS_PUBLIC_URL", "").rstrip("/")
     try:
         connection: Final = LensConnection.from_env()
