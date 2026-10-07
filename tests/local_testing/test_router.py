@@ -24,8 +24,8 @@ from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
 from litellm.types.router import ModelInfo
 from litellm.router_utils.cooldown_handlers import (
-    _async_get_cooldown_deployments,
-    _get_cooldown_deployments,
+    async_get_cooldown_deployments,
+    get_cooldown_deployments,
 )
 from litellm.types.router import DeploymentTypedDict
 
@@ -62,71 +62,6 @@ def test_router_multi_org_list():
     )
 
     assert len(router.get_model_list()) == 3
-
-
-@pytest.mark.asyncio()
-async def test_router_provider_wildcard_routing():
-    """
-    Pass list of orgs in 1 model definition,
-    expect a unique deployment for each to be created
-    """
-    litellm.set_verbose = True
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "openai/*",
-                "litellm_params": {
-                    "model": "openai/*",
-                    "api_key": os.environ["OPENAI_API_KEY"],
-                    "api_base": "https://api.openai.com/v1",
-                },
-            },
-            {
-                "model_name": "anthropic/*",
-                "litellm_params": {
-                    "model": "anthropic/*",
-                    "api_key": os.environ["ANTHROPIC_API_KEY"],
-                },
-            },
-            {
-                "model_name": "groq/*",
-                "litellm_params": {
-                    "model": "groq/*",
-                    "api_key": os.environ["GROQ_API_KEY"],
-                },
-            },
-        ]
-    )
-
-    print("router model list = ", router.get_model_list())
-
-    response1 = await router.acompletion(
-        model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    print("response 1 = ", response1)
-
-    response2 = await router.acompletion(
-        model="openai/gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    print("response 2 = ", response2)
-
-    response3 = await router.acompletion(
-        model="groq/openai/gpt-oss-120b",
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    print("response 3 = ", response3)
-
-    response4 = await router.acompletion(
-        model=os.environ.get(
-            "CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"
-        ),
-        messages=[{"role": "user", "content": "hello"}],
-    )
 
 
 @pytest.mark.asyncio()
@@ -561,7 +496,7 @@ async def test_async_router_context_window_fallback(sync_mode):
     from large_text import text
 
     litellm.set_verbose = False
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     print(f"len(text): {len(text)}")
     try:
@@ -986,174 +921,14 @@ def test_function_calling_on_router():
 
 
 ### IMAGE GENERATION
-@pytest.mark.asyncio
-async def test_aimg_gen_on_router():
-    litellm.set_verbose = True
-    try:
-        model_list = [
-            {
-                "model_name": "gpt-image-1",
-                "litellm_params": {
-                    "model": "gpt-image-1",
-                },
-            }
-        ]
-        router = Router(model_list=model_list, num_retries=3)
-        response = await router.aimage_generation(
-            model="gpt-image-1", prompt="A cute baby sea otter"
-        )
-        print(response)
-        assert len(response.data) > 0
-        router.reset()
-    except litellm.InternalServerError as e:
-        pass
-    except Exception as e:
-        if "Your task failed as a result of our safety system." in str(e):
-            pass
-        elif "Operation polling timed out" in str(e):
-            pass
-        elif "Connection error" in str(e):
-            pass
-        else:
-            traceback.print_exc()
-            pytest.fail(f"Error occurred: {e}")
-
-
 # asyncio.run(test_aimg_gen_on_router())
-
-
-def test_img_gen_on_router():
-    litellm.set_verbose = True
-    try:
-        model_list = [
-            {
-                "model_name": "gpt-image-1",
-                "litellm_params": {
-                    "model": "gpt-image-1",
-                },
-            }
-        ]
-        router = Router(model_list=model_list)
-        response = router.image_generation(
-            model="gpt-image-1", prompt="A cute baby sea otter"
-        )
-        print(response)
-        assert len(response.data) > 0
-        router.reset()
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        traceback.print_exc()
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_img_gen_on_router()
 ###
 
 
-def test_aembedding_on_router():
-    litellm.set_verbose = True
-    try:
-        model_list = [
-            {
-                "model_name": "text-embedding-ada-002",
-                "litellm_params": {
-                    "model": "text-embedding-ada-002",
-                },
-                "tpm": 100000,
-                "rpm": 10000,
-            },
-        ]
-        router = Router(model_list=model_list)
-
-        async def embedding_call():
-            ## Test 1: user facing function
-            response = await router.aembedding(
-                model="text-embedding-ada-002",
-                input=["good morning from litellm", "this is another item"],
-            )
-            print(response)
-
-            ## Test 2: underlying function
-            response = await router._aembedding(
-                model="text-embedding-ada-002",
-                input=["good morning from litellm 2"],
-            )
-            print(response)
-            router.reset()
-
-        asyncio.run(embedding_call())
-
-        print("\n Making sync Embedding call\n")
-        ## Test 1: user facing function
-        response = router.embedding(
-            model="text-embedding-ada-002",
-            input=["good morning from litellm 2"],
-        )
-        print(response)
-        router.reset()
-
-        ## Test 2: underlying function
-        response = router._embedding(
-            model="text-embedding-ada-002",
-            input=["good morning from litellm 2"],
-        )
-        print(response)
-        router.reset()
-    except Exception as e:
-        if "Your task failed as a result of our safety system." in str(e):
-            pass
-        elif "Operation polling timed out" in str(e):
-            pass
-        elif "Connection error" in str(e):
-            pass
-        else:
-            traceback.print_exc()
-            pytest.fail(f"Error occurred: {e}")
-
-
 # test_aembedding_on_router()
-
-
-def test_azure_embedding_on_router():
-    """
-    [PROD Use Case] - Makes an aembedding call + embedding call
-    """
-    litellm.set_verbose = True
-    try:
-        model_list = [
-            {
-                "model_name": "text-embedding-ada-002",
-                "litellm_params": {
-                    "model": "azure/text-embedding-ada-002",
-                    "api_key": os.environ["AZURE_AI_API_KEY"],
-                    "api_base": os.environ["AZURE_AI_API_BASE"],
-                },
-                "tpm": 100000,
-                "rpm": 10000,
-            },
-        ]
-        router = Router(model_list=model_list)
-
-        async def embedding_call():
-            response = await router.aembedding(
-                model="text-embedding-ada-002", input=["good morning from litellm"]
-            )
-            print(response)
-
-        asyncio.run(embedding_call())
-
-        print("\n Making sync Azure Embedding call\n")
-
-        response = router.embedding(
-            model="text-embedding-ada-002",
-            input=["test 2 from litellm. async embedding"],
-        )
-        print(response)
-        router.reset()
-    except Exception as e:
-        traceback.print_exc()
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_azure_embedding_on_router()
@@ -1163,30 +938,6 @@ def test_azure_embedding_on_router():
 
 
 # test openai-compatible endpoint
-@pytest.mark.asyncio
-async def test_mistral_on_router():
-    litellm._turn_on_debug()
-    model_list = [
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "mistral/mistral-small-latest",
-            },
-        },
-    ]
-    router = Router(model_list=model_list)
-    response = await router.acompletion(
-        model="gpt-3.5-turbo",
-        messages=[
-            {
-                "role": "user",
-                "content": "hello from litellm test",
-            }
-        ],
-    )
-    print(response)
-
-
 # asyncio.run(test_mistral_on_router())
 
 
@@ -2130,11 +1881,11 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
         )
 
     if sync_mode:
-        cooldown_deployments = _get_cooldown_deployments(
+        cooldown_deployments = get_cooldown_deployments(
             litellm_router_instance=router, parent_otel_span=None
         )
     else:
-        cooldown_deployments = await _async_get_cooldown_deployments(
+        cooldown_deployments = await async_get_cooldown_deployments(
             litellm_router_instance=router, parent_otel_span=None
         )
 

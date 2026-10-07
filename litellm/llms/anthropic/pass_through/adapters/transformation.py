@@ -962,7 +962,7 @@ class LiteLLMAnthropicMessagesAdapter:
             )
         elif isinstance(system_content, list):
             # Convert Anthropic system content blocks to OpenAI format
-            openai_system_content: Final[list[dict[str, Any]]] = []
+            openai_system_content: Final[list[dict[str, object]]] = []
             model_name: Final = anthropic_message_request.get("model", "")
             for block in system_content:
                 if isinstance(block, dict) and block.get("type") == "text":
@@ -1314,7 +1314,7 @@ class LiteLLMAnthropicMessagesAdapter:
             case ({"type": "text", "text": str(text)},):
                 return text
             case _:
-                return list(parts)  # mutable-ok: content must be a json list
+                return list(parts)
 
     def _tool_result_part(self, item: object) -> ToolMessageContentPart | None:
         if isinstance(item, str):

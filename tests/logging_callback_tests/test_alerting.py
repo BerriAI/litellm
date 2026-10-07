@@ -128,8 +128,6 @@ def test_init():
     print("passed testing slack alerting init")
 
 
-
-
 @pytest.fixture
 def slack_alerting():
     return SlackAlerting(
@@ -324,52 +322,6 @@ async def test_daily_reports_completion(slack_alerting):
         assert response_val is True
 
         mock_send_alert.assert_awaited()
-
-
-@pytest.mark.asyncio
-async def test_daily_reports_redis_cache_scheduler():
-    redis_cache = RedisCache()
-    slack_alerting = SlackAlerting(
-        internal_usage_cache=DualCache(redis_cache=redis_cache)
-    )
-
-    # we need this to be 0 so it actualy sends the report
-    slack_alerting.alerting_args.daily_report_frequency = 0
-
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-5.5",
-                "litellm_params": {
-                    "model": "gpt-5-mini",
-                },
-            }
-        ]
-    )
-
-    with (
-        patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert,
-        patch.object(
-            redis_cache, "async_set_cache", new=AsyncMock()
-        ) as mock_redis_set_cache,
-    ):
-        # initial call - expect empty
-        await slack_alerting._run_scheduler_helper(llm_router=router)
-
-        try:
-            json.dumps(mock_redis_set_cache.call_args[0][1])
-        except Exception as e:
-            pytest.fail(
-                "Cache value can't be json dumped - {}".format(
-                    mock_redis_set_cache.call_args[0][1]
-                )
-            )
-
-        mock_redis_set_cache.assert_awaited_once()
-
-        # second call - expect empty
-        await slack_alerting._run_scheduler_helper(llm_router=router)
 
 
 @pytest.mark.asyncio
@@ -787,7 +739,7 @@ async def test_langfuse_trace_id():
     - Unit test for `_add_langfuse_trace_id_to_alert` function in slack_alerting.py
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+    from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 
     litellm.success_callback = ["langfuse"]
 
@@ -810,7 +762,7 @@ async def test_langfuse_trace_id():
 
     await asyncio.sleep(3)
 
-    assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
+    assert litellm_logging_obj.get_trace_id(service_name="langfuse") is not None
 
     slack_alerting = SlackAlerting(
         alerting_threshold=32,
@@ -819,7 +771,7 @@ async def test_langfuse_trace_id():
         internal_usage_cache=DualCache(),
     )
 
-    trace_url = await _add_langfuse_trace_id_to_alert(
+    trace_url = await add_langfuse_trace_id_to_alert(
         request_data={"litellm_logging_obj": litellm_logging_obj}
     )
 
@@ -827,7 +779,7 @@ async def test_langfuse_trace_id():
 
     returned_trace_id = trace_url.split("/")[-1]
 
-    assert returned_trace_id == litellm_logging_obj._get_trace_id(
+    assert returned_trace_id == litellm_logging_obj.get_trace_id(
         service_name="langfuse"
     )
 

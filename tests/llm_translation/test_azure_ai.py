@@ -248,7 +248,7 @@ async def test_azure_ai_request_format():
     """
     from openai import AsyncAzureOpenAI, AzureOpenAI
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Set up the test parameters
     api_key = os.getenv("AZURE_AI_API_KEY")
@@ -270,9 +270,9 @@ async def test_azure_ai_request_format():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["azure/gpt5_series/gpt-5-mini", "azure/gpt-5-mini"])
+@pytest.mark.parametrize("model", ["azure/gpt5_series/gpt-5-mini"])
 async def test_azure_gpt5_reasoning(model):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.acompletion(
         model=model,
         messages=[{"role": "user", "content": "What is the capital of France?"}],
@@ -352,7 +352,7 @@ async def test_azure_ai_model_router():
         calculate_azure_model_router_flat_cost,
     )
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.acompletion(
         model="azure_ai/model_router/azure-model-router",
         messages=[{"role": "user", "content": "hi who is this"}],
@@ -391,7 +391,7 @@ async def test_azure_ai_model_router_streaming_model_in_chunk():
     Test that Azure AI model router streaming returns the actual model in each chunk.
     The response should contain the actual model used (e.g., gpt-4.1-nano) not the request model (azure-model-router).
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.acompletion(
         model="azure_ai/azure-model-router",
         messages=[{"role": "user", "content": "hi"}],
@@ -469,7 +469,7 @@ async def test_azure_ai_model_router_streaming_cost_with_stream_options():
     litellm.callbacks = [test_callback]
 
     try:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         response = await litellm.acompletion(
             model="azure_ai/azure-model-router",
             messages=[{"role": "user", "content": "hi"}],

@@ -1,3 +1,4 @@
+import errno
 import os
 import signal
 import socket
@@ -5,7 +6,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +15,11 @@ from typing import Final
 
 import httpx
 import psutil
-from integration._support.client import Gateway
+from integration._support.client import GATEWAY_LIMITS, Gateway
+
+DB_PUSH: Final = ("--use_prisma_db_push",)
+MIGRATE_DEPLOY: Final = ()
+LEGACY_MIGRATE_DEPLOY: Final = ("--use_legacy_migration_resolver",)
 
 
 def proxy_database_environment() -> Mapping[str, str]:
@@ -46,12 +51,16 @@ def signal_group(group: int, action: int) -> None:
         pass
 
 
+def graceful_stop_seconds() -> float:
+    return max(30.0, float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70")))
+
+
 def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
     if process.poll() is not None:
         return True
     process.terminate()
     try:
-        process.wait(timeout=30)
+        process.wait(timeout=graceful_stop_seconds())
     except subprocess.TimeoutExpired:
         return False
     return True
@@ -73,11 +82,150 @@ def owned_proxy(
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
+    database_setup: tuple[str, ...] = DB_PUSH,
 ) -> Iterator[Gateway]:
     with owned_proxy_process(
-        gateway, directory, overrides, config=config, remove_environment=remove_environment, workers=workers
+        gateway,
+        directory,
+        overrides,
+        config=config,
+        remove_environment=remove_environment,
+        workers=workers,
+        database_setup=database_setup,
     ) as owned:
         yield owned.gateway
+
+
+def _stop(process: subprocess.Popen[bytes]) -> None:
+    root_stopped: Final = stop_root_process(process)
+    residual: Final = group_members(process.pid)
+    if residual:
+        signal_group(process.pid, signal.SIGTERM)
+        psutil.wait_procs(residual, timeout=5)
+    remaining: Final = group_members(process.pid)
+    if remaining:
+        signal_group(process.pid, signal.SIGKILL)
+        psutil.wait_procs(remaining, timeout=3)
+    process.wait(timeout=3)
+    survivors: Final = group_members(process.pid)
+    assert not survivors, "Owned proxy child survived cleanup"
+    assert root_stopped and not remaining, "Owned proxy required forced cleanup"
+
+
+_PORT_ATTEMPTS: Final = 3
+_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE)
+
+
+def _free_port() -> int:
+    with socket.socket() as reserve:
+        reserve.bind(("127.0.0.1", 0))
+        return reserve.getsockname()[1]
+
+
+@dataclass(frozen=True, slots=True)
+class _Launch:
+    process: subprocess.Popen[bytes]
+    port: int
+    log: Path
+
+
+def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path) -> _Launch:
+    port: Final = _free_port()
+    log_path: Final = output / f"owned-proxy-{uuid.uuid4().hex}.log"
+    with log_path.open("w") as log:
+        process: Final = subprocess.Popen(
+            [*command, "--port", str(port)],
+            cwd=root,
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    return _Launch(process, port, log_path)
+
+
+def _lost_port_race(exit_code: int | None, log: Path) -> bool:
+    return exit_code is not None and _BIND_COLLISION in log.read_text()
+
+
+def _wait_until_ready(launch: _Launch) -> None:
+    with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
+        deadline: Final = time.monotonic() + float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70"))
+        while launch.process.poll() is None:
+            try:
+                if client.get("/health/readiness", timeout=2).status_code == 200:
+                    return
+            except httpx.TransportError:
+                pass
+            assert time.monotonic() < deadline, "Owned proxy readiness deadline exceeded"
+            time.sleep(0.1)
+
+
+def _launch_until_bound(
+    command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path, attempts: int
+) -> _Launch:
+    launch: Final = _launch(command, root, environment, output)
+    try:
+        _wait_until_ready(launch)
+        exit_code: Final = launch.process.poll()
+        assert exit_code is None or (attempts > 1 and _lost_port_race(exit_code, launch.log)), (
+            "Owned proxy exited before readiness"
+        )
+    except BaseException:
+        _stop(launch.process)
+        raise
+    if exit_code is None:
+        return launch
+    _stop(launch.process)
+    return _launch_until_bound(command, root, environment, output, attempts - 1)
+
+
+def _proxy_root() -> Path:
+    return Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
+
+
+def _proxy_environment(
+    gateway: Gateway, overrides: Mapping[str, str], remove_environment: tuple[str, ...]
+) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            **{
+                name: value
+                for name, value in {**os.environ, **proxy_database_environment()}.items()
+                if name not in remove_environment
+            },
+            "LITELLM_MASTER_KEY": gateway.key,
+            "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
+            "STORE_MODEL_IN_DB": "True",
+            **overrides,
+        }
+    )
+
+
+def setup_only_proxy_run(
+    gateway: Gateway, overrides: Mapping[str, str], *, config: Path, workers: int
+) -> subprocess.CompletedProcess[str]:
+    """The proxy CLI's `--skip_server_startup` pass (the image's setup step), run to completion with the
+    environment an owned proxy gets."""
+    return subprocess.run(  # test-quality-ok: the checkout at the working directory is the proxy under test
+        (
+            sys.executable,
+            "-m",
+            "integration._support.proxy",
+            "--config",
+            str(config),
+            "--num_workers",
+            str(workers),
+            *DB_PUSH,
+            "--skip_server_startup",
+        ),
+        cwd=_proxy_root(),
+        env=dict(_proxy_environment(gateway, overrides, ())),
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
 
 
 @contextmanager
@@ -89,72 +237,172 @@ def owned_proxy_process(
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
+    database_setup: tuple[str, ...] = DB_PUSH,
+    extra_arguments: tuple[str, ...] = (),
 ) -> Iterator[OwnedProxy]:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port: Final = reserve.getsockname()[1]
-    root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
-    environment: Final = {
-        **{
-            name: value
-            for name, value in {**os.environ, **proxy_database_environment()}.items()
-            if name not in remove_environment
-        },
-        "LITELLM_MASTER_KEY": gateway.key,
-        "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
-        "STORE_MODEL_IN_DB": "True",
-        **overrides,
-    }
+    root: Final = _proxy_root()
+    environment: Final = _proxy_environment(gateway, overrides, remove_environment)
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
-    log_path: Final = output / f"owned-proxy-{uuid.uuid4().hex}.log"
-    with log_path.open("w") as log:
-        process: Final = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "integration._support.proxy",
-                "--config",
-                str(config or "tests/integration/proxy_config.yaml"),
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(port),
-                "--num_workers",
-                str(workers),
-                "--use_prisma_db_push",
-                "--enforce_prisma_migration_check",
-            ],
-            cwd=root,
-            env=environment,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        try:
-            with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=15, trust_env=False) as client:
-                deadline: Final = time.monotonic() + 70
-                while True:
-                    assert process.poll() is None, "Owned proxy exited before readiness"
-                    try:
-                        if client.get("/health/readiness", timeout=2).status_code == 200:
-                            break
-                    except httpx.TransportError:
-                        pass
-                    assert time.monotonic() < deadline, "Owned proxy readiness deadline exceeded"
-                    time.sleep(0.1)
-                yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, log_path)
-        finally:
-            root_stopped: Final = stop_root_process(process)
-            residual: Final = group_members(process.pid)
-            if residual:
-                signal_group(process.pid, signal.SIGTERM)
-                psutil.wait_procs(residual, timeout=5)
-            remaining: Final = group_members(process.pid)
-            if remaining:
-                signal_group(process.pid, signal.SIGKILL)
-                psutil.wait_procs(remaining, timeout=3)
-            process.wait(timeout=3)
-            survivors: Final = group_members(process.pid)
-            assert not survivors, "Owned proxy child survived cleanup"
-            assert root_stopped and not remaining, "Owned proxy required forced cleanup"
+    command: Final = (
+        sys.executable,
+        "-m",
+        "integration._support.proxy",
+        "--config",
+        str(config or "tests/integration/proxy_config.yaml"),
+        "--host",
+        "127.0.0.1",
+        "--num_workers",
+        str(workers),
+        *database_setup,
+        *extra_arguments,
+    )
+    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
+    process: Final = launch.process
+    try:
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+        ) as client:
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log)
+    finally:
+        _stop(process)
+
+
+@contextmanager
+def owned_gateway_image(
+    gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path, workers: int
+) -> Iterator[OwnedProxy]:
+    """The componentized gateway started the way its image starts it: `docker/component_entrypoint.sh` running
+    `python -m gateway.launch`, with the config handed over as `CONFIG_FILE_PATH`. It serves the data plane only,
+    so keys come from a proxy that shares its database."""
+    root: Final = _proxy_root()
+    environment: Final = _proxy_environment(gateway, {**overrides, "CONFIG_FILE_PATH": str(config)}, ())
+    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output.mkdir(parents=True, exist_ok=True)
+    command: Final = (
+        str(root / "docker" / "component_entrypoint.sh"),
+        sys.executable,
+        "-m",
+        "gateway.launch",
+        "--workers",
+        str(workers),
+        "--host",
+        "127.0.0.1",
+    )
+    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
+    try:
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+        ) as client:
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), launch.process, launch.log)
+    finally:
+        _stop(launch.process)
+
+
+def _is_ready(client: httpx.Client) -> bool:
+    try:
+        return client.get("/health/readiness", timeout=2).status_code == 200
+    except httpx.TransportError:
+        return False
+
+
+def refused_boot_log(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+) -> str:
+    """Start the proxy and return its log once it exits non-zero instead of becoming ready."""
+    root: Final = _proxy_root()
+    environment: Final = _proxy_environment(gateway, overrides, ())
+    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output.mkdir(parents=True, exist_ok=True)
+    command: Final = (
+        sys.executable,
+        "-m",
+        "integration._support.proxy",
+        "--config",
+        str(config or "tests/integration/proxy_config.yaml"),
+        "--host",
+        "127.0.0.1",
+        "--num_workers",
+        "1",
+        *DB_PUSH,
+    )
+    launch: Final = _launch(command, root, environment, output)
+    try:
+        with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
+            deadline: Final = time.monotonic() + 70
+            while launch.process.poll() is None:
+                assert not _is_ready(client), (
+                    f"Proxy became ready instead of refusing to boot:\n{launch.log.read_text()}"
+                )
+                assert time.monotonic() < deadline, "Proxy neither exited nor became ready within the deadline"
+                time.sleep(0.1)
+        assert launch.process.returncode != 0, f"Proxy exited 0 instead of refusing to boot:\n{launch.log.read_text()}"
+        return launch.log.read_text()
+    finally:
+        _stop(launch.process)
+
+
+_UPSTREAM_READY_SECONDS: Final = 60
+
+
+class UpstreamSlot:
+    """A scripted upstream a test module owns on a fixed port, so a cell can take it down and bring it back."""
+
+    __slots__ = ("directory", "port", "process", "root")
+
+    def __init__(self, directory: Path, port: int, root: Path) -> None:
+        self.directory = directory
+        self.port = port
+        self.root = root
+        self.process: subprocess.Popen[bytes] | None = None
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def start(self) -> None:
+        assert self.process is None, "Owned upstream is already running"
+        output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR") or self.directory)
+        log_path: Final = output / f"owned-upstream-{self.port}-{uuid.uuid4().hex}.log"
+        with log_path.open("w") as log:
+            process: Final = subprocess.Popen(
+                [sys.executable, "-m", "integration._support.upstream", "--port", str(self.port)],
+                cwd=self.root,
+                env=dict(os.environ),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        self.process = process
+        deadline: Final = time.monotonic() + _UPSTREAM_READY_SECONDS
+        while process.poll() is None:
+            try:
+                if httpx.get(f"{self.url}/health", timeout=2, trust_env=False).status_code == 200:
+                    return
+            except httpx.TransportError:
+                pass
+            assert time.monotonic() < deadline, f"Owned upstream readiness deadline exceeded: {log_path}"
+            time.sleep(0.1)
+        raise AssertionError(f"Owned upstream exited before readiness: {log_path}")
+
+    def stop(self) -> None:
+        process: Final = self.process
+        assert process is not None, "Owned upstream is not running"
+        self.process = None
+        _stop(process)
+
+
+@contextmanager
+def owned_upstream(directory: Path) -> Generator[UpstreamSlot]:
+    root: Final = _proxy_root()
+    slot: Final = UpstreamSlot(directory, _free_port(), root)
+    slot.start()
+    try:
+        yield slot
+    finally:
+        if slot.process is not None:
+            slot.stop()

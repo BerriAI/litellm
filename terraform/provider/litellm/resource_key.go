@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
 
 func resourceKey() *schema.Resource {
@@ -33,6 +34,14 @@ func resourceKey() *schema.Resource {
 			"token_id": {
 				Type:     schema.TypeString,
 				Computed: true,
+			},
+			"key_type": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringInSlice([]string{"llm_api", "management", "read_only", "default"}, false),
+				Description:  "Type of key that determines its default allowed routes. Changing it creates a new key",
 			},
 			"models": {
 				Type:     schema.TypeList,
@@ -161,9 +170,10 @@ func resourceKey() *schema.Resource {
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 			"allowed_routes": {
-				Type:     schema.TypeList,
-				Optional: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
+				Type:             schema.TypeList,
+				Optional:         true,
+				Elem:             &schema.Schema{Type: schema.TypeString},
+				DiffSuppressFunc: suppressUnconfiguredAllowedRoutes,
 			},
 			"allowed_passthrough_routes": {
 				Type:     schema.TypeList,
@@ -284,10 +294,47 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 	} else if v := d.Get("key").(string); v != "" {
 		key.Key = v
 	}
+	proxyMintedKey := key.Key == ""
 
 	createdKey, err := c.CreateKey(key)
 	if err != nil {
 		return diag.FromErr(fmt.Errorf("error creating key: %s", err))
+	}
+
+	// /key/generate replaces a declared allowed_routes with the key_type
+	// preset, while /key/update stores the list verbatim. Re-assert the
+	// declared routes right after create so the first apply already leaves
+	// the key with the routes the config asks for (a replacement forced by
+	// any ForceNew attribute would otherwise hand out the preset until a
+	// second apply).
+	if keyTypePresetsRoutes(key.KeyType) && len(key.AllowedRoutes) > 0 &&
+		!slices.Equal(createdKey.AllowedRoutes, key.AllowedRoutes) {
+		// Echo the values the generate just stored for the two fields
+		// /key/update requires non-null; empty objects would clear
+		// configured or server-defaulted restrictions.
+		storedOrConfigured := func(stored, configured map[string]interface{}) map[string]interface{} {
+			if stored != nil {
+				return stored
+			}
+			return configured
+		}
+		if _, err := c.RestoreKeyRoutes(createdKey.TokenID, key.AllowedRoutes,
+			storedOrConfigured(createdKey.Permissions, key.Permissions),
+			storedOrConfigured(createdKey.ModelMaxBudget, key.ModelMaxBudget)); err != nil {
+			// For a proxy-minted key nothing is in state yet, so returning
+			// without cleanup would orphan an active key terraform cannot see
+			// or delete, and a retried apply would mint another one. Delete it
+			// so the retry starts clean; a config-supplied key may predate
+			// this apply, so it is never deleted here. Name the hash either
+			// way so an operator can finish by hand if cleanup fails.
+			if proxyMintedKey {
+				if delErr := c.DeleteKey(createdKey.TokenID); delErr != nil {
+					return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset: %s; cleanup failed too, key %s must be deleted manually: %s", err, createdKey.TokenID, delErr))
+				}
+				return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset (created key deleted, retry the apply): %s", err))
+			}
+			return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset on config-supplied key %s; the key was left in place: %s", createdKey.TokenID, err))
+		}
 	}
 
 	d.SetId(createdKey.TokenID)
@@ -322,6 +369,9 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	key := &Key{Key: d.Id()}
 	mapResourceDataToKey(d, key)
+	if allowedRoutesNotConfigured(d) {
+		key.AllowedRoutes = nil
+	}
 	if !d.HasChange("duration") {
 		key.Duration = ""
 	}
@@ -371,6 +421,47 @@ func changedMap(d *schema.ResourceData, name string) map[string]interface{} {
 		return nil
 	}
 	return d.Get(name).(map[string]interface{})
+}
+
+// allowedRoutesNotConfigured reports whether the raw configuration leaves
+// allowed_routes unset. d.Get cannot answer this: it merges state into
+// unconfigured attributes, so once a refresh has materialized the server's
+// routes into state (or left a stale copy behind with -refresh=false), the
+// configured and unconfigured cases read identically.
+func allowedRoutesNotConfigured(d *schema.ResourceData) bool {
+	raw, diags := d.GetRawConfigAt(cty.GetAttrPath("allowed_routes"))
+	return !diags.HasError() && raw.IsNull()
+}
+
+// keyTypePresetsRoutes reports whether the proxy derives allowed_routes from
+// this key_type at create time, overwriting whatever the request declared.
+// "default" (and an unset type) preset nothing.
+func keyTypePresetsRoutes(keyType string) bool {
+	switch keyType {
+	case "llm_api", "management", "read_only":
+		return true
+	}
+	return false
+}
+
+// Reads copy the server's routes into state so drift on them stays visible,
+// and /key/update keeps the stored routes whenever allowed_routes is absent
+// from the payload. Suppressing the diff for a config that never declares the
+// attribute therefore matches the wire behavior: without suppression the plan
+// would show a perpetual removal diff against server-derived routes (the
+// presets a key_type implies, or routes granted directly on the proxy) that
+// no apply can ever clear. When the raw config is unavailable (helpers that
+// diff without one), only a whole-list removal shape is suppressed so a
+// config that shrinks the list still diffs.
+func suppressUnconfiguredAllowedRoutes(k, old, new string, d *schema.ResourceData) bool {
+	if new != "" && new != "0" {
+		return false
+	}
+	raw, diags := d.GetRawConfigAt(cty.GetAttrPath("allowed_routes"))
+	if !diags.HasError() {
+		return raw.IsNull()
+	}
+	return true
 }
 
 var errKeyGone = errors.New("no longer exists")
@@ -449,6 +540,7 @@ func resourceKeyDelete(ctx context.Context, d *schema.ResourceData, m interface{
 }
 
 func mapResourceDataToKey(d *schema.ResourceData, key *Key) {
+	key.KeyType = d.Get("key_type").(string)
 	key.Models = expandStringList(d.Get("models").([]interface{}))
 	if v, ok := d.GetOk("max_budget"); ok {
 		val := v.(float64)
@@ -504,6 +596,9 @@ func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
 
 	// Note: "key" is write-only and must not be set here (Read operations).
 	// It is only set during Create so it is available during apply.
+	if key.KeyType != "" {
+		d.Set("key_type", key.KeyType)
+	}
 
 	if len(key.Models) > 0 {
 		d.Set("models", key.Models)
@@ -576,9 +671,7 @@ func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
 	if len(key.EnforcedParams) > 0 {
 		d.Set("enforced_params", key.EnforcedParams)
 	}
-	if len(key.AllowedRoutes) > 0 {
-		d.Set("allowed_routes", key.AllowedRoutes)
-	}
+	d.Set("allowed_routes", append([]string{}, key.AllowedRoutes...))
 	if len(key.AllowedPassthroughRoutes) > 0 {
 		d.Set("allowed_passthrough_routes", key.AllowedPassthroughRoutes)
 	}

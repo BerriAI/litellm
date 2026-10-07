@@ -3,7 +3,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -17,6 +17,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
 )
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import ModelInfo, Usage
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
 
 
@@ -69,7 +70,7 @@ def batch_cost_is_final(batch: Batch) -> bool:
 
 
 async def calculate_batch_cost_and_usage(
-    file_content_dictionary: list[dict],
+    file_content_dictionary: list[dict[str, object]],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
@@ -95,11 +96,11 @@ async def calculate_batch_cost_and_usage(
     )
 
 
-async def _handle_completed_batch(
+async def handle_completed_batch(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
     model_name: str | None = None,
-    litellm_params: dict | None = None,
+    litellm_params: dict[str, object] | None = None,
     model_info: ModelInfo | None = None,
 ) -> BatchCostUsageResult:
     """Fetch a completed batch's output file and aggregate its cost, usage, and
@@ -127,7 +128,7 @@ async def _handle_completed_batch(
         return BatchCostUsageResult(
             cost=0.0,
             usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
-            models=[],  # mutable-ok: no output file means no model was ever priced; BatchCostUsageResult.models requires list[str]
+            models=[],
             successful_requests=0,
             failed_requests=await count_error_file_failed_requests(
                 batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
@@ -161,6 +162,9 @@ async def _handle_completed_batch(
     )
 
 
+_handle_completed_batch = handle_completed_batch
+
+
 class _LineOutcome(Enum):
     """A batch output line that yielded no billable stats."""
 
@@ -182,7 +186,7 @@ class _BatchOutputLineStats:
 
 
 def _classify_output_line_stats(
-    entries: Iterable[dict],
+    entries: Iterable[dict[str, object]],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     model_info: ModelInfo | None,
@@ -294,7 +298,7 @@ def _output_line_cost(
 
 
 def _aggregate_batch_cost_usage_models(
-    entries: Iterable[dict],
+    entries: Iterable[dict[str, object]],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
@@ -346,7 +350,7 @@ def _aggregate_batch_cost_usage_models(
 
 
 def calculate_vertex_ai_batch_cost_and_usage(
-    vertex_ai_batch_responses: Iterable[dict],
+    vertex_ai_batch_responses: Iterable[dict[str, object]],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
 ) -> BatchCostUsageResult:
@@ -435,7 +439,7 @@ def _provider_output_file_id(output_file_id: str) -> str:
 async def _fetch_batch_managed_file_content(
     file_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"] = "openai",
-    litellm_params: dict | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> bytes:
     """
     Fetch a batch's output or error file and return its raw JSONL bytes.
@@ -447,16 +451,17 @@ async def _fetch_batch_managed_file_content(
                        Required for Azure and other providers that need authentication
     """
     from litellm.files.main import afile_content
+    from litellm.files.types import FileContentCallOptions, FileContentRequestKwargs
 
-    # Build kwargs for afile_content with credentials from litellm_params
-    file_content_kwargs: Final = {
-        "file_id": _provider_output_file_id(file_id),
+    provider_output_file_id: Final = _provider_output_file_id(file_id)
+    credentials: Final = extract_file_access_credentials(litellm_params)
+    file_content_kwargs: Final[FileContentRequestKwargs] = {
+        "file_id": provider_output_file_id,
         "custom_llm_provider": custom_llm_provider,
+        **cast(  # cast-ok: preserve dynamic provider credentials without validation
+            FileContentCallOptions, credentials
+        ),
     }
-
-    # Extract and add credentials for file access
-    credentials: Final = _extract_file_access_credentials(litellm_params)
-    file_content_kwargs.update(credentials)
 
     _file_content: Final = await afile_content(**file_content_kwargs)
     return _file_content.content
@@ -465,7 +470,7 @@ async def _fetch_batch_managed_file_content(
 async def _fetch_batch_output_file_content(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"] = "openai",
-    litellm_params: dict | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> bytes:
     """
     Fetch the batch output file and return its raw JSONL bytes
@@ -487,7 +492,7 @@ async def _fetch_batch_output_file_content(
 async def count_error_file_failed_requests(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
-    litellm_params: dict | None,
+    litellm_params: Mapping[str, object] | None,
 ) -> int:
     """Count failed requests reported only in the batch's separate error file.
 
@@ -505,10 +510,12 @@ async def count_error_file_failed_requests(
     except Exception as e:  # noqa: BLE001  # a failed/missing error file must not abort cost tracking for the batch
         verbose_logger.debug("Failed to fetch batch error file %s: %s", batch.error_file_id, e)
         return 0
-    return sum(1 for _ in _iter_batch_input_lines(error_file_content))
+    return sum(1 for _ in iter_batch_input_lines(error_file_content))
 
 
-def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
+def extract_file_access_credentials(
+    litellm_params: Mapping[str, object] | None,
+) -> dict[str, object]:
     """
     Extract credentials from litellm_params for file access operations.
 
@@ -521,7 +528,7 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
     Returns:
         Dictionary containing only the credentials needed for file access
     """
-    credentials: Final = {}
+    credentials: Final[dict[str, object]] = {}
 
     if litellm_params:
         # List of credential keys that should be passed to file operations
@@ -543,6 +550,9 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "max_retries",
             "_litellm_internal_model_credentials",
             *AWS_CREDENTIAL_KWARGS_KEYS,
+            # A federated deployment holds no api_key, so without these the fetch that reads a
+            # finished batch's output has nothing to authenticate with and its cost is never billed.
+            *sorted(ANTHROPIC_WIF_KWARGS_KEYS),
         )
         for key in credential_keys:
             if key in litellm_params:
@@ -551,7 +561,10 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
     return credentials
 
 
-def _get_file_content_as_dictionary(file_content: bytes) -> list[dict]:
+_extract_file_access_credentials = extract_file_access_credentials
+
+
+def get_file_content_as_dictionary(file_content: bytes) -> list[dict[str, object]]:
     """
     Get the file content as a list of dictionaries from JSON Lines format,
     skipping malformed lines
@@ -559,7 +572,10 @@ def _get_file_content_as_dictionary(file_content: bytes) -> list[dict]:
     return list(_iter_batch_output_entries(file_content))
 
 
-def _iter_batch_input_lines(file_content: bytes) -> Iterator[bytes]:
+_get_file_content_as_dictionary = get_file_content_as_dictionary
+
+
+def iter_batch_input_lines(file_content: bytes) -> Iterator[bytes]:
     """
     Yield non-empty JSONL lines (unparsed) one at a time, so a caller can parse
     each row in its own try/except and a single malformed line cannot abort the
@@ -577,27 +593,30 @@ def _iter_batch_input_lines(file_content: bytes) -> Iterator[bytes]:
             yield line
 
 
-def _iter_batch_output_entries(file_content: bytes) -> Iterator[dict]:
+_iter_batch_input_lines = iter_batch_input_lines
+
+
+def _iter_batch_output_entries(file_content: bytes) -> Iterator[dict[str, object]]:
     """
     Yield parsed batch output JSONL entries one at a time without materializing
     the whole file as a list, so peak memory stays bounded. A malformed or
     non-object line is skipped with a warning so one bad line never aborts the
     whole batch's cost accounting.
     """
-    for line in _iter_batch_input_lines(file_content):
+    for line in iter_batch_input_lines(file_content):
         entry = _parse_batch_output_line(line)
         if entry is not None:
             yield entry
 
 
-def _parse_batch_output_line(line: bytes) -> dict | None:
+def _parse_batch_output_line(line: bytes) -> dict[str, object] | None:
     try:
         parsed: Final[object] = json.loads(line)
     except ValueError as e:
         verbose_logger.warning("skipping malformed batch output line: %s", str(e))
         return None
     if isinstance(parsed, dict):
-        return parsed
+        return cast("dict[str, object]", parsed)  # cast-ok: JSON object keys are strings by definition
     verbose_logger.warning("skipping non-object batch output line of type %s", type(parsed).__name__)
     return None
 
@@ -607,24 +626,29 @@ def _parse_batch_output_line(line: bytes) -> dict | None:
 _BATCH_TOKEN_ESTIMATE_BYTES_PER_TOKEN: Final = 4
 
 
-def _estimate_batch_entry_tokens(raw_line: bytes) -> int:
+def estimate_batch_entry_tokens(raw_line: bytes) -> int:
     """Conservative token estimate for a batch row the token counter cannot measure
     (or that cannot be parsed). Keeps the batch token total non-zero so a crafted
     row cannot evade the TPM limit, without hard-rejecting a legitimate batch."""
     return max(1, len(raw_line) // _BATCH_TOKEN_ESTIMATE_BYTES_PER_TOKEN)
 
 
-def _count_entry_tokens(
-    entry: dict,
+_estimate_batch_entry_tokens = estimate_batch_entry_tokens
+
+
+def count_entry_tokens(
+    entry: Mapping[str, object],
     model_name: str | None = None,
 ) -> int:
     """Token-count a single batch input entry's body (chat / text / embedding)."""
-    body: Final = entry.get("body", {}) or {}
-    model: Final = body.get("model", model_name or "")
+    body: Final = cast(  # cast-ok: batch payload bodies come from provider JSON
+        Mapping[str, object], entry.get("body", {}) or {}
+    )
+    model: Final = cast(str, body.get("model", model_name or ""))  # cast-ok: provider batch model names are strings
 
     messages: Final = body.get("messages")
     if messages:
-        return token_counter(model=model, messages=messages)
+        return token_counter(model=model, messages=cast(list[dict[str, object]], messages))
 
     prompt: Final = body.get("prompt")
     if prompt:
@@ -635,6 +659,9 @@ def _count_entry_tokens(
         return _count_prompt_or_input_tokens(model=model, value=input_data)
 
     return 0
+
+
+_count_entry_tokens = count_entry_tokens
 
 
 def _count_prompt_or_input_tokens(model: str, value: object) -> int:
@@ -703,8 +730,8 @@ def _get_batch_job_usage_from_response_body(
     from litellm.responses.utils import ResponseAPILoggingUtils
 
     _usage_dict: Final = response_body.get("usage", None) or {}
-    if ResponseAPILoggingUtils._is_response_api_usage(_usage_dict):
-        return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_usage_dict)
+    if ResponseAPILoggingUtils.is_response_api_usage(_usage_dict):
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_usage_dict)
     usage: Final[Usage] = Usage(**_usage_dict)
     if custom_llm_provider == "xai":
         from litellm.llms.xai.chat.transformation import XAIChatConfig
@@ -733,9 +760,11 @@ def _get_response_from_batch_job_output_file(
         return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput", None) or {}
-    _response: Final[dict] = batch_job_output_file.get("response", None) or {}
+    _response: Final = cast(  # cast-ok: batch output response comes from provider JSON
+        Mapping[str, object], batch_job_output_file.get("response", None) or {}
+    )
     _response_body: Final = _response.get("body", None) or {}
-    return _response_body
+    return cast(Mapping[str, object], _response_body)  # cast-ok: batch response body comes from provider JSON
 
 
 def _batch_response_was_successful(
@@ -752,5 +781,7 @@ def _batch_response_was_successful(
         return _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("type") == "succeeded"
     if custom_llm_provider == "bedrock":
         return batch_job_output_file.get("modelOutput") is not None and batch_job_output_file.get("error") is None
-    _response: Final[dict] = batch_job_output_file.get("response", None) or {}
+    _response: Final[dict[str, object]] = cast(  # cast-ok: batch response bodies come from provider JSON
+        dict[str, object], batch_job_output_file.get("response", None) or {}
+    )
     return _response.get("status_code", None) == 200

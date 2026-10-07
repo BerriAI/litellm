@@ -88,7 +88,8 @@
     "call_type"
   ],
   "stream_opened": [
-    "logger"
+    "logger",
+    "head"
   ],
   "stream_success": [
     "logger",

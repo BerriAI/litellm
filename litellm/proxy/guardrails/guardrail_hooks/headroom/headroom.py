@@ -508,7 +508,6 @@ class HeadroomGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
         )
-        self.timeout: httpx.Timeout = self._resolve_timeout(timeout)
         self.ccr_retrieval = ccr_retrieval
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -520,6 +519,7 @@ class HeadroomGuardrail(CustomGuardrail):
             default_on=default_on,
             supported_event_hooks=list(self.get_supported_event_hooks()),
         )
+        self.timeout = self._resolve_timeout(timeout)
 
     def _should_bypass(self, request_data: dict) -> bool:
         psr: Final = request_data.get("proxy_server_request")
@@ -890,7 +890,7 @@ class HeadroomGuardrail(CustomGuardrail):
             return base_result
         if not has_headroom_retrieve_tool(effective.get("tools")):
             return base_result
-        return {  # mutable-ok: the hook contract is a plain dict the router merges into the request kwargs
+        return {
             **effective,
             "stream": False,
             HEADROOM_CONVERTED_STREAM_KEY: True,

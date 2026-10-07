@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import Final, NoReturn
 from unittest.mock import MagicMock, patch
 
@@ -10,13 +11,21 @@ import litellm
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
+    MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
+    MidStreamFallbackControls,
     _trigger_cooldown_for_failed_deployment,
-    fallback_attempt_key,
+    attempted_retries_for_request,
+    committed_retry_budget_for_request,
+    carry_over_routed_deployment,
     clear_pre_routing_selection,
+    fallback_attempt_key,
     get_fallback_model_group,
     get_pre_routing_selection,
+    mid_stream_retry_kwargs,
     record_pre_routing_selection,
+    record_retry_attempt,
+    routed_deployment_id,
     run_async_fallback,
 )
 
@@ -720,9 +729,7 @@ async def test_run_async_fallback_keeps_a_request_override_distinct_from_the_bar
     with pytest.raises(RuntimeError, match="fallback model also failed"):
         await run_async_fallback(
             litellm_router=router,
-            fallback_model_group=[
-                {"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}
-            ],
+            fallback_model_group=[{"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}],
             original_model_group="primary-model",
             original_exception=RuntimeError("original failed"),
             max_fallbacks=3,
@@ -793,7 +800,7 @@ class TestTriggerCooldownForFailedDeployment:
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_called_once()
@@ -818,7 +825,7 @@ class TestTriggerCooldownForFailedDeployment:
             }
         }
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs=kwargs, exception=exc)
 
             mock_set_cooldown.assert_not_called()
@@ -835,7 +842,7 @@ class TestTriggerCooldownForFailedDeployment:
         exc.failed_deployment_id = "fallback-deployment"
 
         with (
-            patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown,
+            patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown,
             patch(
                 "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
             ) as mock_increment,
@@ -850,7 +857,7 @@ class TestTriggerCooldownForFailedDeployment:
     def test_no_op_when_deployment_id_missing(self):
         mock_router = MagicMock()
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
                 litellm_router=mock_router, kwargs={}, exception=RuntimeError("no metadata")
             )
@@ -866,7 +873,7 @@ class TestTriggerCooldownForFailedDeployment:
         exc.failed_deployment_id = "fallback-deployment"
         mark_advisor_orchestration_failure(exc)
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_not_called()
@@ -879,7 +886,7 @@ class TestTriggerCooldownForFailedDeployment:
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
 
             call_kwargs = mock_set_cooldown.call_args[1]
@@ -897,7 +904,7 @@ class TestTriggerCooldownForFailedDeployment:
         exc.failed_deployment_id = "fallback-deployment"
         exc.litellm_response_headers = httpx.Headers({"retry-after": "45"})
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
 
             call_kwargs = mock_set_cooldown.call_args[1]
@@ -912,7 +919,7 @@ class TestTriggerCooldownForFailedDeployment:
         exc.failed_deployment_id = "fallback-deployment"
 
         with patch(
-            "litellm.router_utils.fallback_event_handlers._set_cooldown_deployments",
+            "litellm.router_utils.fallback_event_handlers.set_cooldown_deployments",
             side_effect=RuntimeError("cooldown error"),
         ):
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
@@ -930,7 +937,7 @@ class TestTriggerCooldownForFailedDeployment:
         exc.failed_deployment_id = "fallback-deployment"
 
         with (
-            patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown,
+            patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown,
             patch(
                 "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
             ) as mock_increment,
@@ -955,7 +962,7 @@ class TestTriggerCooldownForFailedDeployment:
         exc = litellm.NotFoundError("not found", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_called_once()
@@ -977,7 +984,7 @@ class TestTriggerCooldownForFailedDeployment:
         exc.failed_deployment_id = "fallback-deployment"
 
         with (
-            patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown,
+            patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown,
             patch(
                 "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
             ) as mock_increment,
@@ -1052,7 +1059,7 @@ class TestTriggerCooldownForFailedDeployment:
         exc = litellm.Timeout(message="timeout", model="gpt-4", llm_provider="openai")
         exc.failed_deployment_id = "fallback-deployment"
 
-        with patch("litellm.router_utils.fallback_event_handlers._set_cooldown_deployments") as mock_set_cooldown:
+        with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_called_once()
@@ -1139,6 +1146,58 @@ class TestRunAsyncFallbackTriggersCooldown:
 
 
 @pytest.mark.asyncio
+async def test_a_stored_fallback_target_cannot_carry_a_federation_field():
+    """A dict fallback target is merged into kwargs, and kwargs beat the deployment's own params,
+    so a stored key/team/global fallback could otherwise set the workspace a federation token is
+    minted for. The request itself is already forbidden to carry these, and a stored setting is
+    not a more trusted source than the request."""
+    with pytest.raises(ValueError, match="server-owned workload identity federation parameter"):
+        await run_async_fallback(
+            litellm_router=FakeRouter(),
+            fallback_model_group=[{"model": "anthropic-backup", "anthropic_federation_workspace_id": "wrkspc_other"}],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("upstream limited request"),
+            max_fallbacks=3,
+            fallback_depth=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_stored_fallback_target_cannot_carry_an_openai_federation_field():
+    """The OpenAI identity trio is server-owned for the same reason: a stored fallback target
+    naming a token file would pick which workload assertion is exchanged for the bearer."""
+    with pytest.raises(ValueError, match="openai_identity_token_file"):
+        await run_async_fallback(
+            litellm_router=FakeRouter(),
+            fallback_model_group=[
+                {"model": "openai-backup", "openai_identity_token_file": "/var/run/secrets/tokens/other"}
+            ],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("upstream limited request"),
+            max_fallbacks=3,
+            fallback_depth=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_is_not_swallowed_as_a_fallback_error():
+    """Checked before the per-target loop on purpose: inside it, the refusal would be caught as
+    that target's failure and the run would quietly continue to the next one."""
+    with pytest.raises(ValueError, match="anthropic_issuer_signing_key_ref"):
+        await run_async_fallback(
+            litellm_router=FakeRouter(),
+            fallback_model_group=[
+                {"model": "anthropic-backup", "anthropic_issuer_signing_key_ref": "os.environ/ADMIN_KEY"},
+                "a-perfectly-fine-model",
+            ],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("upstream limited request"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            include_fallback_errors=True,
+        )
+
+
 async def test_run_async_fallback_stamps_fallback_info_into_metadata():
     """Spend logs are built from the request metadata of the nested call, so the
     fallback signal has to be stamped there before recursing."""
@@ -1399,3 +1458,98 @@ def test_get_fallback_model_group_never_resolves_a_provider_without_a_prefixed_k
 
     assert get_fallback_model_group(fallbacks=fallbacks, model_group="my-alias") == (["gpt-5.5-mini"], 1)
     resolver.assert_not_called()
+
+
+def test_mid_stream_retry_kwargs_strips_what_the_retry_wrapper_pops_and_keeps_the_controls_carrier():
+    def generic_function(**kwargs) -> None:
+        return None
+
+    def attempt(**kwargs) -> None:
+        return None
+
+    controls = MidStreamFallbackControls(MappingProxyType({"num_retries": 3}))
+    litellm_metadata = {"model_group": "glm"}
+    hop_kwargs = {
+        "model": "glm",
+        "original_generic_function": generic_function,
+        "original_function": attempt,
+        "fallbacks": [{"glm": ["fb"]}],
+        "context_window_fallbacks": [],
+        "content_policy_fallbacks": [],
+        "num_retries": 3,
+        "model_group_retry_policy": {},
+        "stream": True,
+        "litellm_metadata": litellm_metadata,
+        MID_STREAM_FALLBACK_CONTROLS_KEY: controls,
+    }
+
+    retry_kwargs = mid_stream_retry_kwargs(hop_kwargs)
+
+    assert retry_kwargs == {
+        "model": "glm",
+        "original_generic_function": generic_function,
+        "stream": True,
+        "litellm_metadata": litellm_metadata,
+        MID_STREAM_FALLBACK_CONTROLS_KEY: controls,
+    }
+    assert retry_kwargs["litellm_metadata"] is litellm_metadata
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        pytest.param({"litellm_metadata": {"attempted_retries": 2}, "metadata": {"attempted_retries": 5}}, 2, id="litellm_metadata-wins"),
+        pytest.param({"metadata": {"attempted_retries": 1}}, 1, id="metadata-bucket"),
+        pytest.param({"litellm_metadata": {"attempted_retries": "2"}}, 0, id="string-is-not-a-count"),
+        pytest.param({"litellm_metadata": {"attempted_retries": -1}}, 0, id="negative-is-not-a-count"),
+        pytest.param({"litellm_metadata": {}}, 0, id="unstamped"),
+        pytest.param({}, 0, id="no-bucket"),
+    ],
+)
+def test_attempted_retries_for_request_reads_the_request_bucket(kwargs, expected):
+    assert attempted_retries_for_request(kwargs) == expected
+
+
+def test_record_retry_attempt_stamps_the_bucket_the_retry_wrapper_reads():
+    kwargs = {"litellm_metadata": {"attempted_retries": 0, "max_retries": 2}, "metadata": {}}
+
+    record_retry_attempt(kwargs, attempted_retries=1, max_retries=2)
+
+    assert kwargs["litellm_metadata"] == {"attempted_retries": 1, "max_retries": 2}
+    assert kwargs["metadata"] == {}
+    assert attempted_retries_for_request(kwargs) == 1
+    assert committed_retry_budget_for_request(kwargs) == 2
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        pytest.param({"litellm_metadata": {"attempted_retries": 1, "max_retries": 3}}, 3, id="committed-by-a-retry"),
+        pytest.param({"litellm_metadata": {"attempted_retries": 0, "max_retries": 3}}, None, id="stamped-before-any-retry"),
+        pytest.param({"litellm_metadata": {"attempted_retries": 1, "max_retries": "3"}}, None, id="string-is-not-a-budget"),
+        pytest.param({"litellm_metadata": {"attempted_retries": 1}}, None, id="no-budget"),
+        pytest.param({}, None, id="no-bucket"),
+    ],
+)
+def test_committed_retry_budget_for_request_is_the_budget_a_retry_stamped(kwargs, expected):
+    assert committed_retry_budget_for_request(kwargs) == expected
+
+
+def test_carry_over_routed_deployment_copies_model_info_into_the_snapshot():
+    live_kwargs = {"litellm_metadata": {"model_info": {"id": "dep-1"}, "deployment": "anthropic/glm-a"}}
+    snapshot = {"litellm_metadata": {"model_group": "glm"}}
+
+    carry_over_routed_deployment(live_kwargs=live_kwargs, snapshot=snapshot)
+
+    assert snapshot["litellm_metadata"] == {"model_group": "glm", "model_info": {"id": "dep-1"}}
+    assert snapshot["litellm_metadata"]["model_info"] is not live_kwargs["litellm_metadata"]["model_info"]
+    assert routed_deployment_id(snapshot) == "dep-1"
+
+
+def test_carry_over_routed_deployment_leaves_a_snapshot_without_a_bucket_alone():
+    snapshot = {"model": "glm"}
+
+    carry_over_routed_deployment(live_kwargs={"litellm_metadata": {"model_info": {"id": "dep-1"}}}, snapshot=snapshot)
+
+    assert snapshot == {"model": "glm"}
+    assert routed_deployment_id(snapshot) is None

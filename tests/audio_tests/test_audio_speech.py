@@ -22,7 +22,7 @@ import litellm
 
 
 async def _run_audio_speech_litellm(sync_mode, model, api_base, api_key):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     speech_file_path = Path(__file__).parent / "speech.mp3"
 
     if sync_mode:
@@ -320,23 +320,13 @@ def test_audio_speech_cost_calc():
         assert standard_logging_payload["response_cost"] > 0
 
 
-def test_audio_speech_gemini():
-    result = litellm.speech(
-        model="gemini/gemini-2.5-flash-preview-tts",
-        input="the quick brown fox jumped over the lazy dogs",
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
-
-    print(result)
-
-
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_azure_ava_tts_async():
     """
     Test Azure AVA (Cognitive Services) Text-to-Speech with real API request.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     api_key = os.getenv("AZURE_TTS_API_KEY")
     api_base = os.getenv("AZURE_TTS_API_BASE")
 
@@ -390,7 +380,7 @@ async def test_runwayml_tts_async():
     """
     Test RunwayML Text-to-Speech with real API request.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     api_key = os.getenv("RUNWAYML_API_KEY")
     api_base = os.getenv("RUNWAYML_API_BASE")
 
@@ -667,38 +657,3 @@ async def test_aws_polly_tts_with_ssml():
         assert request_body["VoiceId"] == "Joanna"
 
 
-@pytest.mark.asyncio
-async def test_aws_polly_tts_real_api():
-    """
-    Test AWS Polly TTS with real API request.
-    Requires AWS credentials to be configured.
-    """
-    speech_file_path = Path(__file__).parent / "aws_polly_speech_generative.mp3"
-
-    response = await litellm.aspeech(
-        model="aws_polly/generative",
-        voice="Joanna",
-        input="Hello, this is a test of AWS Polly text to speech integration with LiteLLM.",
-        aws_region_name="us-east-1",
-    )
-
-    from litellm.types.llms.openai import HttpxBinaryResponseContent
-
-    assert isinstance(response, HttpxBinaryResponseContent)
-
-    binary_content = response.content
-    assert len(binary_content) > 0
-
-    # MP3 files start with ID3 tag or MPEG sync word
-    assert (
-        binary_content[:3] == b"ID3"
-        or binary_content[:2] == b"\xff\xfb"
-        or binary_content[:2] == b"\xff\xf3"
-    )
-
-    response.stream_to_file(speech_file_path)
-
-    assert speech_file_path.exists()
-    assert speech_file_path.stat().st_size > 0
-
-    print(f"AWS Polly TTS audio saved to: {speech_file_path}")

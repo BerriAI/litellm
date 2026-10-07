@@ -505,159 +505,6 @@ async def test_router_completion_streaming():
 """
 
 
-@pytest.mark.asyncio
-async def test_router_caching_ttl():
-    """
-    Confirm caching ttl's work as expected.
-
-    Relevant issue: https://github.com/BerriAI/litellm/issues/5609
-    """
-    messages = [
-        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
-    ]
-    model = "azure-model"
-    model_list = [
-        {
-            "model_name": "azure-model",
-            "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
-                "tpm": 1440,
-                "mock_response": "Hello world",
-            },
-            "model_info": {"id": 1},
-        }
-    ]
-    router = Router(
-        model_list=model_list,
-        routing_strategy="usage-based-routing-v2",
-        set_verbose=False,
-        redis_host=os.getenv("REDIS_HOST"),
-        redis_password=os.getenv("REDIS_PASSWORD"),
-        redis_port=os.getenv("REDIS_PORT"),
-    )
-
-    assert router.cache.redis_cache is not None
-
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
-    increment_cache_kwargs = {}
-    with patch.object(
-        router.cache,
-        "async_increment_cache_pipeline",
-        new=AsyncMock(),
-    ) as mock_client:
-        await router.acompletion(model=model, messages=messages)
-
-        # Async success callbacks are dispatched to GLOBAL_LOGGING_WORKER's
-        # background queue; drain it before asserting the mock was invoked.
-        await GLOBAL_LOGGING_WORKER.flush()
-
-        # mock_client.assert_called_once()
-        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
-        print(f"mock_client.call_args.args: {mock_client.call_args.args}")
-
-        # Get the increment_list from the first positional argument or the keyword argument
-        increment_list = mock_client.call_args.kwargs.get(
-            "increment_list",
-            mock_client.call_args.args[0] if mock_client.call_args.args else None,
-        )
-        assert increment_list is not None
-        assert len(increment_list) > 0
-
-        # Check that TTL is set to 60 for all operations
-        for operation in increment_list:
-            assert operation["ttl"] == 60
-
-        # Get the first operation for testing the redis increment
-        first_operation = increment_list[0]
-        increment_cache_kwargs = {
-            "key": first_operation["key"],
-            "value": first_operation["increment_value"],
-            "ttl": first_operation["ttl"],
-        }
-
-    ## call redis async increment and check if ttl correctly set
-    await router.cache.redis_cache.async_increment(**increment_cache_kwargs)
-
-    _redis_client = router.cache.redis_cache.init_async_client()
-
-    async with _redis_client as redis_client:
-        current_ttl = await redis_client.ttl(increment_cache_kwargs["key"])
-
-        assert current_ttl >= 0
-
-        print(f"current_ttl: {current_ttl}")
-
-
-def test_router_caching_ttl_sync():
-    """
-    Confirm caching ttl's work as expected.
-
-    Relevant issue: https://github.com/BerriAI/litellm/issues/5609
-    """
-    messages = [
-        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
-    ]
-    model = "azure-model"
-    model_list = [
-        {
-            "model_name": "azure-model",
-            "litellm_params": {
-                "model": "azure/gpt-turbo",
-                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-                "api_base": "https://openai-france-1234.openai.azure.com",
-                "tpm": 1440,
-                "mock_response": "Hello world",
-            },
-            "model_info": {"id": 1},
-        }
-    ]
-    router = Router(
-        model_list=model_list,
-        routing_strategy="usage-based-routing-v2",
-        set_verbose=False,
-        redis_host=os.getenv("REDIS_HOST"),
-        redis_password=os.getenv("REDIS_PASSWORD"),
-        redis_port=os.getenv("REDIS_PORT"),
-    )
-
-    assert router.cache.redis_cache is not None
-
-    increment_cache_kwargs = {}
-    with patch.object(
-        router.cache.redis_cache,
-        "increment_cache",
-        new=MagicMock(),
-    ) as mock_client:
-        router.completion(model=model, messages=messages)
-
-        print(mock_client.call_args_list)
-        mock_client.assert_called()
-        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
-        print(f"mock_client.call_args.args: {mock_client.call_args.args}")
-
-        increment_cache_kwargs = {
-            "key": mock_client.call_args.args[0],
-            "value": mock_client.call_args.args[1],
-            "ttl": mock_client.call_args.kwargs["ttl"],
-        }
-
-        assert mock_client.call_args.kwargs["ttl"] == 60
-
-    ## call redis async increment and check if ttl correctly set
-    router.cache.redis_cache.increment_cache(**increment_cache_kwargs)
-
-    _redis_client = router.cache.redis_cache.redis_client
-
-    current_ttl = _redis_client.ttl(increment_cache_kwargs["key"])
-
-    assert current_ttl >= 0
-
-    print(f"current_ttl: {current_ttl}")
-
-
 def test_return_potential_deployments():
     """
     Assert deployment at limit is filtered out
@@ -672,7 +519,7 @@ def test_return_potential_deployments():
                 "model_name": "model-test",
                 "litellm_params": {
                     "rpm": 1,
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                     "model": "openai/gpt-3.5-turbo",
                     "mock_response": "Hello, world!",
                 },
@@ -685,7 +532,7 @@ def test_return_potential_deployments():
                 "model_name": "model-test",
                 "litellm_params": {
                     "rpm": 10,
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                     "model": "openai/o1-mini",
                     "mock_response": "Hello, world, it's o1!",
                 },

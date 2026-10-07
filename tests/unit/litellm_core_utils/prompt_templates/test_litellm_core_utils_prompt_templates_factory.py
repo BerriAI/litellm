@@ -22,12 +22,79 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
+    encode_tool_call_id_with_signature,
+    function_call_prompt,
+    get_thought_signature_from_tool,
     get_tool_calls_from_response,
     make_valid_bedrock_tool_name,
     ollama_pt,
+    parse_mime_type,
     sanitize_messages_for_tool_calling,
 )
 from litellm.types.llms.openai import ChatCompletionToolMessage
+from litellm.utils import validate_and_fix_openai_messages
+
+
+def test_function_call_prompt_preserves_append_failure_for_non_string_content() -> None:
+    messages = [{"role": "system", "content": None}]
+
+    with pytest.raises(AttributeError):
+        function_call_prompt(messages, [])
+
+
+@pytest.mark.parametrize(
+    ("thought_signature", "expected"),
+    [
+        ("encoded-signature", "call_123__thought__encoded-signature"),
+        (None, "call_123"),
+        ("", "call_123"),
+    ],
+)
+def test_encode_tool_call_id_with_signature(thought_signature, expected):
+    assert encode_tool_call_id_with_signature("call_123", thought_signature) == expected
+
+
+@pytest.mark.parametrize(
+    ("tool", "expected"),
+    [
+        ({"provider_specific_fields": {"thought_signature": "tool-signature"}}, "tool-signature"),
+        (
+            {"function": {"provider_specific_fields": {"thought_signature": "function-signature"}}},
+            "function-signature",
+        ),
+        (
+            {"id": encode_tool_call_id_with_signature("call_123", "embedded-signature")},
+            "embedded-signature",
+        ),
+        ({}, None),
+    ],
+)
+def test_get_thought_signature_from_tool(tool, expected):
+    assert get_thought_signature_from_tool(tool) == expected
+
+
+@pytest.mark.parametrize(
+    ("base64_data", "expected"),
+    [
+        ("data:image/png;base64,encoded-image", "image/png"),
+        ("data:application/pdf;base64,encoded-document", "application/pdf"),
+        ("not-a-data-url", None),
+    ],
+)
+def test_parse_mime_type(base64_data, expected):
+    assert parse_mime_type(base64_data) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_error"),
+    [
+        ({"type": "file"}, "missing the required 'file' field"),
+        ({"type": "file", "file": {}}, "file_data and file_id cannot both be None"),
+    ],
+)
+def test_process_file_message_rejects_missing_file_data(message, expected_error):
+    with pytest.raises(litellm.BadRequestError, match=expected_error):
+        BedrockConverseMessagesProcessor.process_file_message(message)
 
 
 def _get_gemini_function_response_inline_data_parts(result):
@@ -323,7 +390,7 @@ def test_bedrock_validate_format_image_or_video():
     # Test valid image formats
     valid_image_formats = ["png", "jpeg", "gif", "webp"]
     for format in valid_image_formats:
-        result = BedrockImageProcessor._validate_format(f"image/{format}", format)
+        result = BedrockImageProcessor.validate_format(f"image/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
 
     # Test valid video formats
@@ -339,7 +406,7 @@ def test_bedrock_validate_format_image_or_video():
         "3gp",
     ]
     for format in valid_video_formats:
-        result = BedrockImageProcessor._validate_format(f"video/{format}", format)
+        result = BedrockImageProcessor.validate_format(f"video/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
 
     # Test valid document formats
@@ -351,7 +418,7 @@ def test_bedrock_validate_format_image_or_video():
     }
     for mime, expected in valid_document_formats.items():
         print("testing mime", mime, "expected", expected)
-        result = BedrockImageProcessor._validate_format(mime, mime.split("/")[1])
+        result = BedrockImageProcessor.validate_format(mime, mime.split("/")[1])
         assert result == expected, f"Expected {expected}, got {result}"
 
 
@@ -4095,3 +4162,168 @@ def test_is_unsignable_thinking_block_treats_whitespace_only_as_empty():
     }
 
     assert is_unsignable_thinking_block(whitespace_only_block) is True
+
+
+_CONTENT_LESS_USER_MESSAGES: Final = ({"role": "user"}, {"role": "user", "content": None})
+_CONTENT_LESS_TOOL_MESSAGES: Final = (
+    {"role": "tool", "tool_call_id": "call_1"},
+    {"role": "tool", "tool_call_id": "call_1", "content": None},
+)
+_BOSTON_WEATHER_TOOL_CALL_TURN: Final = (
+    {"role": "user", "content": "What is the weather in Boston?"},
+    {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Boston"}'},
+            }
+        ],
+    },
+)
+
+
+def _conversation_around(
+    content_less_user_message: dict[str, object],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    with_message: Final = [
+        {"role": "user", "content": "What is the capital of France?"},
+        content_less_user_message,
+        {"role": "assistant", "content": "Paris."},
+        {"role": "user", "content": "And of Spain?"},
+    ]
+    without_message: Final = [message for message in with_message if message is not content_less_user_message]
+    return validate_and_fix_openai_messages(with_message), validate_and_fix_openai_messages(without_message)
+
+
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+def test_bedrock_converse_messages_pt_user_message_without_content_adds_no_block(
+    content_less_user_message: dict[str, object],
+):
+    with_message, without_message = _conversation_around(content_less_user_message)
+
+    assert _bedrock_converse_messages_pt(
+        messages=with_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
+    ) == _bedrock_converse_messages_pt(messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+async def test_bedrock_converse_messages_pt_async_user_message_without_content_adds_no_block(
+    content_less_user_message: dict[str, object],
+):
+    with_message, without_message = _conversation_around(content_less_user_message)
+
+    assert await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=with_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
+    ) == await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
+    )
+
+
+@pytest.mark.parametrize("content_less_tool_message", _CONTENT_LESS_TOOL_MESSAGES)
+def test_bedrock_converse_messages_pt_tool_message_without_content_yields_empty_tool_result(
+    content_less_tool_message: dict[str, object],
+):
+    result: Final = _bedrock_converse_messages_pt(
+        messages=validate_and_fix_openai_messages([*_BOSTON_WEATHER_TOOL_CALL_TURN, content_less_tool_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    )
+
+    tool_result: Final = result[-1]["content"][0]["toolResult"]
+    assert result[-1]["role"] == "user"
+    assert tool_result["toolUseId"] == "call_1"
+    assert tool_result["content"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_less_tool_message", _CONTENT_LESS_TOOL_MESSAGES)
+async def test_bedrock_converse_messages_pt_async_tool_message_without_content_yields_empty_tool_result(
+    content_less_tool_message: dict[str, object],
+):
+    result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=validate_and_fix_openai_messages([*_BOSTON_WEATHER_TOOL_CALL_TURN, content_less_tool_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    )
+
+    tool_result: Final = result[-1]["content"][0]["toolResult"]
+    assert tool_result["toolUseId"] == "call_1"
+    assert tool_result["content"] == []
+
+
+def test_bedrock_converse_messages_pt_blank_user_text_sends_the_continue_message_text():
+    continue_message: Final = {"role": "user", "content": "Please continue."}
+    blank_last_turn: Final = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi."},
+        {"role": "user", "content": "   "},
+    ]
+    explicit_last_turn: Final = [*blank_last_turn[:2], continue_message]
+
+    assert _bedrock_converse_messages_pt(
+        messages=blank_last_turn,
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+        user_continue_message=continue_message,
+    ) == _bedrock_converse_messages_pt(
+        messages=explicit_last_turn,
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+        user_continue_message=continue_message,
+    )
+
+
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+def test_bedrock_converse_messages_pt_lone_content_less_user_turn_sends_the_continue_message(
+    content_less_user_message: dict[str, object],
+):
+    continue_message: Final = {"role": "user", "content": "Please continue."}
+
+    assert _bedrock_converse_messages_pt(
+        messages=validate_and_fix_openai_messages([content_less_user_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+        user_continue_message=continue_message,
+    ) == _bedrock_converse_messages_pt(
+        messages=[continue_message],
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+        user_continue_message=continue_message,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+async def test_bedrock_converse_messages_pt_async_lone_content_less_user_turn_continues_under_modify_params(
+    content_less_user_message: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    assert await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=validate_and_fix_openai_messages([content_less_user_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    ) == await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=[{"role": "user", "content": ""}],
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    )
+
+
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+def test_bedrock_converse_messages_pt_lone_content_less_user_turn_adds_no_block_without_a_continue_message(
+    content_less_user_message: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    assert (
+        _bedrock_converse_messages_pt(
+            messages=validate_and_fix_openai_messages([content_less_user_message]),
+            model="anthropic.claude-haiku-4-5",
+            llm_provider="bedrock",
+        )
+        == []
+    )

@@ -2,6 +2,7 @@ import asyncio
 import copy
 import functools
 import gc
+import itertools
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ import warnings
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -19,15 +20,18 @@ import openai
 import pytest
 import respx
 from fastapi import HTTPException
+from opentelemetry import trace
 
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.plumbing.context import set_request_root_span
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
@@ -47,6 +51,8 @@ from litellm.router import (
     _anthropic_stream_should_decline_fallback,
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
+    _without_line_breaks,
+    Span,
 )
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
@@ -54,7 +60,22 @@ from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deploymen
 from litellm.router_utils.fallback_event_handlers import DISABLE_FALLBACKS_METADATA_KEY
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.llms.openai import ChatCompletionRequest
-from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
+from litellm.types.router import (
+    CustomRoutingStrategyBase,
+    Deployment,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    ModelGroupInfo,
+    ModelInfo,
+    PreRoutingHookResponse,
+    RetryPolicy,
+    RoutingContext,
+)
+
+if TYPE_CHECKING:
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -154,31 +175,18 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
             num_retries=0,
         )
         callbacks = router.optional_callbacks or []
-        encrypted_content_callbacks = [
-            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
-        ]
-        deployment_callback = next(
-            cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck)
-        )
+        encrypted_content_callbacks = [cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)]
+        deployment_callback = next(cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck))
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is False
-        assert (
-            encrypted_content_callbacks[0].model_group_affinity_config
-            == model_group_affinity_config
-        )
-        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(
-            deployment_callback
-        )
-        assert litellm.callbacks.index(encrypted_content_callbacks[0]) < (
-            litellm.callbacks.index(deployment_callback)
-        )
+        assert encrypted_content_callbacks[0].model_group_affinity_config == model_group_affinity_config
+        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(deployment_callback)
+        assert litellm.callbacks.index(encrypted_content_callbacks[0]) < (litellm.callbacks.index(deployment_callback))
 
         router._add_encrypted_content_affinity_check(enable_global_affinity=True)
 
         callbacks = router.optional_callbacks or []
-        encrypted_content_callbacks = [
-            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
-        ]
+        encrypted_content_callbacks = [cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)]
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is True
         assert encrypted_content_callbacks[0].router is router
@@ -209,13 +217,9 @@ async def test_encrypted_content_affinity_model_group_config_is_additive():
         },
         target_deployment,
     ]
-    encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
-        "deployment-b", "rs_test"
-    )
+    encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-b", "rs_test")
 
-    assert EncryptedContentAffinityCheck.has_model_group_affinity_enabled(
-        {model_group: ["encrypted_content_affinity"]}
-    )
+    assert EncryptedContentAffinityCheck.has_model_group_affinity_enabled({model_group: ["encrypted_content_affinity"]})
     assert not EncryptedContentAffinityCheck.has_model_group_affinity_enabled(None)
 
     per_group_check = EncryptedContentAffinityCheck(
@@ -256,10 +260,7 @@ async def test_encrypted_content_affinity_model_group_config_is_additive():
     )
 
     assert unfiltered == healthy_deployments
-    assert (
-        "encrypted_content_affinity_enabled"
-        not in disabled_request_kwargs["litellm_metadata"]
-    )
+    assert "encrypted_content_affinity_enabled" not in disabled_request_kwargs["litellm_metadata"]
 
     global_check = EncryptedContentAffinityCheck(
         enable_global_affinity=True,
@@ -279,9 +280,7 @@ async def test_encrypted_content_affinity_model_group_config_is_additive():
     )
 
     assert globally_filtered == [target_deployment]
-    assert global_request_kwargs["litellm_metadata"][
-        "encrypted_content_affinity_enabled"
-    ]
+    assert global_request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"]
 
 
 @pytest.mark.asyncio
@@ -328,18 +327,10 @@ async def test_encrypted_content_affinity_takes_priority_over_user_key_affinity(
             num_retries=0,
         )
         callbacks = router.optional_callbacks or []
-        deployment_callback = next(
-            cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck)
-        )
-        encrypted_content_callback = next(
-            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
-        )
-        assert callbacks.index(encrypted_content_callback) < callbacks.index(
-            deployment_callback
-        )
-        assert litellm.callbacks.index(encrypted_content_callback) < (
-            litellm.callbacks.index(deployment_callback)
-        )
+        deployment_callback = next(cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck))
+        encrypted_content_callback = next(cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck))
+        assert callbacks.index(encrypted_content_callback) < callbacks.index(deployment_callback)
+        assert litellm.callbacks.index(encrypted_content_callback) < (litellm.callbacks.index(deployment_callback))
 
         cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
             model_group=model_group,
@@ -350,9 +341,7 @@ async def test_encrypted_content_affinity_takes_priority_over_user_key_affinity(
             value={"model_id": "deployment-a"},
             ttl=60,
         )
-        encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
-            "deployment-b", "rs_test"
-        )
+        encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-b", "rs_test")
         request_kwargs = {
             "input": [{"type": "reasoning", "id": encoded_id}],
             "litellm_metadata": {"user_api_key_hash": user_api_key_hash},
@@ -538,7 +527,9 @@ async def test_async_router_acreate_file_passthrough_keeps_the_file_and_forwards
     from io import BytesIO
     from unittest.mock import MagicMock, patch
 
-    jsonl_content = b'{"custom_id": "r1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "vertex-batch"}}\n'
+    jsonl_content = (
+        b'{"custom_id": "r1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "vertex-batch"}}\n'
+    )
     router = litellm.Router(
         model_list=[
             {
@@ -549,9 +540,7 @@ async def test_async_router_acreate_file_passthrough_keeps_the_file_and_forwards
     )
 
     with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
-        await router.acreate_file(
-            model="vertex-batch", purpose="batch", file=BytesIO(jsonl_content), passthrough=True
-        )
+        await router.acreate_file(model="vertex-batch", purpose="batch", file=BytesIO(jsonl_content), passthrough=True)
         forwarded = mock_acreate_file.call_args.kwargs
         assert forwarded["passthrough"] is True
         forwarded["file"].seek(0)
@@ -886,8 +875,6 @@ async def test_arouter_async_get_healthy_deployments():
     assert result[0]["litellm_params"]["model"] == "gpt-3.5-turbo"
 
 
-
-
 def test_arouter_test_team_model():
     """
     Test that router.test_team_model returns the correct model
@@ -999,9 +986,7 @@ async def test_arouter_aretrieve_batch():
         ],
     )
 
-    with patch.object(
-        litellm, "aretrieve_batch", return_value=AsyncMock()
-    ) as mock_aretrieve_batch:
+    with patch.object(litellm, "aretrieve_batch", return_value=AsyncMock()) as mock_aretrieve_batch:
         try:
             response = await router.aretrieve_batch(
                 model="gpt-3.5-turbo",
@@ -1261,6 +1246,7 @@ def test_sync_deployment_callback_on_success_skips_batch_retrieves(
         == expected_successes
     )
 
+
 _ROUTING_STRATEGY_CACHE_MARKERS = ("_map", "_request_count", ":tpm:", ":rpm:")
 
 
@@ -1272,8 +1258,7 @@ async def _moved_routing_counters(router, timeout: float = 2.0) -> list[str]:
         moved = sorted(
             f"{key}={cache_dict[key]}"
             for key in cache_dict
-            if any(marker in key for marker in _ROUTING_STRATEGY_CACHE_MARKERS)
-            and cache_dict[key]
+            if any(marker in key for marker in _ROUTING_STRATEGY_CACHE_MARKERS) and cache_dict[key]
         )
         if moved:
             return moved
@@ -1354,9 +1339,7 @@ async def test_arouter_aretrieve_file_content():
     Test that router.acreate_file with JSONL file returns the correct response
     """
 
-    with patch.object(
-        litellm, "afile_content", return_value=AsyncMock()
-    ) as mock_afile_content:
+    with patch.object(litellm, "afile_content", return_value=AsyncMock()) as mock_afile_content:
         router = litellm.Router(
             model_list=[
                 {
@@ -1417,7 +1400,7 @@ async def test_arouter_filter_team_based_models():
     assert result is not None
 
     # FAILS
-    with pytest.raises(Exception, match='No deployments available for selected model, Try again in') as e:
+    with pytest.raises(Exception, match="No deployments available for selected model, Try again in") as e:
         result = await router.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello, world!"}],
@@ -1501,9 +1484,7 @@ def test_arouter_should_include_deployment():
         model=deployment_with_team_and_public_name,
         team_id="test-team",
     )
-    assert (
-        result is True
-    ), "Should return True when team_id and team_public_model_name match"
+    assert result is True, "Should return True when team_id and team_public_model_name match"
 
     # Test Case 2: Team-specific deployment - team_id matches but model_name doesn't match team_public_model_name
     result = router.should_include_deployment(
@@ -1511,9 +1492,9 @@ def test_arouter_should_include_deployment():
         model=deployment_with_team_and_public_name,
         team_id="test-team",
     )
-    assert (
-        result is False
-    ), "Should return False when team_id matches but model_name doesn't match team_public_model_name"
+    assert result is False, (
+        "Should return False when team_id matches but model_name doesn't match team_public_model_name"
+    )
 
     # Test Case 3: Team-specific deployment - team_id doesn't match
     result = router.should_include_deployment(
@@ -1529,30 +1510,18 @@ def test_arouter_should_include_deployment():
         model=deployment_with_team_no_public_name,
         team_id="test-team",
     )
-    assert (
-        result is True
-    ), "Should return True when team deployment has no team_public_model_name to match"
+    assert result is True, "Should return True when team deployment has no team_public_model_name to match"
 
     # Test Case 5: Non-team deployment - model_name matches and no team_id
-    result = router.should_include_deployment(
-        model_name="gpt-4", model=deployment_without_team, team_id=None
-    )
-    assert (
-        result is True
-    ), "Should return True when model_name matches and deployment has no team_id"
+    result = router.should_include_deployment(model_name="gpt-4", model=deployment_without_team, team_id=None)
+    assert result is True, "Should return True when model_name matches and deployment has no team_id"
 
     # Test Case 6: Non-team deployment - model_name matches but team_id provided (should still work)
-    result = router.should_include_deployment(
-        model_name="gpt-4", model=deployment_without_team, team_id="any-team"
-    )
-    assert (
-        result is True
-    ), "Should return True when model_name matches non-team deployment, regardless of team_id param"
+    result = router.should_include_deployment(model_name="gpt-4", model=deployment_without_team, team_id="any-team")
+    assert result is True, "Should return True when model_name matches non-team deployment, regardless of team_id param"
 
     # Test Case 7: Non-team deployment - model_name doesn't match
-    result = router.should_include_deployment(
-        model_name="different-model", model=deployment_without_team, team_id=None
-    )
+    result = router.should_include_deployment(model_name="different-model", model=deployment_without_team, team_id=None)
     assert result is False, "Should return False when model_name doesn't match"
 
     # Test Case 8: Team deployment accessed without matching team_id
@@ -1561,9 +1530,7 @@ def test_arouter_should_include_deployment():
         model=deployment_with_team_and_public_name,
         team_id=None,
     )
-    assert (
-        result is True
-    ), "Should return True when matching model with exact model_name"
+    assert result is True, "Should return True when matching model with exact model_name"
 
 
 def test_arouter_responses_api_bridge():
@@ -1581,7 +1548,7 @@ def test_arouter_responses_api_bridge():
                 "litellm_params": {
                     "model": "azure/responses/o_series/webinterface-o3-pro",
                     "api_base": "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55",
-                    "api_key": "sk-1234567890",
+                    "api_key": "sk-9876567890",
                     "api_version": "preview",
                     "stream": True,
                 },
@@ -1613,9 +1580,7 @@ def test_arouter_responses_api_bridge():
         "status": "completed",
         "output": [],
     }
-    mock_response.text = (
-        '{"id": "resp_test", "object": "response", "status": "completed", "output": []}'
-    )
+    mock_response.text = '{"id": "resp_test", "object": "response", "status": "completed", "output": []}'
 
     with patch.object(client, "post", return_value=mock_response) as mock_post:
         try:
@@ -1689,7 +1654,7 @@ def test_add_invalid_provider_to_router():
         ],
     )
 
-    with pytest.raises(Exception, match='Unsupported provider - vertex_ai_eu') as e:
+    with pytest.raises(Exception, match="Unsupported provider - vertex_ai_eu") as e:
         router.add_deployment(
             Deployment(
                 model_name="vertex_ai/*",
@@ -1714,7 +1679,9 @@ def registered_custom_provider(monkeypatch: pytest.MonkeyPatch) -> str:
                 model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], mock_response="served by onprem handler"
             )
 
-    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "test-onprem-llm", "custom_handler": OnPremLLM()}])
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "test-onprem-llm", "custom_handler": OnPremLLM()}]
+    )
     monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
     monkeypatch.setattr(litellm, "_custom_providers", list(litellm._custom_providers))
     return "test-onprem-llm"
@@ -1791,15 +1758,9 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
             },
         }
 
-        with patch.object(
-            router, "_update_kwargs_with_deployment"
-        ) as mock_update_kwargs:
-            with patch.object(
-                router, "async_routing_strategy_pre_call_checks"
-            ) as mock_pre_call_checks:
-                with patch.object(
-                    router, "_get_client", return_value=None
-                ) as mock_get_client:
+        with patch.object(router, "_update_kwargs_with_deployment") as mock_update_kwargs:
+            with patch.object(router, "async_routing_strategy_pre_call_checks") as mock_pre_call_checks:
+                with patch.object(router, "_get_client", return_value=None) as mock_get_client:
                     result = await router._ageneric_api_call_with_fallbacks_helper(
                         model="gpt-3.5-turbo",
                         original_generic_function=mock_generic_function,
@@ -1834,7 +1795,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
     with patch.object(router, "async_get_available_deployment") as mock_get_deployment:
         mock_get_deployment.side_effect = Exception("No deployment available")
 
-        with pytest.raises(Exception, match='No deployment available') as exc_info:
+        with pytest.raises(Exception, match="No deployment available") as exc_info:
             await router._ageneric_api_call_with_fallbacks_helper(
                 model="gpt-3.5-turbo",
                 original_generic_function=mock_generic_function,
@@ -1864,15 +1825,9 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
             max_parallel_requests=1, model_id="deployment-1", model_group="gpt-3.5-turbo"
         )
 
-        with patch.object(
-            router, "_update_kwargs_with_deployment"
-        ) as mock_update_kwargs:
-            with patch.object(
-                router, "_get_client", return_value=mock_semaphore
-            ) as mock_get_client:
-                with patch.object(
-                    router, "async_routing_strategy_pre_call_checks"
-                ) as mock_pre_call_checks:
+        with patch.object(router, "_update_kwargs_with_deployment") as mock_update_kwargs:
+            with patch.object(router, "_get_client", return_value=mock_semaphore) as mock_get_client:
+                with patch.object(router, "async_routing_strategy_pre_call_checks") as mock_pre_call_checks:
                     result = await router._ageneric_api_call_with_fallbacks_helper(
                         model="gpt-3.5-turbo",
                         original_generic_function=mock_semaphore_function,
@@ -1901,16 +1856,10 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
             },
         }
 
-        with patch.object(
-            router, "_update_kwargs_with_deployment"
-        ) as mock_update_kwargs:
-            with patch.object(
-                router, "_get_client", return_value=None
-            ) as mock_get_client:
-                with patch.object(
-                    router, "async_routing_strategy_pre_call_checks"
-                ) as mock_pre_call_checks:
-                    with pytest.raises(Exception, match='Mock failure') as exc_info:
+        with patch.object(router, "_update_kwargs_with_deployment") as mock_update_kwargs:
+            with patch.object(router, "_get_client", return_value=None) as mock_get_client:
+                with patch.object(router, "async_routing_strategy_pre_call_checks") as mock_pre_call_checks:
+                    with pytest.raises(Exception, match="Mock failure") as exc_info:
                         await router._ageneric_api_call_with_fallbacks_helper(
                             model="gpt-3.5-turbo",
                             original_generic_function=mock_failing_function,
@@ -1978,9 +1927,9 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
             original_generic_function=capture_model,
         )
 
-    assert (
-        captured["model"] == "vertex_ai/gemini-2.5-flash"
-    ), f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
+    assert captured["model"] == "vertex_ai/gemini-2.5-flash", (
+        f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
+    )
 
 
 @pytest.mark.asyncio
@@ -2086,14 +2035,10 @@ def test_router_get_model_access_groups_team_only_models():
         ]
     )
 
-    access_groups = router.get_model_access_groups(
-        model_name="gpt-3.5-turbo", team_id=None
-    )
+    access_groups = router.get_model_access_groups(model_name="gpt-3.5-turbo", team_id=None)
     assert len(access_groups) == 0
 
-    access_groups = router.get_model_access_groups(
-        model_name="gpt-3.5-turbo", team_id="team_1"
-    )
+    access_groups = router.get_model_access_groups(model_name="gpt-3.5-turbo", team_id="team_1")
     assert list(access_groups.keys()) == ["default-models"]
 
 
@@ -2188,9 +2133,7 @@ def test_model_group_info_cost_from_db_model_info():
         ]
     )
 
-    with patch.object(
-        router, "get_deployment_model_info", side_effect=Exception("not found")
-    ):
+    with patch.object(router, "get_deployment_model_info", side_effect=Exception("not found")):
         result = router._cached_get_model_group_info("my-custom-model")
         assert result is not None
         assert result.input_cost_per_token == 0.0001
@@ -2218,9 +2161,7 @@ def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
         ]
     )
 
-    with patch.object(
-        router, "get_deployment_model_info", side_effect=Exception("not found")
-    ):
+    with patch.object(router, "get_deployment_model_info", side_effect=Exception("not found")):
         result = router._cached_get_model_group_info("my-custom-model-no-cost")
         assert result is not None
         assert result.input_cost_per_token is None
@@ -2272,6 +2213,183 @@ def test_model_group_info_cost_none_for_unpriced_deployment_but_zero_when_declar
     assert priced is not None
     assert priced.input_cost_per_token is not None and priced.input_cost_per_token > 0
     assert priced.output_cost_per_token is not None and priced.output_cost_per_token > 0
+
+
+def _alias_cost_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "vllm-free",
+                "litellm_params": {
+                    "model": "openai/my-vllm-free",
+                    "api_key": "fake",
+                    "api_base": "http://localhost:8000/v1",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {
+                "model_name": "gpt-priced",
+                "litellm_params": {"model": "gpt-4o", "api_key": "fake"},
+            },
+        ],
+        model_group_alias={"hidden-free": {"model": "vllm-free", "hidden": True}, "visible": "vllm-free"},
+    )
+
+
+def test_get_model_group_info_include_hidden_resolves_a_hidden_alias():
+    router = _alias_cost_router()
+
+    assert router.get_model_group_info(model_group="hidden-free") is None
+
+    hidden: Final = router.get_model_group_info(model_group="hidden-free", include_hidden=True)
+    assert hidden is not None
+    assert hidden.model_group == "hidden-free"
+    assert hidden.input_cost_per_token == 0
+    assert hidden.output_cost_per_token == 0
+
+
+def test_update_settings_model_group_alias_drops_cached_group_info():
+    router = _alias_cost_router()
+    before: Final = router.cached_model_group_info("visible")
+    assert before is not None and before.input_cost_per_token == 0
+
+    router.update_settings(model_group_alias={"visible": "gpt-priced"})
+
+    after: Final = router.cached_model_group_info("visible")
+    assert after is not None
+    assert after.input_cost_per_token is not None and after.input_cost_per_token > 0
+
+
+_PAID_INPUT_COST_PER_TOKEN: Final = 3e-06
+_PAID_OUTPUT_COST_PER_TOKEN: Final = 1.5e-05
+
+
+def _free_ollama_deployment(model_name: str) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "ollama/qwen3:0.6b",
+            "api_base": "http://localhost:11434",
+            "input_cost_per_token": 0,
+            "output_cost_per_token": 0,
+        },
+    }
+
+
+def _paid_openai_deployment(model_name: str, model: str) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": model,
+            "api_key": "fake",
+            "input_cost_per_token": _PAID_INPUT_COST_PER_TOKEN,
+            "output_cost_per_token": _PAID_OUTPUT_COST_PER_TOKEN,
+        },
+    }
+
+
+def _assert_priced(info: ModelGroupInfo | None, provider: str) -> None:
+    assert info is not None
+    assert info.providers == [provider]
+    assert info.input_cost_per_token == _PAID_INPUT_COST_PER_TOKEN
+    assert info.output_cost_per_token == _PAID_OUTPUT_COST_PER_TOKEN
+
+
+def _assert_free(info: ModelGroupInfo | None, provider: str) -> None:
+    assert info is not None
+    assert info.providers == [provider]
+    assert info.input_cost_per_token == 0
+    assert info.output_cost_per_token == 0
+
+
+def test_get_model_group_info_prices_an_alias_chain_from_the_group_it_routes_to():
+    """chain-entry resolves one hop to local-free and is served by local-free's own
+    deployment, so its price is that deployment's; local-free's own alias to gpt-priced
+    is a hop the router takes only for a request to local-free by name."""
+    router = Router(
+        model_list=[
+            _free_ollama_deployment("local-free"),
+            _paid_openai_deployment("gpt-priced", "gpt-4o"),
+        ],
+        model_group_alias={"chain-entry": "local-free", "local-free": "gpt-priced"},
+    )
+
+    _assert_free(router.get_model_group_info(model_group="chain-entry"), "ollama")
+    _assert_priced(router.get_model_group_info(model_group="local-free"), "openai")
+
+
+def test_get_model_group_info_prices_an_alias_chain_from_the_wildcard_route_serving_it():
+    """When the routed group has no deployment of its own, the wildcard route matching it
+    serves the request, so the price is the wildcard's and never the routed group's own alias
+    target's."""
+    router = Router(
+        model_list=[
+            _paid_openai_deployment("openai/*", "openai/*"),
+            _free_ollama_deployment("local-free"),
+        ],
+        model_group_alias={"wildcard-entry": "openai/gpt-4o", "openai/gpt-4o": "local-free"},
+    )
+
+    _assert_priced(router.get_model_group_info(model_group="wildcard-entry"), "openai")
+    _assert_free(router.get_model_group_info(model_group="openai/gpt-4o"), "ollama")
+
+
+def _served_models(deployments: list[DeploymentTypedDict] | None) -> list[str]:
+    return [deployment["litellm_params"]["model"] for deployment in deployments or ()]
+
+
+def test_get_model_list_of_routed_group_reads_the_groups_own_deployments_only():
+    """The router resolves an alias once, so a group reached as an alias target is served by
+    its own deployments. get_model_list composes the group's own alias target too, the hop a
+    request to that group by name takes."""
+    router = Router(
+        model_list=[
+            _free_ollama_deployment("local-free"),
+            _paid_openai_deployment("gpt-priced", "gpt-4o"),
+        ],
+        model_group_alias={"local-free": "gpt-priced"},
+    )
+
+    assert _served_models(router.get_model_list_of_routed_group("local-free")) == ["ollama/qwen3:0.6b"]
+    assert _served_models(router.get_model_list(model_name="local-free")) == ["ollama/qwen3:0.6b", "gpt-4o"]
+
+
+def test_get_model_list_of_routed_group_falls_back_to_the_wildcard_route_serving_it():
+    router = Router(
+        model_list=[
+            _paid_openai_deployment("openai/*", "openai/*"),
+            _free_ollama_deployment("local-free"),
+        ],
+        model_group_alias={"openai/gpt-4o": "local-free"},
+    )
+
+    routed = router.get_model_list_of_routed_group("openai/gpt-4o")
+
+    assert [deployment["model_name"] for deployment in routed] == ["openai/gpt-4o"]
+    assert _served_models(routed) == ["openai/gpt-4o"]
+    assert _served_models(router.get_model_list(model_name="openai/gpt-4o")) == ["ollama/qwen3:0.6b"]
+
+
+def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selector():
+    router = _alias_cost_router()
+
+    router._switch_routing_strategy(
+        "lar1",
+        {
+            "routing_strategy_args": {
+                "confidence_threshold_low": 0.1,
+                "confidence_threshold_medium": 0.3,
+                "confidence_threshold_high": 0.9,
+            }
+        },
+    )
+    assert router.routing_strategy == "lar1"
+    assert "async_get_available_deployment" in router.__dict__
+
+    router._switch_routing_strategy("usage-based-routing-v2", {})
+    assert router.lowesttpm_logger_v2 is not None
+    assert "async_get_available_deployment" not in router.__dict__
 
 
 @pytest.mark.parametrize(
@@ -2337,9 +2455,7 @@ def test_model_group_info_with_stringified_cost_values():
                 }
         return None
 
-    with patch.object(
-        router, "get_deployment_model_info", side_effect=_model_info_with_str_costs
-    ):
+    with patch.object(router, "get_deployment_model_info", side_effect=_model_info_with_str_costs):
         result = router._set_model_group_info(
             model_group="my-custom-model",
             user_facing_model_group_name="my-custom-model",
@@ -2385,9 +2501,7 @@ def test_model_group_info_db_fallback_with_stringified_cost_values():
         ]
     )
 
-    with patch.object(
-        router, "get_deployment_model_info", side_effect=Exception("not found")
-    ):
+    with patch.object(router, "get_deployment_model_info", side_effect=Exception("not found")):
         result = router._set_model_group_info(
             model_group="my-custom-model",
             user_facing_model_group_name="my-custom-model",
@@ -2647,6 +2761,7 @@ async def test_acompletion_streaming_iterator():
 
     # Collect streamed chunks — the first chunk succeeds, then the error re-raises
     collected_chunks = []
+
     async def _drain():
         async for chunk in result:
             collected_chunks.append(chunk)
@@ -2994,9 +3109,7 @@ def test_adopt_fallback_response_headers_replaces_rather_than_merges():
         "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
     }
 
-    wrapper.adopt_fallback_response_headers(
-        fallback, Router._prepare_fallback_hidden_params(fallback)
-    )
+    wrapper.adopt_fallback_response_headers(fallback, Router._prepare_fallback_hidden_params(fallback))
 
     assert wrapper._response_headers == {"x-request-id": "req-FALLBACK"}
     assert wrapper._hidden_params["model_id"] == "fallback-deployment"
@@ -3068,9 +3181,7 @@ def test_adopt_fallback_response_headers_drops_headers_the_fallback_cannot_repla
     fallback._response_headers = None
     fallback._hidden_params = {"model_id": "fallback-deployment"}
 
-    wrapper.adopt_fallback_response_headers(
-        fallback, Router._prepare_fallback_hidden_params(fallback)
-    )
+    wrapper.adopt_fallback_response_headers(fallback, Router._prepare_fallback_hidden_params(fallback))
 
     assert wrapper._response_headers is None
     assert wrapper._hidden_params["model_id"] == "fallback-deployment"
@@ -3097,9 +3208,7 @@ def test_adopt_fallback_response_headers_keeps_identity_when_fallback_has_none()
     hidden_params_before = wrapper._hidden_params
 
     fallback = object()
-    wrapper.adopt_fallback_response_headers(
-        fallback, Router._prepare_fallback_hidden_params(fallback)
-    )
+    wrapper.adopt_fallback_response_headers(fallback, Router._prepare_fallback_hidden_params(fallback))
 
     assert wrapper._response_headers is None
     assert wrapper._hidden_params is hidden_params_before
@@ -3173,9 +3282,7 @@ async def test_set_response_headers_is_the_only_complexity_header_source_for_pro
         **additional_headers,
     )
 
-    assert not {
-        key for key in proxy_headers if key.startswith("x-litellm-complexity-router-")
-    }
+    assert not {key for key in proxy_headers if key.startswith("x-litellm-complexity-router-")}
 
 
 @pytest.mark.asyncio
@@ -4094,11 +4201,7 @@ def _make_responses_iterator(
         BaseResponsesAPIStreamingIterator,
     )
 
-    base = (
-        LiteLLMCompletionStreamingIterator
-        if bridge
-        else BaseResponsesAPIStreamingIterator
-    )
+    base = LiteLLMCompletionStreamingIterator if bridge else BaseResponsesAPIStreamingIterator
 
     class _Iter(base):
         def __init__(self):
@@ -4198,9 +4301,7 @@ async def test_aresponses_streaming_iterator_fallback():
         BaseResponsesAPIStreamingIterator,
     )
 
-    router = _make_router_with_fallback(
-        "anthropic/claude-sonnet-4-6", "vertex_ai/claude-sonnet-4-6"
-    )
+    router = _make_router_with_fallback("anthropic/claude-sonnet-4-6", "vertex_ai/claude-sonnet-4-6")
     src = _make_responses_iterator(
         chunks=[MagicMock(type="response.created")],
         error=MidStreamFallbackError(
@@ -4446,9 +4547,9 @@ async def test_aresponses_streaming_iterator_writes_litellm_metadata_on_fallback
     fbk = mock_fallback_utils.call_args.kwargs["kwargs"]
     assert "litellm_metadata" in fbk, "wrong metadata_variable_name"
     assert fbk["litellm_metadata"]["model_group"] == "gpt-4"
-    assert "model_group" not in fbk.get(
-        "metadata", {}
-    ), "model_group leaked into 'metadata' instead of 'litellm_metadata'"
+    assert "model_group" not in fbk.get("metadata", {}), (
+        "model_group leaked into 'metadata' instead of 'litellm_metadata'"
+    )
 
 
 @pytest.mark.asyncio
@@ -4863,9 +4964,7 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
     fallback_response_object = ResponsesAPIResponse(
         id="resp_test", created_at=0, model="gpt-4", object="response", output=[]
     )
-    fallback_response_object.usage = ResponseAPIUsage(
-        input_tokens=20, output_tokens=15, total_tokens=35
-    )
+    fallback_response_object.usage = ResponseAPIUsage(input_tokens=20, output_tokens=15, total_tokens=35)
     fallback_event = ResponseCompletedEvent(
         type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
         response=fallback_response_object,
@@ -4874,9 +4973,7 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
     with (
         patch(
             "litellm.main.stream_chunk_builder",
-            return_value=SimpleNamespace(
-                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=4)
-            ),
+            return_value=SimpleNamespace(usage=SimpleNamespace(prompt_tokens=10, completion_tokens=4)),
         ),
         patch.object(
             router,
@@ -5177,9 +5274,7 @@ def test_pre_call_checks_skips_token_count_without_max_input_tokens(monkeypatch)
     monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {})
 
     calls = []
-    monkeypatch.setattr(
-        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000
-    )
+    monkeypatch.setattr(litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000)
 
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
@@ -5207,14 +5302,10 @@ def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5})
 
     calls = []
-    monkeypatch.setattr(
-        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000
-    )
+    monkeypatch.setattr(litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000)
 
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
@@ -5241,14 +5332,10 @@ def test_pre_call_checks_uses_precounted_tokens(monkeypatch):
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5})
 
     calls = []
-    monkeypatch.setattr(
-        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1
-    )
+    monkeypatch.setattr(litellm, "token_counter", lambda *a, **k: calls.append(1) or 1)
 
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
@@ -5275,9 +5362,7 @@ async def test_async_get_healthy_deployments_counts_tokens_off_the_event_loop(mo
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1_000_000}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1_000_000})
 
     counting_threads = []
     monkeypatch.setattr(
@@ -5373,14 +5458,10 @@ def test_pre_call_checks_does_not_recount_inline_after_an_off_loop_failure(monke
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5})
 
     calls = []
-    monkeypatch.setattr(
-        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000
-    )
+    monkeypatch.setattr(litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000)
 
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
@@ -5408,9 +5489,7 @@ async def test_async_get_healthy_deployments_never_recounts_on_the_loop(monkeypa
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5})
 
     counting_threads = []
 
@@ -5445,9 +5524,7 @@ async def test_acount_pre_call_check_tokens_leaves_the_event_loop_free(monkeypat
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5})
 
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
@@ -5483,9 +5560,7 @@ async def test_acount_pre_call_check_tokens_skips_without_max_input_tokens(monke
     monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {})
 
     calls = []
-    monkeypatch.setattr(
-        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000
-    )
+    monkeypatch.setattr(litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000)
 
     count = await router._acount_pre_call_check_tokens(
         model="m",
@@ -5513,9 +5588,7 @@ def test_pre_call_checks_counts_tokens_from_responses_input_string(monkeypatch):
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1})
 
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
@@ -5540,9 +5613,7 @@ def test_pre_call_checks_counts_tokens_from_responses_input_list(monkeypatch):
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 1})
 
     deployments = [
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
@@ -5584,9 +5655,7 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
     )
     assert with_instructions_tokens > input_only_tokens
 
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": input_only_tokens})
     with pytest.raises(litellm.ContextWindowExceededError):
         router._pre_call_checks(
             model="m",
@@ -5655,9 +5724,7 @@ def test_pre_call_checks_counts_tool_definition_tokens(monkeypatch, prompt_kwarg
     prompt_only_tokens = router._count_pre_call_check_tokens(
         messages=prompt_kwargs.get("messages"), input=prompt_kwargs.get("input")
     )
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": prompt_only_tokens}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": prompt_only_tokens})
 
     assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, **prompt_kwargs)) == 1
     with pytest.raises(litellm.ContextWindowExceededError):
@@ -5777,7 +5844,7 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
     assert string_input_tokens > 0
     assert list_input_tokens > 0
 
-    with pytest.raises(ValueError, match='Either messages or input must be provided to count tokens'):
+    with pytest.raises(ValueError, match="Either messages or input must be provided to count tokens"):
         router._count_pre_call_check_tokens(messages=None, input=None)
 
 
@@ -5792,9 +5859,7 @@ def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
         ],
         enable_pre_call_checks=True,
     )
-    monkeypatch.setattr(
-        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
-    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5})
 
     counted: list[dict] = []
     original = router._count_pre_call_check_tokens
@@ -5884,9 +5949,7 @@ def test_get_deployment_model_info_base_model_flow():
     }
 
     # Test Case 1: Base model flow with custom model info that has base_model
-    with patch.object(
-        litellm, "model_cost", {"test-custom-model": mock_custom_model_info}
-    ):
+    with patch.object(litellm, "model_cost", {"test-custom-model": mock_custom_model_info}):
         with patch.object(litellm, "get_model_info") as mock_get_model_info:
             # Configure mock returns
             mock_get_model_info.side_effect = lambda model: {
@@ -5894,15 +5957,11 @@ def test_get_deployment_model_info_base_model_flow():
                 "test-model": mock_litellm_model_name_info,
             }.get(model)
 
-            result = router.get_deployment_model_info(
-                model_id="test-custom-model", model_name="test-model"
-            )
+            result = router.get_deployment_model_info(model_id="test-custom-model", model_name="test-model")
 
             # Verify that get_model_info was called for both base model and model name
             assert mock_get_model_info.call_count == 2
-            mock_get_model_info.assert_any_call(
-                model="gpt-3.5-turbo"
-            )  # base model call
+            mock_get_model_info.assert_any_call(model="gpt-3.5-turbo")  # base model call
             mock_get_model_info.assert_any_call(model="test-model")  # model name call
 
             # Verify the result contains merged information
@@ -5913,26 +5972,18 @@ def test_get_deployment_model_info_base_model_flow():
             # 2. The result of step 1 gets merged into litellm_model_name_info (custom+base override litellm)
 
             # Fields from custom model (should override base model values)
-            assert (
-                result["input_cost_per_token"] == 0.001
-            )  # From custom model (overrides base 0.0015)
-            assert (
-                result["output_cost_per_token"] == 0.002
-            )  # From custom model (same as base)
+            assert result["input_cost_per_token"] == 0.001  # From custom model (overrides base 0.0015)
+            assert result["output_cost_per_token"] == 0.002  # From custom model (same as base)
             assert result["custom_field"] == "custom_value"  # From custom model
 
             # Fields from base model that weren't overridden by custom
             assert result["max_tokens"] == 4096  # From base model
             assert result["litellm_provider"] == "openai"  # From base model
-            assert (
-                result["mode"] == "chat"
-            )  # From base model (overrides litellm "completion")
+            assert result["mode"] == "chat"  # From base model (overrides litellm "completion")
 
             # The key field comes from base model since both base and litellm have it
             # and base model info overrides litellm model name info in final merge
-            assert (
-                result["key"] == "gpt-3.5-turbo"
-            )  # From base model (overrides litellm key)
+            assert result["key"] == "gpt-3.5-turbo"  # From base model (overrides litellm key)
 
     # Test Case 2: Custom model info without base_model
     mock_custom_model_info_no_base = {
@@ -5951,9 +6002,7 @@ def test_get_deployment_model_info_base_model_flow():
                 "test-model": mock_litellm_model_name_info,
             }.get(model)
 
-            result = router.get_deployment_model_info(
-                model_id="test-custom-model-no-base", model_name="test-model"
-            )
+            result = router.get_deployment_model_info(model_id="test-custom-model-no-base", model_name="test-model")
 
             # Should only call get_model_info once for model name (no base model)
             assert mock_get_model_info.call_count == 1
@@ -5973,9 +6022,7 @@ def test_get_deployment_model_info_base_model_flow():
                 "test-model": mock_litellm_model_name_info,
             }.get(model)
 
-            result = router.get_deployment_model_info(
-                model_id="non-existent-model", model_name="test-model"
-            )
+            result = router.get_deployment_model_info(model_id="non-existent-model", model_name="test-model")
 
             # Should only call get_model_info once for model name
             assert mock_get_model_info.call_count == 1
@@ -6008,9 +6055,7 @@ def test_get_deployment_model_info_base_model_flow():
 
             mock_get_model_info.side_effect = mock_get_model_info_side_effect
 
-            result = router.get_deployment_model_info(
-                model_id="test-custom-model-invalid", model_name="test-model"
-            )
+            result = router.get_deployment_model_info(model_id="test-custom-model-invalid", model_name="test-model")
 
             # Should handle exception gracefully and still return merged result
             assert result is not None
@@ -6019,12 +6064,8 @@ def test_get_deployment_model_info_base_model_flow():
 
     # Test Case 5: Both model_cost.get() and get_model_info() return None
     with patch.object(litellm, "model_cost", {}):
-        with patch.object(
-            litellm, "get_model_info", side_effect=Exception("Not found")
-        ):
-            result = router.get_deployment_model_info(
-                model_id="non-existent", model_name="non-existent"
-            )
+        with patch.object(litellm, "get_model_info", side_effect=Exception("Not found")):
+            result = router.get_deployment_model_info(model_id="non-existent", model_name="non-existent")
 
             # Should return None when no model info is found
             assert result is None
@@ -6047,9 +6088,7 @@ def test_get_deployment_model_info_base_model_flow():
             # Model NOT in built-in cost map — raise exception
             mock_get_model_info.side_effect = Exception("Model not in cost map")
 
-            result = router.get_deployment_model_info(
-                model_id="custom-model-id", model_name="unknown-model"
-            )
+            result = router.get_deployment_model_info(model_id="custom-model-id", model_name="unknown-model")
 
             # Should return custom_model_info even when litellm_model_name_model_info is None
             assert result is not None
@@ -6085,15 +6124,11 @@ def test_get_deployment_model_info_base_model_flow():
 
             mock_get_model_info.side_effect = get_info_side_effect
 
-            result = router.get_deployment_model_info(
-                model_id="custom-with-base", model_name="unknown-model"
-            )
+            result = router.get_deployment_model_info(model_id="custom-with-base", model_name="unknown-model")
 
             # Should return custom_model_info merged with base model info
             assert result is not None
-            assert (
-                result["input_cost_per_token"] == 0.01
-            )  # From custom (overrides base)
+            assert result["input_cost_per_token"] == 0.01  # From custom (overrides base)
             assert result["max_tokens"] == 8192  # From base model
             assert result["litellm_provider"] == "openai"  # From base model
 
@@ -6140,18 +6175,14 @@ def test_get_deployment_model_info_base_model_merge_priority():
         "litellm_only_field": "litellm_value",
     }
 
-    with patch.object(
-        litellm, "model_cost", {"custom-model-id": mock_custom_model_info}
-    ):
+    with patch.object(litellm, "model_cost", {"custom-model-id": mock_custom_model_info}):
         with patch.object(litellm, "get_model_info") as mock_get_model_info:
             mock_get_model_info.side_effect = lambda model: {
                 "gpt-4": mock_base_model_info,
                 "test-model": mock_litellm_model_name_info,
             }.get(model)
 
-            result = router.get_deployment_model_info(
-                model_id="custom-model-id", model_name="test-model"
-            )
+            result = router.get_deployment_model_info(model_id="custom-model-id", model_name="test-model")
 
             assert result is not None
 
@@ -6161,29 +6192,17 @@ def test_get_deployment_model_info_base_model_merge_priority():
             # 3. Result from steps 1-2 overrides litellm_model_name_info
 
             # Fields that should come from custom model info (highest priority)
-            assert (
-                result["input_cost_per_token"] == 0.01
-            )  # From custom model (overrides base 0.03)
-            assert (
-                result["max_tokens"] == 8000
-            )  # From custom model (overrides base 4096)
+            assert result["input_cost_per_token"] == 0.01  # From custom model (overrides base 0.03)
+            assert result["max_tokens"] == 8000  # From custom model (overrides base 4096)
             assert result["custom_only_field"] == "custom_value"  # From custom model
 
             # Fields that should come from base model (not overridden by custom)
-            assert (
-                result["output_cost_per_token"] == 0.06
-            )  # From base model (not in custom)
-            assert (
-                result["litellm_provider"] == "openai"
-            )  # From base model (not in custom)
-            assert (
-                result["base_only_field"] == "base_value"
-            )  # From base model (not in custom)
+            assert result["output_cost_per_token"] == 0.06  # From base model (not in custom)
+            assert result["litellm_provider"] == "openai"  # From base model (not in custom)
+            assert result["base_only_field"] == "base_value"  # From base model (not in custom)
 
             # Fields that should come from litellm model name info (not overridden by custom+base)
-            assert (
-                result["mode"] == "completion"
-            )  # From litellm model name info (not in custom or base)
+            assert result["mode"] == "completion"  # From litellm model name info (not in custom or base)
             assert (
                 result["litellm_only_field"] == "litellm_value"
             )  # From litellm model name info (not in custom or base)
@@ -6200,7 +6219,11 @@ def test_get_deployment_model_info_base_model_merge_priority():
     [
         (
             "gpt",
-            {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://my-resource.services.ai.azure.com", "api_key": "key"},
+            {
+                "model": "azure_ai/gpt-5.4-mini",
+                "api_base": "https://my-resource.services.ai.azure.com",
+                "api_key": "key",
+            },
             "gpt/openai/deployments/gpt-5.4-mini/chat/completions",
             "gpt-5.4-mini/openai/deployments/gpt-5.4-mini/chat/completions",
         ),
@@ -6255,10 +6278,9 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
         model="special-bedrock-model",
         model_name="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     )
-    assert (
-        result["endpoint"]
-        == "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke"
-    ), f"Expected '/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke', got '{result['endpoint']}'"
+    assert result["endpoint"] == "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke", (
+        f"Expected '/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke', got '{result['endpoint']}'"
+    )
 
     # Test Case 2: Bedrock invoke-with-response-stream endpoint
     kwargs = {
@@ -6270,10 +6292,9 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
         model="special-bedrock-model",
         model_name="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     )
-    assert (
-        result["endpoint"]
-        == "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream"
-    ), f"Expected streaming endpoint with stripped prefix, got '{result['endpoint']}'"
+    assert result["endpoint"] == "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream", (
+        f"Expected streaming endpoint with stripped prefix, got '{result['endpoint']}'"
+    )
 
     # Test Case 3: Bedrock converse endpoint
     kwargs = {
@@ -6285,9 +6306,9 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
         model="bedrock-model",
         model_name="bedrock/us.meta.llama3-8b-instruct-v1:0",
     )
-    assert (
-        result["endpoint"] == "/model/us.meta.llama3-8b-instruct-v1:0/converse"
-    ), f"Expected '/model/us.meta.llama3-8b-instruct-v1:0/converse', got '{result['endpoint']}'"
+    assert result["endpoint"] == "/model/us.meta.llama3-8b-instruct-v1:0/converse", (
+        f"Expected '/model/us.meta.llama3-8b-instruct-v1:0/converse', got '{result['endpoint']}'"
+    )
 
     # Test Case 4: Bedrock provider prefix auto-detected from model_name
     kwargs = {
@@ -6298,9 +6319,9 @@ def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
         model="router-model",
         model_name="bedrock/us.meta.llama3-8b-instruct-v1:0",
     )
-    assert (
-        result["endpoint"] == "/model/us.meta.llama3-8b-instruct-v1:0/invoke"
-    ), f"Expected '/model/us.meta.llama3-8b-instruct-v1:0/invoke', got '{result['endpoint']}'"
+    assert result["endpoint"] == "/model/us.meta.llama3-8b-instruct-v1:0/invoke", (
+        f"Expected '/model/us.meta.llama3-8b-instruct-v1:0/invoke', got '{result['endpoint']}'"
+    )
 
 
 def test_update_kwargs_with_deployment_uses_pass_through_request_timeout():
@@ -6437,14 +6458,10 @@ async def test_router_acompletion_with_unknown_model_and_default_fallback():
     # Initialize the router with a default fallback
     router = litellm.Router(model_list=model_list, default_fallbacks=["gpt-4o"])
 
-    messages = [
-        {"role": "user", "content": "This call should succeed by falling back."}
-    ]
+    messages = [{"role": "user", "content": "This call should succeed by falling back."}]
 
     # Call completion with a model name that is NOT in the model_list
-    response = await router.acompletion(
-        model="completely-unknown-model", messages=messages
-    )
+    response = await router.acompletion(model="completely-unknown-model", messages=messages)
 
     # Check that the call did not fail and we received a valid response object.
     assert response is not None
@@ -6623,15 +6640,10 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
         ],
     )
 
-    credentials = router.get_deployment_credentials_with_provider(
-        model_id="bedrock-claude-model"
-    )
+    credentials = router.get_deployment_credentials_with_provider(model_id="bedrock-claude-model")
 
     assert credentials is not None
-    assert (
-        credentials["aws_bedrock_runtime_endpoint"]
-        == "https://bedrock-runtime.us-east-1.amazonaws.com"
-    )
+    assert credentials["aws_bedrock_runtime_endpoint"] == "https://bedrock-runtime.us-east-1.amazonaws.com"
     assert credentials["aws_access_key_id"] == "test-access-key"
     assert credentials["aws_secret_access_key"] == "test-secret-key"
     assert credentials["aws_region_name"] == "us-east-1"
@@ -6658,9 +6670,7 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
         ],
     )
 
-    credentials = router.get_deployment_credentials_with_provider(
-        model_id="vertex-gemini"
-    )
+    credentials = router.get_deployment_credentials_with_provider(model_id="vertex-gemini")
 
     assert credentials is not None
     assert credentials["gcs_bucket_name"] == "my-batch-bucket"
@@ -6745,9 +6755,7 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
         ],
     )
 
-    credentials = router.get_deployment_credentials_with_provider(
-        model_id="azure-gpt-4"
-    )
+    credentials = router.get_deployment_credentials_with_provider(model_id="azure-gpt-4")
 
     assert credentials is not None
     assert credentials["api_key"] == "resolved-api-key"
@@ -6784,9 +6792,7 @@ def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
         ],
     )
 
-    credentials = router.get_deployment_credentials_with_provider(
-        model_id="bedrock-batch-model"
-    )
+    credentials = router.get_deployment_credentials_with_provider(model_id="bedrock-batch-model")
 
     assert credentials is not None
     assert credentials["custom_llm_provider"] == "bedrock"
@@ -6830,9 +6836,7 @@ def test_get_deployment_credentials_with_provider_preserves_aws_auth_params():
         ],
     )
 
-    credentials = router.get_deployment_credentials_with_provider(
-        model_id="bedrock-batch-model"
-    )
+    credentials = router.get_deployment_credentials_with_provider(model_id="bedrock-batch-model")
 
     assert credentials is not None
     for key, value in aws_auth_params.items():
@@ -6902,15 +6906,11 @@ def test_get_deployment_credentials_with_provider_team_wildcard_priority():
         ],
     )
 
-    team_credentials = router.get_deployment_credentials_with_provider(
-        model_id="openai/gpt-5.2", team_id="team-1"
-    )
+    team_credentials = router.get_deployment_credentials_with_provider(model_id="openai/gpt-5.2", team_id="team-1")
     assert team_credentials is not None
     assert team_credentials["api_key"] == "team-key"
 
-    global_credentials = router.get_deployment_credentials_with_provider(
-        model_id="openai/gpt-5.2"
-    )
+    global_credentials = router.get_deployment_credentials_with_provider(model_id="openai/gpt-5.2")
     assert global_credentials is not None
     assert global_credentials["api_key"] == "global-key"
 
@@ -6951,15 +6951,11 @@ def test_get_deployment_credentials_with_provider_skips_other_team_deployment():
     assert other_team_credentials is not None
     assert other_team_credentials["vertex_project"] == "shared-project"
 
-    unscoped_credentials = router.get_deployment_credentials_with_provider(
-        model_id="gemini-2.5-pro"
-    )
+    unscoped_credentials = router.get_deployment_credentials_with_provider(model_id="gemini-2.5-pro")
     assert unscoped_credentials is not None
     assert unscoped_credentials["vertex_project"] == "shared-project"
 
-    owner_credentials = router.get_deployment_credentials_with_provider(
-        model_id="gemini-2.5-pro", team_id="team-b"
-    )
+    owner_credentials = router.get_deployment_credentials_with_provider(model_id="gemini-2.5-pro", team_id="team-b")
     assert owner_credentials is not None
     assert owner_credentials["vertex_project"] == "team-b-project"
 
@@ -6986,16 +6982,8 @@ def test_get_deployment_credentials_with_provider_no_fallback_to_other_team_only
         ],
     )
 
-    assert (
-        router.get_deployment_credentials_with_provider(
-            model_id="gemini-2.5-pro", team_id="team-a"
-        )
-        is None
-    )
-    assert (
-        router.get_deployment_credentials_with_provider(model_id="gemini-2.5-pro")
-        is None
-    )
+    assert router.get_deployment_credentials_with_provider(model_id="gemini-2.5-pro", team_id="team-a") is None
+    assert router.get_deployment_credentials_with_provider(model_id="gemini-2.5-pro") is None
 
 
 def test_deployment_usable_by_team_helpers():
@@ -7035,9 +7023,7 @@ def test_deployment_usable_by_team_helpers():
     assert router._deployment_usable_by_team(shared, "team-a") is True
     assert router._deployment_usable_by_team(shared, None) is True
 
-    picked = router._get_model_group_deployment_usable_by_team(
-        model_group_name="gemini-2.5-pro", team_id="team-a"
-    )
+    picked = router._get_model_group_deployment_usable_by_team(model_group_name="gemini-2.5-pro", team_id="team-a")
     assert picked is not None
     assert picked.litellm_params.vertex_project == "shared-project"
 
@@ -7047,12 +7033,15 @@ def test_deployment_usable_by_team_helpers():
     assert owner_picked is not None
     assert owner_picked.litellm_params.vertex_project == "team-b-project"
 
-    assert (
-        router._get_model_group_deployment_usable_by_team(
-            model_group_name="unknown-model", team_id="team-a"
-        )
-        is None
-    )
+    assert router._get_model_group_deployment_usable_by_team(model_group_name="unknown-model", team_id="team-a") is None
+
+
+def test_deployment_usable_by_team_uses_dynamic_model_info_get():
+    class ModelInfo:
+        def get(self, key: str) -> str | None:
+            return "team-b" if key == "team_id" else None
+
+    assert litellm.Router.deployment_usable_by_team({"model_info": ModelInfo()}, "team-a") is False
 
 
 def test_get_deployment_credentials_with_provider_skips_other_team_wildcard():
@@ -7084,9 +7073,7 @@ def test_get_deployment_credentials_with_provider_skips_other_team_wildcard():
     assert other_team_credentials is not None
     assert other_team_credentials["api_key"] == "global-key"
 
-    owner_credentials = router.get_deployment_credentials_with_provider(
-        model_id="openai/gpt-5.2", team_id="team-b"
-    )
+    owner_credentials = router.get_deployment_credentials_with_provider(model_id="openai/gpt-5.2", team_id="team-b")
     assert owner_credentials is not None
     assert owner_credentials["api_key"] == "team-b-key"
 
@@ -7098,21 +7085,11 @@ def test_team_wildcard_credentials_not_usable_after_delete_deployment():
     """
     router = litellm.Router(model_list=[_team_wildcard_model(api_key="old-key")])
 
-    assert (
-        router.get_deployment_credentials_with_provider(
-            model_id="openai/gpt-5.2", team_id="team-1"
-        )
-        is not None
-    )
+    assert router.get_deployment_credentials_with_provider(model_id="openai/gpt-5.2", team_id="team-1") is not None
 
     router.delete_deployment(id="team-wildcard-id")
 
-    assert (
-        router.get_deployment_credentials_with_provider(
-            model_id="openai/gpt-5.2", team_id="team-1"
-        )
-        is None
-    )
+    assert router.get_deployment_credentials_with_provider(model_id="openai/gpt-5.2", team_id="team-1") is None
 
 
 def test_global_wildcard_pattern_router_evicts_stale_entry_on_upsert_and_delete():
@@ -7185,22 +7162,13 @@ def test_team_wildcard_credentials_refreshed_on_upsert_and_set_model_list():
 
     router = litellm.Router(model_list=[_team_wildcard_model(api_key="old-key")])
 
-    router.upsert_deployment(
-        deployment=Deployment(**_team_wildcard_model(api_key="new-key"))
-    )
-    credentials = router.get_deployment_credentials_with_provider(
-        model_id="openai/gpt-5.2", team_id="team-1"
-    )
+    router.upsert_deployment(deployment=Deployment(**_team_wildcard_model(api_key="new-key")))
+    credentials = router.get_deployment_credentials_with_provider(model_id="openai/gpt-5.2", team_id="team-1")
     assert credentials is not None
     assert credentials["api_key"] == "new-key"
 
     router.set_model_list(model_list=[])
-    assert (
-        router.get_deployment_credentials_with_provider(
-            model_id="openai/gpt-5.2", team_id="team-1"
-        )
-        is None
-    )
+    assert router.get_deployment_credentials_with_provider(model_id="openai/gpt-5.2", team_id="team-1") is None
 
 
 def test_get_available_guardrail_single_deployment():
@@ -7389,9 +7357,7 @@ async def test_anthropic_messages_call_type_is_cached():
             startTime=1234567890.0,
             endTime=1234567891.0,
             completionStartTime=1234567890.5,
-            model_map_information=StandardLoggingModelInformation(
-                model_map_key="gpt-3.5-turbo", model_map_value=None
-            ),
+            model_map_information=StandardLoggingModelInformation(model_map_key="gpt-3.5-turbo", model_map_value=None),
             model="gpt-3.5-turbo",
             model_id="model-123",
             model_group="openai-gpt",
@@ -7470,12 +7436,8 @@ async def test_anthropic_messages_call_type_is_cached():
     )
 
     # This assertion will FAIL if anthropic_messages is filtered out
-    assert (
-        cached_result is not None
-    ), "Model ID should be cached for anthropic_messages call type"
-    assert (
-        cached_result["model_id"] == test_model_id
-    ), f"Expected {test_model_id}, got {cached_result['model_id']}"
+    assert cached_result is not None, "Model ID should be cached for anthropic_messages call type"
+    assert cached_result["model_id"] == test_model_id, f"Expected {test_model_id}, got {cached_result['model_id']}"
 
 
 def test_update_kwargs_with_deployment_propagates_model_tags():
@@ -7500,9 +7462,7 @@ def test_update_kwargs_with_deployment_propagates_model_tags():
     )
 
     kwargs: dict = {"metadata": {}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-4o-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-4o-mini")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     # Deployment tags should be propagated to kwargs metadata
@@ -7531,9 +7491,7 @@ def test_update_kwargs_with_deployment_merges_tags_without_duplicates():
 
     # Simulate request that already has tags (from request body or key/team level)
     kwargs: dict = {"metadata": {"tags": ["user-tag", "shared-tag"]}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-4o-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-4o-mini")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     # Both sources should be merged, no duplicates
@@ -7560,9 +7518,7 @@ def test_update_kwargs_with_deployment_no_tags():
     )
 
     kwargs: dict = {"metadata": {}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-4o-mini"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-4o-mini")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     # No tags key should be added if deployment has no tags
@@ -7644,9 +7600,7 @@ def test_update_kwargs_with_deployment_merges_tools():
             },
         ],
     }
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="o3-deep-research"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="o3-deep-research")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     # Tools should be merged: deployment first, then request
@@ -7677,9 +7631,7 @@ def test_update_kwargs_with_deployment_merge_tools_deployment_only():
     )
 
     kwargs: dict = {"metadata": {}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="o3-deep-research"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="o3-deep-research")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     assert kwargs["tools"] == [{"type": "web_search"}]
@@ -7708,9 +7660,7 @@ def test_update_kwargs_with_deployment_merge_tools_request_overrides_tool_choice
         "metadata": {},
         "tool_choice": "none",
     }
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="o3-deep-research"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="o3-deep-research")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     # Request tool_choice should be preserved (merged tools still applied)
@@ -7812,12 +7762,8 @@ def test_update_kwargs_with_deployment_model_info_in_litellm_metadata():
     )
 
     kwargs: dict = {}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="claude-sonnet-4"
-    )
-    router._update_kwargs_with_deployment(
-        deployment=deployment, kwargs=kwargs, function_name="generic_api_call"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="claude-sonnet-4")
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="generic_api_call")
 
     assert "litellm_metadata" in kwargs
     model_info = kwargs["litellm_metadata"]["model_info"]
@@ -7849,12 +7795,8 @@ def test_update_kwargs_with_deployment_model_info_in_metadata():
     )
 
     kwargs: dict = {}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="claude-sonnet-4"
-    )
-    router._update_kwargs_with_deployment(
-        deployment=deployment, kwargs=kwargs, function_name=None
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="claude-sonnet-4")
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=None)
 
     assert "metadata" in kwargs
     model_info = kwargs["metadata"]["model_info"]
@@ -7967,6 +7909,7 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
+
         async def _drain():
             async for chunk in result:
                 collected.append(chunk)
@@ -7993,6 +7936,7 @@ async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_f
             initial_kwargs=dict(initial_kwargs),
         )
         collected = []
+
         async def _drain():
             async for chunk in result:
                 collected.append(chunk)
@@ -8209,23 +8153,17 @@ def test_multiregion_team_deployments_unique_model_names():
     assert len(deployments) == 0
 
     # With team_id: O(n) scan finds BOTH regional deployments
-    deployments = router._get_all_deployments(
-        model_name="claude-sonnet", team_id="metis-team"
-    )
+    deployments = router._get_all_deployments(model_name="claude-sonnet", team_id="metis-team")
     assert len(deployments) == 2
     deployment_names = {d["model_name"] for d in deployments}
     assert deployment_names == {"metis-claude-us-east-1", "metis-claude-us-west-2"}
 
     # Each deployment has a unique ID (critical for cooldown/retry to work)
     deployment_ids = {d["model_info"]["id"] for d in deployments}
-    assert (
-        len(deployment_ids) == 2
-    ), "Each deployment must have a unique ID for cooldown tracking"
+    assert len(deployment_ids) == 2, "Each deployment must have a unique ID for cooldown tracking"
 
     # Wrong team: returns nothing
-    deployments = router._get_all_deployments(
-        model_name="claude-sonnet", team_id="other-team"
-    )
+    deployments = router._get_all_deployments(model_name="claude-sonnet", team_id="other-team")
     assert len(deployments) == 0
 
 
@@ -8270,12 +8208,8 @@ async def test_multiregion_team_failover_between_regions():
     )
 
     # Verify the router finds both deployments for the team
-    deployments = router._get_all_deployments(
-        model_name="claude-sonnet", team_id="metis-team"
-    )
-    assert (
-        len(deployments) == 2
-    ), "Router must find both regional deployments by team_public_model_name"
+    deployments = router._get_all_deployments(model_name="claude-sonnet", team_id="metis-team")
+    assert len(deployments) == 2, "Router must find both regional deployments by team_public_model_name"
 
     # Make a normal request — should succeed from one of the regions
     response = await router.acompletion(
@@ -8400,9 +8334,7 @@ def test_explicit_model_access_does_not_force_access_group_filtering():
         },
     )
 
-    deployment_groups = [
-        d.get("model_info", {}).get("access_groups") for d in deployments
-    ]
+    deployment_groups = [d.get("model_info", {}).get("access_groups") for d in deployments]
     assert ["AG1"] in deployment_groups
     assert ["AG2"] in deployment_groups
 
@@ -8447,9 +8379,7 @@ def test_access_group_filter_empty_does_not_bypass_via_litellm_model_fallback(
 
     orig_groups = router.get_model_access_groups
 
-    def fake_get_model_access_groups(
-        model_name=None, model_access_group=None, team_id=None
-    ):
+    def fake_get_model_access_groups(model_name=None, model_access_group=None, team_id=None):
         if model_name == "gpt-5" and model_access_group is None:
             return {"AG1": ["gpt-5"], "AG2": ["gpt-5"]}
         return orig_groups(
@@ -8524,9 +8454,7 @@ def test_access_group_block_does_not_silently_use_default_fallback_model(
 
     orig_groups = router.get_model_access_groups
 
-    def fake_get_model_access_groups(
-        model_name=None, model_access_group=None, team_id=None
-    ):
+    def fake_get_model_access_groups(model_name=None, model_access_group=None, team_id=None):
         if model_name == "gpt-5" and model_access_group is None:
             return {"AG1": ["gpt-5"], "AG2": ["gpt-5"]}
         return orig_groups(
@@ -8593,9 +8521,7 @@ def test_access_group_block_via_litellm_model_branch_does_not_use_default_fallba
 
     orig_groups = router.get_model_access_groups
 
-    def fake_get_model_access_groups(
-        model_name=None, model_access_group=None, team_id=None
-    ):
+    def fake_get_model_access_groups(model_name=None, model_access_group=None, team_id=None):
         if model_name == "gpt-5" and model_access_group is None:
             return {"AG1": ["gpt-5"], "AG2": ["gpt-5"]}
         return orig_groups(
@@ -8650,9 +8576,7 @@ def test_try_early_resolve_deployments_for_model_not_in_names():
     )
 
     assert (
-        router_in_names._try_early_resolve_deployments_for_model_not_in_names(
-            model="gpt-5", request_team_id=None
-        )
+        router_in_names._try_early_resolve_deployments_for_model_not_in_names(model="gpt-5", request_team_id=None)
         is None
     )
     assert (
@@ -8674,10 +8598,8 @@ def test_try_early_resolve_deployments_for_model_not_in_names():
         ]
     )
 
-    pattern_result = (
-        pattern_router._try_early_resolve_deployments_for_model_not_in_names(
-            model="openai/gpt-4o-mini", request_team_id=None
-        )
+    pattern_result = pattern_router._try_early_resolve_deployments_for_model_not_in_names(
+        model="openai/gpt-4o-mini", request_team_id=None
     )
     assert pattern_result is not None
     resolved_model, pattern_deployments = pattern_result
@@ -8703,10 +8625,8 @@ def test_try_early_resolve_deployments_for_model_not_in_names():
         },
     }
 
-    default_result = (
-        default_router._try_early_resolve_deployments_for_model_not_in_names(
-            model="brand-new-model", request_team_id=None
-        )
+    default_result = default_router._try_early_resolve_deployments_for_model_not_in_names(
+        model="brand-new-model", request_team_id=None
     )
     assert default_result is not None
     resolved_model, default_deployment = default_result
@@ -8714,10 +8634,7 @@ def test_try_early_resolve_deployments_for_model_not_in_names():
     assert isinstance(default_deployment, dict)
     assert default_deployment["litellm_params"]["model"] == "brand-new-model"
     # The original default_deployment must not be mutated.
-    assert (
-        default_router.default_deployment["litellm_params"]["model"]
-        == "openai/will-be-overridden"
-    )
+    assert default_router.default_deployment["litellm_params"]["model"] == "openai/will-be-overridden"
 
 
 def _router_with_two_deployments(blocked_flags):
@@ -8765,10 +8682,7 @@ def _seed_unhealthy_states(router, unhealthy_ids, timestamp=None):
 
     ts = timestamp if timestamp is not None else time.time()
     router.health_state_cache.set_deployment_health_states(
-        {
-            uid: {"is_healthy": False, "timestamp": ts, "reason": "test_unhealthy"}
-            for uid in unhealthy_ids
-        }
+        {uid: {"is_healthy": False, "timestamp": ts, "reason": "test_unhealthy"} for uid in unhealthy_ids}
     )
 
 
@@ -8835,7 +8749,6 @@ async def test_health_probe_preserves_normal_caller_policy(
     assert await router.cooldown_cache.async_get_active_cooldowns(["dep-0", "dep-1"], parent_otel_span=None) == []
 
 
-
 @pytest.mark.asyncio
 async def test_async_get_fully_unhealthy_model_names_keeps_name_when_partial():
     router = _router_with_two_deployments([False, False])
@@ -8896,9 +8809,7 @@ async def test_async_get_fully_unhealthy_model_names_noop_with_allowed_fails_pol
 @pytest.mark.asyncio
 async def test_async_get_healthy_deployments_skips_blocked_deployment():
     router = _router_with_two_deployments([True, False])
-    healthy, all_dep = await router._async_get_healthy_deployments(
-        model="gpt-4o", parent_otel_span=None
-    )
+    healthy, all_dep = await router._async_get_healthy_deployments(model="gpt-4o", parent_otel_span=None)
     healthy_ids = [d["model_info"]["id"] for d in healthy]
     assert "dep-0" not in healthy_ids
     assert "dep-1" in healthy_ids
@@ -8907,9 +8818,7 @@ async def test_async_get_healthy_deployments_skips_blocked_deployment():
 
 def test_get_healthy_deployments_sync_skips_blocked_deployment():
     router = _router_with_two_deployments([False, True])
-    healthy, all_dep = router._get_healthy_deployments(
-        model="gpt-4o", parent_otel_span=None
-    )
+    healthy, all_dep = router._get_healthy_deployments(model="gpt-4o", parent_otel_span=None)
     healthy_ids = [d["model_info"]["id"] for d in healthy]
     assert "dep-0" in healthy_ids
     assert "dep-1" not in healthy_ids
@@ -8926,9 +8835,7 @@ def test_filter_blocked_deployments_drops_blocked_keeps_unblocked():
 @pytest.mark.asyncio
 async def test_public_async_get_healthy_deployments_skips_blocked_on_primary_path():
     router = _router_with_two_deployments([True, False])
-    deployments = await router.async_get_healthy_deployments(
-        model="gpt-4o", request_kwargs={}
-    )
+    deployments = await router.async_get_healthy_deployments(model="gpt-4o", request_kwargs={})
     assert isinstance(deployments, list)
     ids = [d["model_info"]["id"] for d in deployments]
     assert "dep-0" not in ids
@@ -9016,9 +8923,7 @@ def _router_with_two_pass_through_deployments(blocked_flags):
 
 def test_get_available_deployment_for_pass_through_skips_blocked():
     router = _router_with_two_pass_through_deployments([True, False])
-    deployment = router.get_available_deployment_for_pass_through(
-        model="gpt-4o", request_kwargs={}
-    )
+    deployment = router.get_available_deployment_for_pass_through(model="gpt-4o", request_kwargs={})
     assert deployment["model_info"]["id"] == "pt-1"
 
 
@@ -9027,9 +8932,7 @@ def test_get_available_deployment_for_pass_through_raises_when_dict_blocked():
 
     router = _router_with_two_pass_through_deployments([True, True])
     with pytest.raises(litellm.ServiceUnavailableError):
-        router.get_available_deployment_for_pass_through(
-            model="pt-0", request_kwargs={}
-        )
+        router.get_available_deployment_for_pass_through(model="pt-0", request_kwargs={})
 
 
 def test_get_available_deployment_for_pass_through_names_cooldown_despite_healthy_non_pass_through():
@@ -9071,9 +8974,7 @@ def test_initialize_deployment_for_pass_through_keeps_bedrock_iam_deployment():
             }
         ]
     )
-    assert [m["model_info"]["id"] for m in router.get_model_list()] == [
-        "bedrock-iam-pt"
-    ]
+    assert [m["model_info"]["id"] for m in router.get_model_list()] == ["bedrock-iam-pt"]
 
 
 def test_pass_through_deployment_api_key_resolves_via_get_credentials():
@@ -9084,12 +8985,7 @@ def test_pass_through_deployment_api_key_resolves_via_get_credentials():
     router = _router_with_two_pass_through_deployments([False, False])
     passthrough_router = PassthroughEndpointRouter(llm_router_getter=lambda: router)
     assert len(router.get_model_list()) == 2
-    assert (
-        passthrough_router.get_credentials(
-            custom_llm_provider="openai", region_name=None
-        )
-        == "sk-fake-for-tests"
-    )
+    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-fake-for-tests"
 
 
 def test_get_deployment_credentials_returns_none_for_blocked_deployment():
@@ -9106,7 +9002,7 @@ def test_get_deployment_credentials_with_provider_returns_none_for_blocked_deplo
 
 def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     """
-    Exercises Router._is_deployment_blocked so router_code_coverage.py (AST call graph)
+    Exercises Router.is_deployment_blocked so router_code_coverage.py (AST call graph)
     marks the helper as covered by router-named tests.
     """
     import types
@@ -9117,24 +9013,28 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     blocked_dep = router.get_deployment("dep-0")
     unblocked_dep = router.get_deployment("dep-1")
     assert blocked_dep is not None and unblocked_dep is not None
-    assert litellm.Router._is_deployment_blocked(blocked_dep) is True
-    assert litellm.Router._is_deployment_blocked(unblocked_dep) is False
+    assert litellm.Router.is_deployment_blocked(blocked_dep) is True
+    assert litellm.Router.is_deployment_blocked(unblocked_dep) is False
 
     # No model_info on deployment object → treated as not blocked
-    assert litellm.Router._is_deployment_blocked(object()) is False
+    assert litellm.Router.is_deployment_blocked(object()) is False
     missing_blocked = types.SimpleNamespace()
+    assert litellm.Router.is_deployment_blocked(types.SimpleNamespace(model_info=missing_blocked)) is False
     assert (
-        litellm.Router._is_deployment_blocked(
-            types.SimpleNamespace(model_info=missing_blocked)
-        )
-        is False
-    )
-    assert (
-        litellm.Router._is_deployment_blocked(
-            types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True))
-        )
+        litellm.Router.is_deployment_blocked(types.SimpleNamespace(model_info=types.SimpleNamespace(blocked=True)))
         is True
     )
+
+
+def test_routing_groups_legacy_property_forwards_to_public_attribute():
+    router = _router_with_two_deployments([False, False])
+
+    assert router._routing_groups is router.routing_groups
+
+    replacement = dict(router.routing_groups)
+    router._routing_groups = replacement
+
+    assert router.routing_groups is replacement
 
 
 class TestRouterRequestTimeoutPropagation:
@@ -9172,9 +9072,7 @@ class TestRouterRequestTimeoutPropagation:
             litellm.request_timeout = original_value
             litellm.request_timeout_explicitly_set = original_flag
 
-    def test_request_timeout_stored_independently_when_both_set(
-        self, explicit_request_timeout
-    ):
+    def test_request_timeout_stored_independently_when_both_set(self, explicit_request_timeout):
         router = self._make_router(timeout=330)
         assert router.timeout == 330
         assert router.request_timeout == 300
@@ -9192,22 +9090,16 @@ class TestRouterRequestTimeoutPropagation:
             litellm.request_timeout = original_value
             litellm.request_timeout_explicitly_set = original_flag
 
-    def test_non_stream_prefers_request_timeout_over_router_timeout(
-        self, explicit_request_timeout
-    ):
+    def test_non_stream_prefers_request_timeout_over_router_timeout(self, explicit_request_timeout):
         router = self._make_router(timeout=330)
         assert router._get_non_stream_timeout(kwargs={}, data={}) == 300
 
-    def test_stream_prefers_request_timeout_over_router_timeout(
-        self, explicit_request_timeout
-    ):
+    def test_stream_prefers_request_timeout_over_router_timeout(self, explicit_request_timeout):
         router = self._make_router(timeout=330)
         # stream=True resolves through _get_stream_timeout; request_timeout must win.
         assert router._get_timeout(kwargs={"stream": True}, data={}) == 300
 
-    def test_explicit_stream_timeout_still_wins_over_request_timeout(
-        self, explicit_request_timeout
-    ):
+    def test_explicit_stream_timeout_still_wins_over_request_timeout(self, explicit_request_timeout):
         router = self._make_router(timeout=330, stream_timeout=45)
         assert router._get_stream_timeout(kwargs={}, data={}) == 45
 
@@ -9223,22 +9115,13 @@ class TestRouterRequestTimeoutPropagation:
             litellm.request_timeout = original_value
             litellm.request_timeout_explicitly_set = original_flag
 
-    def test_per_deployment_timeout_overrides_request_timeout(
-        self, explicit_request_timeout
-    ):
+    def test_per_deployment_timeout_overrides_request_timeout(self, explicit_request_timeout):
         router = self._make_router(timeout=330)
         assert router._get_non_stream_timeout(kwargs={}, data={"timeout": 120}) == 120
 
-    def test_per_request_timeout_overrides_request_timeout(
-        self, explicit_request_timeout
-    ):
+    def test_per_request_timeout_overrides_request_timeout(self, explicit_request_timeout):
         router = self._make_router(timeout=330)
-        assert (
-            router._get_non_stream_timeout(
-                kwargs={"timeout": 60}, data={"timeout": 120}
-            )
-            == 60
-        )
+        assert router._get_non_stream_timeout(kwargs={"timeout": 60}, data={"timeout": 120}) == 60
 
     def test_passthrough_prefers_request_timeout_over_router_timeout(self, explicit_request_timeout):
         router = self._make_router(timeout=330)
@@ -9557,9 +9440,7 @@ class TestAdvisorSubCallCooldown:
         )
 
     def _cooled_down_ids(self, router):
-        active = router.cooldown_cache.get_active_cooldowns(
-            model_ids=["dep-1"], parent_otel_span=None
-        )
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["dep-1"], parent_otel_span=None)
         return [entry[0] for entry in active]
 
     @pytest.mark.asyncio
@@ -9568,12 +9449,7 @@ class TestAdvisorSubCallCooldown:
 
         router = self._router()
         now = datetime.now()
-        assert (
-            router.deployment_callback_on_failure(
-                self._kwargs(self._auth_error()), None, now, now
-            )
-            is True
-        )
+        assert router.deployment_callback_on_failure(self._kwargs(self._auth_error()), None, now, now) is True
         assert "dep-1" in self._cooled_down_ids(router)
 
     def test_advisor_orchestration_failure_does_not_cool_down_deployment(self):
@@ -9588,12 +9464,7 @@ class TestAdvisorSubCallCooldown:
         mark_advisor_orchestration_failure(exception)
 
         now = datetime.now()
-        assert (
-            router.deployment_callback_on_failure(
-                self._kwargs(exception), None, now, now
-            )
-            is False
-        )
+        assert router.deployment_callback_on_failure(self._kwargs(exception), None, now, now) is False
         assert "dep-1" not in self._cooled_down_ids(router)
 
 
@@ -9872,13 +9743,13 @@ def test_stream_chunks_have_generated_content_detects_text_and_non_text():
     audio_chunk = _chunk(audio_delta)
     assert _stream_chunks_have_generated_content([audio_chunk]) is True
 
-    images_delta = Delta(images=[{"image_url": {"url": "https://example.com/img.png"}, "index": 0, "type": "image_url"}])
+    images_delta = Delta(
+        images=[{"image_url": {"url": "https://example.com/img.png"}, "index": 0, "type": "image_url"}]
+    )
     images_chunk = _chunk(images_delta)
     assert _stream_chunks_have_generated_content([images_chunk]) is True
 
-    annotations_delta = Delta(
-        annotations=[{"type": "url_citation", "url_citation": {"url": "https://example.com"}}]
-    )
+    annotations_delta = Delta(annotations=[{"type": "url_citation", "url_citation": {"url": "https://example.com"}}])
     annotations_chunk = _chunk(annotations_delta)
     assert _stream_chunks_have_generated_content([annotations_chunk]) is True
 
@@ -9922,12 +9793,8 @@ def test_get_configured_token_limits_skips_wildcard_pattern_matching():
         ]
     )
 
-    with patch.object(
-        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
-    ):
-        assert router.get_configured_token_limits(
-            "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
-        ) == (None, None)
+    with patch.object(router.pattern_router, "route", side_effect=AssertionError("pattern route called")):
+        assert router.get_configured_token_limits("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0") == (None, None)
 
 
 def test_get_configured_token_limits_treats_malformed_values_as_absent():
@@ -10150,13 +10017,8 @@ def test_get_model_listing_info_skips_wildcard_pattern_matching():
         ]
     )
 
-    with patch.object(
-        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
-    ):
-        assert (
-            router.get_model_listing_info("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
-            is None
-        )
+    with patch.object(router.pattern_router, "route", side_effect=AssertionError("pattern route called")):
+        assert router.get_model_listing_info("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0") is None
 
 
 def test_get_configured_mode_reads_deployment_model_info():
@@ -10198,13 +10060,8 @@ def test_get_configured_mode_skips_wildcard_pattern_matching():
         ]
     )
 
-    with patch.object(
-        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
-    ):
-        assert (
-            router.get_configured_mode("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
-            is None
-        )
+    with patch.object(router.pattern_router, "route", side_effect=AssertionError("pattern route called")):
+        assert router.get_configured_mode("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0") is None
 
 
 def test_get_configured_mode_treats_malformed_values_as_absent():
@@ -10263,13 +10120,205 @@ def test_get_configured_display_name_skips_wildcard_pattern_matching():
         ]
     )
 
-    with patch.object(
-        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
-    ):
-        assert (
-            router.get_configured_display_name("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
-            is None
-        )
+    with patch.object(router.pattern_router, "route", side_effect=AssertionError("pattern route called")):
+        assert router.get_configured_display_name("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0") is None
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [["ultrafast"], ["priority", {"id": "ultrafast", "name": "Ultrafast", "description": "Fastest"}], [], "not-a-list"],
+)
+def test_get_configured_service_tiers_returns_the_deployment_model_info_value_as_set(configured):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": configured},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra") == (configured,)
+
+
+def test_get_configured_service_tiers_returns_one_value_per_deployment_in_model_list_order():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://a.example"},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://b.example"},
+                "model_info": {"service_tiers": ["priority", "ultrafast"]},
+            },
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"], None, ["priority", "ultrafast"])
+
+
+def test_get_configured_service_tiers_returns_none_for_an_unset_deployment_and_nothing_for_an_unknown_name():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-tiers-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("no-tiers-model") == (None,)
+    assert router.get_configured_service_tiers("not-a-real-model") == ()
+
+
+def test_get_configured_service_tiers_does_not_apply_a_wildcard_deployment_to_matched_names():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("openai/gpt-6-astra") == ()
+
+
+def test_get_configured_service_tiers_reads_only_the_deployments_a_request_can_route_to():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://paused.example"},
+                "model_info": {"blocked": True},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
+                "model_info": {"team_id": "team-2"},
+            },
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-1") == (["ultrafast"],)
+    assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-2") == (["ultrafast"], None)
+    assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"],)
+
+
+@pytest.mark.parametrize(
+    "alias_value, expected_group",
+    [
+        ("gpt-6-astra", "gpt-6-astra"),
+        ({"model": "gpt-6-astra", "hidden": True}, "gpt-6-astra"),
+        ({"model": "", "hidden": False}, "gpt-6"),
+    ],
+    ids=["string-alias", "item-alias", "malformed-alias-is-itself"],
+)
+def test_routable_model_group_is_the_alias_target_else_the_name_itself(alias_value, expected_group):
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-6-astra", "litellm_params": {"model": "openai/gpt-6-astra"}}],
+        model_group_alias={"gpt-6": alias_value},
+    )
+
+    assert router.routable_model_group("gpt-6") == expected_group
+    assert router.routable_model_group("gpt-6-astra") == "gpt-6-astra"
+    assert router.routable_model_group("not-a-real-model") == "not-a-real-model"
+
+
+def test_get_configured_service_tiers_reads_an_alias_off_its_target_deployments():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
+                "model_info": {"team_id": "team-2", "service_tiers": ["priority"]},
+            },
+        ],
+        model_group_alias={"gpt-6": "gpt-6-astra", "gpt-6-quiet": {"model": "gpt-6-astra", "hidden": True}},
+    )
+
+    assert router.get_configured_service_tiers("gpt-6") == router.get_configured_service_tiers("gpt-6-astra")
+    assert router.get_configured_service_tiers("gpt-6", team_id="team-1") == (["ultrafast"],)
+    assert router.get_configured_service_tiers("gpt-6", team_id="team-2") == (["ultrafast"], ["priority"])
+    assert router.get_configured_service_tiers("gpt-6-quiet", team_id="team-1") == (["ultrafast"],)
+
+
+def _router_with_team_owned_deployments():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/gpt-5.5"},
+                "model_info": {"team_id": "team-1", "service_tiers": ["priority"]},
+            },
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/paused-model"},
+                "model_info": {"team_id": "team-2", "blocked": True, "service_tiers": ["paused"]},
+            },
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/team-2-model"},
+                "model_info": {"team_id": "team-2", "service_tiers": ["flex"]},
+            },
+            {
+                "model_name": "owned-and-shared",
+                "litellm_params": {"model": "openai/team-1-model"},
+                "model_info": {"team_id": "team-1", "service_tiers": ["priority"]},
+            },
+            {
+                "model_name": "owned-and-shared",
+                "litellm_params": {"model": "openai/shared-model"},
+                "model_info": {"service_tiers": ["flex"]},
+            },
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+        ],
+        model_group_alias={"nickname": "owned-by-teams"},
+    )
+
+
+@pytest.mark.parametrize(
+    "model_name, team_id, upstream_model, service_tiers",
+    [
+        ("owned-by-teams", "team-1", "openai/gpt-5.5", (["priority"],)),
+        ("owned-by-teams", "team-2", "openai/team-2-model", (["flex"],)),
+        ("nickname", "team-1", "openai/gpt-5.5", (["priority"],)),
+        ("nickname", "team-2", "openai/team-2-model", (["flex"],)),
+        ("owned-by-teams", "team-3", None, ()),
+        ("owned-by-teams", None, "openai/gpt-5.5", (["priority"], ["flex"])),
+        ("owned-and-shared", "team-1", "openai/team-1-model", (["priority"], ["flex"])),
+        ("owned-and-shared", "team-2", "openai/shared-model", (["flex"],)),
+        ("owned-and-shared", None, "openai/shared-model", (["flex"],)),
+        ("openai/gpt-5.5", "team-1", None, ()),
+        ("not-a-real-model", None, None, ()),
+    ],
+)
+def test_upstream_model_and_service_tiers_are_read_off_the_deployments_the_team_can_route_to(
+    model_name, team_id, upstream_model, service_tiers
+):
+    router = _router_with_team_owned_deployments()
+
+    assert router.get_routable_upstream_model(model_name, team_id) == upstream_model
+    assert router.get_configured_service_tiers(model_name, team_id) == service_tiers
 
 
 def test_get_configured_display_name_treats_malformed_values_as_absent():
@@ -10502,13 +10551,16 @@ async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
     mock_client = MagicMock()
     mock_client.post = AsyncMock(side_effect=lambda *args, **kwargs: fake_response())
 
-    with patch.object(
-        CommonBatchFilesUtils,
-        "sign_aws_request",
-        return_value=({"Authorization": "signed"}, b"{}"),
-    ) as mock_sign, patch(
-        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
-        return_value=mock_client,
+    with (
+        patch.object(
+            CommonBatchFilesUtils,
+            "sign_aws_request",
+            return_value=({"Authorization": "signed"}, b"{}"),
+        ) as mock_sign,
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+            return_value=mock_client,
+        ),
     ):
         await router.acreate_batch(
             model="bedrock-batch-model",
@@ -10537,13 +10589,13 @@ async def test_avector_store_search_injects_router():
     """
     from litellm.types.vector_stores import VectorStoreSearchResponse
 
-    expected_response = VectorStoreSearchResponse(
-        object="vector_store.search_results.page", search_query="q", data=[]
-    )
+    expected_response = VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
     mock_asearch = AsyncMock(return_value=expected_response)
     # Router.__init__ binds asearch via a local import, so patch the module
     # attribute before constructing the Router.
-    with patch("litellm.vector_stores.main.asearch", new=mock_asearch):  # test-quality-ok: the SDK call is the only place the injected router kwarg is observable
+    with patch(
+        "litellm.vector_stores.main.asearch", new=mock_asearch
+    ):  # test-quality-ok: the SDK call is the only place the injected router kwarg is observable
         router = litellm.Router(
             model_list=[
                 {
@@ -10577,7 +10629,9 @@ async def test_avector_store_create_does_not_inject_router():
             }
         ]
     )
-    with patch("litellm.vector_stores.main.acreate", new=mock_acreate):  # test-quality-ok: the SDK call is the only place a leaked router kwarg would surface
+    with patch(
+        "litellm.vector_stores.main.acreate", new=mock_acreate
+    ):  # test-quality-ok: the SDK call is the only place a leaked router kwarg would surface
         create_response = await router.avector_store_create(model=None, custom_llm_provider="openai")
 
     assert create_response is expected_response
@@ -10593,13 +10647,13 @@ def test_vector_store_search_injects_router():
     """
     from litellm.types.vector_stores import VectorStoreSearchResponse
 
-    expected_response = VectorStoreSearchResponse(
-        object="vector_store.search_results.page", search_query="q", data=[]
-    )
+    expected_response = VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
     mock_search = MagicMock(return_value=expected_response)
     # Router.__init__ binds search via a local import, so patch the module
     # attribute before constructing the Router.
-    with patch("litellm.vector_stores.main.search", new=mock_search):  # test-quality-ok: the SDK call is the only place the injected router kwarg is observable
+    with patch(
+        "litellm.vector_stores.main.search", new=mock_search
+    ):  # test-quality-ok: the SDK call is the only place the injected router kwarg is observable
         router = litellm.Router(
             model_list=[
                 {
@@ -10608,9 +10662,7 @@ def test_vector_store_search_injects_router():
                 }
             ]
         )
-        search_response = router.vector_store_search(
-            vector_store_id="v", query="q", custom_llm_provider="s3_vectors"
-        )
+        search_response = router.vector_store_search(vector_store_id="v", query="q", custom_llm_provider="s3_vectors")
 
     assert search_response is expected_response
     mock_search.assert_called_once()
@@ -10624,7 +10676,9 @@ def test_vector_store_create_does_not_inject_router():
     mock_create = MagicMock(return_value=expected_response)
     # Router.__init__ binds create via a local import, so patch the module
     # attribute before constructing the Router.
-    with patch("litellm.vector_stores.main.create", new=mock_create):  # test-quality-ok: the SDK call is the only place a leaked router kwarg would surface
+    with patch(
+        "litellm.vector_stores.main.create", new=mock_create
+    ):  # test-quality-ok: the SDK call is the only place a leaked router kwarg would surface
         router = litellm.Router(
             model_list=[
                 {
@@ -10659,9 +10713,7 @@ class TestPreRoutingStrategyRegistryLifecycle:
     def _complexity_router_params(default_model: str, tags=None) -> dict:
         return {
             "model": "auto_router/complexity_router",
-            "complexity_router_config": {
-                "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o", "COMPLEX": "gpt-4o"}
-            },
+            "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o", "COMPLEX": "gpt-4o"}},
             "complexity_router_default_model": default_model,
             **({"tags": tags} if tags else {}),
         }
@@ -10966,9 +11018,7 @@ class TestPreRoutingStrategyRegistryLifecycle:
             deployment=Deployment(
                 model_name="hybrid-router",
                 litellm_params=LiteLLM_Params(
-                    **self._hybrid_router_params(
-                        {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o", "COMPLEX": "gpt-4o"}
-                    )
+                    **self._hybrid_router_params({"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o", "COMPLEX": "gpt-4o"})
                 ),
                 model_info=ModelInfo(id="router-1", db_model=True),
             )
@@ -11077,9 +11127,7 @@ class TestPreRoutingStrategyRegistryLifecycle:
             ({"model": "openai/gpt-4o"}, False),
         ]
         for params, expected in cases:
-            actual = router._deployment_participates_in_adaptive_routing(
-                litellm_params=LiteLLM_Params(**params)
-            )
+            actual = router._deployment_participates_in_adaptive_routing(litellm_params=LiteLLM_Params(**params))
             assert actual is expected, params["model"]
 
 
@@ -11266,22 +11314,16 @@ class TestUpsertDeploymentRollback:
         router.delete_deployment(id="prod-1")
         assert router.has_model_id("prod-1") is False
 
-        router._restore_deployment_after_failed_upsert(
-            previous_deployment=previous, model_id="prod-1"
-        )
+        router._restore_deployment_after_failed_upsert(previous_deployment=previous, model_id="prod-1")
 
         restored = router.get_deployment(model_id="prod-1")
         assert restored is not None
         assert restored.litellm_params.model == "gpt-4o"
 
-        router._restore_deployment_after_failed_upsert(
-            previous_deployment=previous, model_id="prod-1"
-        )
+        router._restore_deployment_after_failed_upsert(previous_deployment=previous, model_id="prod-1")
         assert len(router.model_list) == 1
 
-        router._restore_deployment_after_failed_upsert(
-            previous_deployment=None, model_id="prod-1"
-        )
+        router._restore_deployment_after_failed_upsert(previous_deployment=None, model_id="prod-1")
         assert len(router.model_list) == 1
 
 
@@ -11515,15 +11557,16 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         }
 
     @pytest.mark.asyncio
-    async def test_subagent_concrete_model_uses_the_main_sessions_router(self):
+    @pytest.mark.parametrize("app", ["cli", "cli-bg"])
+    async def test_subagent_concrete_model_uses_the_main_sessions_router(self, app):
         router = self._router()
 
         await router.acompletion(
             model="smart-router",
             messages=[{"role": "user", "content": "main turn"}],
-            **self._request_kwargs(),
+            **self._request_kwargs(app=app),
         )
-        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+        subagent_kwargs = self._request_kwargs(app=app, agent_id="agent-1234")
 
         response = await router.acompletion(
             model="expensive-model",
@@ -12040,18 +12083,14 @@ class TestAutoRouterSharedModelNameConnectionParams:
         return httpx.Response(
             status_code=200,
             json={
-                "candidates": [
-                    {"content": {"parts": [{"text": "Paris"}], "role": "model"}, "finishReason": "STOP"}
-                ],
+                "candidates": [{"content": {"parts": [{"text": "Paris"}], "role": "model"}, "finishReason": "STOP"}],
                 "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1, "totalTokenCount": 6},
                 "modelVersion": "gemini-3.6-flash",
             },
             request=httpx.Request("POST", "https://generativelanguage.googleapis.com"),
         )
 
-    @pytest.mark.parametrize(
-        "plain_entry_first", [True, False], ids=["plain_entry_first", "marker_entry_first"]
-    )
+    @pytest.mark.parametrize("plain_entry_first", [True, False], ids=["plain_entry_first", "marker_entry_first"])
     async def test_routed_tier_call_goes_out_on_its_own_endpoint_and_credentials(self, plain_entry_first):
         """The outbound provider request for the routed tier hits the tier's own Gemini host
         with the tier's own key, never the plain sibling's api_base or api_key."""
@@ -12175,9 +12214,7 @@ async def _drive_cyclic_fallback(router, capture, recorder=None, **request_kwarg
         litellm.callbacks.append(recorder)
     try:
         with pytest.raises(litellm.InternalServerError):
-            await router.acompletion(
-                model="group-a", messages=[{"role": "user", "content": "hi"}], **request_kwargs
-            )
+            await router.acompletion(model="group-a", messages=[{"role": "user", "content": "hi"}], **request_kwargs)
     finally:
         router_logger.removeHandler(capture)
         router_logger.setLevel(previous_level)
@@ -12451,9 +12488,7 @@ async def test_fallback_failure_detail_from_upstream_is_bounded():
     await _drive_cyclic_fallback(
         _cyclic_fallback_router(),
         capture,
-        mock_response=litellm.InternalServerError(
-            message=huge_message, llm_provider="openai", model="group-a"
-        ),
+        mock_response=litellm.InternalServerError(message=huge_message, llm_provider="openai", model="group-a"),
     )
 
     assert capture.messages, "the fallback failure path did not log at ERROR"
@@ -12519,9 +12554,7 @@ def test_ensure_deployment_affinity_callback_is_idempotent():
     try:
         router._ensure_deployment_affinity_callback()
         router._ensure_deployment_affinity_callback()
-        affinity_callbacks = [
-            cb for cb in router.optional_callbacks or [] if isinstance(cb, DeploymentAffinityCheck)
-        ]
+        affinity_callbacks = [cb for cb in router.optional_callbacks or [] if isinstance(cb, DeploymentAffinityCheck)]
         assert len(affinity_callbacks) == 1
     finally:
         for cb in router.optional_callbacks or []:
@@ -12663,9 +12696,7 @@ class TestModelGroupAliasReachesPreRoutingStrategies:
         router = self._router("auto_routers")
         metadata: dict = {}
 
-        response = await router.acompletion(
-            model="smart-alias", messages=self._messages(), metadata=metadata
-        )
+        response = await router.acompletion(model="smart-alias", messages=self._messages(), metadata=metadata)
 
         assert response.choices[0].message.content == "routed by the tier"
         assert metadata["model_group"] == "smart-alias"
@@ -12827,15 +12858,22 @@ class TestTeamPublicNameReachesPreRoutingStrategies:
 
     @pytest.mark.asyncio
     async def test_team_public_name_shadows_a_global_model_for_that_team_only(self):
-        router = self._router(
-            {self.INTERNAL_NAME: self._RewriteStrategy()},
-            extra_deployments=({"model_name": self.PUBLIC_NAME, "litellm_params": {"model": "openai/gpt-4o"}},),
+        router: Final = litellm.Router(
+            model_list=[
+                self._team_marker(self.INTERNAL_NAME),
+                {"model_name": "gemini-flash", "litellm_params": {"model": "gemini/gemini-3.6-flash"}},
+                {"model_name": self.PUBLIC_NAME, "litellm_params": {"model": "openai/gpt-4o"}},
+            ],
         )
 
         async def routed(request_kwargs: dict) -> str | None:
             response = await router.async_pre_routing_hook(
                 model=self.PUBLIC_NAME, request_kwargs=request_kwargs, messages=self._messages()
             )
+            if response is not None:
+                assert response.routing_decision is not None
+                assert response.routing_decision["router_model_name"] == self.INTERNAL_NAME
+                assert response.routing_decision["router_config_id"] == router.model_list[0]["model_info"]["id"]
             return response.model if response else None
 
         async def selected(request_kwargs: dict) -> str:
@@ -12900,6 +12938,7 @@ class TestTeamPublicNameReachesPreRoutingStrategies:
 
         assert response is not None
         assert response.model == "gemini-flash"
+
     @pytest.mark.asyncio
     async def test_strategy_resolution_agrees_with_the_deployment_path_for_every_principal(self):
         router = self._router(
@@ -12957,7 +12996,6 @@ class TestTeamPublicNameReachesPreRoutingStrategies:
         assert one_team._team_deployments_across_teams("missing") == []
         with pytest.raises(litellm.BadRequestError, match="multiple teams"):
             two_teams._team_deployments_across_teams(self.PUBLIC_NAME)
-
 
     def test_compression_policy_follows_the_same_resolution_for_every_principal(self):
         from litellm.proxy.guardrails.auto_router_compression import AutoRouterCompressionPolicy, policy_for_model
@@ -13182,7 +13220,6 @@ class TestAutoRouterCompressionDecoupling:
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-
 @pytest.mark.usefixtures("local_model_cost_map")
 class TestAzureBaseModelFallbackLogging:
     """When an azure deployment has no base_model but its model name is a known
@@ -13209,17 +13246,14 @@ class TestAzureBaseModelFallbackLogging:
     def test_map_known_deployment_name_resolves_without_error_log(self):
         router = self._router_with_azure_deployment("azure/gpt-4o")
 
-        with patch(
-            "litellm.router.verbose_router_logger.error"
-        ) as mock_error:
+        with patch("litellm.router.verbose_router_logger.error") as mock_error:
             model_info = router.get_router_model_info(
                 deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
             )
 
-        assert not any(
-            "Could not identify azure model" in str(call)
-            for call in mock_error.call_args_list
-        ), f"unexpected error log: {mock_error.call_args_list}"
+        assert not any("Could not identify azure model" in str(call) for call in mock_error.call_args_list), (
+            f"unexpected error log: {mock_error.call_args_list}"
+        )
         # the fallback resolution must actually surface the map values
         assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o"]["max_input_tokens"]
         assert model_info["input_cost_per_token"] == litellm.model_cost["azure/gpt-4o"]["input_cost_per_token"]
@@ -13227,17 +13261,14 @@ class TestAzureBaseModelFallbackLogging:
     def test_unmappable_deployment_name_still_logs_error(self):
         router = self._router_with_azure_deployment("azure/my-custom-deployment-name")
 
-        with patch(
-            "litellm.router.verbose_router_logger.error"
-        ) as mock_error:
+        with patch("litellm.router.verbose_router_logger.error") as mock_error:
             model_info = router.get_router_model_info(
                 deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
             )
 
-        assert any(
-            "Could not identify azure model" in str(call)
-            for call in mock_error.call_args_list
-        ), "expected the error log for an unmappable azure deployment name"
+        assert any("Could not identify azure model" in str(call) for call in mock_error.call_args_list), (
+            "expected the error log for an unmappable azure deployment name"
+        )
         # unmappable names resolve to a zeroed stub — unchanged behavior
         assert model_info.get("max_input_tokens") is None
 
@@ -13263,6 +13294,7 @@ class TestAzureBaseModelFallbackLogging:
             deployment=None, received_model_name="my-group", id="azure-base-model-test-id"
         )
         assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]
+
 
 def test_model_group_info_intersects_supported_reasoning_efforts():
     router = litellm.Router(
@@ -13354,7 +13386,6 @@ def test_model_group_info_reasoning_efforts_are_unknown_when_any_deployment_is_o
     assert result.supported_reasoning_efforts is None
 
 
-
 @pytest.mark.parametrize(
     "model,provider,expected",
     [
@@ -13374,11 +13405,15 @@ def test_model_group_info_reasoning_efforts_are_unknown_when_any_deployment_is_o
 def test_model_group_info_fast_mode_uses_exact_provider_catalog(
     local_model_cost_map: None, model: str, provider: str | None, expected: bool, operator_flag: bool
 ) -> None:
-    router: Final = Router(model_list=[{
-        "model_name": "fast-group",
-        "litellm_params": {"model": model, "custom_llm_provider": provider, "api_key": "fake-key"},
-        "model_info": {"supports_fast_mode": operator_flag},
-    }])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fast-group",
+                "litellm_params": {"model": model, "custom_llm_provider": provider, "api_key": "fake-key"},
+                "model_info": {"supports_fast_mode": operator_flag},
+            }
+        ]
+    )
 
     result: Final = router.get_model_group_info("fast-group")
 
@@ -13390,16 +13425,21 @@ def test_model_group_info_fast_mode_uses_exact_provider_catalog(
 def test_model_group_info_fast_mode_fails_closed_without_explicit_boolean(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, flag: object
 ) -> None:
-    entry: Final = {key: value for key, value in litellm.model_cost["claude-opus-5"].items()
-                   if key != "supports_fast_mode"}
+    entry: Final = {
+        key: value for key, value in litellm.model_cost["claude-opus-5"].items() if key != "supports_fast_mode"
+    }
     if flag is not None:
         entry["supports_fast_mode"] = flag
     monkeypatch.setitem(litellm.model_cost, "claude-opus-5", entry)
-    router: Final = Router(model_list=[{
-        "model_name": "fast-group",
-        "litellm_params": {"model": "anthropic/claude-opus-5", "api_key": "fake-key"},
-        "model_info": {"supports_fast_mode": True},
-    }])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fast-group",
+                "litellm_params": {"model": "anthropic/claude-opus-5", "api_key": "fake-key"},
+                "model_info": {"supports_fast_mode": True},
+            }
+        ]
+    )
 
     result: Final = router.get_model_group_info("fast-group")
 
@@ -13407,24 +13447,30 @@ def test_model_group_info_fast_mode_fails_closed_without_explicit_boolean(
     assert result.supports_fast_mode is False
 
 
-@pytest.mark.parametrize("other_model,expected", [
-    ("anthropic/claude-opus-4-8", True),
-    ("anthropic/claude-opus-4-7", False),
-    ("anthropic/off-map-opus", False),
-    ("vertex_ai/claude-opus-5", False),
-    ("bedrock/claude-opus-5", False),
-])
+@pytest.mark.parametrize(
+    "other_model,expected",
+    [
+        ("anthropic/claude-opus-4-8", True),
+        ("anthropic/claude-opus-4-7", False),
+        ("anthropic/off-map-opus", False),
+        ("vertex_ai/claude-opus-5", False),
+        ("bedrock/claude-opus-5", False),
+    ],
+)
 @pytest.mark.parametrize("reverse", [True, False])
 def test_model_group_info_fast_mode_requires_every_deployment(
     local_model_cost_map: None, other_model: str, expected: bool, reverse: bool
 ) -> None:
-    models: Final = (other_model, "anthropic/claude-opus-5") if reverse else (
-        "anthropic/claude-opus-5", other_model
+    models: Final = (other_model, "anthropic/claude-opus-5") if reverse else ("anthropic/claude-opus-5", other_model)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fast-group",
+                "litellm_params": {"model": model, "api_key": "fake-key"},
+            }
+            for model in models
+        ]
     )
-    router: Final = Router(model_list=[{
-        "model_name": "fast-group",
-        "litellm_params": {"model": model, "api_key": "fake-key"},
-    } for model in models])
 
     result: Final = router.get_model_group_info("fast-group")
 
@@ -13664,6 +13710,7 @@ class TestAddDeploymentApiBaseProviderResolution:
         assert deployment is not None
         assert deployment.litellm_params.custom_llm_provider == "openai"
 
+
 # =====================================================================
 # anthropic_messages mid-stream-fallback helpers, added for #24004
 # (mid-stream fallback not supported for anthropic_messages route type).
@@ -13696,7 +13743,9 @@ def _anthropic_messages_make_wrapper() -> FallbackAwareAnthropicMessagesStream:
 
 
 def _anthropic_messages_make_router(**router_kwargs) -> Router:
+    """A fallback-only router: no same-group retries unless a test asks for them."""
     router_kwargs.setdefault("fallbacks", [{"primary": ["fallback"]}])
+    router_kwargs.setdefault("num_retries", 0)
     return Router(
         model_list=[
             {
@@ -13776,10 +13825,7 @@ class _AnthropicMessagesFallbackByteStream:
 
 
 def _anthropic_messages_overloaded_error_chunk() -> bytes:
-    return (
-        b"event: error\n"
-        b'data: {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}\n\n'
-    )
+    return b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}\n\n'
 
 
 def _anthropic_messages_invalid_request_error_chunk() -> bytes:
@@ -13824,9 +13870,7 @@ async def test_anthropic_messages_streaming_iterator_passthrough():
         [_anthropic_messages_content_chunk("hi"), _anthropic_messages_content_chunk(" there")]
     )
 
-    wrapped = await router._aanthropic_messages_streaming_iterator(
-        response=source, initial_kwargs={"model": "primary"}
-    )
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source, initial_kwargs={"model": "primary"})
 
     collected = [chunk async for chunk in wrapped]
     assert collected == [_anthropic_messages_content_chunk("hi"), _anthropic_messages_content_chunk(" there")]
@@ -13845,12 +13889,14 @@ async def test_anthropic_messages_streaming_iterator_flushes_buffered_lifecycle_
         [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("hi"), message_stop]
     )
 
-    wrapped = await router._aanthropic_messages_streaming_iterator(
-        response=source, initial_kwargs={"model": "primary"}
-    )
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source, initial_kwargs={"model": "primary"})
 
     collected = [chunk async for chunk in wrapped]
-    assert collected == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("hi"), message_stop]
+    assert collected == [
+        _anthropic_messages_message_start_chunk(),
+        _anthropic_messages_content_chunk("hi"),
+        message_stop,
+    ]
 
 
 @pytest.mark.asyncio
@@ -13862,9 +13908,7 @@ async def test_anthropic_messages_streaming_iterator_flushes_buffered_frames_on_
     message_stop = b'event: message_stop\ndata: {"type": "message_stop"}\n\n'
     source = _AnthropicMessagesFakeByteStream([_anthropic_messages_message_start_chunk(), message_stop])
 
-    wrapped = await router._aanthropic_messages_streaming_iterator(
-        response=source, initial_kwargs={"model": "primary"}
-    )
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source, initial_kwargs={"model": "primary"})
 
     collected = [chunk async for chunk in wrapped]
     assert collected == [_anthropic_messages_message_start_chunk(), message_stop]
@@ -13915,7 +13959,9 @@ async def test_anthropic_messages_ping_behind_buffered_lifecycle_frame_is_forwar
         await content_released.wait()
         yield _anthropic_messages_content_chunk("hi")
 
-    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary"}
+    )
 
     assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_ping_chunk()
     content_released.set()
@@ -13960,7 +14006,9 @@ async def test_anthropic_messages_no_fallback_message_start_reaches_client_befor
         await content_released.wait()
         yield _anthropic_messages_content_chunk("hi")
 
-    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary"}
+    )
 
     assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_message_start_chunk()
     content_released.set()
@@ -14025,7 +14073,9 @@ async def test_anthropic_messages_default_wildcard_fallback_still_buffers_lifecy
         await content_released.wait()
         yield _anthropic_messages_content_chunk("hi")
 
-    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary"}
+    )
 
     pending = asyncio.ensure_future(wrapped.__anext__())
     await asyncio.sleep(0.2)
@@ -14065,8 +14115,15 @@ def _anthropic_messages_two_order_primary_model_list() -> list:
             id="wildcard-overridden-by-request-none",
         ),
         pytest.param({"fallbacks": [{"*": ["fallback"]}]}, {"model": "primary"}, True, id="wildcard"),
-        pytest.param({"fallbacks": None}, {"model": "primary", "fallbacks": [{"model": "fallback"}]}, True, id="request-dict-fallback"),
-        pytest.param({"fallbacks": None}, {"model": "primary", "fallbacks": ["fallback"]}, True, id="request-list-fallback"),
+        pytest.param(
+            {"fallbacks": None},
+            {"model": "primary", "fallbacks": [{"model": "fallback"}]},
+            True,
+            id="request-dict-fallback",
+        ),
+        pytest.param(
+            {"fallbacks": None}, {"model": "primary", "fallbacks": ["fallback"]}, True, id="request-list-fallback"
+        ),
         pytest.param(
             {"fallbacks": [{"primary": ["fallback"]}]},
             {"model": "primary", "disable_fallbacks": True},
@@ -14079,7 +14136,9 @@ def _anthropic_messages_two_order_primary_model_list() -> list:
             True,
             id="content-policy-fallback",
         ),
-        pytest.param({"fallbacks": None, "enable_weighted_failover": True}, {"model": "primary"}, True, id="weighted-failover"),
+        pytest.param(
+            {"fallbacks": None, "enable_weighted_failover": True}, {"model": "primary"}, True, id="weighted-failover"
+        ),
     ],
 )
 def test_anthropic_messages_stream_can_fall_back_direct_call(router_kwargs, request_kwargs, expected):
@@ -14152,7 +14211,9 @@ async def test_anthropic_messages_order_fallback_still_buffers_lifecycle_frames(
         await content_released.wait()
         yield _anthropic_messages_content_chunk("hi")
 
-    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary"}
+    )
 
     pending = asyncio.ensure_future(wrapped.__anext__())
     await asyncio.sleep(0.2)
@@ -14197,7 +14258,9 @@ async def test_anthropic_messages_leading_ping_keepalive_is_forwarded_live():
         yield _anthropic_messages_message_start_chunk()
         yield _anthropic_messages_content_chunk("hi")
 
-    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary"}
+    )
 
     assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_ping_chunk()
     content_released.set()
@@ -14510,7 +14573,8 @@ async def test_anthropic_messages_fallback_on_pre_first_chunk_error_event():
     """Regression for #24004: a retriable SSE `event: error` frame
     (overloaded_error/internal_server_error) that arrives before any real
     content must trigger the router's fallback chain instead of passing
-    through to the client silently."""
+    through to the client silently. The frame carries the error a 529 answer maps to, an InternalServerError,
+    so a failed fallback answers the status every other litellm path gives an overload."""
     router = _anthropic_messages_make_router()
     source = _AnthropicMessagesFakeByteStream([_anthropic_messages_overloaded_error_chunk()])
     fallback_stream = _AnthropicMessagesFallbackByteStream([_anthropic_messages_content_chunk("fallback answer")])
@@ -14530,7 +14594,8 @@ async def test_anthropic_messages_fallback_on_pre_first_chunk_error_event():
     mock_fallback.assert_awaited_once()
     raised = mock_fallback.await_args.kwargs["e"]
     assert isinstance(raised, MidStreamFallbackError)
-    assert raised.status_code == 503
+    assert isinstance(raised.original_exception, litellm.InternalServerError)
+    assert raised.status_code == 500
     assert raised.is_pre_first_chunk is True
     assert source.closed is True
 
@@ -14854,6 +14919,719 @@ async def test_anthropic_messages_hop_stream_failure_reaches_second_fallback_ent
     assert b"overloaded_error" not in body
 
 
+_ANTHROPIC_MESSAGES_RETRY_GROUP: Final = ("anthropic/glm-a", "anthropic/glm-b")
+
+
+def _anthropic_messages_retry_router(
+    num_retries: int,
+    deployment_params: Mapping[str, object] | None = None,
+    fallbacks: list[dict[str, list[str]]] | None = None,
+    context_window_fallbacks: list[dict[str, list[str]]] | None = None,
+    retry_policy: RetryPolicy | None = None,
+) -> Router:
+    """Two deployments in the group, so a same-group retry waits for no backoff; no fallbacks unless asked."""
+    group_deployments = [
+        {"model_name": "glm", "litellm_params": {"model": model, "api_key": "sk-test", **(deployment_params or {})}}
+        for model in _ANTHROPIC_MESSAGES_RETRY_GROUP
+    ]
+    return Router(
+        model_list=[
+            *group_deployments,
+            {"model_name": "fb", "litellm_params": {"model": "anthropic/fb-model", "api_key": "sk-test"}},
+            {"model_name": "cw", "litellm_params": {"model": "anthropic/cw-model", "api_key": "sk-test"}},
+        ],
+        num_retries=num_retries,
+        fallbacks=fallbacks or [],
+        context_window_fallbacks=context_window_fallbacks or [],
+        retry_policy=retry_policy,
+    )
+
+
+class _AnthropicMessagesScriptedProvider:
+    """Stands in for litellm.anthropic_messages: answers each call with the next scripted stream and records
+    the deployment it was routed to plus the retry counters the router stamped for that attempt."""
+
+    def __init__(self, *streams) -> None:
+        self._streams = list(streams)
+        self.calls: list[tuple[str, object, object]] = []
+
+    async def __call__(self, **kwargs):
+        litellm_metadata = kwargs.get("litellm_metadata") or {}
+        self.calls.append(
+            (kwargs["model"], litellm_metadata.get("attempted_retries"), litellm_metadata.get("max_retries"))
+        )
+        assert self._streams, "provider called more times than scripted"
+        return self._streams.pop(0)()
+
+
+def _anthropic_messages_transport_drop(original_exception: Exception | None = None) -> MidStreamFallbackError:
+    """What the completion bridge raises when the upstream closes the connection before any content."""
+    return MidStreamFallbackError(
+        message="Connection closed",
+        model="glm",
+        llm_provider="databricks",
+        original_exception=original_exception
+        or litellm.APIConnectionError(message="Connection closed", llm_provider="databricks", model="glm"),
+        is_pre_first_chunk=True,
+    )
+
+
+def _anthropic_messages_dropped_before_content():
+    return _AnthropicMessagesRaisingByteStream(
+        [_anthropic_messages_message_start_chunk()], _anthropic_messages_transport_drop()
+    )
+
+
+def _anthropic_messages_bridge_error_chunk() -> bytes:
+    from litellm.anthropic_interface.exceptions.exception_mapping_utils import anthropic_error_sse_frame
+
+    return anthropic_error_sse_frame(status_code=500, raw_message="Connection closed").encode()
+
+
+def _anthropic_messages_retried_stream():
+    return _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    )
+
+
+async def _anthropic_messages_drain_into(stream, received: list) -> None:
+    async for chunk in stream:
+        received.append(chunk)
+
+
+async def _anthropic_messages_stream_through_router(router: Router, provider, **request_kwargs):
+    return await router._aanthropic_messages_with_streaming_fallbacks(
+        original_function=provider,
+        model="glm",
+        stream=True,
+        messages=[{"role": "user", "content": "ping"}],
+        max_tokens=16,
+        **request_kwargs,
+    )
+
+
+_ANTHROPIC_MESSAGES_PRE_CONTENT_DROPS: Final = (
+    pytest.param(_anthropic_messages_dropped_before_content, id="bridge-raises-before-content"),
+    pytest.param(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_bridge_error_chunk()]
+        ),
+        id="bridge-error-frame",
+    ),
+    pytest.param(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+        ),
+        id="provider-overloaded-frame",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dropped_stream", _ANTHROPIC_MESSAGES_PRE_CONTENT_DROPS)
+async def test_anthropic_messages_stream_dropped_before_content_is_retried_within_the_group(dropped_stream):
+    """Issue #44238: a /v1/messages stream the provider dropped before any content was answered after a
+    single upstream attempt, num_retries never applied. The drop is retried within the model group, with
+    the retry counters continuing the request's count, and the client sees one message lifecycle."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(dropped_stream, _anthropic_messages_retried_stream)
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert all(model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls)
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_dropped_after_content_keeps_the_error_and_is_not_retried():
+    """A drop once content reached the client cannot be retried without a second overlapping message
+    lifecycle, so it keeps surfacing the provider's error after a single attempt."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    drop = _anthropic_messages_transport_drop()
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("par")], drop
+        )
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    received = []
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        await _anthropic_messages_drain_into(stream, received)
+
+    assert raised.value is drop.original_exception
+    assert received == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("par")]
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retries_stop_at_num_retries_and_raise_the_last_drop():
+    """Every retry's own stream continues the same count, so a group that keeps dropping is tried
+    exactly 1 + num_retries times before the provider's error reaches the client."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.APIConnectionError):
+        [chunk async for chunk in stream]
+
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2), (2, 2)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retries_run_out_before_the_fallback_chain_is_consulted():
+    """Same-group retries come first; the fallback group is reached only once num_retries is spent."""
+    router = _anthropic_messages_retry_router(num_retries=1, fallbacks=[{"glm": ["fb"]}])
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, True, False]
+    assert provider.calls[-1][0] == "anthropic/fb-model"
+
+
+def _anthropic_messages_fb_deployment_hidden_params() -> dict:
+    return {"model_id": "fb-deployment", "additional_headers": {"x-litellm-model-group": "fb"}}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_fallback_after_exhausted_retries_attributes_the_response_to_the_fallback_deployment():
+    """The retry's stream carries a wrapper of its own, so a fallback it makes before its first byte must reach
+    the wrapper the proxy reads headers off: the response names the deployment that served it, not the primary."""
+    router = _anthropic_messages_retry_router(num_retries=1, fallbacks=[{"glm": ["fb"]}])
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+        lambda: _AnthropicMessagesFallbackByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")],
+            hidden_params=_anthropic_messages_fb_deployment_hidden_params(),
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert stream._hidden_params["model_id"] == "fb-deployment"
+    assert stream._hidden_params["additional_headers"]["x-litellm-model-group"] == "fb"
+    assert stream._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+
+
+def test_anthropic_messages_wrapper_follows_the_attribution_of_a_source_that_fell_back():
+    inner = FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), object())
+    outer = FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), inner)
+    fallback = _AnthropicMessagesFallbackByteStream([], hidden_params=_anthropic_messages_fb_deployment_hidden_params())
+
+    outer.follow_source_attribution()
+    assert "model_id" not in outer._hidden_params
+
+    inner.merge_fallback_hidden_params(*Router._prepare_fallback_hidden_params(fallback))
+    inner.adopt_fallback_source(fallback)
+    outer.follow_source_attribution()
+    assert outer._hidden_params["model_id"] == "fb-deployment"
+    assert outer._hidden_params["additional_headers"]["x-litellm-model-group"] == "fb"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drops", [1, 2])
+async def test_anthropic_messages_mid_stream_retries_are_counted_in_the_response_retry_headers(drops: int):
+    """A retry made after the stream opened never passes through async_function_with_retries, so the wrapper
+    stamps the retry headers that path would have and the client reads them along with the first byte."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(
+        *([_anthropic_messages_dropped_before_content] * drops), _anthropic_messages_retried_stream
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    first = await stream.__anext__()
+    headers = stream._hidden_params["additional_headers"]
+
+    assert first == _anthropic_messages_message_start_chunk()
+    assert (headers["x-litellm-attempted-retries"], headers["x-litellm-max-retries"]) == (drops, 2)
+    assert [chunk async for chunk in stream] == [_anthropic_messages_content_chunk("pong")]
+
+
+def _anthropic_messages_raise_authentication_error():
+    raise litellm.AuthenticationError(message="invalid api key", llm_provider="anthropic", model="glm")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_non_retriable_error_is_handed_to_the_fallback_chain():
+    """A retry that fails before its stream opens with an error no retry covers ends the retries and reaches
+    the fallback group the way a pre-stream failure does, instead of surfacing as the client's error."""
+    router = _anthropic_messages_retry_router(num_retries=2, fallbacks=[{"glm": ["fb"]}])
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_authentication_error,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, True, False]
+
+
+def _anthropic_messages_raise_timeout():
+    raise litellm.Timeout(message="upstream timed out", model="glm", llm_provider="databricks")
+
+
+def _anthropic_messages_raise_internal_server_error():
+    raise litellm.InternalServerError(message="upstream reset", llm_provider="databricks", model="glm")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_timeout_is_retried_like_a_pre_stream_timeout():
+    """A 408 raised by a retry attempt before its stream opens is retried the way the pre-stream path retries
+    a 408, instead of ending the retries on the error-frame gate that only knows 429 and 5xx."""
+    router = _anthropic_messages_retry_router(num_retries=3)
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_timeout,
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, True, True]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_deployment_num_retries_also_governs_a_failure_before_the_stream_opens():
+    """The deployment's num_retries litellm_param sets the budget for a failure raised before the stream opened
+    on this route, as it does for a mid-stream drop and for chat completions."""
+    router = _anthropic_messages_retry_router(num_retries=0, deployment_params={"num_retries": 2})
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_raise_internal_server_error,
+        _anthropic_messages_raise_internal_server_error,
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert len(provider.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_non_retriable_error_reaches_the_client_without_fallbacks():
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_authentication_error,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.AuthenticationError):
+        [chunk async for chunk in stream]
+
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
+
+
+def _anthropic_messages_raise_context_window_error():
+    raise litellm.ContextWindowExceededError(message="prompt too long", llm_provider="anthropic", model="glm")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_context_window_error_takes_the_context_window_fallback():
+    """The fallback chain sees the retry's own error type, so a context window overflow on the retried
+    deployment reaches context_window_fallbacks rather than the regular fallbacks."""
+    router = _anthropic_messages_retry_router(
+        num_retries=2, fallbacks=[{"glm": ["fb"]}], context_window_fallbacks=[{"glm": ["cw"]}]
+    )
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_context_window_error,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
+    assert [model for model, _, _ in provider.calls][-1] == "anthropic/cw-model"
+
+
+def test_anthropic_messages_retry_budget_precedence_direct_call():
+    """A retry policy naming the error class outranks the request's num_retries, which outranks the routed
+    deployment's, which outranks the router's; num_retries=0 on the request turns a policy off too."""
+    router = _anthropic_messages_retry_router(num_retries=3, deployment_params={"num_retries": 2})
+    deployment_id = router.get_model_list(model_name="glm")[0]["model_info"]["id"]
+    routed = {"model": "glm", "litellm_metadata": {"model_info": {"id": deployment_id}}}
+    drop = litellm.APIConnectionError(message="closed", llm_provider="databricks", model="glm")
+    reset = litellm.InternalServerError(message="reset", llm_provider="databricks", model="glm")
+    policy_router = _anthropic_messages_retry_router(
+        num_retries=3, retry_policy=RetryPolicy(InternalServerErrorRetries=4)
+    )
+
+    assert router._anthropic_messages_retry_budget(drop, {"model": "glm"}) == (3, False)
+    assert router._anthropic_messages_retry_budget(drop, routed) == (2, False)
+    assert router._anthropic_messages_retry_budget(drop, {**routed, "num_retries": 1}) == (1, False)
+    assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 1}) == (4, True)
+    assert policy_router._anthropic_messages_retry_budget(drop, {"model": "glm", "num_retries": 1}) == (1, False)
+    assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 0}) == (0, False)
+    committed = {**routed, "litellm_metadata": {**routed["litellm_metadata"], "attempted_retries": 1, "max_retries": 5}}
+    assert router._anthropic_messages_retry_budget(drop, committed) == (5, False)
+    assert policy_router._anthropic_messages_retry_budget(reset, committed) == (5, True)
+
+
+def test_anthropic_messages_stream_can_retry_direct_call():
+    router = _anthropic_messages_retry_router(num_retries=1)
+    policy_router = _anthropic_messages_retry_router(
+        num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1)
+    )
+
+    assert router._anthropic_messages_stream_can_retry({"model": "glm"}) is True
+    spent = {"model": "glm", "litellm_metadata": {"attempted_retries": 1}}
+    assert router._anthropic_messages_stream_can_retry(spent) is False
+    assert router._anthropic_messages_stream_can_retry({"model": "glm", "num_retries": 0}) is False
+    assert policy_router._anthropic_messages_stream_can_retry({"model": "glm"}) is True
+    assert policy_router._anthropic_messages_stream_can_retry(spent) is False
+    assert policy_router._anthropic_messages_stream_can_retry({"model": "glm", "num_retries": 0}) is False
+    assert policy_router._anthropic_messages_resolved_retry_policy({"model": "glm"}) is not None
+    assert policy_router._anthropic_messages_resolved_retry_policy({"model": "glm", "num_retries": 0}) is None
+
+
+def test_retry_policy_ceiling_is_the_largest_budget_any_error_class_is_granted():
+    from litellm.router import _retry_policy_ceiling
+
+    assert _retry_policy_ceiling(RetryPolicy(InternalServerErrorRetries=1, RateLimitErrorRetries=3)) == 3
+    assert _retry_policy_ceiling(RetryPolicy()) == 0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_last_attempt_under_a_retry_policy_forwards_lifecycle_frames_live():
+    """A retry policy bounds the hold the way a plain budget does: once the attempts reach the most retries the
+    policy grants, the stream is the last one, so its frames reach the client as they arrive and a drop after
+    them is the provider's error in-band rather than an error raised before any byte."""
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(DefaultRetries=1))
+    drop = _anthropic_messages_transport_drop()
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        lambda: _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], drop),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    received: list = []
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        await _anthropic_messages_drain_into(stream, received)
+
+    assert raised.value is drop.original_exception
+    assert received == [_anthropic_messages_message_start_chunk()]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_request_num_retries_zero_opts_out_of_the_mid_stream_retry():
+    router = _anthropic_messages_retry_router(num_retries=2)
+    drop = _anthropic_messages_transport_drop()
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], drop)
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider, num_retries=0)
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        [chunk async for chunk in stream]
+
+    assert raised.value is drop.original_exception
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured", [1, "1"], ids=["int", "config-string"])
+async def test_anthropic_messages_deployment_num_retries_sets_the_mid_stream_retry_budget(configured):
+    """A deployment's own num_retries litellm_param outranks the router's, as it does for a failure
+    raised before the stream opened."""
+    router = _anthropic_messages_retry_router(num_retries=0, deployment_params={"num_retries": configured})
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content, _anthropic_messages_retried_stream
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_policy_sets_the_mid_stream_retry_budget_per_error_class():
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1))
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesRaisingByteStream(
+            [_anthropic_messages_message_start_chunk()],
+            _anthropic_messages_transport_drop(
+                litellm.InternalServerError(message="upstream reset", llm_provider="databricks", model="glm")
+            ),
+        ),
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+def _anthropic_messages_error_frame(error_type: str) -> bytes:
+    return f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'type': error_type, 'message': error_type}})}\n\n".encode()
+
+
+_ANTHROPIC_MESSAGES_ERROR_FRAME_POLICIES: Final = (
+    pytest.param("api_error", RetryPolicy(InternalServerErrorRetries=1), id="api_error-500-internal-server"),
+    pytest.param("overloaded_error", RetryPolicy(InternalServerErrorRetries=1), id="overloaded-internal-server"),
+    pytest.param("rate_limit_error", RetryPolicy(RateLimitErrorRetries=1), id="rate-limit-429"),
+    pytest.param("timeout_error", RetryPolicy(TimeoutErrorRetries=1), id="timeout-504"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type,policy", _ANTHROPIC_MESSAGES_ERROR_FRAME_POLICIES)
+async def test_anthropic_messages_error_frame_is_retried_under_the_class_the_pre_stream_mapping_gives_it(
+    error_type, policy
+):
+    """An `event: error` frame before content carried a generic error, so a policy naming only error classes
+    granted it no retry while the hold still counted the policy: one attempt, then an HTTP error with no
+    bytes out. The frame now takes the class the pre-stream mapping raises for an answer carrying its body, so
+    an overloaded frame counts as the InternalServerError a 529 answer is, not a ServiceUnavailableError."""
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=policy)
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame(error_type)]
+        ),
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_error_frame_of_a_class_granted_no_retry_reaches_the_client_as_sent():
+    """A rate limit frame is the RateLimitError a 429 answer is, so a policy granting only InternalServerError
+    retries leaves it unretried. With no fallback to take over either, the frame reaches the client as the
+    provider sent it, behind the lifecycle frames held back for a retry that never opened, the way the last
+    exhausted attempt's frames do; raising it instead turned a provider error frame into an HTTP error only
+    on the first attempt."""
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1))
+    frame = _anthropic_messages_error_frame("rate_limit_error")
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream([_anthropic_messages_message_start_chunk(), frame])
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), frame]
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_error_frame_of_a_class_granted_no_retry_still_reaches_a_configured_fallback():
+    """The same unretried rate limit frame goes to the fallback group when one is configured, since a
+    fallback can still take over before any byte reached the client."""
+    router = _anthropic_messages_retry_router(
+        num_retries=0, fallbacks=[{"glm": ["fb"]}], retry_policy=RetryPolicy(InternalServerErrorRetries=1)
+    )
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame("rate_limit_error")]
+        ),
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, False]
+    assert provider.calls[-1][0] == "anthropic/fb-model"
+
+
+def test_anthropic_messages_recoverable_frame_error_direct_call():
+    """Which `event: error` frames are intercepted for a retry or a fallback, and which reach the client as sent."""
+    policy_router = _anthropic_messages_retry_router(
+        num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1)
+    )
+    fallback_router = _anthropic_messages_retry_router(num_retries=0, fallbacks=[{"glm": ["fb"]}])
+    api_error = ("api_error", "reset", 500)
+    rate_limit = ("rate_limit_error", "slow down", 429)
+    kwargs = {"model": "glm"}
+
+    recovered = policy_router._anthropic_messages_recoverable_frame_error(api_error, b"", False, "glm", kwargs)
+    assert isinstance(recovered, litellm.InternalServerError)
+    assert policy_router._anthropic_messages_recoverable_frame_error(rate_limit, b"", False, "glm", kwargs) is None
+    assert policy_router._anthropic_messages_recoverable_frame_error(api_error, b"", True, "glm", kwargs) is None
+    assert policy_router._anthropic_messages_recoverable_frame_error(None, b"", False, "glm", kwargs) is None
+    assert (
+        policy_router._anthropic_messages_recoverable_frame_error(
+            ("invalid_request_error", "bad", 400), b"", False, "glm", kwargs
+        )
+        is None
+    )
+    spent = {"model": "glm", "litellm_metadata": {"attempted_retries": 1, "max_retries": 1}}
+    assert policy_router._anthropic_messages_recoverable_frame_error(api_error, b"", False, "glm", spent) is None
+    assert isinstance(
+        fallback_router._anthropic_messages_recoverable_frame_error(rate_limit, b"", False, "glm", kwargs),
+        litellm.RateLimitError,
+    )
+
+
+_ANTHROPIC_MESSAGES_MALFORMED_POLICIES: Final = (
+    pytest.param({"glm": {"RateLimitErrorRetries": "many"}}, id="string-budget"),
+    pytest.param({"glm": 5}, id="group-policy-is-an-int"),
+    pytest.param(5, id="policy-map-is-an-int"),
+    pytest.param({"glm": [1]}, id="group-policy-is-a-list"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", _ANTHROPIC_MESSAGES_MALFORMED_POLICIES)
+@pytest.mark.parametrize("where", ["request", "router"])
+async def test_anthropic_messages_malformed_retry_policy_leaves_a_healthy_stream_alone(policy, where):
+    """The hold decision resolves the group's retry policy before the first byte, so a policy that does not
+    parse used to fail every stream of that group with a 500 before any attempt. It now governs nothing."""
+    router = _anthropic_messages_retry_router(num_retries=0)
+    request_kwargs = {"model_group_retry_policy": policy} if where == "request" else {}
+    if where == "router":
+        router.model_group_retry_policy = policy
+    provider = _AnthropicMessagesScriptedProvider(_anthropic_messages_retried_stream)
+
+    stream = await _anthropic_messages_stream_through_router(router, provider, **request_kwargs)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", _ANTHROPIC_MESSAGES_MALFORMED_POLICIES)
+async def test_anthropic_messages_malformed_retry_policy_falls_back_to_the_plain_budget(policy):
+    router = _anthropic_messages_retry_router(num_retries=1)
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame("overloaded_error")]
+        ),
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider, model_group_retry_policy=policy)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 1), (1, 1)]
+
+
+class _AnthropicMessagesAlternatingDeployments(CustomRoutingStrategyBase):
+    """Routes each attempt to the group's next deployment in turn, so which sibling a retry lands on is known."""
+
+    def __init__(self, router: Router, model_group: str) -> None:
+        self._deployments = itertools.cycle(router.get_model_list(model_name=model_group) or ())
+
+    async def async_get_available_deployment(
+        self, model, messages=None, input=None, specific_deployment=False, request_kwargs=None
+    ):
+        return next(self._deployments)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_num_retries,sibling_num_retries,expected_counters",
+    [
+        pytest.param(3, 1, [(0, 0), (1, 3), (2, 3), (3, 3)], id="sibling-grants-fewer"),
+        pytest.param(1, 3, [(0, 0), (1, 1)], id="sibling-grants-more"),
+    ],
+)
+async def test_anthropic_messages_retries_keep_the_budget_the_first_drop_committed_to_across_deployments(
+    first_num_retries, sibling_num_retries, expected_counters
+):
+    """A retry's stream recomputed its budget from the sibling deployment it landed on, so a group whose
+    deployments grant different num_retries stopped early or overshot the budget the first drop stamped
+    into the retry headers; later attempts now keep that budget, as the pre-stream retry loop does."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "glm",
+                "litellm_params": {"model": "anthropic/glm-a", "api_key": "sk-test", "num_retries": first_num_retries},
+            },
+            {
+                "model_name": "glm",
+                "litellm_params": {
+                    "model": "anthropic/glm-b",
+                    "api_key": "sk-test",
+                    "num_retries": sibling_num_retries,
+                },
+            },
+        ],
+        num_retries=0,
+        fallbacks=None,
+    )
+    router.set_custom_routing_strategy(_AnthropicMessagesAlternatingDeployments(router, "glm"))
+    provider = _AnthropicMessagesScriptedProvider(
+        *[_anthropic_messages_dropped_before_content] * len(expected_counters)
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.APIConnectionError):
+        [chunk async for chunk in stream]
+
+    assert [model for model, _, _ in provider.calls] == (["anthropic/glm-a", "anthropic/glm-b"] * 2)[
+        : len(expected_counters)
+    ]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == expected_counters
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_lifecycle_frames_wait_for_content_while_a_retry_remains():
+    """A retry can only restart cleanly while nothing reached the client, so with retries left a
+    fallback-less group holds message_start back until the first content frame, as a fallback does."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    content_released = asyncio.Event()
+
+    async def held_stream():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    provider = _AnthropicMessagesScriptedProvider(held_stream)
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+
+    pending = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.2)
+    assert not pending.done()
+    content_released.set()
+    assert await asyncio.wait_for(pending, timeout=1) == _anthropic_messages_message_start_chunk()
+    assert [chunk async for chunk in stream] == [_anthropic_messages_content_chunk("hi")]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_attempt_strips_the_controls_carrier_and_wraps_every_hop_stream():
     """Each attempt of the chain, not only the primary's, comes back wrapped for mid-stream
@@ -15033,6 +15811,7 @@ def _mid_stream_opt_out_router() -> Router:
             {"model_name": "fallback", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "k2"}},
         ],
         fallbacks=[{"primary": ["fallback"]}],
+        num_retries=0,
     )
 
 
@@ -16313,9 +17092,9 @@ class TestTierParamsTheTargetAccepts:
     def test_declared_param_allowlist_ignores_malformed_declarations(self):
         """A str is iterable, so without the type guard a YAML scalar mistake like
         allowed_openai_params: reasoning_effort would allowlist single characters."""
-        assert litellm.Router._declared_param_allowlist({"allowed_openai_params": ["reasoning_effort", 3]}) == frozenset(
-            {"reasoning_effort"}
-        )
+        assert litellm.Router._declared_param_allowlist(
+            {"allowed_openai_params": ["reasoning_effort", 3]}
+        ) == frozenset({"reasoning_effort"})
         assert litellm.Router._declared_param_allowlist({"allowed_openai_params": "reasoning_effort"}) == frozenset()
         assert litellm.Router._declared_param_allowlist({}) == frozenset()
 
@@ -16395,7 +17174,11 @@ class TestTierParamsTheTargetAccepts:
 
     @pytest.mark.parametrize(
         "deployment",
-        [{"model_name": "x"}, {"model_name": "x", "litellm_params": {}}, {"model_name": "x", "litellm_params": {"model": "not-a-real-provider/nope"}}],
+        [
+            {"model_name": "x"},
+            {"model_name": "x", "litellm_params": {}},
+            {"model_name": "x", "litellm_params": {"model": "not-a-real-provider/nope"}},
+        ],
     )
     def test_deployment_accepts_param_fails_open(self, deployment):
         """An unresolvable deployment must not be the reason a param is dropped."""
@@ -16700,9 +17483,7 @@ class TestPreRoutingTierDrivesFallbacks:
     async def test_the_selected_tier_fallback_chain_runs(self):
         router = self._router([{"tier1": ["backup-a"]}])
 
-        response = await router.acompletion(
-            model="smart-router", messages=[{"role": "user", "content": "hi"}]
-        )
+        response = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
 
         assert response.choices[0].message.content == "from backup-a"
 
@@ -16735,9 +17516,7 @@ class TestPreRoutingTierDrivesFallbacks:
     async def test_a_request_without_a_pre_routing_hook_still_uses_its_own_group(self):
         router = self._router([{"tier1": ["backup-a"]}])
 
-        response = await router.acompletion(
-            model="tier1", messages=[{"role": "user", "content": "hi"}]
-        )
+        response = await router.acompletion(model="tier1", messages=[{"role": "user", "content": "hi"}])
 
         assert response.choices[0].message.content == "from backup-a"
 
@@ -17876,6 +18655,8 @@ async def test_router_embedding_path_rejects_past_max_parallel_requests_without_
             },
         )
 
+    # Reap earlier tests' garbage first so only this test's coroutines are recorded
+    gc.collect()
     with respx.mock() as respx_mock, warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         route: Final = respx_mock.post("https://max-parallel-embed.local/v1/embeddings").mock(side_effect=upstream)
@@ -17981,7 +18762,9 @@ async def test_router_deployment_slot_rejects_while_held_and_frees_slot_on_exit(
 
     async with router._deployment_slot(deployment=deployment.model_dump(), kwargs=kwargs, parent_otel_span=None):
         with pytest.raises(litellm.RateLimitError) as overflow:
-            async with router._deployment_slot(deployment=deployment.model_dump(), kwargs=kwargs, parent_otel_span=None):
+            async with router._deployment_slot(
+                deployment=deployment.model_dump(), kwargs=kwargs, parent_otel_span=None
+            ):
                 pass
     assert overflow.value.status_code == 429
     assert "slot-deployment" in overflow.value.message
@@ -18216,18 +18999,25 @@ class TestMemberAutoRouterInference:
 
         self.cache = UserApiKeyCache()
         self.team = LiteLLM_TeamTable(
-            team_id="router-team", models=["member-router", "permitted-model"],
+            team_id="router-team",
+            models=["member-router", "permitted-model"],
             members_with_roles=[Member(user_id="router-member", role="user")],
         )
         self.actor = UserAPIKeyAuth(
-            user_id="router-member", team_id="router-team", user_role=LitellmUserRoles.INTERNAL_USER,
-            models=["member-router", "permitted-model"], api_key="test-key-hash", config={"timeout": 60},
+            user_id="router-member",
+            team_id="router-team",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["member-router", "permitted-model"],
+            api_key="test-key-hash",
+            config={"timeout": 60},
         )
-        self.database = SimpleNamespace(db=SimpleNamespace(
-            litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=self.team)),
-            litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
-            litellm_accessgrouptable=SimpleNamespace(find_unique=AsyncMock()),
-        ))
+        self.database = SimpleNamespace(
+            db=SimpleNamespace(
+                litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=self.team)),
+                litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+                litellm_accessgrouptable=SimpleNamespace(find_unique=AsyncMock()),
+            )
+        )
         monkeypatch.setattr(proxy_server, "user_api_key_cache", self.cache)
         monkeypatch.setattr(proxy_server, "prisma_client", self.database)
 
@@ -18237,44 +19027,71 @@ class TestMemberAutoRouterInference:
         return {
             "model_name": "model_name_router-team_member-router",
             "litellm_params": {
-                "model": "auto_router/complexity_router", "complexity_router_default_model": target,
+                "model": "auto_router/complexity_router",
+                "complexity_router_default_model": target,
                 "complexity_router_config": {
-                    "tiers": dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), target), "adaptive": False,
+                    "tiers": dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), target),
+                    "adaptive": False,
                     **({"classifier_type": "llm", "classifier_llm_config": {"model": target}} if classifier else {}),
                 },
-                "tags": ["member" if member else "admin"], "timeout": 13.0 if member else 29.0,
+                "tags": ["member" if member else "admin"],
+                "timeout": 13.0 if member else 29.0,
             },
             "model_info": {
-                "team_id": "router-team", "team_public_model_name": "member-router", "member_auto_router": member,
+                "team_id": "router-team",
+                "team_public_model_name": "member-router",
+                "member_auto_router": member,
             },
         }
 
     @classmethod
     def _router(cls, *markers: dict[str, object]) -> Router:
-        return Router(model_list=[
-            *(markers or (cls._marker(),)),
-            {"model_name": "permitted-model", "litellm_params": {
-                "model": "openai/gpt-4o-mini", "api_key": "test-key", "api_base": "https://api.openai.com/v1",
-            }},
-            {"model_name": "restricted-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"}},
-        ])
+        return Router(
+            model_list=[
+                *(markers or (cls._marker(),)),
+                {
+                    "model_name": "permitted-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "test-key",
+                        "api_base": "https://api.openai.com/v1",
+                    },
+                },
+                {"model_name": "restricted-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"}},
+            ]
+        )
 
     def _request(
-        self, *, actor: UserAPIKeyAuth | None = None, metadata_name: str = "metadata", tag: str = "member",
+        self,
+        *,
+        actor: UserAPIKeyAuth | None = None,
+        metadata_name: str = "metadata",
+        tag: str = "member",
     ) -> dict[str, object]:
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
         return LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
-            data={metadata_name: {"tags": [tag]}, **({"metadata": {"user_api_key_auth": {"user_role": "proxy_admin"}}}
-                  if metadata_name == "litellm_metadata" else {})},
-            user_api_key_dict=actor or self.actor, _metadata_variable_name=metadata_name,
+            data={
+                metadata_name: {"tags": [tag]},
+                **(
+                    {"metadata": {"user_api_key_auth": {"user_role": "proxy_admin"}}}
+                    if metadata_name == "litellm_metadata"
+                    else {}
+                ),
+            },
+            user_api_key_dict=actor or self.actor,
+            _metadata_variable_name=metadata_name,
         )
 
     async def _route(
-        self, router: Router, request: dict[str, object] | None = None, model: str = "member-router",
+        self,
+        router: Router,
+        request: dict[str, object] | None = None,
+        model: str = "member-router",
     ) -> PreRoutingHookResponse:
         response: Final = await router.async_pre_routing_hook(
-            model=model, request_kwargs=request if request is not None else self._request(),
+            model=model,
+            request_kwargs=request if request is not None else self._request(),
             messages=[{"role": "user", "content": "Hello"}],
         )
         assert response is not None
@@ -18283,36 +19100,68 @@ class TestMemberAutoRouterInference:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("metadata_name", ("metadata", "litellm_metadata"))
     async def test_cached_roster_revocation_blocks_classifier_and_session_rebinding(
-        self, metadata_name: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch,
+        self,
+        metadata_name: str,
+        respx_mock: respx.MockRouter,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         from litellm.proxy.auth.auth_checks import delete_cache_team_object
 
         monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
         router: Final = self._router(self._marker(classifier=True))
-        classify: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(200, json={
-            "id": "classifier", "object": "chat.completion", "created": 0, "model": "gpt-4o-mini",
-            "choices": [{"index": 0, "message": {"content": '{"tier":"SIMPLE"}', "role": "assistant"},
-                         "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        })
-        request: Final = {**self._request(metadata_name=metadata_name), "proxy_server_request": {"headers": {
-            "x-claude-code-session-id": "member-router-session", "x-app": "cli",
-        }}}
+        classify: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "classifier",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"content": '{"tier":"SIMPLE"}', "role": "assistant"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        request: Final = {
+            **self._request(metadata_name=metadata_name),
+            "proxy_server_request": {
+                "headers": {
+                    "x-claude-code-session-id": "member-router-session",
+                    "x-app": "cli",
+                }
+            },
+        }
         first: Final = await self._route(router, request)
         assert first.model == "permitted-model" and first.routing_decision is not None
         assert first.routing_decision["cause"] == "llm_classifier"
         assert (await self._route(router, request)).model == "permitted-model"
         assert self.database.db.litellm_teamtable.find_unique.await_count == 1
         assert self.database.db.litellm_teammembership.find_unique.await_count == 1
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(update={"members_with_roles": []})
+        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+            update={"members_with_roles": []}
+        )
         await delete_cache_team_object(
-            team_id=self.team.team_id, team_alias=None, user_api_key_cache=self.cache, proxy_logging_obj=None,
+            team_id=self.team.team_id,
+            team_alias=None,
+            user_api_key_cache=self.cache,
+            proxy_logging_obj=None,
         )
         with pytest.raises(HTTPException, match="no longer a member"):
             await self._route(router, request)
-        rebound: Final = {**request, "proxy_server_request": {"headers": {
-            "x-claude-code-session-id": "member-router-session", "x-app": "cli", "x-claude-code-agent-id": "subagent",
-        }}}
+        rebound: Final = {
+            **request,
+            "proxy_server_request": {
+                "headers": {
+                    "x-claude-code-session-id": "member-router-session",
+                    "x-app": "cli",
+                    "x-claude-code-agent-id": "subagent",
+                }
+            },
+        }
         with pytest.raises(HTTPException, match="no longer a member"):
             await self._route(router, rebound, model="restricted-model")
         assert classify.call_count == 2
@@ -18322,11 +19171,23 @@ class TestMemberAutoRouterInference:
     async def test_member_router_fails_closed(self, state: str, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.proxy import proxy_server
 
-        request: Final = {"metadata": {"user_api_key_team_id": "router-team", "user_api_key_auth": {
-            "team_id": "router-team", "user_role": "proxy_admin",
-        }}} if state == "forged" else self._request(actor=self.actor.model_copy(
-            update={"user_id": ""} if state == "empty-user" else {},
-        ))
+        request: Final = (
+            {
+                "metadata": {
+                    "user_api_key_team_id": "router-team",
+                    "user_api_key_auth": {
+                        "team_id": "router-team",
+                        "user_role": "proxy_admin",
+                    },
+                }
+            }
+            if state == "forged"
+            else self._request(
+                actor=self.actor.model_copy(
+                    update={"user_id": ""} if state == "empty-user" else {},
+                )
+            )
+        )
         self.database.db.litellm_teamtable.find_unique.return_value = (
             None if state == "deleted" else self.team.model_copy(update={"blocked": state == "blocked"})
         )
@@ -18337,11 +19198,20 @@ class TestMemberAutoRouterInference:
         assert error.value.status_code == (503 if state == "unavailable" else 403)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("user_id,role", [(None, LitellmUserRoles.INTERNAL_USER), ("admin", LitellmUserRoles.PROXY_ADMIN)])
-    async def test_service_key_and_admin_preserve_runtime_access(self, user_id: str | None, role: LitellmUserRoles) -> None:
-        assert (await self._route(self._router(), self._request(
-            actor=self.actor.model_copy(update={"user_id": user_id, "user_role": role}),
-        ))).model == "permitted-model"
+    @pytest.mark.parametrize(
+        "user_id,role", [(None, LitellmUserRoles.INTERNAL_USER), ("admin", LitellmUserRoles.PROXY_ADMIN)]
+    )
+    async def test_service_key_and_admin_preserve_runtime_access(
+        self, user_id: str | None, role: LitellmUserRoles
+    ) -> None:
+        assert (
+            await self._route(
+                self._router(),
+                self._request(
+                    actor=self.actor.model_copy(update={"user_id": user_id, "user_role": role}),
+                ),
+            )
+        ).model == "permitted-model"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("ceiling", ("team", "key", "member", "organization", "project"))
@@ -18352,35 +19222,56 @@ class TestMemberAutoRouterInference:
         from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
         from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
 
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(update={
-            "models": ["member-router"] if ceiling == "team" else self.team.models,
-            "organization_id": "router-org" if ceiling == "organization" else None,
-        })
+        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+            update={
+                "models": ["member-router"] if ceiling == "team" else self.team.models,
+                "organization_id": "router-org" if ceiling == "organization" else None,
+            }
+        )
         if ceiling == "member":
             await self.cache.async_set_cache(
                 key=team_membership_reservation_cache_key(user_id="router-member", team_id="router-team"),
-                value=LiteLLM_TeamMembership(user_id="router-member", team_id="router-team",
-                    litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["restricted-model"])),
+                value=LiteLLM_TeamMembership(
+                    user_id="router-member",
+                    team_id="router-team",
+                    litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["restricted-model"]),
+                ),
                 model_type=LiteLLM_TeamMembership,
             )
         elif ceiling == "organization":
             await self.cache.async_set_cache(
-                key="org_id:router-org", value=LiteLLM_OrganizationTable(
-                    organization_id="router-org", budget_id="org-budget", created_by="admin", updated_by="admin",
+                key="org_id:router-org",
+                value=LiteLLM_OrganizationTable(
+                    organization_id="router-org",
+                    budget_id="org-budget",
+                    created_by="admin",
+                    updated_by="admin",
                     models=["restricted-model"],
-                ), model_type=LiteLLM_OrganizationTable,
+                ),
+                model_type=LiteLLM_OrganizationTable,
             )
         elif ceiling == "project":
             await self.cache.async_set_cache(
-                key="project_id:router-project", value=LiteLLM_ProjectTableCachedObj(
-                    project_id="router-project", team_id="router-team", models=["restricted-model"],
-                ), model_type=LiteLLM_ProjectTableCachedObj,
+                key="project_id:router-project",
+                value=LiteLLM_ProjectTableCachedObj(
+                    project_id="router-project",
+                    team_id="router-team",
+                    models=["restricted-model"],
+                ),
+                model_type=LiteLLM_ProjectTableCachedObj,
             )
         with pytest.raises(ProxyException, match="is not available for this API key"):
-            await self._route(self._router(), self._request(actor=self.actor.model_copy(update={
-                "models": ["member-router"] if ceiling == "key" else self.actor.models,
-                "project_id": "router-project" if ceiling == "project" else None,
-            })))
+            await self._route(
+                self._router(),
+                self._request(
+                    actor=self.actor.model_copy(
+                        update={
+                            "models": ["member-router"] if ceiling == "key" else self.actor.models,
+                            "project_id": "router-project" if ceiling == "project" else None,
+                        }
+                    )
+                ),
+            )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("group_owner", ("team", "key"))
@@ -18388,22 +19279,32 @@ class TestMemberAutoRouterInference:
         from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
         group: Final = LiteLLM_AccessGroupTable(
-            access_group_id="router-group", access_group_name="Router targets", access_model_names=["permitted-model"],
+            access_group_id="router-group",
+            access_group_name="Router targets",
+            access_model_names=["permitted-model"],
         )
         self.database.db.litellm_accessgrouptable.find_unique.return_value = group
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(update={
-            "models": ["member-router"] if group_owner == "team" else self.team.models,
-            "access_group_ids": ["router-group"] if group_owner == "team" else [],
-        })
-        request: Final = self._request(actor=self.actor.model_copy(update={
-            "models": ["member-router"] if group_owner == "key" else self.actor.models,
-            "access_group_ids": ["router-group"] if group_owner == "key" else [],
-        }))
+        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+            update={
+                "models": ["member-router"] if group_owner == "team" else self.team.models,
+                "access_group_ids": ["router-group"] if group_owner == "team" else [],
+            }
+        )
+        request: Final = self._request(
+            actor=self.actor.model_copy(
+                update={
+                    "models": ["member-router"] if group_owner == "key" else self.actor.models,
+                    "access_group_ids": ["router-group"] if group_owner == "key" else [],
+                }
+            )
+        )
         router: Final = self._router()
         assert (await self._route(router, request)).model == "permitted-model"
         assert (await self._route(router, request)).model == "permitted-model"
         assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 1
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group.model_copy(update={"access_model_names": []})
+        self.database.db.litellm_accessgrouptable.find_unique.return_value = group.model_copy(
+            update={"access_model_names": []}
+        )
         await evict_and_broadcast(cache_keys=("access_group_id:router-group",), user_api_key_cache=self.cache)
         with pytest.raises(ProxyException, match="is not available for this API key"):
             await self._route(router, request)
@@ -18414,13 +19315,16 @@ class TestMemberAutoRouterInference:
         router: Final = self._router(self._marker(member=False), self._marker())
         request: Final = self._request()
         selected: Final = router._selected_strategy_marker_deployment(
-            model="model_name_router-team_member-router", strategy_tags=("member",), request_kwargs=request,
+            model="model_name_router-team_member-router",
+            strategy_tags=("member",),
+            request_kwargs=request,
         )
         assert selected is not None and selected["model_info"]["member_auto_router"] is True
         assert (await self._route(router, request)).model == "permitted-model"
         assert request["timeout"] == 13.0
         await self.cache.async_set_cache(
-            key="team_id:router-team", model_type=LiteLLM_TeamTable,
+            key="team_id:router-team",
+            model_type=LiteLLM_TeamTable,
             value=self.team.model_copy(update={"models": ["member-router"]}),
         )
         with pytest.raises(ProxyException, match="is not available for this API key"):
@@ -18436,7 +19340,9 @@ class TestMemberAutoRouterInference:
         router: Final = self._router(self._marker(member=False))
         monkeypatch.setitem(sys.modules, "fastapi", None)
         monkeypatch.delitem(sys.modules, "litellm.proxy.auth.auto_router_checks", raising=False)
-        assert (await self._route(router, {"metadata": {"user_api_key_team_id": "router-team"}})).model == "restricted-model"
+        assert (
+            await self._route(router, {"metadata": {"user_api_key_team_id": "router-team"}})
+        ).model == "restricted-model"
 
 
 def _access_window_offsets(start_hours: float, end_hours: float, team_ids: list) -> dict:
@@ -18481,10 +19387,12 @@ def test_access_windows_hide_reserved_deployment_from_other_teams():
 
 
 def test_access_windows_raise_when_only_reserved_deployments_remain():
-    router = Router(model_list=_reserved_model_list(
-        windows_for_reserved=[_access_window_offsets(-1, 1, ["team-a"])],
-        windows_for_open=[_access_window_offsets(-1, 1, ["team-a"])],
-    )[:1])
+    router = Router(
+        model_list=_reserved_model_list(
+            windows_for_reserved=[_access_window_offsets(-1, 1, ["team-a"])],
+            windows_for_open=[_access_window_offsets(-1, 1, ["team-a"])],
+        )[:1]
+    )
     for request_kwargs in ({"metadata": {"user_api_key_team_id": "team-b"}}, {}):
         with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
             router._common_checks_available_deployment(model="gpt-4o-ptu", request_kwargs=request_kwargs)
@@ -18547,9 +19455,11 @@ def test_access_windows_inactive_window_leaves_deployments_available():
 
 
 def test_access_windows_apply_when_calling_by_model_id():
-    router = Router(model_list=_reserved_model_list(
-        windows_for_reserved=[_access_window_offsets(-1, 1, ["team-a"])],
-    ))
+    router = Router(
+        model_list=_reserved_model_list(
+            windows_for_reserved=[_access_window_offsets(-1, 1, ["team-a"])],
+        )
+    )
     with pytest.raises(litellm.BadRequestError, match="reserved for another team"):
         router._common_checks_available_deployment(
             model="reserved-deployment",
@@ -18716,7 +19626,9 @@ async def test_bare_model_group_served_by_wildcard_deployment_uses_provider_pref
 
 
 @pytest.mark.asyncio
-async def test_bare_model_group_served_by_wildcard_deployment_uses_provider_prefixed_context_window_fallback_key() -> None:
+async def test_bare_model_group_served_by_wildcard_deployment_uses_provider_prefixed_context_window_fallback_key() -> (
+    None
+):
     """The context-window chain is keyed the same way the ordinary chain is, so a key spelled like the
     wildcard deployment ("anthropic/claude-sonnet-4-6") must catch the bare group's context-window error too."""
     router = litellm.Router(
@@ -18776,9 +19688,7 @@ def test_bare_model_group_served_by_wildcard_deployment_has_provider_prefixed_co
     [
         GuardrailRaisedException(guardrail_name="chunk-scanner", message="blocked"),
         HTTPException(status_code=403, detail={"error": "blocked", "guardrail_name": "chunk-scanner"}),
-        ModifyResponseException(
-            message="blocked", model="primary", request_data={}, guardrail_name="chunk-scanner"
-        ),
+        ModifyResponseException(message="blocked", model="primary", request_data={}, guardrail_name="chunk-scanner"),
     ],
 )
 async def test_a_guardrail_verdict_is_neither_retried_nor_fallen_back(verdict: Exception) -> None:
@@ -18802,3 +19712,642 @@ async def test_a_guardrail_verdict_is_neither_retried_nor_fallen_back(verdict: E
             await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == ["primary"]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("gpt-4\r\nERROR forged entry\n", "gpt-4ERROR forged entry"),
+        (RuntimeError("no deployments\r\nfor gpt-4"), "no deploymentsfor gpt-4"),
+        ("gpt-4", "gpt-4"),
+    ],
+)
+def test_without_line_breaks_drops_every_cr_and_lf_from_the_logged_value(value: object, expected: str) -> None:
+    assert _without_line_breaks(value) == expected
+
+
+def test_a_failed_routing_read_prefetch_logs_the_request_model_without_its_line_breaks(monkeypatch, caplog) -> None:
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4", "api_key": "k"}}]
+    )
+    forged_model: Final = "gpt-4\r\nERROR forged entry\n"
+
+    def fail_lookup(model_name: str | None = None, team_id: str | None = None) -> None:
+        raise RuntimeError(f"no deployments for {model_name}")
+
+    monkeypatch.setattr(router, "get_model_list", fail_lookup)
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+        router.arm_routing_read_prefetch(forged_model, {})
+
+    messages: Final = [r.getMessage() for r in caplog.records if "routing read prefetch not armed" in r.getMessage()]
+    assert messages == [
+        "routing read prefetch not armed for gpt-4ERROR forged entry: no deployments for gpt-4ERROR forged entry"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routing_strategy",
+    ["simple-shuffle", "usage-based-routing-v2", "least-busy", "latency-based-routing"],
+)
+async def test_router_subclass_overriding_async_get_healthy_deployments_with_the_old_signature_still_routes(
+    routing_strategy: str,
+) -> None:
+    class OldSignatureRouter(litellm.Router):
+        async def async_get_healthy_deployments(
+            self,
+            model: str,
+            request_kwargs: dict,
+            messages: list[dict[str, str]] | None = None,
+            input: str | list | None = None,
+            specific_deployment: bool | None = False,
+            parent_otel_span: Span | None = None,
+            health_check_probe: bool = False,
+        ):
+            return await super().async_get_healthy_deployments(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+                parent_otel_span=parent_otel_span,
+                health_check_probe=health_check_probe,
+            )
+
+    router: Final = OldSignatureRouter(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x", "mock_response": "hi"},
+            }
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+    response: Final = await router.acompletion(model="m", messages=[{"role": "user", "content": "x"}])
+
+    assert response.choices[0].message.content == "hi"
+
+
+def test_get_deployment_credentials_with_provider_preserves_anthropic_wif_params():
+    """
+    Test that get_deployment_credentials_with_provider preserves a litellm_params-configured
+    Anthropic workload identity federation setup (both the legacy token_file fields and the
+    Phase 1 internal_issuer/keycloak identity-source fields) so files/batches/passthrough
+    deployments using WIF do not silently fall back to a missing credential.
+    """
+    wif_params = {
+        "anthropic_federation_rule_id": "fdrl_deployment",
+        "anthropic_organization_id": "org-deployment",
+        "anthropic_identity_source": "keycloak",
+        "anthropic_keycloak_token_url": "https://keycloak.internal.example/realms/r/protocol/openid-connect/token",
+        "anthropic_keycloak_client_id": "litellm",
+        "anthropic_keycloak_client_secret_ref": "oidc/env/KEYCLOAK_CLIENT_SECRET",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic-wif-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    **wif_params,
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="anthropic-wif-model")
+
+    assert credentials is not None
+    for key, value in wif_params.items():
+        assert credentials.get(key) == value, key
+
+
+def test_router_keeps_wif_secret_pointers_unresolved(monkeypatch):
+    monkeypatch.setenv("WIF_TEST_KC_SECRET", "kc-secret")
+    monkeypatch.setenv("WIF_TEST_FDRL", "fdrl_from_env")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-wif",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "anthropic_federation_rule_id": "os.environ/WIF_TEST_FDRL",
+                    "anthropic_identity_source": "keycloak",
+                    "anthropic_keycloak_token_url": "https://keycloak.example/token",
+                    "anthropic_keycloak_client_id": "litellm",
+                    "anthropic_keycloak_client_secret_ref": "os.environ/WIF_TEST_KC_SECRET",
+                },
+            }
+        ]
+    )
+
+    litellm_params = router.get_model_list()[0]["litellm_params"]
+
+    assert litellm_params["anthropic_federation_rule_id"] == "fdrl_from_env"
+    assert litellm_params["anthropic_keycloak_client_secret_ref"] == "os.environ/WIF_TEST_KC_SECRET"
+
+
+@pytest.mark.asyncio
+async def test_failure_rpm_increment_declares_the_router_usage_key_family():
+    """The RPM bump a failed call still earns is router usage bookkeeping, so its Redis span
+    reads ``redis.incr router_usage`` rather than a bare ``redis.incr``."""
+    from unittest.mock import AsyncMock
+
+    from litellm._internal_context import current_service_target
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+                "model_info": {"id": "dep-1"},
+            }
+        ]
+    )
+    seen: list[str | None] = []
+
+    async def _increment(**_kwargs):
+        seen.append(current_service_target())
+
+    with patch.object(router.cache, "async_increment_cache", new=AsyncMock(side_effect=_increment)):
+        await router.async_deployment_callback_on_failure(
+            kwargs={
+                "call_type": "acompletion",
+                "litellm_params": {
+                    "metadata": {"deployment": "openai/gpt-4o", "model_group": "gpt-group"},
+                    "model_info": {"id": "dep-1"},
+                },
+            },
+            completion_response=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    assert seen == ["router_usage"]
+    assert current_service_target() is None
+
+
+class _SpanRecordingInMemoryCache(InMemoryCache):
+    """Records the live OTel span each read runs under, so the test sees what a Redis span would nest in."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_span_names: list[str] = []
+
+    async def async_batch_get_cache(self, keys, **kwargs):
+        self.active_span_names.append(trace.get_current_span().name)
+        return await super().async_batch_get_cache(keys, **kwargs)
+
+    async def async_get_cache(self, key, **kwargs):
+        self.active_span_names.append(trace.get_current_span().name)
+        return await super().async_get_cache(key, **kwargs)
+
+
+@pytest.fixture
+def v2_span_exporter(monkeypatch):
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.otel import OpenTelemetryV2Config
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.plumbing import providers
+    from litellm.proxy import proxy_server
+
+    config = OpenTelemetryV2Config(exporter="in_memory")
+    exporter = InMemorySpanExporter()
+    logger = OpenTelemetryV2(config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    return exporter
+
+
+@pytest.mark.asyncio
+async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_model_group(v2_span_exporter):
+    """Picking a deployment opens ``route {model_group}`` (the requested group, not the deployment
+    it picks) under the server span, and the cooldown reads it issues run inside it, so their Redis
+    spans nest there instead of lying flat under the request."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "a"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-5.4", "api_key": "fake", "mock_response": "b"},
+                "model_info": {"id": "dep-b"},
+            },
+        ]
+    )
+    recording_cache = _SpanRecordingInMemoryCache()
+    router.cache.in_memory_cache = recording_cache
+    router.cooldown_cache.cooldown_store.in_memory_cache = recording_cache
+
+    with TracerProvider().get_tracer("test").start_as_current_span("POST /v1/chat/completions") as server_span:
+        deployment = await router.async_get_available_deployment(model="gpt-group", request_kwargs={})
+
+    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+    (route_span,) = v2_span_exporter.get_finished_spans()
+    assert route_span.name == "route gpt-group"
+    assert route_span.parent is not None and route_span.parent.span_id == server_span.get_span_context().span_id
+    assert route_span.end_time is not None
+    assert recording_cache.active_span_names and set(recording_cache.active_span_names) == {"route gpt-group"}
+
+
+def _record_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, str | int]]]:
+    events: list[tuple[str, dict[str, str | int]]] = []  # mutable-ok: recorder for the injected phase_event double
+
+    def record(name: str, attributes: dict[str, str | int]) -> None:
+        events.append((name, dict(attributes)))
+
+    monkeypatch.setattr(litellm.router, "phase_event", record)
+    return events
+
+
+def _pick(model_group: str, reason: str, attempt: int) -> tuple[str, dict[str, str | int]]:
+    return (
+        "litellm.request.deployment_selected",
+        {
+            "litellm.deployment.attempt": attempt,
+            "litellm.deployment.reason": reason,
+            "litellm.deployment.model_group": model_group,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "request_kwargs, expected_reason, expected_attempt",
+    [
+        (None, "initial", 1),
+        ({"metadata": {"attempted_retries": 0}, "fallback_depth": 0}, "initial", 1),
+        ({"metadata": {"attempted_retries": 2}}, "retry", 3),
+        ({"litellm_metadata": {"attempted_retries": 1}, "metadata": {"attempted_retries": 4}}, "retry", 2),
+        ({"metadata": {}, "fallback_depth": 1}, "fallback", 1),
+        ({"metadata": {"attempted_retries": 1}, "fallback_depth": 1}, "retry", 2),
+    ],
+)
+def test_deployment_pick_attributes_derive_attempt_and_reason(
+    request_kwargs: dict[str, object] | None, expected_reason: str, expected_attempt: int
+):
+    attributes: Final = litellm.router._deployment_pick_attributes("gpt-4o", request_kwargs)
+
+    assert dict(attributes) == {
+        "litellm.deployment.attempt": expected_attempt,
+        "litellm.deployment.reason": expected_reason,
+        "litellm.deployment.model_group": "gpt-4o",
+    }
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_deployment_selected_once(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+            }
+        ]
+    )
+
+    await router.acompletion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("gpt-4o", "initial", 1)]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_every_retry_pick(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "flaky",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": Exception("boom")},
+            }
+        ],
+        num_retries=2,
+        retry_after=0,
+    )
+
+    with pytest.raises(Exception, match="boom"):
+        await router.acompletion(model="flaky", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("flaky", "initial", 1), _pick("flaky", "retry", 2), _pick("flaky", "retry", 3)]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_fallback_pick_with_its_model_group(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": Exception("boom")},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake", "mock_response": "hi"},
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+    response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "hi"
+    assert events == [_pick("primary", "initial", 1), _pick("backup", "fallback", 1)]
+
+
+@pytest.mark.asyncio
+async def test_non_chat_surfaces_mark_their_deployment_pick(monkeypatch: pytest.MonkeyPatch):
+    """The event is emitted where the router picks, so embeddings and the sync path report it too."""
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "fake", "mock_response": [0.1]},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+            },
+        ]
+    )
+
+    await router.aembedding(model="embed", input="hi")
+    router.completion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("embed", "initial", 1), _pick("gpt-4o", "initial", 1)]
+
+
+class TestAutoRouterTraceProvenance:
+    @pytest.fixture
+    def _tracing(self, monkeypatch: pytest.MonkeyPatch) -> "tuple[OpenTelemetryV2, InMemorySpanExporter]":
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from litellm.integrations.otel import OpenTelemetryV2Config
+        from litellm.integrations.otel.logger import OpenTelemetryV2
+        from litellm.integrations.otel.plumbing import providers
+        from litellm.proxy import proxy_server
+
+        config: Final = OpenTelemetryV2Config(exporter="in_memory")
+        exporter: Final = InMemorySpanExporter()
+        logger: Final = OpenTelemetryV2(config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter))
+        monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+        return logger, exporter
+
+    @staticmethod
+    def _marker(tag: str, target: str = "answer") -> dict[str, object]:
+        return {
+            "model_name": "traced-router",
+            "model_info": {"id": f"definition-{tag}", "updated_at": "2026-10-01T12:00:00+00:00"},
+            "litellm_params": {
+                "model": "auto_router/complexity_router", "tags": [tag],
+                "complexity_router_config": {
+                    "tiers": dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), target),
+                },
+            },
+        }
+
+    def test_definition_fingerprint_is_canonical_and_tracks_config_not_credentials(self):
+        original: Final = Deployment.model_validate(self._marker("blue"))
+        reordered: Final = Deployment.model_validate({
+            **self._marker("blue"),
+            "litellm_params": {
+                "api_key": "credential-only-change", "tags": ["blue"], "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": dict.fromkeys(("REASONING", "COMPLEX", "MEDIUM", "SIMPLE"), "answer")},
+            },
+        })
+        fingerprint: Final = Router._routing_definition_fingerprint(original)
+        assert fingerprint is not None
+        assert fingerprint == Router._routing_definition_fingerprint(reordered)
+        assert fingerprint != Router._routing_definition_fingerprint(Deployment.model_validate(self._marker("blue", "other")))
+
+    @pytest.mark.asyncio
+    async def test_direct_classifier_and_plugin_prelude_never_inherit_parent_decisions(
+        self, _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]", monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        logger, exporter = _tracing
+        completed: Final = asyncio.Event()
+
+        class ObservedClassifier:
+            prelude: Mapping[str, object] = {}
+
+            async def run(self, context: RoutingContext) -> RoutingContext:
+                self.prelude = dict(context.metadata)
+                return context
+
+            async def classify(self, context: RoutingContext) -> str:
+                await litellm.acompletion(
+                    model="openai/gpt-5.6-luna", api_key="test", mock_response="SIMPLE",
+                    messages=[{"role": "user", "content": "choose a tier"}],
+                    metadata={**context.metadata, "internal_call_origin": "autorouter_classifier"},
+                )
+                return "SIMPLE"
+
+        class CallbackComplete(CustomLogger):
+            async def async_log_success_event(
+                self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+            ) -> None:
+                completed.set()
+
+        monkeypatch.setattr(litellm, "_async_success_callback", [logger, CallbackComplete()])
+        classifier: Final = ObservedClassifier()
+        router: Final = Router(model_list=[
+            {**self._marker("blue"), "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "classifier_type": "custom", "classifier_plugin": classifier,
+                    "tiers": {"SIMPLE": "answer"}, "session_affinity": False, "deployment_affinity": False,
+                },
+            }},
+            {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
+        ], plugins=[classifier])
+        stale: Final = {"routing_decision": {"router_model_name": "previous"}, "_autorouter_baseline_route": "old"}
+        request: Final = {"metadata": {**stale}, "litellm_metadata": {**stale, "user_api_key_team_id": "team"}}
+        with logger.tracer.start_as_current_span("request") as root:
+            set_request_root_span(root)
+            await router.async_get_available_deployment(
+                model="traced-router", request_kwargs=request, messages=[{"role": "user", "content": "hello"}]
+            )
+            await completed.wait()
+        classifier_span: Final = next(
+            span for span in exporter.get_finished_spans()
+            if (span.attributes or {}).get("litellm.request.purpose") == "autorouter_classifier"
+        )
+        assert not any(key.startswith("litellm.routing.") for key in classifier_span.attributes)
+        assert "routing_decision" not in classifier.prelude
+        assert "_autorouter_baseline_route" not in classifier.prelude
+        assert classifier.prelude["user_api_key_team_id"] == "team"
+        assert "routing_decision" not in request["metadata"]
+        assert "_autorouter_baseline_route" not in request["metadata"]
+        assert request["litellm_metadata"]["routing_decision"]["cause"] == "classifier_plugin"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("build_fails", [False, True])
+    async def test_semantic_internal_failure_keeps_phase_identity_without_parent_retry_attribution(
+        self, _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]", monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter, build_fails: bool,
+    ) -> None:
+        logger, exporter = _tracing
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        query_statuses: Final = iter((503, 200))
+
+        def embedding_response(request: httpx.Request) -> httpx.Response:
+            status: Final = 400 if build_fails else (
+                next(query_statuses) if json.loads(request.content)["input"] == ["query-retry"] else 200
+            )
+            return httpx.Response(status, headers={"x-should-retry": "false"}, json={
+                "object": "list", "model": "text-embedding-3-small",
+                "data": [{"object": "embedding", "index": 0, "embedding": [1.0, 0.0]}],
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            })
+
+        upstream: Final = respx_mock.post("https://embedding.example/v1/embeddings").mock(side_effect=embedding_response)
+        router: Final = Router(model_list=[
+            {"model_name": "semantic", "model_info": {"id": "semantic-definition"}, "litellm_params": {
+                "model": "auto_router/semantic-router", "auto_router_default_model": "answer",
+                "auto_router_embedding_model": "embed",
+                "auto_router_config": json.dumps({"routes": [{"name": "answer", "utterances": ["hello"]}]}),
+            }},
+            *({"model_name": "embed", "model_info": {"id": f"embed-{index}"}, "litellm_params": {
+                "model": "openai/text-embedding-3-small", "api_base": "https://embedding.example/v1",
+                "api_key": "test", "max_retries": 0,
+            }} for index in range(2)),
+            {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
+        ], num_retries=1, retry_after=0)
+        stale: Final = {"routing_decision": {"router_model_name": "previous"}, "_autorouter_baseline_route": "old"}
+        request: Final = {"metadata": {**stale}, "litellm_metadata": {**stale}}
+        with logger.tracer.start_as_current_span("request") as root:
+            set_request_root_span(root)
+            call: Final = router.async_get_available_deployment(
+                model="semantic", request_kwargs=request, messages=[{"role": "user", "content": "query-retry"}]
+            )
+            if build_fails:
+                with pytest.raises(ValueError, match="API call failed"):
+                    await call
+            else:
+                await call
+        spans: Final = {span.name: span for span in exporter.get_finished_spans()}
+        assert spans["route semantic"].attributes["litellm.routing.router_config_id"] == "semantic-definition"
+        assert not any(event.name == "litellm.routing.retry" for event in spans["request"].events)
+        if build_fails:
+            assert all(
+                "routing_decision" not in bucket and "_autorouter_baseline_route" not in bucket
+                for bucket in (request["metadata"], request["litellm_metadata"])
+            )
+        else:
+            assert sum(json.loads(call.request.content)["input"] == ["query-retry"] for call in upstream.calls) == 2
+            assert request["litellm_metadata"]["routing_decision"]["cause"] == "semantic_match"
+            assert sum(span.name == "route embed" for span in exporter.get_finished_spans()) == 2
+            assert any(event.name == "litellm.request.deployment_selected" for event in spans["request"].events)
+
+    @pytest.mark.asyncio
+    async def test_same_alias_and_tags_across_strategy_families_keep_selected_definition(
+        self, _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]"
+    ) -> None:
+        logger, exporter = _tracing
+        router: Final = Router(model_list=[
+            self._marker("blue"),
+            {
+                "model_name": "traced-router",
+                "model_info": {"id": "definition-semantic"},
+                "litellm_params": {
+                    "model": "auto_router/semantic-router",
+                    "tags": ["blue"],
+                    "auto_router_config": json.dumps({"routes": [{"name": "answer", "utterances": ["hello"]}]}),
+                    "auto_router_default_model": "answer",
+                    "auto_router_embedding_model": "embed",
+                },
+            },
+        ])
+        with logger.start_phase_span("route traced-router"):
+            response: Final = await router.async_pre_routing_hook(
+                model="traced-router", request_kwargs={"metadata": {"tags": ["blue"]}}
+            )
+        assert response is None
+        span: Final = next(span for span in exporter.get_finished_spans() if span.name == "route traced-router")
+        assert span.attributes is not None
+        assert span.attributes["litellm.routing.router_config_id"] == router.model_list[1]["model_info"]["id"]
+        assert span.attributes["litellm.routing.router_type"] == "semantic"
+
+    @pytest.mark.asyncio
+    async def test_semantic_team_alias_keeps_registered_identity_after_routing_and_retry(
+        self,
+        _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]",
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+    ) -> None:
+        logger, exporter = _tracing
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        respx_mock.post("https://embedding.example/v1/embeddings").respond(200, json={
+            "object": "list",
+            "model": "text-embedding-3-small",
+            "data": [{"object": "embedding", "index": 0, "embedding": [1.0, 0.0]}],
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        })
+        router: Final = Router(model_list=[
+            {
+                "model_name": "internal-semantic-router",
+                "model_info": {"id": "semantic-definition", "team_id": "trace-team", "team_public_model_name": "public-router"},
+                "litellm_params": {
+                    "model": "auto_router/semantic-router",
+                    "auto_router_config": json.dumps({"routes": [{"name": "answer", "utterances": ["hello"]}]}),
+                    "auto_router_default_model": "answer",
+                    "auto_router_embedding_model": "embed",
+                },
+            },
+            {"model_name": "embed", "litellm_params": {"model": "openai/text-embedding-3-small", "api_base": "https://embedding.example/v1", "api_key": "test"}},
+            {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
+        ])
+        request: Final = {"metadata": {"user_api_key_team_id": "trace-team"}}
+        with logger.tracer.start_as_current_span("request"):
+            await router.async_get_available_deployment(
+                model="public-router", request_kwargs=request, messages=[{"role": "user", "content": "hello"}]
+            )
+            router.log_retry({**request, "model": "answer"}, ValueError("retry"))
+        decision: Final = request["metadata"]["routing_decision"]
+        assert decision["router_model_name"] == router.model_list[0]["model_name"]
+        assert decision["router_config_id"] == router.model_list[0]["model_info"]["id"]
+        assert decision["cause"] == "semantic_match"
+        spans: Final = {span.name: span for span in exporter.get_finished_spans()}
+        assert spans["route public-router"].attributes["litellm.routing.router_model_name"] == decision["router_model_name"]
+        assert spans["route public-router"].attributes["litellm.routing.router_config_id"] == decision["router_config_id"]
+        retry: Final = next(event for event in spans["request"].events if event.name == "litellm.routing.retry")
+        assert retry.attributes["litellm.routing.router_model_name"] == decision["router_model_name"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("passthrough", [False, True])
+    async def test_attempt_spans_keep_selected_config_and_plain_fallback_clears_it(
+        self, _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]", passthrough: bool
+    ) -> None:
+        logger, exporter = _tracing
+        router: Final = Router(model_list=[
+            self._marker("blue"), self._marker("green"),
+            {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test", "use_in_pass_through": True, "tags": ["blue", "green"]}},
+        ], enable_tag_filtering=True)
+        request: Final = {"metadata": {"tags": ["green"]}, "litellm_metadata": {"tags": ["green"]}}
+        pick: Final = router.async_get_available_deployment_for_pass_through if passthrough else router.async_get_available_deployment
+        with logger.tracer.start_as_current_span("request"):
+            await pick(model="traced-router", request_kwargs=request, messages=[{"role": "user", "content": "hello"}])
+            decision: Final = request["litellm_metadata"]["routing_decision"]
+            assert decision["router_config_id"] == "definition-green"
+            assert decision["router_config_updated_at"] == "2026-10-01T12:00:00+00:00"
+            assert decision["router_config_fingerprint"] == router.complexity_routers["traced-router"][1].definition_fingerprint
+            assert "routing_decision" not in request["metadata"]
+            router.log_retry({**request, "model": "answer"}, ValueError("private-error-text"))
+            await pick(model="answer", request_kwargs=request, messages=[{"role": "user", "content": "hello"}])
+        assert "routing_decision" not in request["litellm_metadata"]
+        spans: Final = {span.name: span for span in exporter.get_finished_spans()}
+        assert spans["route traced-router"].attributes["litellm.routing.router_config_id"] == "definition-green"
+        assert spans["route traced-router"].attributes["litellm.routing.routed_model"] == "answer"
+        assert not any(key.startswith("litellm.routing.") for key in spans["route answer"].attributes)
+        retry: Final = next(event for event in spans["request"].events if event.name == "litellm.routing.retry")
+        assert retry.attributes["error.type"] == "ValueError"
+        assert retry.attributes["litellm.retry.count"] == 1
+        assert "private-error-text" not in str(retry.attributes)

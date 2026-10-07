@@ -265,6 +265,114 @@ def test_should_cooldown_deployment_auth_limit_error(testing_litellm_router):
     )
 
 
+@pytest.mark.parametrize("exception_status", (401, 402))
+def test_is_cooldown_required_for_account_errors(testing_litellm_router, exception_status):
+    assert (
+        _is_cooldown_required(
+            litellm_router_instance=testing_litellm_router,
+            model_id="test_deployment",
+            exception_status=exception_status,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("allowed_fails", (None, 0))
+def test_single_deployment_402_does_not_cooldown(
+    allowed_fails: int | None,
+) -> None:
+    assert (
+        _should_cooldown_deployment(
+            Router(
+                model_list=[
+                    {
+                        "model_name": "gpt-5-mini",
+                        "litellm_params": {"model": "gpt-5-mini"},
+                        "model_info": {"id": "dep-1"},
+                    },
+                ],
+                allowed_fails=allowed_fails,
+            ),
+            "dep-1",
+            402,
+            litellm.PaymentRequiredError(
+                message="Insufficient credits",
+                model="gpt-5-mini",
+                llm_provider="openai",
+            ),
+        )
+        is False
+    )
+
+
+def test_single_deployment_402_respects_router_allowed_fails_policy() -> None:
+    assert (
+        _should_cooldown_deployment(
+            Router(
+                model_list=[
+                    {
+                        "model_name": "gpt-5-mini",
+                        "litellm_params": {"model": "gpt-5-mini"},
+                        "model_info": {"id": "dep-1"},
+                    },
+                ],
+                allowed_fails_policy=AllowedFailsPolicy(BadRequestErrorAllowedFails=0),
+            ),
+            "dep-1",
+            402,
+            litellm.PaymentRequiredError(
+                message="Insufficient credits",
+                model="gpt-5-mini",
+                llm_provider="openai",
+            ),
+        )
+        is True
+    )
+
+
+def test_single_deployment_402_respects_deployment_allowed_fails_policy() -> None:
+    assert (
+        _should_cooldown_deployment(
+            Router(
+                model_list=[
+                    {
+                        "model_name": "gpt-5-mini",
+                        "litellm_params": {"model": "gpt-5-mini"},
+                        "model_info": {
+                            "id": "dep-1",
+                            "allowed_fails_policy": {"BadRequestErrorAllowedFails": 0},
+                        },
+                    },
+                ],
+            ),
+            "dep-1",
+            402,
+            litellm.PaymentRequiredError(
+                message="Insufficient credits",
+                model="gpt-5-mini",
+                llm_provider="openai",
+            ),
+        )
+        is True
+    )
+
+
+def test_multi_deployment_402_cools_down(testing_litellm_router: Router) -> None:
+    assert (
+        _should_cooldown_deployment(
+            testing_litellm_router,
+            "test_deployment",
+            402,
+            litellm.PaymentRequiredError(
+                message="Insufficient credits",
+                model="gpt-5-mini",
+                llm_provider="openai",
+            ),
+        )
+        is True
+    )
+
+
 @pytest.mark.asyncio
 async def test_should_cooldown_deployment(testing_litellm_router):
     """
