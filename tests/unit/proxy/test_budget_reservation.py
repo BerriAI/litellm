@@ -2483,6 +2483,34 @@ class _TeamMembershipFloorDb:
         return SimpleNamespace(find_unique=AsyncMock(return_value=row))
 
 
+class _FlakyPipelineRedisCache(_ExpiringRedisCache):
+    """_ExpiringRedisCache, but the first ``fail_first_n`` calls to
+    async_increment_pipeline time out. With ``apply_before_failing`` the
+    increments land before the timeout surfaces, the ambiguous case where the
+    caller can't tell whether its write applied; with ``fail_deletes`` the
+    counter delete that would otherwise clean that up fails too."""
+
+    def __init__(self, fail_first_n: int = 0, apply_before_failing: bool = False, fail_deletes: bool = False) -> None:
+        super().__init__()
+        self.fail_first_n = fail_first_n
+        self.apply_before_failing = apply_before_failing
+        self.fail_deletes = fail_deletes
+        self.pipeline_calls = 0
+
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        self.pipeline_calls += 1
+        if self.pipeline_calls <= self.fail_first_n:
+            if self.apply_before_failing:
+                await super().async_increment_pipeline(increment_list, **kwargs)
+            raise TimeoutError("redis timeout")
+        return await super().async_increment_pipeline(increment_list, **kwargs)
+
+    async def async_delete_cache(self, key: str, *args: object, **kwargs: object) -> None:
+        if self.fail_deletes:
+            raise ConnectionError("redis unreachable")
+        await super().async_delete_cache(key, *args, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
     spend_counter_state,
@@ -3141,6 +3169,120 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
     ):
         # must return without raising
         await release_budget_reservation_on_cancel(reservation)
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_swallows_a_second_cancellation_while_shielded():
+    # A second CancelledError arriving while the shielded reconcile is in flight must not
+    # propagate: the reconcile keeps running detached regardless, and there is nothing more
+    # for this call to do but return.
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [{"counter_key": "spend:key:key-cancel-twice"}],
+        "finalized": False,
+        "input_cost": 0.5,
+    }
+    with patch(  # test-quality-ok: reconcile_budget_reservation is a module function, no DI seam for this test
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=asyncio.CancelledError()),
+    ):
+        # must return without raising, and without taking the finalize-on-failure path either:
+        # a second cancellation isn't a failure, it's the reconcile still running in the background
+        await release_budget_reservation_on_cancel(reservation)
+
+    assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_swallows_invalidate_failure_after_reconcile_fails():
+    # If both the reconcile and the invalidate fallback fail (e.g. a persistent
+    # outage), there is nothing left to try: the failure must be logged and swallowed,
+    # not propagated, and the reservation still ends up finalized so it is not reprocessed.
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [{"counter_key": "spend:key:key-cancel-double-failure"}],
+        "finalized": False,
+        "input_cost": 0.5,
+    }
+    with patch(  # test-quality-ok: reconcile_budget_reservation is a module function, no DI seam for this test
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ), patch(  # test-quality-ok: invalidate_budget_reservation_counters is a module function, no DI seam for this test
+        "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
+        new=AsyncMock(side_effect=RuntimeError("redis still down")),
+    ):
+        # must return without raising
+        await release_budget_reservation_on_cancel(reservation)
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_invalidates_counter_when_reconcile_fails(
+    spend_counter_state,
+):
+    """
+    Regression for #30460 Path 1: if reconcile fails on the cancel path (e.g. a
+    Redis outage), the pre-charge must not be left stuck in the counter with
+    nothing left to correct it. This mirrors what
+    release_or_invalidate_budget_reservation already does on the non-cancel
+    release path: drop the counter so the next read reseeds from the DB instead
+    of enforcing the stale reservation until the TTL.
+    """
+    counter_cache, _key_cache = spend_counter_state
+    counter_key = "spend:key:key-cancel-redis-down"
+    counter_cache.redis_cache = _FlakyPipelineRedisCache(fail_first_n=99)
+    counter_cache.redis_cache.store[counter_key] = 3.0
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=3.0)
+
+    reservation = {
+        "reserved_cost": 3.0,
+        "input_cost": 0.5,
+        "finalized": False,
+        "entries": [{"counter_key": counter_key, "reserved_cost": 3.0, "applied_adjustment": 0.0}],
+    }
+
+    await release_budget_reservation_on_cancel(reservation)
+
+    assert counter_key not in counter_cache.redis_cache.store
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) is None
+    assert reservation["finalized"] is True
+    assert counter_cache.redis_cache.pipeline_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_does_not_refund_twice_when_reconcile_times_out_after_applying(
+    spend_counter_state,
+):
+    """
+    Regression for the duplicate-refund race (veria-ai finding on
+    budget_reservation.py): the reconcile's INCRBYFLOAT lands in Redis but the
+    pipeline response times out, and the counter delete meant to clean that up
+    fails too, so the counter still holds the already-refunded value. Re-applying
+    the reconcile would subtract this reservation's refund a second time and eat
+    into a concurrent request's spend sharing the counter. The refund must land
+    exactly once.
+    """
+    counter_cache, _key_cache = spend_counter_state
+    counter_key = "spend:key:key-cancel-timeout-after-apply"
+    counter_cache.redis_cache = _FlakyPipelineRedisCache(fail_first_n=99, apply_before_failing=True, fail_deletes=True)
+    # 2.0 of a concurrent request's spend plus this request's 3.0 reservation
+    counter_cache.redis_cache.store[counter_key] = 5.0
+
+    reservation = {
+        "reserved_cost": 3.0,
+        "input_cost": 0.5,
+        "finalized": False,
+        "entries": [{"counter_key": counter_key, "reserved_cost": 3.0, "applied_adjustment": 0.0}],
+    }
+
+    await release_budget_reservation_on_cancel(reservation)
+    await release_budget_reservation_on_cancel(reservation)
+
+    # 5.0 - (3.0 - 0.5), applied once; a second application would leave 0.0
+    assert counter_cache.redis_cache.store[counter_key] == pytest.approx(2.5)
+    assert counter_cache.redis_cache.pipeline_calls == 1
+    assert reservation["finalized"] is True
 
 
 @pytest.mark.asyncio
