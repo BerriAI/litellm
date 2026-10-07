@@ -3875,6 +3875,18 @@ class TestHostedOpenAIDialectFlag:
         assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("azure/my-deployment", None) is False
         assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("my-deployment", "azure") is False
 
+    def test_bare_name_colliding_with_an_openai_row_reads_its_own_provider_entry(self, monkeypatch):
+        """The Responses layer hands the hook a bare deployment name plus its provider. The openai row keyed by
+        that bare name neither answers for the deployment nor stops the lookup of the provider's own entry."""
+        self._register(monkeypatch, "gpt-collide", "openai")
+        self._register(monkeypatch, "azure_ai/gpt-collide", "azure_ai")
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is True
+
+    def test_bare_name_colliding_with_an_openai_row_stays_ineligible_without_its_own_flag(self, monkeypatch):
+        self._register(monkeypatch, "gpt-collide", "openai")
+        self._register(monkeypatch, "azure_ai/gpt-collide", "azure_ai", flag=None)
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is False
+
 
 class TestBedrockMantleGptShipsTheOpenAIDialect:
     """The shipped cost map flags Bedrock Mantle's GPT-5.6 and newer OpenAI rows, so a configured injection point

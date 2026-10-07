@@ -130,18 +130,22 @@ def _hosted_openai_dialect_flag(
     keyed with the region outranking the region-free one. A bare name the map does not
     key has no such candidates, so it costs no provider lookup. Entries for the openai
     provider are left to the caller's api_base check, so an OpenAI-compatible
-    third-party host is still not assumed to speak the dialect.
+    third-party host is still not assumed to speak the dialect. A bare deployment name
+    another provider serves (``gpt-6-astra`` on azure_ai) may collide with the openai
+    row of the same name, so an exact entry only speaks for a deployment when it is
+    keyed for that deployment's provider.
     """
     import litellm
 
     exact_entry: Final = litellm.model_cost.get(model)
-    if isinstance(exact_entry, dict):
-        return _hosted_entry_flag(exact_entry, lambda: custom_llm_provider or resolve_provider(model))
-    if custom_llm_provider is None and "/" not in model:
+    exact_provider: Final = exact_entry.get("litellm_provider") if isinstance(exact_entry, dict) else None
+    if custom_llm_provider is None and (exact_provider == "openai" or ("/" not in model and exact_provider is None)):
         return None
     provider: Final = custom_llm_provider or resolve_provider(model)
     if provider is None or provider == "openai":
         return None
+    if isinstance(exact_entry, dict) and exact_provider == provider:
+        return _hosted_entry_flag(exact_entry, lambda: provider)
     from litellm.utils import get_potential_model_names
 
     names: Final = get_potential_model_names(model, provider)
