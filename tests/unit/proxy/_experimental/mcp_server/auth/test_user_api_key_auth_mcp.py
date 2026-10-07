@@ -7990,9 +7990,13 @@ class TestGatewaySessionAdmission:
                 rpm_limit=rpm_limit,
             )
         )
+        prisma = MagicMock()
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.should_load_db_object", return_value=False),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         ):
             yield get_user_object
@@ -10143,10 +10147,14 @@ class TestScopedSessionAdmission:
                 rpm_limit=None,
             )
         )
+        prisma = MagicMock()
+        prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
             patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
             patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.should_load_db_object", return_value=False),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         ):
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope_dict)
@@ -10200,3 +10208,21 @@ async def test_managed_agent_permission_resolution_outage_is_not_an_unrestricted
     )
     with pytest.raises(RuntimeError, match="policy unavailable"):
         await resolution
+
+
+@pytest.mark.asyncio
+async def test_unreadable_empty_key_scope_cannot_gain_additive_grants(monkeypatch):
+    auth = UserAPIKeyAuth(api_key="test-key", object_permission_id="key-scope")
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_allowed_mcp_servers_for_key",
+        AsyncMock(return_value=[SpecialMCPServerNames.no_mcp_servers.value]),
+    )
+    monkeypatch.setattr(MCPRequestHandler, "_key_object_permission_hydrated", AsyncMock(return_value=None))
+    monkeypatch.setattr(MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=["unrelated-server"])
+    )
+    access = await MCPRequestHandler.get_mcp_server_access(auth)
+    assert access.server_ids == ()
+    assert access.scope == "scoped"
