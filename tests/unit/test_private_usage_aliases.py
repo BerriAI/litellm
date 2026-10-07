@@ -104,6 +104,67 @@ PROXY_CLASS_NAME_ALIAS_CASES: Final = (
     ),
 )
 
+PACKAGE_EXPORT_ALIAS_CASES: Final = (
+    ("litellm.proxy.hooks", "_PROXY_CacheControlCheck", "PROXY_CacheControlCheck"),
+    (
+        "litellm.proxy.hooks",
+        "_PROXY_MaxBudgetPerSessionHandler",
+        "PROXY_MaxBudgetPerSessionHandler",
+    ),
+    ("litellm.proxy.hooks", "_PROXY_MaxIterationsHandler", "PROXY_MaxIterationsHandler"),
+    ("litellm.proxy.hooks", "_PROXY_MaxParallelRequestsHandler", "PROXY_MaxParallelRequestsHandler"),
+    (
+        "litellm.proxy.hooks",
+        "_PROXY_MaxParallelRequestsHandler_v3",
+        "PROXY_MaxParallelRequestsHandler_v3",
+    ),
+    (
+        "litellm.proxy.hooks",
+        "_PROXY_SensitiveDataRoutingHandler",
+        "PROXY_SensitiveDataRoutingHandler",
+    ),
+    (
+        "litellm.proxy.management_endpoints.policy_endpoints",
+        "_build_all_names_per_competitor",
+        "build_all_names_per_competitor",
+    ),
+    (
+        "litellm.proxy.management_endpoints.policy_endpoints",
+        "_build_comparison_blocked_words",
+        "build_comparison_blocked_words",
+    ),
+    (
+        "litellm.proxy.management_endpoints.policy_endpoints",
+        "_build_competitor_guardrail_definitions",
+        "build_competitor_guardrail_definitions",
+    ),
+    (
+        "litellm.proxy.management_endpoints.policy_endpoints",
+        "_build_name_blocked_words",
+        "build_name_blocked_words",
+    ),
+    (
+        "litellm.proxy.management_endpoints.policy_endpoints",
+        "_build_recommendation_blocked_words",
+        "build_recommendation_blocked_words",
+    ),
+    (
+        "litellm.proxy.management_endpoints.policy_endpoints",
+        "_build_refinement_prompt",
+        "build_refinement_prompt",
+    ),
+    (
+        "litellm.proxy.management_endpoints.policy_endpoints",
+        "_clean_competitor_line",
+        "clean_competitor_line",
+    ),
+    (
+        "litellm.proxy.management_endpoints.policy_endpoints",
+        "_parse_variations_response",
+        "parse_variations_response",
+    ),
+)
+
 ALIAS_CASES: Final = (
     (
         "enterprise.enterprise_hooks.banned_keywords",
@@ -4204,6 +4265,20 @@ def test_public_aliases(
         assert old_value.__func__ is new_value.__func__
     else:
         assert old_value is new_value
+
+
+@pytest.mark.parametrize(
+    ("package_name", "private_name", "public_name"),
+    PACKAGE_EXPORT_ALIAS_CASES,
+)
+def test_private_package_exports_are_available_and_match_public_alias(
+    package_name: str,
+    private_name: str,
+    public_name: str,
+) -> None:
+    package: Final = import_module(package_name)
+
+    assert getattr(package, private_name) is getattr(package, public_name)
 
 
 @pytest.mark.parametrize(
