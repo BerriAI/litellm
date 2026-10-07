@@ -17,12 +17,8 @@ def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
 
 
-def _scoped_root(pathspec: str) -> str:
-    return re.sub(r"^:\([^)]*\)", "", pathspec).split("*", 1)[0]
-
-
-def _gate_rooted_at(root: str) -> tuple[str, ...]:
-    return next(gate for gate in GATES if _scoped_root(gate[0]) == root)
+def _harness_gate() -> tuple[str, ...]:
+    return next(gate for gate in GATES if gate[0] == "tests/e2e")
 
 
 def _changed_files_selected_by(tmp_path: Path, pathspecs: tuple[str, ...], files: tuple[str, ...]) -> frozenset[str]:
@@ -31,7 +27,7 @@ def _changed_files_selected_by(tmp_path: Path, pathspecs: tuple[str, ...], files
     _git(tmp_path, "config", "user.name", "t")
     _git(tmp_path, "commit", "-q", "--allow-empty", "-m", "base")
     for name in files:
-        target = tmp_path / name
+        target: Final = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("x = 1\n")
     _git(tmp_path, "add", "-A")
@@ -41,18 +37,12 @@ def _changed_files_selected_by(tmp_path: Path, pathspecs: tuple[str, ...], files
     )
 
 
-def test_workflow_still_carries_the_ruff_format_e2e_basedpyright_and_claude_code_harness_diff_gates() -> None:
-    assert frozenset(_scoped_root(gate[0]) for gate in GATES) == frozenset(
-        {"litellm/", "tests/e2e/", "tests/e2e/claude_code/"}
-    )
-
-
-@pytest.mark.parametrize("pathspecs", GATES, ids=" ".join)
-def test_diff_gate_selects_top_level_and_nested_python_files_only(tmp_path: Path, pathspecs: tuple[str, ...]) -> None:
-    root = _scoped_root(pathspecs[0])
-    top_level = f"{root}top_level_module.py"
-    nested = f"{root}pkg/sub/nested_module.py"
-    selected = _changed_files_selected_by(
+@pytest.mark.parametrize("root", ("litellm/", "tests/e2e/", "tests/e2e_harness/"))
+def test_python_diff_gate_selects_top_level_and_nested_python_files_only(tmp_path: Path, root: str) -> None:
+    pathspecs: Final = next(gate for gate in GATES if f":(glob){root}**/*.py" in gate)
+    top_level: Final = f"{root}top_level_module.py"
+    nested: Final = f"{root}pkg/sub/nested_module.py"
+    selected: Final = _changed_files_selected_by(
         tmp_path,
         pathspecs,
         (top_level, nested, f"{root}notes.md", "elsewhere/top_level_module.py", "elsewhere/pkg/nested_module.py"),
@@ -69,10 +59,24 @@ def test_diff_gate_selects_top_level_and_nested_python_files_only(tmp_path: Path
         ".github/workflows/test-linting.yml",
     ),
 )
-def test_claude_code_gate_also_fires_on_its_installer_dependency_manifests_and_workflow(
-    tmp_path: Path, trigger: str
-) -> None:
-    selected = _changed_files_selected_by(
-        tmp_path, _gate_rooted_at("tests/e2e/claude_code/"), (trigger, "elsewhere/pyproject.toml", "tests/e2e/notes.md")
+def test_harness_gate_fires_on_its_installer_dependency_manifests_and_workflow(tmp_path: Path, trigger: str) -> None:
+    selected: Final = _changed_files_selected_by(
+        tmp_path, _harness_gate(), (trigger, "elsewhere/pyproject.toml", "tests/e2e/ui/notes.md")
     )
     assert selected == frozenset({trigger})
+
+
+@pytest.mark.parametrize(
+    "changed",
+    (
+        "tests/e2e/test_endpoint.py",
+        "tests/e2e/claude_code/cron_vm/settings.json",
+        "tests/e2e_harness/test_cli.py",
+        "tests/e2e_harness/nested/fixture.txt",
+    ),
+)
+def test_harness_gate_selects_harness_files_and_excludes_ui(tmp_path: Path, changed: str) -> None:
+    selected: Final = _changed_files_selected_by(
+        tmp_path, _harness_gate(), (changed, "tests/e2e/ui/test_ui.py", "elsewhere/test_endpoint.py")
+    )
+    assert selected == frozenset({changed})
