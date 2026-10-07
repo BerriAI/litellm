@@ -117,11 +117,11 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
                 except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                     try:
                         await self._response.aread()
-                    except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                    except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                         pass
                     try:
                         await self._response.aclose()
-                    except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                    except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                         pass
                     raise
             return self
@@ -164,7 +164,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             self._start_flush()
             try:
                 await self._response.aclose()
-            except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+            except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                 pass
             raise
         else:
@@ -191,7 +191,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             if self._initialized:
                 await self._iterator.aclose()
                 await self._response.aclose()
-        except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+        except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
             pass
 
 
@@ -239,7 +239,7 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
             self._start_flush()
             try:
                 self._response.close()
-            except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+            except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                 pass
             raise
         else:
@@ -260,7 +260,7 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
         self._start_flush()
         try:
             self._response.close()
-        except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+        except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
             pass
 
 
@@ -375,7 +375,7 @@ async def allm_passthrough_route(
                     provider=LlmProviders(resolved_custom_llm_provider),
                     model=model,
                 )
-            except Exception:  # noqa: BLE001 S110
+            except Exception:  # noqa: BLE001, S110  # provider config is optional
                 # If we can't get provider config, pass None
                 pass
 
@@ -383,7 +383,7 @@ async def allm_passthrough_route(
             # If no provider config available, raise the original exception
             raise e
 
-        raise base_llm_http_handler._handle_error(
+        raise base_llm_http_handler.handle_error(
             e=e,
             provider_config=provider_config,
         )
@@ -441,8 +441,8 @@ def llm_passthrough_route(
 
     if client is None:
         from litellm.llms.custom_httpx.http_handler import (
-            _get_httpx_client,
             get_async_httpx_client,
+            get_httpx_client,
         )
         from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
         from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -457,7 +457,7 @@ def llm_passthrough_route(
                 params={"timeout": resolved_timeout},
             )
         else:
-            client = _get_httpx_client(params={"timeout": resolved_timeout})
+            client = get_httpx_client(params={"timeout": resolved_timeout})
 
     # Add model_id to litellm_params if present in kwargs (for Bedrock Application Inference Profiles)
     if "model_id" in kwargs:
@@ -581,11 +581,11 @@ def llm_passthrough_route(
             except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                 try:
                     response.read()
-                except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                     pass
                 try:
                     response.close()
-                except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                     pass
                 raise
 
@@ -595,7 +595,7 @@ def llm_passthrough_route(
                 return response
     except Exception as e:
         assert provider_config is not None
-        raise base_llm_http_handler._handle_error(
+        raise base_llm_http_handler.handle_error(
             e=e,
             provider_config=provider_config,
         )

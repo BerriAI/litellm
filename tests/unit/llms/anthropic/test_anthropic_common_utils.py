@@ -776,7 +776,7 @@ class TestProxyOAuthHeaderForwarding:
     ):
         """Authorization Bearer (LiteLLM key) must never be forwarded to the LLM provider.
 
-        When a user sends their LiteLLM key as 'Authorization: Bearer sk-1234' and
+        When a user sends their LiteLLM key as 'Authorization: Bearer sk-9876' and
         forward_llm_provider_auth_headers=True, the Authorization header must be stripped
         — not sent to Anthropic as if it were an Anthropic API key.
         """
@@ -786,7 +786,7 @@ class TestProxyOAuthHeaderForwarding:
 
         raw_headers = Headers(
             raw=[
-                (b"authorization", b"Bearer sk-1234-litellm-proxy-key"),
+                (b"authorization", b"Bearer sk-9876-litellm-proxy-key"),
                 (b"x-api-key", b"sk-ant-api03-real-anthropic-key"),
                 (b"content-type", b"application/json"),
             ]
@@ -1994,7 +1994,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_adaptive_thinking_detected_for_opus_4_8(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -2009,7 +2009,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_adaptive_thinking_detected_for_fable_5(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -2042,7 +2042,7 @@ class TestClaudeOpus48AdaptiveThinking:
         version (``4.6`` -> ``4-6``)."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -2061,7 +2061,7 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is False
 
     @pytest.mark.parametrize(
         "model",
@@ -2087,7 +2087,7 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
 
     @pytest.mark.parametrize(
         "model",
@@ -2108,7 +2108,7 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is False
 
     @pytest.mark.parametrize(
         "model",
@@ -2117,7 +2117,7 @@ class TestClaudeOpus48AdaptiveThinking:
     def test_non_adaptive_models_not_detected(self, local_model_cost_map, model):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is False
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is False
 
 
 class TestDefaultSuffixAdaptiveThinking:
@@ -2140,7 +2140,7 @@ class TestDefaultSuffixAdaptiveThinking:
     def test_default_suffix_models_are_adaptive_thinking(self, local_model_cost_map, model: str) -> None:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True, (
+        assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True, (
             f"{model} not classified as adaptive thinking. Check _model_map_lookup_candidates strips @default suffix."
         )
 
@@ -2172,12 +2172,12 @@ class TestCapabilityProbeUsesCallerProvider:
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is True
+        assert AnthropicModelInfo.is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is True
 
         monkeypatch.setitem(litellm.model_cost[self.BEDROCK_MODEL], "supports_adaptive_thinking", False)
         litellm.get_model_info.cache_clear()
 
-        assert AnthropicModelInfo._is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is False
+        assert AnthropicModelInfo.is_adaptive_thinking_model(self.BEDROCK_MODEL, "bedrock") is False
 
 
 def test_create_anthropic_model_list_response_shape():
@@ -4148,3 +4148,43 @@ def test_tool_call_is_rebuilt_as_server_tool_use_only_with_a_stored_result(
     from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
 
     assert tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields) is rebuilt
+
+
+def _pre_stream_exception_for(error_type: str, message: str, status_code: int, model: str) -> Exception:
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    body: Final = json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+    with pytest.raises(Exception, match=message) as raised:
+        exception_type(
+            model=model,
+            original_exception=AnthropicError(status_code=status_code, message=body),
+            custom_llm_provider="anthropic",
+        )
+    return raised.value
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    ["overloaded_error", "api_error", "timeout_error", "rate_limit_error", "invalid_request_error", "never_seen_error"],
+)
+def test_anthropic_error_frame_exception_matches_the_pre_stream_mapping_for_that_frame(error_type: str) -> None:
+    from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP, anthropic_error_frame_exception
+
+    status_code: Final = ANTHROPIC_ERROR_STATUS_CODE_MAP.get(error_type, 500)
+    pre_stream: Final = _pre_stream_exception_for(error_type, "upstream said no", status_code, "claude-sonnet-4-5")
+
+    error: Final = anthropic_error_frame_exception(error_type, "upstream said no", status_code, "claude-sonnet-4-5")
+
+    assert type(error) is type(pre_stream)
+    assert getattr(error, "status_code", None) == getattr(pre_stream, "status_code", None)
+    assert "upstream said no" in str(error)
+
+
+def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal_server_error() -> None:
+    import litellm
+    from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
+
+    error: Final = anthropic_error_frame_exception("overloaded_error", "Overloaded", 503, "claude-sonnet-4-5")
+
+    assert type(error) is litellm.InternalServerError

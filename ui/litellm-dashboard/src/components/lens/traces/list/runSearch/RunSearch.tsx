@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 
 import type { TraceSummary } from "../../types";
-import type { TimeWindow } from "@/components/shared/timeline/Timeline";
+import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 
 import { SearchBox } from "@/components/shared/search/SearchBox";
 import { itemValues } from "@/components/shared/search/valueSource";
@@ -19,10 +19,11 @@ interface RunSearchProps {
   runs: readonly TraceSummary[];
   /** The range the list shows; the copied query bounds itself to it. */
   range?: TimeWindow;
+  busy?: boolean;
 }
 
 /** The runs list query box: free text plus `key:value` filters over run fields, copyable as a trace query. */
-export function RunSearch({ value, onChange, runs, range }: RunSearchProps) {
+export function RunSearch({ value, onChange, runs, range, busy = false }: RunSearchProps) {
   const command = useMemo(() => runQueryCommand(range), [range]);
   return (
     <SearchBox.Root
@@ -31,11 +32,12 @@ export function RunSearch({ value, onChange, runs, range }: RunSearchProps) {
       value={value}
       onValueChange={onChange}
       label="Search runs"
-      className="h-full min-w-0"
+      className="h-10 min-w-0 basis-full sm:w-auto sm:basis-0"
     >
       <SearchBox.Input
-        className="h-full rounded-none border-0 px-3 focus-within:bg-muted/40 focus-within:ring-0 dark:bg-transparent"
-        placeholder="Search runs, or filter like agent:researcher status:error"
+        className="h-full overflow-hidden rounded-none border-0 px-3 whitespace-nowrap focus-within:bg-muted/40 focus-within:ring-0 dark:bg-transparent"
+        placeholder="Search input or trace ID"
+        busy={busy}
       />
       <SearchBox.Suggestions>
         <SearchBox.CopyCommand title={COPY_HINT} command={command} />

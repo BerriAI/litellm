@@ -3,6 +3,7 @@ import type { ApiClient } from "@/lib/http/client";
 import { getAuthHeaderName } from "@/lib/http/runtime";
 import type { Client } from "openapi-fetch";
 import type { components, paths } from "@/lib/http/schema";
+import { liveDatasetsApi, type DatasetsApi } from "../datasets/client";
 import type {
   ActivitySelection,
   AnalysisModelInfo,
@@ -35,6 +36,8 @@ export type Key = z.infer<typeof keySchema>;
 export type KeyPage = z.infer<typeof keyPageSchema>;
 export type KeyInfo = z.infer<typeof keyInfoSchema>["info"];
 
+export type ReviewPage = components["schemas"]["ReviewPage"];
+
 export interface AnalysisKeyRequest {
   readonly model: string;
   readonly budget: number;
@@ -43,10 +46,12 @@ export interface AnalysisKeyRequest {
 export interface LensApi {
   /** Partitions query caches between backends (one token, or the demo). */
   readonly scope: string;
+  readonly datasets: DatasetsApi;
   lenses(): Promise<LensList>;
   activity(): Promise<components["schemas"]["ActivityAvailability"]>;
   runs(lensId: string, offset: number): Promise<Job[]>;
   run(lensId: string, jobId: string): Promise<Job>;
+  reviews(lensId: string, jobId: string, after: number): Promise<ReviewPage>;
   execution(lensId: string, executionId: string, offset: number): Promise<ExecutionContent>;
   sample(selection: ActivitySelection, offset: number, asOf: string): Promise<Sample>;
   agents(): Promise<string[]>;
@@ -84,6 +89,7 @@ export function liveLensApi(client: LensClient, apiClient: ApiClient, accessToke
   const worker = (worker_id: string) => ({ headers, params: { path: { worker_id } } });
   return {
     scope: accessToken,
+    datasets: liveDatasetsApi(client, apiClient, accessToken),
     lenses: () => required(client.GET("/lens", { headers })),
     activity: () => required(client.GET("/lens/activity/available", { headers })),
     runs: (lensId, offset) =>
@@ -95,6 +101,13 @@ export function liveLensApi(client: LensClient, apiClient: ApiClient, accessToke
         client.GET("/lens/{lens_id}/runs/{job_id}", {
           headers,
           params: { path: { lens_id: lensId, job_id: jobId } },
+        }),
+      ),
+    reviews: (lensId, jobId, after) =>
+      required(
+        client.GET("/lens/{lens_id}/runs/{job_id}/reviews", {
+          headers,
+          params: { path: { lens_id: lensId, job_id: jobId }, query: { after } },
         }),
       ),
     execution: (lensId, executionId, offset) =>

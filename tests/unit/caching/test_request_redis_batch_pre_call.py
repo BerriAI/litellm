@@ -283,7 +283,7 @@ def _deployment(deployment_id: str) -> dict:
 
 def _router(redis_cache: FakeRedisCache, routing_strategy: str = "usage-based-routing-v2") -> Router:
     router = Router(model_list=[_deployment("dep-a"), _deployment("dep-b")], routing_strategy=routing_strategy)
-    router._update_redis_cache(cache=redis_cache)
+    router.update_redis_cache(cache=redis_cache)
     return router
 
 
@@ -689,7 +689,7 @@ async def test_simple_shuffle_prefetches_only_its_cooldown_read_into_the_admissi
     assert redis_cache.alone == []
 
     shuffle = Router(model_list=[_deployment("dep-a")], routing_strategy="simple-shuffle")
-    shuffle._update_redis_cache(cache=redis_cache)
+    shuffle.update_redis_cache(cache=redis_cache)
     with request_redis_batch_scope() as request:
         shuffle.arm_routing_read_prefetch(_MODEL_GROUP, {})
         armed = request.prefetched["routing_read"]

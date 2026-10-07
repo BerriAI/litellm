@@ -12,6 +12,7 @@ from functools import partial
 from pathlib import Path
 from textwrap import dedent
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
@@ -21,11 +22,13 @@ from fastapi import HTTPException, status
 import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy._types import (
     LiteLLMRoutes,
     LiteLLM_JWTAuth,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    LiteLLM_ObjectPermissionTable,
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
@@ -65,6 +68,7 @@ from litellm.proxy.auth.user_api_key_auth import (
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
+from tests._master_key import MASTER_KEY
 
 
 class _RoutingRequest:
@@ -75,9 +79,9 @@ class _RoutingRequest:
 
 
 def test_get_api_key():
-    bearer_token = "Bearer sk-12345678"
-    api_key = "sk-12345678"
-    passed_in_key = "Bearer sk-12345678"
+    bearer_token = "Bearer sk-98765678"
+    api_key = "sk-98765678"
+    passed_in_key = "Bearer sk-98765678"
     assert get_api_key(
         custom_litellm_key_header=None,
         api_key=bearer_token,
@@ -2821,7 +2825,7 @@ class TestJWTOAuth2Coexistence:
     def test_is_jwt_rejects_opaque_tokens(self):
         """Opaque OAuth2 tokens do not have 3 dot-separated parts."""
         assert JWTHandler.is_jwt("some-opaque-oauth2-token") is False
-        assert JWTHandler.is_jwt("sk-12345678") is False
+        assert JWTHandler.is_jwt("sk-98765678") is False
         assert JWTHandler.is_jwt("Bearer token") is False
         assert JWTHandler.is_jwt("two.parts") is False
 
@@ -5301,6 +5305,222 @@ async def test_centralized_common_checks_tolerates_db_errors_when_fetching_conte
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deny_by_default", "team_lookup_error", "denied"),
+    [
+        (False, RuntimeError("team cache unavailable"), False),
+        (True, RuntimeError("team cache unavailable"), True),
+        (True, HTTPException(status_code=404, detail="team read failed"), True),
+    ],
+    ids=["flag-off-lookup-swallowed", "flag-on-lookup-swallowed", "flag-on-team-rebuilt-from-token"],
+)
+async def test_team_key_vector_store_access_when_team_cannot_be_resolved(
+    monkeypatch: pytest.MonkeyPatch, deny_by_default: bool, team_lookup_error: Exception, denied: bool
+):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token: Final = UserAPIKeyAuth(
+        api_key="sk-team-key", team_id="team-1", team_models=["gpt-4o-mini"], object_permission_id="key-permission"
+    )
+    token.via_virtual_key = True
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url="/v1/rag/query")
+    database: Final = MagicMock()
+    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        side_effect=lambda where: LiteLLM_ObjectPermissionTable(
+            object_permission_id=where["object_permission_id"], vector_stores=["KBSTOREA"]
+        )
+        if where["object_permission_id"] == "key-permission"
+        else None
+    )
+    attrs: Final = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": database,
+        "proxy_logging_obj": MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock())),
+        "general_settings": {"vector_store_deny_by_default": deny_by_default},
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.get_team_object", AsyncMock(side_effect=team_lookup_error)
+    )
+
+    checks: Final = _run_centralized_common_checks(
+        user_api_key_auth_obj=token,
+        request=request,
+        request_data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is in this KB?"}],
+            "retrieval_config": {"vector_store_id": "KBSTOREA", "custom_llm_provider": "bedrock"},
+        },
+        route="/v1/rag/query",
+    )
+    if not denied:
+        await checks
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await checks
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        ProxyErrorTypes.team_vector_store_access_denied,
+        "vector_store",
+        "401",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_lookup", "denied"),
+    [
+        ({"team-1": "team-1-grants-a"}, False),
+        (RuntimeError("team cache unavailable"), True),
+        ({"team-1": "team-1-grants-none", "team-2": "team-2-grants-a"}, True),
+    ],
+    ids=["resolved-team-grants", "team-lookup-swallowed-no-personal-fallback", "other-member-team-grants-ignored"],
+)
+async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_team(
+    monkeypatch: pytest.MonkeyPatch, team_lookup: dict[str, str] | Exception, denied: bool
+):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token: Final = UserAPIKeyAuth(
+        user_id="user-1",
+        team_id="team-1",
+        team_models=["gpt-4o-mini"],
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url="/v1/rag/query")
+    grants: Final = {
+        "team-1-grants-a": ["KBSTOREA"],
+        "team-1-grants-none": [],
+        "team-2-grants-a": ["KBSTOREA"],
+        "user-grants-a": ["KBSTOREA"],
+    }
+    database: Final = MagicMock()
+    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        side_effect=lambda where: LiteLLM_ObjectPermissionTable(
+            object_permission_id=where["object_permission_id"], vector_stores=grants[where["object_permission_id"]]
+        )
+    )
+    attrs: Final = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": database,
+        "proxy_logging_obj": MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock())),
+        "general_settings": {"vector_store_deny_by_default": True},
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+
+    async def get_team(team_id: str, **_: object) -> LiteLLM_TeamTableCachedObj:
+        if isinstance(team_lookup, Exception):
+            raise team_lookup
+        return LiteLLM_TeamTableCachedObj(team_id=team_id, models=["gpt-4o-mini"], object_permission_id=team_lookup[team_id])
+
+    monkeypatch.setattr("litellm.proxy.auth.user_api_key_auth.get_team_object", get_team)
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.get_user_object",
+        AsyncMock(
+            return_value=LiteLLM_UserTable(
+                user_id="user-1", teams=["team-1", "team-2"], object_permission_id="user-grants-a"
+            )
+        ),
+    )
+
+    checks: Final = _run_centralized_common_checks(
+        user_api_key_auth_obj=token,
+        request=request,
+        request_data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is in this KB?"}],
+            "retrieval_config": {"vector_store_id": "KBSTOREA", "custom_llm_provider": "bedrock"},
+        },
+        route="/v1/rag/query",
+    )
+    if not denied:
+        await checks
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await checks
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        ProxyErrorTypes.team_vector_store_access_denied,
+        "vector_store",
+        "401",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_permission_id", "denied"),
+    [("admin-grants-a", False), (None, True)],
+    ids=["admin-personal-grant", "admin-without-grant"],
+)
+async def test_keyless_proxy_admin_keeps_personal_vector_store_grants_under_deny_by_default(
+    monkeypatch: pytest.MonkeyPatch, user_permission_id: str | None, denied: bool
+):
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token: Final = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    request: Final = Request(scope={"type": "http"})
+    request._url = URL(url="/v1/rag/query")
+    database: Final = MagicMock()
+    database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        side_effect=lambda where: SimpleNamespace(
+            dict=lambda: {"object_permission_id": where["object_permission_id"], "vector_stores": ["KBSTOREA"]},
+            vector_stores=["KBSTOREA"],
+        )
+    )
+    attrs: Final = {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": database,
+        "general_settings": {"vector_store_deny_by_default": True},
+        "user_api_key_cache": UserApiKeyCache(),
+        "proxy_logging_obj": MagicMock(
+            service_logging_obj=MagicMock(
+                async_service_success_hook=AsyncMock(), async_service_failure_hook=AsyncMock()
+            )
+        ),
+    }
+    for name, value in attrs.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.get_user_object",
+        AsyncMock(
+            return_value=LiteLLM_UserTable(
+                user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN, object_permission_id=user_permission_id
+            )
+        ),
+    )
+
+    checks: Final = _run_centralized_common_checks(
+        user_api_key_auth_obj=token,
+        request=request,
+        request_data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is in this KB?"}],
+            "retrieval_config": {"vector_store_id": "KBSTOREA", "custom_llm_provider": "bedrock"},
+        },
+        route="/v1/rag/query",
+    )
+    if not denied:
+        await checks
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await checks
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        ProxyErrorTypes.user_vector_store_access_denied,
+        "vector_store",
+        "401",
+    )
 
 
 @pytest.mark.asyncio
@@ -9715,7 +9935,7 @@ async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
         scope={
             "type": "websocket",
             "path": "/v1/realtime",
-            "headers": [(b"authorization", b"Bearer sk-1234")],
+            "headers": [(b"authorization", b"Bearer sk-9876")],
             "query_string": b"model=gpt-realtime",
         },
         receive=AsyncMock(),
@@ -9812,8 +10032,8 @@ def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():
     )
     from litellm.proxy.utils import hash_token
 
-    assert _identity_cache_keys("sk-1234", end_user_id="eu-1", key_is_resolved=False) == (
-        hash_token("sk-1234"),
+    assert _identity_cache_keys(MASTER_KEY, end_user_id="eu-1", key_is_resolved=False) == (
+        hash_token(MASTER_KEY),
         end_user_cache_key("eu-1"),
         end_user_restricted_registry_cache_key(),
         model_access_group_registry_cache_key(),
@@ -9825,7 +10045,7 @@ def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():
     master_key_keys = _identity_cache_keys("my-master-key", end_user_id=None, key_is_resolved=False)
     assert master_key_keys == (hash_token("my-master-key"), model_access_group_registry_cache_key())
     assert "my-master-key" not in master_key_keys, "a bearer that is not an sk- key must not be sent to Redis as is"
-    assert _identity_cache_keys("sk-1234", end_user_id=None, key_is_resolved=True) == (
+    assert _identity_cache_keys(MASTER_KEY, end_user_id=None, key_is_resolved=True) == (
         model_access_group_registry_cache_key(),
     )
 

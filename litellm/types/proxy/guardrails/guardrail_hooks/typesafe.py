@@ -1,11 +1,13 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
 
-class TypeSafeGuardrailOptionalParams(BaseModel):
+class TypeSafeGuardrailOptionalParams(LiteLLMBaseModel):
     """Optional tuning knobs for the TypeSafe (Jev) compaction guardrail."""
 
     relevance_threshold: float | None = Field(

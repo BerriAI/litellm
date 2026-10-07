@@ -322,7 +322,7 @@ async def test_key_token_handling(monkeypatch):
     response = await generate_key_fn(
         data=GenerateKeyRequest(),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876", user_id="1234"
         ),
     )
 
@@ -567,7 +567,7 @@ async def test_key_generation_with_object_permission(monkeypatch):
         data=request_data,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-9876",
             user_id="user-1",
         ),
     )
@@ -623,7 +623,7 @@ async def test_generate_key_debug_log_never_contains_raw_token(monkeypatch, capl
             data=GenerateKeyRequest(key=raw_key),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-9876",
                 user_id="user-1",
             ),
         )
@@ -1052,7 +1052,7 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
         data=request_data,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-9876",
             user_id="user-mcp-1",
         ),
     )
@@ -1550,10 +1550,10 @@ async def test_get_new_token_rejects_short_new_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("short_key", ["sk-1234", "sk-abcdefghijkl"])
+@pytest.mark.parametrize("short_key", ["sk-9876", "sk-abcdefghijkl"])
 async def test_generate_key_fn_rejects_short_custom_key(monkeypatch, short_key):
     """Regression test for LIT-4355: /key/generate must reject custom keys shorter
-    than the minimum length (including the 15-char boundary); sk-1234 used to be
+    than the minimum length (including the 15-char boundary); sk-9876 used to be
     accepted and fully exposed via key_name."""
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db = MagicMock()
@@ -1576,7 +1576,7 @@ async def test_generate_key_fn_rejects_short_custom_key(monkeypatch, short_key):
         await generate_key_fn(
             data=GenerateKeyRequest(key=short_key),
             user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876", user_id="1234"
             ),
         )
 
@@ -1613,7 +1613,7 @@ async def test_generate_key_fn_accepts_custom_key_at_minimum_length(monkeypatch)
     response = await generate_key_fn(
         data=GenerateKeyRequest(key=custom_key),
         user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876", user_id="1234"
         ),
     )
 
@@ -3020,7 +3020,7 @@ async def test_generate_key_rejects_a_duration_that_never_advances(monkeypatch, 
             await generate_key_fn(
                 data=GenerateKeyRequest(budget_duration=bad_duration),
                 user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876", user_id="1234"
                 ),
             )
 
@@ -7411,7 +7411,7 @@ async def test_generate_key_with_router_settings(monkeypatch):
         data=request_data,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-9876",
             user_id="user-router-1",
         ),
     )
@@ -9222,7 +9222,7 @@ async def test_key_with_budget_id_does_not_store_budget_duration():
             ),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-9876",
                 user_id="admin-user",
             ),
             litellm_changed_by=None,
@@ -9286,7 +9286,7 @@ async def test_key_does_not_override_explicit_budget_duration():
             ),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key="sk-9876",
                 user_id="admin-user",
             ),
             litellm_changed_by=None,
@@ -9386,7 +9386,7 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key="sk-9876",
         user_id="test-user",
     )
 
@@ -9472,7 +9472,7 @@ async def test_default_key_generate_params_duration(monkeypatch):
         data=request,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-9876",
             user_id="1234",
         ),
         litellm_changed_by=None,
@@ -9533,7 +9533,7 @@ async def test_default_key_generate_params_object_permission_applied_when_absent
         data=request,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-9876",
             user_id="1234",
         ),
         litellm_changed_by=None,
@@ -9598,7 +9598,7 @@ async def test_default_key_generate_params_object_permission_merges_partial(
         data=request,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-9876",
             user_id="1234",
         ),
         litellm_changed_by=None,
@@ -9665,7 +9665,7 @@ async def test_default_key_generate_params_object_permission_does_not_override_e
         data=request,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-9876",
             user_id="1234",
         ),
         litellm_changed_by=None,
@@ -18541,7 +18541,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
 
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key="sk-9876",
         user_id="test-user",
     )
 
@@ -18604,7 +18604,7 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
     mock_prisma_client.db.litellm_searchtoolstable.update_many = AsyncMock(side_effect=_update_many)
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-1234",
+        api_key="sk-9876",
         user_id="test-user",
     )
 
@@ -18982,30 +18982,37 @@ async def test_regenerate_key_output_token_estimate_lowered_rejected_for_non_adm
 _BATCH_LIMIT = "batch_enqueued_token_limit"
 
 
+_UNTOUCHED = object()
+
+
 @pytest.mark.parametrize(
-    "label, request_body, existing_metadata, allowed",
+    "limit_key",
     [
-        ("set on a key with none stored", {"metadata": {_BATCH_LIMIT: 50000}}, None, False),
-        ("raised above the stored limit", {"metadata": {_BATCH_LIMIT: 200000}}, {_BATCH_LIMIT: 100000}, False),
-        ("cleared by replacing the blob", {"metadata": {}}, {_BATCH_LIMIT: 100000}, False),
-        ("resent unchanged", {"metadata": {_BATCH_LIMIT: 100000}}, {_BATCH_LIMIT: 100000}, True),
-        ("left untouched", {}, {_BATCH_LIMIT: 100000}, True),
+        "batch_enqueued_token_limit",
+        "max_batch_file_records",
+        "max_batch_file_uploads_per_day",
+        "max_file_downloads_per_minute",
     ],
 )
-def test_batch_enqueued_token_limit_admin_gate_matrix(label, request_body, existing_metadata, allowed):
-    """A non-admin may only leave a key's stored batch enqueued-token limit as it is.
-
-    When set, the limit replaces the standard RPM/TPM checks for batch
-    submissions, so a key holder writing it would pick their own batch quota.
-    Resending the stored value is what the edit form produces on every save
-    and has to stay allowed.
-    """
+@pytest.mark.parametrize(
+    "label, sent, stored, allowed",
+    [
+        ("set on a key with none stored", 50000, None, False),
+        ("raised above the stored limit", 200000, 100000, False),
+        ("cleared by replacing the blob", None, 100000, False),
+        ("resent unchanged", 100000, 100000, True),
+        ("left untouched", _UNTOUCHED, 100000, True),
+    ],
+)
+def test_batch_limits_admin_gate_matrix(limit_key, label, sent, stored, allowed):
+    request_body = {} if sent is _UNTOUCHED else {"metadata": {} if sent is None else {limit_key: sent}}
+    existing_metadata = None if stored is None else {limit_key: stored}
     from litellm.proxy.auth.auth_utils import (
-        enforce_batch_enqueued_token_limit_is_admin_only,
+        enforce_batch_limits_are_admin_only,
     )
 
     def _call(caller):
-        enforce_batch_enqueued_token_limit_is_admin_only(
+        enforce_batch_limits_are_admin_only(
             data=UpdateKeyRequest(key="sk-1", **request_body),
             existing_metadata=existing_metadata,
             user_api_key_dict=caller,
@@ -19023,7 +19030,7 @@ def test_batch_enqueued_token_limit_admin_gate_matrix(label, request_body, exist
         with pytest.raises(HTTPException) as exc:
             _call(non_admin)
         assert exc.value.status_code == 403
-        assert "Only proxy admins can set" in str(exc.value.detail)
+        assert f"Only proxy admins can set {limit_key}" in str(exc.value.detail)
 
     _call(
         UserAPIKeyAuth(
@@ -19290,7 +19297,7 @@ async def _generate_key_and_get_persisted_row(data: GenerateKeyRequest, mock_ins
         data=data,
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key="sk-9876",
             user_id="1234",
         ),
         litellm_changed_by=None,

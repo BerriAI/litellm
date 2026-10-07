@@ -10,13 +10,9 @@ Tests cover:
 - Error handling
 """
 
-import json
-from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-
-import litellm
 from litellm.llms.bedrock.embed.amazon_nova_transformation import (
     AmazonNovaEmbeddingConfig,
 )
@@ -35,7 +31,7 @@ class TestNovaTransformationRequest:
             "truncation_mode": "END",
         }
 
-        request = config._transform_request(
+        request = config.transform_request(
             input="Hello, world!",
             inference_params=inference_params,
             async_invoke_route=False,
@@ -65,7 +61,7 @@ class TestNovaTransformationRequest:
             "output_s3_uri": "s3://my-bucket/output/",
         }
 
-        request = config._transform_request(
+        request = config.transform_request(
             input="Long text content...",
             inference_params=inference_params,
             async_invoke_route=True,
@@ -103,7 +99,7 @@ class TestNovaTransformationRequest:
             },
         }
 
-        request = config._transform_request(
+        request = config.transform_request(
             input=image_data,
             inference_params=inference_params,
             async_invoke_route=False,
@@ -131,7 +127,7 @@ class TestNovaTransformationRequest:
             },
         }
 
-        request = config._transform_request(
+        request = config.transform_request(
             input="s3://my-bucket/video.mp4",
             inference_params=inference_params,
             async_invoke_route=False,
@@ -159,7 +155,7 @@ class TestNovaTransformationRequest:
             },
         }
 
-        request = config._transform_request(
+        request = config.transform_request(
             input="s3://my-bucket/audio.mp3",
             inference_params=inference_params,
             async_invoke_route=False,
@@ -182,7 +178,7 @@ class TestNovaTransformationRequest:
         }
 
         with pytest.raises(ValueError, match="output_s3_uri is required"):
-            config._transform_request(
+            config.transform_request(
                 input="Test text",
                 inference_params=inference_params,
                 async_invoke_route=True,
@@ -194,7 +190,7 @@ class TestNovaTransformationRequest:
         """Test default embedding purpose is GENERIC_INDEX."""
         config = AmazonNovaEmbeddingConfig()
 
-        request = config._transform_request(
+        request = config.transform_request(
             input="Test text",
             inference_params={},
             async_invoke_route=False,
@@ -207,7 +203,7 @@ class TestNovaTransformationRequest:
         """Test default embedding dimension is 3072."""
         config = AmazonNovaEmbeddingConfig()
 
-        request = config._transform_request(
+        request = config.transform_request(
             input="Test text",
             inference_params={},
             async_invoke_route=False,
@@ -223,7 +219,7 @@ class TestNovaTransformationRequest:
         # Test with JPEG image data URL
         jpeg_data_url = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAASABIAAD"
 
-        request = config._transform_request(
+        request = config.transform_request(
             input=jpeg_data_url,
             inference_params={"dimensions": 1024},
             async_invoke_route=False,
@@ -242,11 +238,9 @@ class TestNovaTransformationRequest:
         config = AmazonNovaEmbeddingConfig()
 
         # Test with PNG image data URL
-        png_data_url = (
-            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
-        )
+        png_data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
 
-        request = config._transform_request(
+        request = config.transform_request(
             input=png_data_url,
             inference_params={},
             async_invoke_route=False,
@@ -267,16 +261,14 @@ class TestNovaTransformationRequest:
         # Test with jpg (should be converted to jpeg)
         jpg_data_url = "data:image/jpg;base64,/9j/4AAQSkZJRg"
 
-        request = config._transform_request(
+        request = config.transform_request(
             input=jpg_data_url,
             inference_params={},
             async_invoke_route=False,
         )
 
         params = request["singleEmbeddingParams"]
-        assert (
-            params["image"]["format"] == "jpeg"
-        )  # Should be converted from jpg to jpeg
+        assert params["image"]["format"] == "jpeg"  # Should be converted from jpg to jpeg
 
     def test_data_url_video_parsing(self):
         """Test that data URL videos are properly parsed."""
@@ -284,7 +276,7 @@ class TestNovaTransformationRequest:
 
         video_data_url = "data:video/mp4;base64,AAAAIGZ0eXBpc29t"
 
-        request = config._transform_request(
+        request = config.transform_request(
             input=video_data_url,
             inference_params={},
             async_invoke_route=False,
@@ -301,7 +293,7 @@ class TestNovaTransformationRequest:
 
         audio_data_url = "data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAA"
 
-        request = config._transform_request(
+        request = config.transform_request(
             input=audio_data_url,
             inference_params={},
             async_invoke_route=False,
@@ -331,9 +323,7 @@ class TestNovaTransformationResponse:
             }
         ]
 
-        result = config._transform_response(
-            response_list, model="amazon.nova-2-multimodal-embeddings-v1:0"
-        )
+        result = config.transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
 
         assert result.model == "amazon.nova-2-multimodal-embeddings-v1:0"
         assert len(result.data) == 1
@@ -365,9 +355,7 @@ class TestNovaTransformationResponse:
             },
         ]
 
-        result = config._transform_response(
-            response_list, model="amazon.nova-2-multimodal-embeddings-v1:0"
-        )
+        result = config.transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
 
         assert len(result.data) == 2
         assert result.data[0].embedding == [0.1, 0.2, 0.3]
@@ -394,9 +382,7 @@ class TestNovaTransformationResponse:
             }
         ]
 
-        result = config._transform_response(
-            response_list, model="amazon.nova-2-multimodal-embeddings-v1:0"
-        )
+        result = config.transform_response(response_list, model="amazon.nova-2-multimodal-embeddings-v1:0")
 
         assert len(result.data) == 2
         assert result.data[0].embedding == [0.1, 0.2, 0.3]
@@ -433,7 +419,7 @@ class TestNovaTransformationResponse:
             }
         ]
 
-        result = config._transform_response(
+        result = config.transform_response(
             response_list=response_list,
             model="amazon.nova-2-multimodal-embeddings-v1:0",
             batch_data=batch_data,
@@ -471,7 +457,7 @@ class TestNovaTransformationResponse:
             }
         ]
 
-        result = config._transform_response(
+        result = config.transform_response(
             response_list=response_list,
             model="amazon.nova-2-multimodal-embeddings-v1:0",
             batch_data=batch_data,
@@ -496,7 +482,7 @@ class TestNovaTransformationResponse:
         ]
 
         # Call without batch_data — should not break
-        result = config._transform_response(
+        result = config.transform_response(
             response_list=response_list,
             model="amazon.nova-2-multimodal-embeddings-v1:0",
         )
@@ -509,13 +495,9 @@ class TestNovaTransformationResponse:
         """Test async invoke response transformation."""
         config = AmazonNovaEmbeddingConfig()
 
-        response = {
-            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"
-        }
+        response = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"}
 
-        result = config._transform_async_invoke_response(
-            response, model="amazon.nova-2-multimodal-embeddings-v1:0"
-        )
+        result = config.transform_async_invoke_response(response, model="amazon.nova-2-multimodal-embeddings-v1:0")
 
         assert result.model == "amazon.nova-2-multimodal-embeddings-v1:0"
         assert len(result.data) == 1
@@ -532,100 +514,11 @@ class TestNovaTransformationResponse:
 class TestNovaEmbeddingIntegration:
     """Integration tests for Nova embeddings through LiteLLM."""
 
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_sync_text_embedding_e2e(self):
-        """End-to-end test for synchronous text embedding."""
-        response = litellm.embedding(
-            model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
-            input=["Hello, world!"],
-            aws_region_name="us-east-1",
-        )
 
-        assert response is not None
-        assert len(response.data) == 1
-        assert len(response.data[0].embedding) > 0
 
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_async_text_embedding_e2e(self):
-        """End-to-end test for asynchronous text embedding."""
-        response = litellm.embedding(
-            model="bedrock/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
-            input=["Long text content for segmentation..."],
-            aws_region_name="us-east-1",
-            output_s3_uri="s3://my-bucket/output/",
-            segmentation_config={"maxLengthChars": 10000},
-        )
 
-        assert response is not None
-        assert hasattr(response, "_hidden_params")
-        assert hasattr(response._hidden_params, "_invocation_arn")
 
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_image_embedding_e2e(self):
-        """End-to-end test for image embedding."""
-        response = litellm.embedding(
-            model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
-            input=["s3://my-bucket/image.png"],
-            aws_region_name="us-east-1",
-            input_type="image",
-            format="png",
-            embedding_purpose="IMAGE_RETRIEVAL",
-        )
 
-        assert response is not None
-        assert len(response.data) == 1
-
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_video_embedding_e2e(self):
-        """End-to-end test for video embedding."""
-        response = litellm.embedding(
-            model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
-            input=["s3://my-bucket/video.mp4"],
-            aws_region_name="us-east-1",
-            input_type="video",
-            format="mp4",
-            embedding_mode="AUDIO_VIDEO_COMBINED",
-            embedding_purpose="VIDEO_RETRIEVAL",
-        )
-
-        assert response is not None
-        assert len(response.data) == 1
-
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_different_dimensions(self):
-        """Test different embedding dimensions."""
-        for dimension in [256, 384, 1024, 3072]:
-            response = litellm.embedding(
-                model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
-                input=["Test text"],
-                aws_region_name="us-east-1",
-                dimensions=dimension,
-            )
-
-            assert response is not None
-            assert len(response.data[0].embedding) == dimension
-
-    @pytest.mark.skip(reason="Requires AWS credentials and actual API calls")
-    def test_different_embedding_purposes(self):
-        """Test different embedding purposes."""
-        purposes = [
-            "GENERIC_INDEX",
-            "GENERIC_RETRIEVAL",
-            "TEXT_RETRIEVAL",
-            "CLASSIFICATION",
-            "CLUSTERING",
-        ]
-
-        for purpose in purposes:
-            response = litellm.embedding(
-                model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
-                input=["Test text"],
-                aws_region_name="us-east-1",
-                embedding_purpose=purpose,
-            )
-
-            assert response is not None
-            assert len(response.data) == 1
 
 
 class TestNovaProviderDetection:

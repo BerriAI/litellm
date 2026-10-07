@@ -73,7 +73,9 @@ interface GuardrailPreset {
   provider: string;
   categoryName?: string;
   guardrailNameSuggestion: string;
-  mode: string;
+  // A guardrail that both rewrites the request and repairs the response needs two
+  // modes seeded, not one; the form already normalises either shape.
+  mode: string | string[];
   defaultOn: boolean;
 }
 

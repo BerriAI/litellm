@@ -211,6 +211,10 @@ async fn schema_supports_span_rollups_and_spend_joins(
             Parameter::Strings(vec!["response-1".into()]),
         ),
         ("request_ids".into(), Parameter::Strings(Vec::new())),
+        (
+            "provider_request_ids".into(),
+            Parameter::Strings(Vec::new()),
+        ),
         ("trace_ids".into(), Parameter::Strings(Vec::new())),
         ("all_teams".into(), Parameter::Integer(0)),
         ("user_id".into(), Parameter::Text(String::new())),
@@ -1332,6 +1336,95 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
 }
 
 #[rstest]
+#[case::traces("traces", 9)]
+#[case::requests("requests", 3)]
+#[tokio::test]
+async fn lens_content_keeps_original_span_and_request_timestamps(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] source: &str,
+    #[case] precision: usize,
+) -> TestResult {
+    let database = database?;
+    ensure_schema(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "trace_test",
+        7,
+    )
+    .await?;
+    let seconds = time::OffsetDateTime::now_utc().unix_timestamp();
+    let root_start = seconds * 1_000_000_000 + 123_456_789;
+    let child_start = root_start + 100_000_000;
+    insert_rows(&database, "otel_traces", vec![
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": root_start, "Duration": 2_000_000_000, "TraceId": "run",
+            "SpanId": "z-root", "ParentSpanId": "", "SpanName": "root", "ObservationType": "agent",
+            "TeamId": "team", "Input": "task", "Output": "done", "StatusCode": "OK"
+        }))?,
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": child_start, "Duration": 17, "TraceId": "run",
+            "SpanId": "a-child", "ParentSpanId": "z-root", "SpanName": "child", "ObservationType": "tool",
+            "TeamId": "team", "Input": "action", "Output": "result", "StatusCode": "OK"
+        }))?,
+    ]).await?;
+    let request_start = seconds * 1000 + 123;
+    let request_end = seconds * 1000 + 987;
+    insert_rows(
+        &database,
+        "spend_logs",
+        vec![serde_json::from_value(serde_json::json!({
+            "request_id": "run", "team_id": "team", "model": "model", "start_time": request_start,
+            "end_time": request_end, "messages": "request", "response": "response"
+        }))?],
+    )
+    .await?;
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let parameters = BTreeMap::from([
+        ("source".into(), Parameter::Text(source.into())),
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("team".into(), Parameter::Text("team".into())),
+        ("record_team".into(), Parameter::Text("team".into())),
+        ("key_hash".into(), Parameter::Text(String::new())),
+        ("trace_ref".into(), Parameter::Text(String::new())),
+        ("id".into(), Parameter::Text("run".into())),
+        ("cursor".into(), Parameter::Text(String::new())),
+        ("offset".into(), Parameter::Integer(1)),
+    ]);
+    let body = execute_named_read(
+        &database.client,
+        &connection,
+        ReadQuery::Content,
+        &parameters,
+    )
+    .await?;
+    let actual: serde_json::Value = serde_json::from_str(&body)?;
+    let format_string =
+        format!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:{precision}]");
+    let format = time::format_description::parse_borrowed::<2>(&format_string)?;
+    let timestamp = |nanos: i64| -> TestResult<String> {
+        Ok(time::OffsetDateTime::from_unix_timestamp_nanos(nanos.into())?.format(&format)?)
+    };
+    let expected = if source == "traces" {
+        serde_json::json!([
+            {"span_id":"a-child", "parent_span_id":"z-root", "name":"child", "kind":"tool",
+             "start_time":timestamp(child_start)?, "end_time":timestamp(child_start + 17)?,
+             "content":"Input: action\nOutput: result\nStatus: OK ", "truncated":0},
+            {"span_id":"z-root", "parent_span_id":"", "name":"root", "kind":"agent",
+             "start_time":timestamp(root_start)?, "end_time":timestamp(root_start + 2_000_000_000)?,
+             "content":"Input: task\nOutput: done\nStatus: OK ", "truncated":0}
+        ])
+    } else {
+        serde_json::json!([
+            {"span_id":"run", "parent_span_id":"", "name":"model", "kind":"llm",
+             "start_time":timestamp(request_start * 1_000_000)?, "end_time":timestamp(request_end * 1_000_000)?,
+             "content":"Input: request\nOutput: response\nError: ", "truncated":0}
+        ])
+    };
+    assert_eq!(actual["data"], expected);
+    Ok(())
+}
+
+#[rstest]
 #[case::short(100)]
 #[case::boundary(7970)]
 #[case::long(16000)]
@@ -2134,6 +2227,7 @@ async fn named_and_sql_readers_share_request_log_visibility(
                 "api_key_hash": legacy_key.unwrap_or_default(),
             }))?,
             response_ids: vec!["shared-response".into()],
+            provider_request_ids: Vec::new(),
             request_ids: Vec::new(),
             trace_ids: Vec::new(),
             start_ms: timestamp / 1_000_000 - 1,

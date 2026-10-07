@@ -4,34 +4,27 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import io
 
-from test_streaming import streaming_format_tests
 
-import asyncio
 import json
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch, ANY
-from respx import MockRouter
-import httpx
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from respx import MockRouter
 
 import litellm
 from litellm import (
-    RateLimitError,
-    Timeout,
     acompletion,
     completion,
-    completion_cost,
     embedding,
     image_generation,
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
-    _gemini_convert_messages_with_history,
+    gemini_convert_messages_with_history,
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-
 
 litellm.num_retries = 3
 litellm.cache = None
@@ -64,37 +57,6 @@ VERTEX_MODELS_TO_NOT_TEST = [
 ]
 
 
-def get_vertex_ai_creds_json() -> dict:
-    # Define the path to the vertex_key.json file
-    print("loading vertex ai credentials")
-    filepath = os.path.dirname(os.path.abspath(__file__))
-    vertex_key_path = filepath + "/vertex_key.json"
-    # Read the existing content of the file or create an empty dictionary
-    try:
-        with open(vertex_key_path, "r") as file:
-            # Read the file content
-            print("Read vertexai file path")
-            content = file.read()
-
-            # If the file is empty or not valid JSON, create an empty dictionary
-            if not content or not content.strip():
-                service_account_key_data = {}
-            else:
-                # Attempt to load the existing JSON content
-                file.seek(0)
-                service_account_key_data = json.load(file)
-    except FileNotFoundError:
-        # If the file doesn't exist, create an empty dictionary
-        service_account_key_data = {}
-
-    # Update the service_account_key_data with environment variables
-    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
-    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
-    private_key = private_key.replace("\\n", "\n")
-    service_account_key_data["private_key_id"] = private_key_id
-    service_account_key_data["private_key"] = private_key
-
-    return service_account_key_data
 
 
 def load_vertex_ai_credentials():
@@ -140,178 +102,21 @@ def load_vertex_ai_credentials():
 # test_vertex_ai_anthropic_streaming()
 
 
-@pytest.mark.skip(
-    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-)
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_aavertex_ai_anthropic_async():
-    # load_vertex_ai_credentials()
-    try:
-        model = "claude-3-5-sonnet@20240620"
-
-        vertex_ai_project = "pathrise-convert-1606954137718"
-        vertex_ai_location = "asia-southeast1"
-        json_obj = get_vertex_ai_creds_json()
-        vertex_credentials = json.dumps(json_obj)
-
-        response = await acompletion(
-            model="vertex_ai/" + model,
-            messages=[{"role": "user", "content": "hi"}],
-            temperature=0.7,
-            vertex_ai_project=vertex_ai_project,
-            vertex_ai_location=vertex_ai_location,
-            vertex_credentials=vertex_credentials,
-        )
-        print(f"Model Response: {response}")
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # asyncio.run(test_vertex_ai_anthropic_async())
 
 
-@pytest.mark.skip(
-    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-)
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_aaavertex_ai_anthropic_async_streaming():
-    # load_vertex_ai_credentials()
-    try:
-        litellm.set_verbose = True
-        model = "claude-3-5-sonnet@20240620"
-
-        vertex_ai_project = "pathrise-convert-1606954137718"
-        vertex_ai_location = "asia-southeast1"
-        json_obj = get_vertex_ai_creds_json()
-        vertex_credentials = json.dumps(json_obj)
-        print(f"vertex_credentials: {vertex_credentials}")
-        response = await acompletion(
-            model="vertex_ai/" + model,
-            messages=[{"role": "user", "content": "hi"}],
-            temperature=0.7,
-            vertex_ai_project=vertex_ai_project,
-            vertex_ai_location=vertex_ai_location,
-            vertex_credentials=vertex_credentials,
-            stream=True,
-        )
-
-        idx = 0
-        async for chunk in response:
-            streaming_format_tests(idx=idx, chunk=chunk)
-            idx += 1
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # asyncio.run(test_vertex_ai_anthropic_async_streaming())
 
 
-@pytest.mark.skip(
-    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-)
-@pytest.mark.flaky(retries=3, delay=1)
-def test_avertex_ai():
-    import random
-
-    litellm.num_retries = 3
-    load_vertex_ai_credentials()
-    test_models = (
-        litellm.vertex_chat_models
-        | litellm.vertex_code_chat_models
-        | litellm.vertex_text_models
-        | litellm.vertex_code_text_models
-    )
-    litellm.set_verbose = False
-    vertex_ai_project = "pathrise-convert-1606954137718"
-
-    test_models = random.sample(list(test_models), 1)
-    test_models += list(litellm.vertex_language_models)  # always test gemini-pro
-    for model in test_models:
-        try:
-            if model in VERTEX_MODELS_TO_NOT_TEST or (
-                "gecko" in model or "32k" in model or "ultra" in model or "002" in model
-            ):
-                # our account does not have access to this model
-                continue
-            print("making request", model)
-            response = completion(
-                model=model,
-                messages=[{"role": "user", "content": "hi"}],
-                temperature=0.7,
-                vertex_ai_project=vertex_ai_project,
-            )
-            print("\nModel Response", response)
-            print(response)
-            assert type(response.choices[0].message.content) == str
-            assert len(response.choices[0].message.content) > 1
-            print(
-                f"response.choices[0].finish_reason: {response.choices[0].finish_reason}"
-            )
-            assert response.choices[0].finish_reason in litellm._openai_finish_reasons
-        except litellm.RateLimitError as e:
-            pass
-        except litellm.InternalServerError as e:
-            pass
-        except Exception as e:
-            pytest.fail(f"Error occurred: {e}")
 
 
 # test_vertex_ai()
 
 
-@pytest.mark.skip(
-    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-)
-@pytest.mark.flaky(retries=3, delay=1)
-def test_avertex_ai_stream():
-    load_vertex_ai_credentials()
-    litellm.set_verbose = True
-    litellm.vertex_project = "pathrise-convert-1606954137718"
-    import random
-
-    test_models = (
-        litellm.vertex_chat_models
-        | litellm.vertex_code_chat_models
-        | litellm.vertex_text_models
-        | litellm.vertex_code_text_models
-    )
-    test_models = random.sample(list(test_models), 1)
-    test_models += list(litellm.vertex_language_models)  # always test gemini-pro
-    for model in test_models:
-        try:
-            if model in VERTEX_MODELS_TO_NOT_TEST or (
-                "gecko" in model or "32k" in model or "ultra" in model or "002" in model
-            ):
-                # our account does not have access to this model
-                continue
-            print("making request", model)
-            response = completion(
-                model=model,
-                messages=[{"role": "user", "content": "hello tell me a short story"}],
-                max_tokens=15,
-                stream=True,
-            )
-            completed_str = ""
-            for chunk in response:
-                print(chunk)
-                content = chunk.choices[0].delta.content or ""
-                print("\n content", content)
-                completed_str += content
-                assert type(content) == str
-                # pass
-            assert len(completed_str) > 1
-        except litellm.RateLimitError as e:
-            pass
-        except litellm.InternalServerError as e:
-            pass
-        except Exception as e:
-            pytest.fail(f"Error occurred: {e}")
 
 
 # test_vertex_ai_stream()
@@ -322,7 +127,7 @@ def test_avertex_ai_stream():
 async def test_async_vertexai_streaming_response():
     import random
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     load_vertex_ai_credentials()
     test_models = (
@@ -381,52 +186,8 @@ async def test_async_vertexai_streaming_response():
             pytest.fail(f"An exception occurred: {e}")
 
 
-def encode_image(image_path):
-    import base64
-
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-@pytest.mark.skip(
-    reason="we already test gemini-pro-vision, this is just another way to pass images"
-)
-def test_gemini_pro_vision_base64():
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-        image_path = "../proxy/cached_logo.jpg"
-        # Getting the base64 string
-        base64_image = encode_image(image_path)
-        resp = litellm.completion(
-            model="vertex_ai/gemini-1.5-pro",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Whats in this image?"},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "data:image/jpeg;base64," + base64_image
-                            },
-                        },
-                    ],
-                }
-            ],
-        )
-        print(resp)
-
-        prompt_tokens = resp.usage.prompt_tokens
-    except litellm.InternalServerError:
-        pass
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        if "500 Internal error encountered.'" in str(e):
-            pass
-        else:
-            pytest.fail(f"An exception occurred - {str(e)}")
 
 
 def vertex_httpx_grounding_post(*args, **kwargs):
@@ -597,7 +358,6 @@ def test_gemini_pro_grounding(value_in_dict):
         pass
 
 
-# @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 from test_completion import response_format_tests
 
 
@@ -683,7 +443,6 @@ def vertex_httpx_mock_reject_prompt_post(*args, **kwargs):
     return mock_response
 
 
-# @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 def vertex_httpx_mock_post(url, data=None, json=None, headers=None, **kwargs):
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -1139,8 +898,9 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
 
 @pytest.mark.asyncio
 async def test_anthropic_message_via_anthropic_messages():
+    from unittest.mock import AsyncMock
+
     from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
-    from unittest.mock import MagicMock, AsyncMock
 
     load_vertex_ai_credentials()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -1373,334 +1133,24 @@ async def test_gemini_pro_httpx_custom_api_base(model):
             assert "hello" in mock_call.call_args.kwargs["headers"]
 
 
-# @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 # gemini_pro_function_calling()
 
 
 # asyncio.run(gemini_pro_async_function_calling())
 
 
-@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
-@pytest.mark.flaky(retries=3, delay=1)
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_vertexai_embedding(sync_mode):
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-
-        input_text = ["good morning from litellm", "this is another item"]
-
-        if sync_mode:
-            response = litellm.embedding(
-                model="textembedding-gecko@001", input=input_text
-            )
-        else:
-            response = await litellm.aembedding(
-                model="textembedding-gecko@001", input=input_text
-            )
-
-        print(f"response: {response}")
-
-        # Assert that the response is not None
-        assert response is not None
-
-        # Assert that the response contains embeddings
-        assert hasattr(response, "data")
-        assert len(response.data) == len(input_text)
-
-        # Assert that each embedding is a non-empty list of floats
-        for embedding in response.data:
-            assert "embedding" in embedding
-            assert isinstance(embedding["embedding"], list)
-            assert len(embedding["embedding"]) > 0
-            assert all(isinstance(x, float) for x in embedding["embedding"])
-
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
-@pytest.mark.asyncio
-async def test_vertexai_multimodal_embedding():
-    load_vertex_ai_credentials()
-    mock_response = AsyncMock()
-
-    def return_val():
-        return {
-            "predictions": [
-                {
-                    "imageEmbedding": [0.1, 0.2, 0.3],  # Simplified example
-                    "textEmbedding": [0.4, 0.5, 0.6],  # Simplified example
-                }
-            ]
-        }
-
-    mock_response.json = return_val
-    mock_response.status_code = 200
-
-    expected_payload = {
-        "instances": [
-            {
-                "image": {
-                    "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
-                },
-                "text": "this is a unicorn",
-            }
-        ]
-    }
-
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=mock_response,
-    ) as mock_post:
-        # Act: Call the litellm.aembedding function
-        response = await litellm.aembedding(
-            model="vertex_ai/multimodalembedding@001",
-            input=[
-                {
-                    "image": {
-                        "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
-                    },
-                    "text": "this is a unicorn",
-                },
-            ],
-        )
-
-        # Assert
-        mock_post.assert_called_once()
-        _, kwargs = mock_post.call_args
-        args_to_vertexai = kwargs["json"]
-
-        print("args to vertex ai call:", args_to_vertexai)
-
-        assert args_to_vertexai == expected_payload
-        assert response.model == "multimodalembedding@001"
-        assert len(response.data) == 1
-        response_data = response.data[0]
-
-        # Optional: Print for debugging
-        print("Arguments passed to Vertex AI:", args_to_vertexai)
-        print("Response:", response)
 
 
-@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
-@pytest.mark.asyncio
-async def test_vertexai_multimodal_embedding_text_input():
-    load_vertex_ai_credentials()
-    mock_response = AsyncMock()
-
-    def return_val():
-        return {
-            "predictions": [
-                {
-                    "textEmbedding": [0.4, 0.5, 0.6],  # Simplified example
-                }
-            ]
-        }
-
-    mock_response.json = return_val
-    mock_response.status_code = 200
-
-    expected_payload = {
-        "instances": [
-            {
-                "text": "this is a unicorn",
-            }
-        ]
-    }
-
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=mock_response,
-    ) as mock_post:
-        # Act: Call the litellm.aembedding function
-        response = await litellm.aembedding(
-            model="vertex_ai/multimodalembedding@001",
-            input=[
-                "this is a unicorn",
-            ],
-        )
-
-        # Assert
-        mock_post.assert_called_once()
-        _, kwargs = mock_post.call_args
-        args_to_vertexai = kwargs["json"]
-
-        print("args to vertex ai call:", args_to_vertexai)
-
-        assert args_to_vertexai == expected_payload
-        assert response.model == "multimodalembedding@001"
-        assert len(response.data) == 1
-        response_data = response.data[0]
-        assert response_data["embedding"] == [0.4, 0.5, 0.6]
-
-        # Optional: Print for debugging
-        print("Arguments passed to Vertex AI:", args_to_vertexai)
-        print("Response:", response)
 
 
-@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
-@pytest.mark.asyncio
-async def test_vertexai_multimodal_embedding_image_in_input():
-    load_vertex_ai_credentials()
-    mock_response = AsyncMock()
-
-    def return_val():
-        return {
-            "predictions": [
-                {
-                    "imageEmbedding": [0.1, 0.2, 0.3],  # Simplified example
-                }
-            ]
-        }
-
-    mock_response.json = return_val
-    mock_response.status_code = 200
-
-    expected_payload = {
-        "instances": [
-            {
-                "image": {
-                    "gcsUri": "gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"
-                },
-            }
-        ]
-    }
-
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=mock_response,
-    ) as mock_post:
-        # Act: Call the litellm.aembedding function
-        response = await litellm.aembedding(
-            model="vertex_ai/multimodalembedding@001",
-            input=["gs://cloud-samples-data/vertex-ai/llm/prompts/landmark1.png"],
-        )
-
-        # Assert
-        mock_post.assert_called_once()
-        _, kwargs = mock_post.call_args
-        args_to_vertexai = kwargs["json"]
-
-        print("args to vertex ai call:", args_to_vertexai)
-
-        assert args_to_vertexai == expected_payload
-        assert response.model == "multimodalembedding@001"
-        assert len(response.data) == 1
-        response_data = response.data[0]
-
-        assert response_data["embedding"] == [0.1, 0.2, 0.3]
-
-        # Optional: Print for debugging
-        print("Arguments passed to Vertex AI:", args_to_vertexai)
-        print("Response:", response)
 
 
-@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
-@pytest.mark.asyncio
-async def test_vertexai_multimodal_embedding_base64image_in_input():
-    import base64
-
-    import requests
-
-    load_vertex_ai_credentials()
-    mock_response = AsyncMock()
-
-    url = "https://dummyimage.com/100/100/fff&text=Test+image"
-    response = requests.get(url)
-    file_data = response.content
-
-    encoded_file = base64.b64encode(file_data).decode("utf-8")
-    base64_image = f"data:image/png;base64,{encoded_file}"
-
-    def return_val():
-        return {
-            "predictions": [
-                {
-                    "imageEmbedding": [0.1, 0.2, 0.3],  # Simplified example
-                }
-            ]
-        }
-
-    mock_response.json = return_val
-    mock_response.status_code = 200
-
-    expected_payload = {
-        "instances": [
-            {
-                "image": {"bytesBase64Encoded": base64_image},
-            }
-        ]
-    }
-
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=mock_response,
-    ) as mock_post:
-        # Act: Call the litellm.aembedding function
-        response = await litellm.aembedding(
-            model="vertex_ai/multimodalembedding@001",
-            input=[base64_image],
-        )
-
-        # Assert
-        mock_post.assert_called_once()
-        _, kwargs = mock_post.call_args
-        args_to_vertexai = kwargs["json"]
-
-        print("args to vertex ai call:", args_to_vertexai)
-
-        assert args_to_vertexai == expected_payload
-        assert response.model == "multimodalembedding@001"
-        assert len(response.data) == 1
-        response_data = response.data[0]
-
-        assert response_data["embedding"] == [0.1, 0.2, 0.3]
-
-        # Optional: Print for debugging
-        print("Arguments passed to Vertex AI:", args_to_vertexai)
-        print("Response:", response)
 
 
-@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
-@pytest.mark.flaky(retries=3, delay=1)
-def test_vertexai_embedding_embedding_latest_input_type():
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-
-        response = embedding(
-            model="vertex_ai/text-embedding-004",
-            input=["hi"],
-            input_type="RETRIEVAL_QUERY",
-        )
-        assert response.usage.prompt_tokens > 0
-        print(f"response:", response)
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="need to get gecko permissions on vertex ai to run this test")
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_vertexai_aembedding():
-    try:
-        load_vertex_ai_credentials()
-        # litellm.set_verbose=True
-        response = await litellm.aembedding(
-            model="textembedding-gecko@001",
-            input=["good morning from litellm", "this is another item"],
-        )
-        print(f"response: {response}")
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.asyncio
@@ -1740,15 +1190,12 @@ def test_tool_name_conversion():
         # Now the assistant can reply with the result of the tool call.
     ]
 
-    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+    translated_messages = gemini_convert_messages_with_history(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
 
     # assert that the last tool response has the corresponding tool name
-    assert (
-        translated_messages[-1]["parts"][0]["function_response"]["name"]
-        == "get_weather"
-    )
+    assert translated_messages[-1]["parts"][0]["function_response"]["name"] == "get_weather"
 
 
 def test_prompt_factory():
@@ -1787,7 +1234,7 @@ def test_prompt_factory():
         # Now the assistant can reply with the result of the tool call.
     ]
 
-    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+    translated_messages = gemini_convert_messages_with_history(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
 
@@ -1797,23 +1244,19 @@ def test_prompt_factory_nested():
         {"role": "user", "content": [{"type": "text", "text": "hi"}]},
         {
             "role": "assistant",
-            "content": [
-                {"type": "text", "text": "Hi! 👋 \n\nHow can I help you today? 😊 \n"}
-            ],
+            "content": [{"type": "text", "text": "Hi! 👋 \n\nHow can I help you today? 😊 \n"}],
         },
         {"role": "user", "content": [{"type": "text", "text": "hi 2nd time"}]},
     ]
 
-    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+    translated_messages = gemini_convert_messages_with_history(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
 
     for message in translated_messages:
         assert len(message["parts"]) == 1
         assert "text" in message["parts"][0], "Missing 'text' from 'parts'"
-        assert isinstance(
-            message["parts"][0]["text"], str
-        ), "'text' value not a string."
+        assert isinstance(message["parts"][0]["text"], str), "'text' value not a string."
 
 
 @pytest.mark.asyncio
@@ -2492,7 +1935,7 @@ def test_gemini_function_call_parameter_in_messages():
 def test_gemini_function_call_parameter_in_messages_2():
     litellm.set_verbose = True
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     messages = [
@@ -2512,7 +1955,7 @@ def test_gemini_function_call_parameter_in_messages_2():
         },
     ]
 
-    returned_contents = _gemini_convert_messages_with_history(messages=messages)
+    returned_contents = gemini_convert_messages_with_history(messages=messages)
 
     print(f"returned_contents: {returned_contents}")
     assert returned_contents == [
@@ -2890,8 +2333,9 @@ def test_gemini_fine_tuned_model_request_consistency():
     """
     litellm.set_verbose = True
     load_vertex_ai_credentials()
+    from unittest.mock import MagicMock, patch
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    from unittest.mock import patch, MagicMock
 
     # Set up the messages
     messages = [
@@ -3301,7 +2745,7 @@ def test_vertex_ai_llama_tool_calling():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     args = {
         "model": "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas",
         "messages": [
@@ -3347,7 +2791,7 @@ def test_gemini_nullable_object_tool_schema_httpx():
     Ensure nullable object tool params preserve nested properties in Vertex schema conversion.
     """
     load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     tools = [
         {
@@ -3503,7 +2947,7 @@ def test_vertex_ai_streaming_response_id():
 def test_vertex_ai_gemini_2_5_pro_streaming():
     try:
         load_vertex_ai_credentials()
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         response = completion(
             model="vertex_ai/gemini-2.5-pro",
             messages=[{"role": "user", "content": "Hi!"}],
@@ -3613,7 +3057,7 @@ def test_vertex_ai_gemini_audio_ogg():
 async def test_vertex_ai_deepseek():
     """Test that deepseek models use the correct v1 API endpoint instead of v1beta1."""
     load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     client = AsyncHTTPHandler()
@@ -3655,7 +3099,7 @@ def test_gemini_grounding_on_streaming():
     from litellm import completion
 
     load_vertex_ai_credentials()
-    # litellm._turn_on_debug()
+    # litellm.turn_on_debug()
     args = {
         "model": "vertex_ai/gemini-3-flash-preview",
         "messages": [
@@ -3689,7 +3133,7 @@ def test_gemini_google_maps_tool_simple():
     Test googleMaps tool with just enableWidget parameter.
     """
     load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     tools = [{"googleMaps": {"enableWidget": True}}]
     tools_with_location = [

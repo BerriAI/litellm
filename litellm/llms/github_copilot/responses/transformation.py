@@ -23,7 +23,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
-from litellm.utils import _cached_get_model_info_helper
+from litellm.utils import cached_get_model_info_helper
 
 from ..authenticator import Authenticator
 from ..common_utils import (
@@ -53,7 +53,7 @@ def github_copilot_supports_responses_api(model: str) -> bool:
     register_model, which also clears the cache used here).
     """
     try:
-        info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
+        info: Final = cached_get_model_info_helper(model=model, custom_llm_provider="github_copilot")
     except Exception as e:
         verbose_logger.debug(
             "github_copilot_supports_responses_api: get_model_info failed for %s: %s",

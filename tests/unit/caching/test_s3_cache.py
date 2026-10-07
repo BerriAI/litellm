@@ -331,7 +331,7 @@ def test_s3_cache_supports_async():
     cache = Cache(type=LiteLLMCacheType.S3, s3_bucket_name="test-bucket")
 
     # Should now return True for async support
-    assert cache._supports_async() is True
+    assert cache.supports_async() is True
 
 
 @pytest.mark.asyncio

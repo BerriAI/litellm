@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.models.organization import LiteLLM_OrganizationTable
@@ -38,6 +38,7 @@ from litellm.router_strategy.complexity_router.config import (
     resolve_complexity_router_config_write,
 )
 from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model, strategy_router_dependencies
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
 from litellm.types.router import Deployment, updateDeployment
 
@@ -45,14 +46,14 @@ if TYPE_CHECKING:
     from prisma import types as prisma_types
 
 
-class _MemberRouterThinking(BaseModel):
+class _MemberRouterThinking(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     type: Literal["enabled", "disabled", "adaptive"]
     budget_tokens: int | None = Field(default=None, gt=0, le=1_000_000)
 
 
-class _MemberRouterGenerationParams(BaseModel):
+class _MemberRouterGenerationParams(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     reasoning_effort: str | None = None
@@ -69,7 +70,7 @@ class _MemberRouterGenerationParams(BaseModel):
     stop: str | tuple[str, ...] | None = None
 
 
-class _MemberOpenSourceClassifierConfig(BaseModel):
+class _MemberOpenSourceClassifierConfig(LiteLLMBaseModel):
     """Classifier settings a team member may set while the gateway owns the connection."""
 
     model_config = ConfigDict(extra="forbid")
@@ -88,7 +89,7 @@ class _MemberComplexityRouterConfig(RequestComplexityRouterConfig):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
 
-class _RouterConfigSource(BaseModel):
+class _RouterConfigSource(LiteLLMBaseModel):
     model: str | None = None
     complexity_router_config: Mapping[str, object] | None = None
 
@@ -270,7 +271,7 @@ async def _load_member_auto_router_dependency_objects(
     return MemberAutoRouterDependencyObjects(membership=membership, organization=organization, project=project)
 
 
-class StoredAutoRouterIdentity(BaseModel):
+class StoredAutoRouterIdentity(LiteLLMBaseModel):
     created_by: str | None = None
     updated_at: datetime | None = None
 

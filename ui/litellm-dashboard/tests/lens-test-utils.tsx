@@ -2,8 +2,6 @@ import type { ReactElement } from "react";
 import { vi } from "vitest";
 import { LensServicesProvider, liveLensServices } from "@/components/lens/data/LensServices";
 import { OnboardingProvider, type Onboarding } from "@/components/lens/onboarding/OnboardingContext";
-import { LENS_INTRO_DISMISSED } from "@/components/lens/storage";
-import { writeStorage } from "@/lib/storage";
 import { renderWithProviders } from "./test-utils";
 
 export interface StubbedRequest {
@@ -65,11 +63,6 @@ export function stubGateway() {
     }),
   );
   return gateway;
-}
-
-/** The Lens introduction opens on a first visit; tests about anything else start with it dismissed. */
-export function dismissLensIntro() {
-  writeStorage(LENS_INTRO_DISMISSED, true);
 }
 
 type LensRenderOptions = Parameters<typeof renderWithProviders>[1] & {
