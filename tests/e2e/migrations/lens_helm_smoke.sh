@@ -65,7 +65,7 @@ forward() {
       cat "$log" >&2
       return 1
     fi
-    if rg -q "^Forwarding from 127\\.0\\.0\\.1:$local_port ->" "$log"; then return 0; fi
+    if grep -q "^Forwarding from 127\\.0\\.0\\.1:$local_port ->" "$log"; then return 0; fi
     sleep 0.2
   done
   cat "$log" >&2
@@ -220,7 +220,7 @@ YAML
     -d "@$qa_dir/trace.json" http://127.0.0.1:14419/v1/traces
   saved_trace
   kubectl -n "$namespace" exec deployment/clickhouse -- clickhouse-client --query \
-    "SELECT count() FROM existing_traces.otel_traces WHERE TraceId = '$trace_id'" | rg -qx 1
+    "SELECT count() FROM existing_traces.otel_traces WHERE TraceId = '$trace_id'" | grep -qx 1
   "${install[@]}" || diagnose
   saved_trace
   for pid in "${forward_pids[@]}"; do kill "$pid"; wait "$pid" 2>/dev/null || true; done
