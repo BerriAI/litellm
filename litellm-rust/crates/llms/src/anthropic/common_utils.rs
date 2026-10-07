@@ -28,6 +28,11 @@ const BETA_HEADER: &str = "anthropic-beta";
 pub const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
 pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 pub const DEFAULT_ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
+pub(crate) const DEFAULT_ANTHROPIC_API_VERSION: &str = "2023-06-01";
+pub(crate) const DEFAULT_ANTHROPIC_HEADERS: &[(&str, &str)] = &[
+    ("anthropic-version", DEFAULT_ANTHROPIC_API_VERSION),
+    ("content-type", "application/json"),
+];
 pub const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
 const API_KEY_HEADER: &str = API_KEY_PLACEMENT.header_name();
 const AUTHORIZATION: &str = CredentialPlacement::Bearer.header_name();

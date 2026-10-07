@@ -154,11 +154,7 @@ pub fn unsupported_message(message: &ChatMessage) -> Option<Unsupported> {
         }
         Some(ChatMessageContent::Parts(parts)) => parts
             .iter()
-            .any(|part| {
-                part.get("type").and_then(Value::as_str) != Some("text")
-                    || part.get("text").and_then(Value::as_str).is_none()
-                    || part.as_object().is_some_and(|object| object.len() != 2)
-            })
+            .any(|part| part.plain_text().is_none())
             .then_some(Unsupported("non-text message content")),
     }
 }

@@ -32,12 +32,16 @@ fn display_text(content: &Recognized<ChatMessageContent>) -> String {
         Recognized::Known(ChatMessageContent::Parts(blocks)) => blocks
             .iter()
             .filter(|block| {
-                !block
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .is_some_and(|kind| HIDDEN_BLOCK_TYPES.contains(&kind))
+                !matches!(
+                    block,
+                    Recognized::Unrecognized(value)
+                        if value
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .is_some_and(|kind| HIDDEN_BLOCK_TYPES.contains(&kind))
+                )
             })
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .filter_map(|block| block.text())
             .collect::<Vec<_>>()
             .join("\n\n"),
         Recognized::Unrecognized(value) => encode(value),
