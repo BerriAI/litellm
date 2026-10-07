@@ -702,7 +702,9 @@ class RouteChecks:
         ) or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route)
 
     @staticmethod
-    def matching_denied_passthrough_route(route: str, metadata_sources: Iterable[Mapping | None]) -> str | None:
+    def matching_denied_passthrough_route(
+        route: str, metadata_sources: Iterable[Mapping[str, object] | None]
+    ) -> str | None:
         """
         First ``denied_passthrough_routes`` entry across ``metadata_sources`` that matches ``route``.
         Unlike the allowlist (key list, else team list), every source's deny list applies.
