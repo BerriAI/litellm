@@ -10,5 +10,14 @@ litellm-config.workspace = true
 litellm-inference.workspace = true
 litellm-inference-messages.workspace = true
 
+arc-swap = "1.9.2"
+rand.workspace = true
+rand_mt = { version = "6.1.0", default-features = false }
+redis = { version = "1.7.0", features = ["tokio-comp", "connection-manager"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
 [dev-dependencies]
 rstest.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }

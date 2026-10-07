@@ -1,5 +1,19 @@
 mod deployment;
 
+pub mod cooldown;
+pub mod engine;
+pub mod failure;
+pub mod fallback;
+pub mod host;
+pub mod operation;
+pub mod pyrepr;
+pub mod random;
+pub mod retry;
+pub mod selection;
+pub mod settings;
+pub mod snapshot;
+pub mod store;
+
 use std::collections::HashMap;
 
 use litellm_config::Model;

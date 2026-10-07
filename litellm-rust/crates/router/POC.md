@@ -84,13 +84,22 @@ Later: other strategies, routing groups, filters (aliases, patterns, access grou
 ## Log
 
 - 2026-10-06: design agreed, branch created
+- 2026-10-07: steps 2 and 3 landed, facade verification running
 
-## Checkpoint 2026-10-06 (handoff to cloud)
+## Checkpoint 2026-10-07
 
-Done: step 1, the facade refactor. `litellm/router.py` is a thin `Router` over `litellm/router_backends/python_router.py` (`PythonRouter`, the unchanged implementation). `Router.backend` holds the backend. Class-level names are forwarded with `_Forwarded` descriptors (so `MagicMock(spec=Router)` and unbound statics like `Router.generate_model_id` keep working). Instance attributes are forwarded with `__getattr__` / `__setattr__` / `__delattr__`. Under `TYPE_CHECKING`, `Router` subclasses `PythonRouter`, which is how the provisional full-surface decision shows up to the type checker
+Done:
+- Step 1 verification: in progress (tests on branch vs its base `cb76270b`, then `make check`). Found so far: an isort failure in `python_router.py` and LIT010/LIT008 in `router.py`, both fixed
+- Step 2: `Route.ROUTER` (`RUST_OPT_IN`) in `litellm/rust_bridge/catalog.py`. `litellm/router_backends/selection.py::select_backend` runs in `Router.__init__`; `rust_support.py` decides what the Rust backend can serve (declines to `PythonRouter` under opt-in, raises under `RUST_REQUIRED`). `RustRouter` is still a stub, so everything declines
+- Step 3: the Rust crate. `engine::Engine::route` runs fallbacks -> retries -> attempt against a `host::RouterHost` (`invoke`, `sleep`). Modules: `snapshot` (registry), `settings`, `failure` (`Classified` record, `Rejection` for router-raised errors), `selection` (resolve, cooldown filter, retry skip, `simple_shuffle`), `retry` (`should_retry_this_error`, backoff), `fallback` (chain lookup), `cooldown` (failure callbacks), `store` (memory + Redis with Python's encodings), `pyrepr` (Python `str()` of dicts), `random` (CPython MT19937), `operation` (`Operation`, `Dispatch`, all `Invoke` today)
 
-Test migration done in that commit: private helpers and module-global patch strings now target `litellm.router_backends.python_router`; tests that subclass `Router` to override hooks the backend calls on itself (`_InjectedFallbackRouter`, `_TierRouter`, `OldSignatureRouter`) and tests that `patch.object(Router, <internal>)` now use `PythonRouter`; `_live_routers` holds backends, so identity checks use `router.backend`. Subclasses that only override methods called from outside the router (proxy auth tests, `RecordingRouter`) still subclass `Router`
+Design notes made while implementing:
+- Python-bound facts cross inside `Classified`: exception classes in MRO order, `str(e)`, status, stamped `num_retries`, the two Retry-After readings (sleep and cooldown use different header precedence), guardrail/exempt flags, `callbacks_ran` (false for errors the attempt raises after litellm returned, e.g. blocked output) and `exact_litellm_type`
+- Metadata and exception writes the router makes (log_retry breadcrumbs, hop bucket copies, exhausted-retry stamps, the fallback debug text) are `host::Op`s the host applies in order before the next attempt or on the final result. Buckets are numbered: 0 is the request's own, each fallback hop opens a copy of its parent's, matching `run_async_fallback`
+- Router-raised errors (`RouterRateLimitError`, no-healthy `BadRequestError`) are `Raised::Router { id, rejection }`; the host materializes each id once
+- Sleeps are a host op so tests can observe them and the sync driver can block
+- Python's shared-logging behavior is kept: with `litellm_logging_obj` passed, only the first failure runs the failure callbacks and fallback-hop failures cool down through `_trigger_cooldown_for_failed_deployment`
 
-Python behavior to reproduce: see `POC-behavior-spec.md` next to this file
+Next: step 4. Export the engine from `python-bridge` (a `Router` pyclass holding `Engine`, with `acompletion`/`completion` style entrypoints going through `host-python::run_call`), and the Python side: `RustRouter` builds a callback-free `PythonRouter` for normalization and kwargs building, projects deployments and settings, and answers `Invoke` with a helper that calls `litellm.<op>(**kwargs)` and classifies the exception. Then step 5 (harness)
 
-Next: step 2 (`Route.ROUTER` in `litellm/rust_bridge/catalog.py`, `RUST_OPT_IN`, backend chosen in `Router.__init__`), then step 3 (Rust crate). Bridge mechanics to reuse: `host-python::run_call` (not `run_public_call`), `PythonHostCalls::begin_host_call` / `resume_host_call` for the Invoke op (see `python-bridge/src/cache/python/host.rs` for the async-op pattern), `HookChain::new()` for no hooks, `hosted_call` from `litellm-host`. `arc-swap` 1.9.2 is already in `Cargo.lock`
+Known gaps to close or decline: chat streaming pre-first-chunk failures (Python goes straight to fallbacks, no in-group retry), `include_fallback_errors`, request-level `model_group_retry_policy`/`specific_deployment`/`priority`, CustomLogger fallback-event hooks, `router_cooldown_event_callback`, the 200-key `InMemoryCache` eviction, fallback keys containing `/` (provider-prefixed matching needs the cost map)

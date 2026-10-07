@@ -924,6 +924,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "backon"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
+dependencies = [
+ "fastrand",
+]
+
+[[package]]
 name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1286,7 +1295,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfc320937d09e6de266b31b9afb480f197d7a861be86be7cb2ea7e5d1bfffc5e"
 dependencies = [
  "bytes",
+ "futures-core",
  "memchr",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -4308,10 +4321,17 @@ dependencies = [
 name = "litellm-router"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "litellm-config",
  "litellm-inference",
  "litellm-inference-messages",
+ "rand 0.8.7",
+ "rand_mt",
+ "redis",
  "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -5798,6 +5818,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
+name = "rand_mt"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab79b42e3c44cf58883b476bbcfa5750130c28cb0c6a9bcbc76ad820aed05873"
+
+[[package]]
 name = "rand_pcg"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5866,18 +5892,28 @@ version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acbc41a996f7652b2ddd9dfd98cc4ff602cfd742ae35382f07f608405ab50ed"
 dependencies = [
+ "arc-swap",
  "arcstr",
+ "async-lock",
+ "backon",
+ "bytes",
+ "cfg-if",
  "combine",
  "crc16",
+ "futures-channel",
+ "futures-util",
  "itoa",
  "num-bigint 0.5.1",
  "percent-encoding",
+ "pin-project-lite",
  "rand 0.10.2",
  "rustls 0.23.42",
  "rustls-native-certs",
  "ryu",
  "sha1_smol",
  "socket2 0.6.5",
+ "tokio",
+ "tokio-util",
  "url",
  "xxhash-rust",
 ]
