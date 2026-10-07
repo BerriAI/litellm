@@ -302,3 +302,27 @@ async fn cache_identity_ignores_deployment_settings_and_skips_rewritten_requests
     first.verify().await;
     second.verify().await;
 }
+
+use bytes::Bytes;
+use futures_util::TryStreamExt;
+use litellm_host::call::CallOutput;
+use litellm_inference::caching::StreamCachable;
+use litellm_inference_messages::route::Messages;
+
+#[rstest]
+#[tokio::test]
+async fn replay_yields_one_chunk_per_sse_event() {
+    let data = Bytes::from_static(
+        b"data: {\"type\":\"content_block_delta\",\"text\":\"hello\"}\n\ndata: {\"type\":\"message_stop\"}\n\n",
+    );
+    let expected = vec![
+        Bytes::from_static(b"data: {\"type\":\"content_block_delta\",\"text\":\"hello\"}\n\n"),
+        Bytes::from_static(b"data: {\"type\":\"message_stop\"}\n\n"),
+    ];
+
+    let CallOutput::Stream { chunks, .. } = <Messages as StreamCachable>::replay(data).unwrap()
+    else {
+        panic!("expected a stream");
+    };
+    assert_eq!(chunks.try_collect::<Vec<_>>().await.unwrap(), expected);
+}

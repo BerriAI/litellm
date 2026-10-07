@@ -30,8 +30,11 @@ from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
 from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.support.cache import (
+    ClosableByteStream,
     cache_key,
+    chunk_bytes,
     collect,
+    collect_chunks,
     invoke,
     payload,
 )
@@ -233,6 +236,59 @@ async def test_cache_controls_and_backend_credential_key_semantics(
     await invoke(route, recording_server, {"caching": False})
     await invoke(route, recording_server, {})
     assert len(recording_server.requests) == recording_server.expected_requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", (False, True), ids=("native-v2", "legacy-python"))
+async def test_rust_messages_replays_each_cached_sse_event_and_closes_cleanly(
+    recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    legacy: bool,
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    events: Final = (
+        *MESSAGES_EVENTS[:2],
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "é🙂"},
+            },
+        ),
+        *MESSAGES_EVENTS[3:],
+    )
+    litellm.cache = Cache() if legacy else _v2.Cache.memory()
+    recorder: Final = RecordingLogger()
+    options: Final = {
+        "model": MESSAGES_MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 32,
+        "api_key": "test-key",
+        "api_base": recording_server.base_url,
+        "stream": True,
+        "callbacks": [recorder],
+    }
+    first: Final = await invoke("messages", recording_server, options, native=True, events=events, ensure_ascii=False)
+    expected: Final = recording_server.default_response.payloads()
+    first_chunks: Final = await collect_chunks(first)
+    assert b"".join(first_chunks) == b"".join(expected)
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    second: Final = await invoke("messages", recording_server, options, native=True, events=events, ensure_ascii=False)
+    second_chunks: Final = await collect_chunks(second)
+    assert second_chunks == expected
+    assert "é🙂".encode() in b"".join(second_chunks)
+    third: Final = cast(
+        ClosableByteStream,
+        await invoke("messages", recording_server, options, native=True, events=events, ensure_ascii=False),
+    )
+    third_first: Final = chunk_bytes(await third.__anext__())
+    await third.aclose()
+    assert third_first == expected[0]
+    assert tuple([chunk_bytes(chunk) async for chunk in third]) == ()
+    await drain_logging()
+    assert "async_log_failure_event" not in recorder.names
+    assert len(recording_server.requests) == 1
 
 
 @pytest.mark.asyncio

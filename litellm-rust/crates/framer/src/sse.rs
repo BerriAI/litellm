@@ -1,6 +1,6 @@
 use std::str;
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::SseError;
@@ -59,6 +59,48 @@ impl SseCodec {
         self.past_bom = true;
         true
     }
+}
+
+/// Splits a complete, buffered SSE body into raw blank-line-delimited blocks.
+/// Each block keeps its bytes and terminating delimiter; trailing bytes without a
+/// terminating blank line are yielded as the final block. Not for live streams:
+/// a network chunk can end mid-block, use `SseCodec` there.
+pub struct RawBlocks {
+    remaining: Bytes,
+}
+
+impl RawBlocks {
+    pub fn new(body: Bytes) -> Self {
+        Self { remaining: body }
+    }
+}
+
+impl Iterator for RawBlocks {
+    type Item = Bytes;
+
+    fn next(&mut self) -> Option<Bytes> {
+        if self.remaining.is_empty() {
+            return None;
+        }
+        let length = block_end(&self.remaining).unwrap_or(self.remaining.len());
+        Some(self.remaining.split_to(length))
+    }
+}
+
+impl std::iter::FusedIterator for RawBlocks {}
+
+/// Same contract as [`RawBlocks`], borrowing from an already-valid UTF-8 body.
+pub fn text_blocks(body: &str) -> impl Iterator<Item = &str> {
+    let mut remaining = body;
+    std::iter::from_fn(move || {
+        if remaining.is_empty() {
+            return None;
+        }
+        let length = block_end(remaining.as_bytes()).unwrap_or(remaining.len());
+        let (block, rest) = remaining.split_at(length);
+        remaining = rest;
+        Some(block)
+    })
 }
 
 fn block_end(bytes: &[u8]) -> Option<usize> {
