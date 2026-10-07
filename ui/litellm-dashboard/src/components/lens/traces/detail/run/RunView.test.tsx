@@ -614,7 +614,7 @@ describe("RunView", () => {
       concurrency: 1,
     };
     const prefetcher = createTracePrefetcher(deps);
-    await prefetcher.warm([{ traceId: research.summary.trace_id }]);
+    await prefetcher.warm([{ ref: { traceId: research.summary.trace_id }, span: true }]);
     renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
 
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
