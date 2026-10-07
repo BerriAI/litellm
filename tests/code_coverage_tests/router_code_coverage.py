@@ -80,6 +80,7 @@ ignored_function_names = [
     "chunks",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
     "messages",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
     "model",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
+    "_routing_groups",  # Property getter and setter reads are never ast.Call nodes
     "_request_header",  # Tested through Claude Code session routing in test_router.py
     "_claude_code_session_router_cache_key",  # Tested through Claude Code session routing in test_router.py
     "_delete_claude_code_session_router_binding",  # Tested through Redis cleanup failure in test_router.py
@@ -105,6 +106,7 @@ ignored_function_names = [
     "_aanthropic_messages_retry_same_group",  # Tested through the dropped-before-content retry tests in test_router.py
     "_aanthropic_messages_yield_recovered",  # Tested through every mid-stream retry and fallback test in test_router.py
     "_anthropic_messages_policy_retries",  # Tested through the retry budget precedence test in test_router.py
+    "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
 ]
 
 

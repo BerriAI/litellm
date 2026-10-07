@@ -1,72 +1,24 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypeAlias
-from uuid import uuid4
+from typing import Final, Literal
 
 from pydantic import BaseModel, TypeAdapter
 
 import litellm
-from litellm.caching.caching import Cache
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
-from litellm.rust_bridge import _native, runtime
+from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.chat_completions.entrypoints import NATIVE_ACOMPLETION, LiteLLMChatCompletionsRequest
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import call_hook
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, LiteLLMMessagesRequest
-from litellm.rust_bridge.response_cache import ResponseCacheRuntime
 from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES, LiteLLMResponsesRequest
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.test_litellm_rust.test_inference import RESPONSES_MODEL, RESPONSES_RESPONSE
-
-CacheRuntime: TypeAlias = _native._ResponseCacheRuntime  # pyright: ignore[reportPrivateUsage]  # private runtime under test
-
-
-class CacheNamespace(Protocol):
-    @property
-    def cache(self) -> object: ...
-
-
-@dataclass(frozen=True, slots=True)
-class CacheTestResolver:
-    namespace: CacheNamespace
-
-    def resolve(self) -> CacheRuntime:
-        return CacheRuntime.from_selected(self.namespace.cache)
-
-
-class CacheLookup(Protocol):
-    def get_cache(self, **kwargs: object) -> object: ...
-    def flush_cache(self) -> object: ...
-
-
-def request(key: str = "key") -> dict[str, object]:
-    return {"key": {"preset": key}}
-
-
-def native_runtime(facade: Cache) -> CacheRuntime:
-    return CacheRuntime.from_cache(facade)
-
-
-def activate_native(facade: Cache) -> Cache:
-    facade._native_cache = ResponseCacheRuntime(_native._ResponseCacheRuntime.from_cache(facade))  # pyright: ignore[reportPrivateUsage]  # explicitly select the runtime under test
-    return facade
-
-
-def assert_native_runtime(facade: Cache) -> ResponseCacheRuntime:
-    runtime: Final = facade._native_cache  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
-    assert isinstance(runtime, ResponseCacheRuntime)
-    assert runtime.kind == "native"
-    return runtime
-
-
-def completion_kwargs(label: str) -> dict[str, object]:
-    return {"model": "gpt-4o", "messages": [{"role": "user", "content": f"{label} {uuid4().hex}"}]}
 
 
 def payload(value: object) -> object:

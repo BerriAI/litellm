@@ -28,8 +28,8 @@ def test_audit_log_masking():
         table_name="LiteLLM_VerificationToken",
         object_id="test",
         action="updated",
-        updated_values=json.dumps({"key": "sk-1234567890", "token": "1q2132r222"}),
-        before_value=json.dumps({"key": "sk-1234567890", "token": "1q2132r222"}),
+        updated_values=json.dumps({"key": "sk-1987657890", "token": "1q2132r222"}),
+        before_value=json.dumps({"key": "sk-1987657890", "token": "1q2132r222"}),
     )
 
     print(audit_log.updated_values)
@@ -147,8 +147,8 @@ def test_update_key_request_requires_key_or_key_alias():
     with pytest.raises(pydantic.ValidationError, match="either key or key_alias must be provided"):
         UpdateKeyRequest(max_budget=10.0)
 
-    by_key = UpdateKeyRequest(key="sk-1234")
-    assert by_key.key == "sk-1234"
+    by_key = UpdateKeyRequest(key="sk-9876")
+    assert by_key.key == "sk-9876"
     assert by_key.key_alias is None
 
     by_alias = UpdateKeyRequest(key_alias="my-alias")
@@ -211,12 +211,12 @@ def test_a_temp_budget_needs_both_halves_or_neither():
     from litellm.proxy._types import UpdateKeyRequest
 
     with pytest.raises(ValidationError, match="temp_budget_increase and temp_budget_expiry must be set together"):
-        UpdateKeyRequest(key="sk-1234", temp_budget_increase=10)
+        UpdateKeyRequest(key="sk-9876", temp_budget_increase=10)
 
     with pytest.raises(ValidationError, match="temp_budget_increase and temp_budget_expiry must be set together"):
-        UpdateKeyRequest(key="sk-1234", temp_budget_expiry="2026-01-01")
+        UpdateKeyRequest(key="sk-9876", temp_budget_expiry="2026-01-01")
 
-    both = UpdateKeyRequest(key="sk-1234", temp_budget_increase=10, temp_budget_expiry="2026-01-01")
+    both = UpdateKeyRequest(key="sk-9876", temp_budget_increase=10, temp_budget_expiry="2026-01-01")
     assert both.temp_budget_increase == 10
 
 
@@ -273,7 +273,7 @@ def test_an_llm_backed_injection_check_needs_the_call_it_would_make():
 def test_a_server_only_marker_is_not_taken_from_the_caller(field, forged, default):
     from litellm.proxy._types import UserAPIKeyAuth
 
-    auth = UserAPIKeyAuth(api_key="sk-1234", **{field: forged})
+    auth = UserAPIKeyAuth(api_key="sk-9876", **{field: forged})
 
     assert getattr(auth, field) == default
 

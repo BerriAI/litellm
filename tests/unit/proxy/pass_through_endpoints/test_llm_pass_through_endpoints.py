@@ -23,6 +23,7 @@ from starlette.datastructures import FormData
 
 
 import litellm
+from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
 from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -566,7 +567,7 @@ class TestVertexAIPassThroughHandler:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
             pass_through_router,
         )
-        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master-1234")
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
 
         endpoint = f"/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent"
 
@@ -1139,7 +1140,7 @@ class TestVertexAIPassThroughHandler:
                     end_time=end_time,
                     cache_hit=False,
                 )
-            recomputed: Final = logging_obj._response_cost_calculator(result=result["result"])
+            recomputed: Final = logging_obj.response_cost_calculator(result=result["result"])
             return result["kwargs"]["response_cost"], recomputed
 
         global_handler_cost, global_recomputed_cost = costs_for("global")
@@ -1880,7 +1881,7 @@ class TestBedrockAgentRuntimePassthroughToggle:
 class TestBedrockAgentRuntimePassthroughVirtualKeyLeak:
 
     VKEY: Final = "sk-litellm-victim-key"
-    MASTER_KEY: Final = "sk-master-1234"
+    MASTER_KEY: Final = SHARED_MASTER_KEY
     ENDPOINT: Final = "knowledgebases/KB1234567/retrieve"
     AMBIENT_AWS_ENV: Final = (
         "AWS_BEARER_TOKEN_BEDROCK",
@@ -3864,6 +3865,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     """
 
     VKEY = "sk-litellm-victim-key"
+    MASTER_KEY: Final = SHARED_MASTER_KEY
     ENDPOINT = "v1/projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
 
     async def _run(
@@ -3871,7 +3873,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         monkeypatch,
         headers: list[tuple[bytes, bytes]],
         authenticated: UserAPIKeyAuth | None = None,
-        master_key: str | None = "sk-master-1234",
+        master_key: str | None = SHARED_MASTER_KEY,
     ) -> tuple[HTTPException | None, dict | None]:
         monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
         caller: Final = authenticated if authenticated is not None else UserAPIKeyAuth(api_key=self.VKEY)
@@ -4189,12 +4191,12 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         ("master_key", "authenticated"),
         [
             pytest.param(
-                "sk-master-1234",
+                SHARED_MASTER_KEY,
                 UserAPIKeyAuth(api_key="best-api-key-ever", user_role=LitellmUserRoles.PROXY_ADMIN),
                 id="custom-auth-returning-its-own-identifier",
             ),
             pytest.param(
-                "sk-master-1234",
+                SHARED_MASTER_KEY,
                 UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(LITELLM_JWT_CLAIMS)),
                 id="jwt-auth",
             ),
@@ -4278,7 +4280,10 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     async def test_master_key_in_authorization_alone_is_rejected(self, monkeypatch):
         raised, forwarded = await self._run(
             monkeypatch,
-            [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
+            [
+                (b"authorization", f"Bearer {self.MASTER_KEY}".encode()),
+                (b"content-type", b"application/json"),
+            ],
             authenticated=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN),
         )
         assert forwarded is None, "the master key must never reach the upstream forwarder"
@@ -4289,7 +4294,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         raised, forwarded = await self._run(
             monkeypatch,
             [
-                (b"authorization", b"Bearer sk-master-1234"),
+                (b"authorization", f"Bearer {self.MASTER_KEY}".encode()),
                 (b"x-goog-api-key", b"AIza-real-google-api-key"),
                 (b"content-type", b"application/json"),
             ],
@@ -4299,7 +4304,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert forwarded is not None
         assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
         assert "authorization" not in forwarded
-        assert "sk-master-1234" not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+        assert self.MASTER_KEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
 
 class TestAnthropicPassthroughVirtualKeyLeak:
@@ -4312,7 +4317,7 @@ class TestAnthropicPassthroughVirtualKeyLeak:
         monkeypatch,
         headers: list[tuple[bytes, bytes]],
         authenticated: UserAPIKeyAuth | None = None,
-        master_key: str | None = "sk-master-1234",
+        master_key: str | None = SHARED_MASTER_KEY,
         proxy_api_key: str | None = None,
     ) -> tuple[HTTPException | None, dict | None]:
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
@@ -4410,8 +4415,11 @@ class TestAnthropicPassthroughVirtualKeyLeak:
     async def test_master_key_in_authorization_is_rejected_not_forwarded(self, monkeypatch):
         raised, forwarded = await self._run(
             monkeypatch,
-            [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
-            authenticated=UserAPIKeyAuth(api_key="sk-master-1234", user_role=LitellmUserRoles.PROXY_ADMIN),
+            [
+                (b"authorization", f"Bearer {SHARED_MASTER_KEY}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=UserAPIKeyAuth(api_key=SHARED_MASTER_KEY, user_role=LitellmUserRoles.PROXY_ADMIN),
         )
         assert forwarded is None, "the master key must never reach Anthropic"
         assert raised is not None and raised.status_code == 401

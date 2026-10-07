@@ -1508,7 +1508,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
     import litellm
     from litellm._service_logger import ServiceLogging
@@ -1547,7 +1547,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
         "callbacks",
         [
             _PROXY_CacheControlCheck(),
-            _PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock()),
+            PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock()),
             ServiceLogging(),
             VectorStorePreCallHook(),
             _InventoryTestGuardrail(guardrail_name="inventory-test-guardrail"),

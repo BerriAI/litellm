@@ -116,7 +116,10 @@ export interface OwnedFinding {
 export function findFinding(lenses: readonly Lens[], key: string): OwnedFinding | undefined {
   return lenses
     .flatMap((lens) => lens.findings.map((finding) => ({ lens, finding })))
-    .find(({ lens, finding }) => findingKey(lens, finding) === key);
+    .find(
+      ({ lens, finding }) =>
+        findingKey(lens, finding) === key || finding.merged_finding_ids?.some((id) => `${lens.id}:${id}` === key),
+    );
 }
 
 export function stepLine(step: Step): string {
@@ -155,9 +158,10 @@ const WINDOW_FORMAT: Intl.DateTimeFormatOptions = {
   minute: "2-digit",
 };
 
+export const shortTime = (iso: string) => new Date(iso).toLocaleString(undefined, WINDOW_FORMAT);
+
 export function windowLabel(job: Job): string {
-  const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, WINDOW_FORMAT);
-  return `${fmt(job.start)} → ${fmt(job.end)}`;
+  return `${shortTime(job.start)} → ${shortTime(job.end)}`;
 }
 
 export function inboxFinding(row: InboxRow): Finding {

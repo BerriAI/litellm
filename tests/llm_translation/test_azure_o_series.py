@@ -184,7 +184,7 @@ async def test_azure_o1_series_response_format_extra_params():
     """
     Tool calling should work for all azure o_series models.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     from openai import AsyncAzureOpenAI
 

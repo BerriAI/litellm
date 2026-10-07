@@ -250,7 +250,7 @@ class NvidiaRivaAudioTranscription:
                 message="NvidiaRivaAudioTranscriptionConfig produced an unexpected request payload type.",
             )
 
-        recognition_config_dict: Final[dict[str, Any]] = request_payload["recognition_config"]
+        recognition_config_dict: Final[dict[str, object]] = request_payload["recognition_config"]
         # The wire format is fixed by our resampler; override anything stale
         # the caller passed in so the gRPC config matches the bytes we send.
         recognition_config_dict["sample_rate_hertz"] = RIVA_TARGET_SAMPLE_RATE_HZ

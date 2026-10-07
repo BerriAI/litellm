@@ -274,6 +274,54 @@ model_list:
       vertex_project: synthetic-vertex-project
       vertex_location: global
       vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: bedrock_mantle/anthropic.claude-haiku-4-5
+    litellm_params:
+      model: bedrock_mantle/anthropic.claude-haiku-4-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/anthropic.claude-sonnet-5
+    litellm_params:
+      model: bedrock_mantle/anthropic.claude-sonnet-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/anthropic.claude-opus-5-5
+    litellm_params:
+      model: bedrock_mantle/anthropic.claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-5.4
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.4
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-5.6-sol
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.6-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-5.6-luna
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.6-luna
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-6-luna
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-6-luna
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-6.1-sol
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-6.1-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL

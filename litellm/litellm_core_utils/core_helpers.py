@@ -5,12 +5,13 @@ import logging
 import re
 from collections.abc import Collection, Iterable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
@@ -426,28 +427,41 @@ def reconstruct_model_name(
 
 
 # Helper functions used for OTEL logging
-def _get_parent_otel_span_from_kwargs(
-    kwargs: dict | None = None,
+def get_parent_otel_span_from_kwargs(
+    kwargs: dict[str, object] | None = None,
 ) -> Span | None:
     try:
         if kwargs is None:
             return None
         litellm_params: Final = kwargs.get("litellm_params")
-        _metadata: Final = kwargs.get("metadata") or {}
-        if "litellm_parent_otel_span" in _metadata:
-            return _metadata["litellm_parent_otel_span"]
+        metadata: Final = cast(  # cast-ok: metadata is caller-provided request data
+            Mapping[str, object], kwargs.get("metadata") or {}
+        )
+        if "litellm_parent_otel_span" in metadata:
+            return cast(  # cast-ok: tracing metadata crosses an external boundary
+                Span | None, metadata["litellm_parent_otel_span"]
+            )
         elif (
             litellm_params is not None
-            and litellm_params.get("metadata") is not None
-            and "litellm_parent_otel_span" in litellm_params.get("metadata", {})
+            and cast(Mapping[str, object], litellm_params).get("metadata") is not None
+            and "litellm_parent_otel_span"
+            in cast(
+                Mapping[str, object],
+                cast(Mapping[str, object], litellm_params).get("metadata", {}),
+            )
         ):
-            return litellm_params["metadata"]["litellm_parent_otel_span"]
+            typed_litellm_params: Final = cast(Mapping[str, object], litellm_params)
+            litellm_metadata: Final = cast(Mapping[str, object], typed_litellm_params["metadata"])
+            return cast(Span | None, litellm_metadata["litellm_parent_otel_span"])
         elif "litellm_parent_otel_span" in kwargs:
-            return kwargs["litellm_parent_otel_span"]
+            return cast(Span | None, kwargs["litellm_parent_otel_span"])
         return None
     except Exception as e:
         verbose_logger.exception("Error in _get_parent_otel_span_from_kwargs: " + str(e))
         return None
+
+
+_get_parent_otel_span_from_kwargs = get_parent_otel_span_from_kwargs
 
 
 def process_response_headers(
@@ -495,7 +509,8 @@ def process_response_headers(
         **processed_headers,
         **additional_headers,
     }
-    return additional_headers
+    request_id: Final = get_provider_request_id(response_headers)
+    return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
 def preserve_upstream_non_openai_attributes(
@@ -725,7 +740,7 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: Final[dict | list[Any] | str | None] = copy.deepcopy(payload)
+        redacted: Final[dict | list[object] | str | None] = copy.deepcopy(payload)
     except Exception:
         return payload
 

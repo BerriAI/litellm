@@ -13,7 +13,7 @@ from litellm.types.llms.watsonx import (
     WatsonXModelPattern,
 )
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
+from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import IBMWatsonXMixin
 
@@ -56,9 +56,9 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         _tools = non_default_params.pop("tools", None)
         if _tools is not None:
             # remove 'additionalProperties' from tools
-            _tools = _remove_additional_properties(_tools)
+            _tools = remove_additional_properties(_tools)
             # remove 'strict' from tools
-            _tools = _remove_strict_from_schema(_tools)
+            _tools = remove_strict_from_schema(_tools)
         if _tools is not None:
             non_default_params["tools"] = _tools
 

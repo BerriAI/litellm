@@ -420,7 +420,7 @@ class TestModelManagementAuthChecks:
         assert result is True
 
     def test_can_user_attach_credential_unchanged_encrypted_existing_allows_any_role(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-9876")
         encrypted_name = encrypt_value_helper(value="shared-credential")
         assert encrypted_name != "shared-credential"
         result = ModelManagementAuthChecks.can_user_attach_credential(
@@ -1761,7 +1761,7 @@ class TestTeamModelSiblingRouting:
         )
 
         # Global deployment should be accessible when team_id is provided
-        deployments = router._get_all_deployments(model_name="global-gpt-4o", team_id="teamA")
+        deployments = router.get_all_deployments(model_name="global-gpt-4o", team_id="teamA")
         assert len(deployments) == 1
         assert deployments[0]["model_name"] == "global-gpt-4o"
 
@@ -3408,7 +3408,7 @@ class TestUpdateDBModelKeepsLegacyDropParams:
         from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
 
-        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-9876")
         legacy_row = Deployment(
             model_name="gpt-5-nano",
             litellm_params=LiteLLM_Params(
@@ -4351,7 +4351,7 @@ class TestModelInfoCostMapEchoFilter:
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
-        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-9876")
         entry = litellm.get_model_info("openai/gpt-5.6")
         db_model = Deployment(
             model_name="gpt-5.6",
@@ -6097,9 +6097,9 @@ class TestStrategyRouterWriteValidation:
             AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY,
             _auto_router_capability_slot,
         )
-        from litellm.router_utils.auto_router_model_naming import gated_capability_of
+        from litellm.router_utils.auto_router_model_naming import gated_capabilities_of
 
-        capability = gated_capability_of(effective_params)
+        capabilities: Final = gated_capabilities_of(effective_params)
 
         fake = self._FakeDb(db_models)
         live_router = self._live_router_holding_one_capability(limit, config_config) if config_config is not None else None
@@ -6116,9 +6116,9 @@ class TestStrategyRouterWriteValidation:
                     async with _auto_router_capability_slot(fake, effective_params=effective_params, model_id=model_id):
                         pass
                 assert exc_info.value.status_code == 403
-                assert capability is not None
+                assert len(capabilities) == 1
                 assert "At most 1 auto-router" in str(exc_info.value.detail)
-                assert capability.subject in str(exc_info.value.detail)
+                assert capabilities[0].subject in str(exc_info.value.detail)
                 assert "'auto_router' feature lifts the limit" in str(exc_info.value.detail)
                 return
             async with _auto_router_capability_slot(fake, effective_params=effective_params, model_id=model_id) as tables:
@@ -6135,8 +6135,59 @@ class TestStrategyRouterWriteValidation:
         assert lock_params == (AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY,)
         assert count_params == (model_id or "",)
         assert "AS model" in count_sql
-        assert capability is not None
-        assert capability.sql_config_predicate.split("{config}")[-1].strip() in count_sql
+        assert len(capabilities) == 1
+        assert capabilities[0].sql_config_predicate.split("{config}")[-1].strip() in count_sql
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("classifier", ("heuristic_first", "hybrid"))
+    @pytest.mark.parametrize(
+        ("other_config", "denied_subject"),
+        (
+            (None, None),
+            (_V2, "heuristic_v2"),
+            (_CUSTOM_PROMPT, "operator-written classifier prompt"),
+        ),
+    )
+    async def test_v2_chain_reserves_both_capabilities_under_one_lock(
+        self, classifier: str, other_config: Mapping[str, object] | None, denied_subject: str | None
+    ) -> None:
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
+
+        candidate: Final = {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                **self._CUSTOM_PROMPT,
+                "classifier_type": classifier,
+                "local_heuristic": "heuristic_v2",
+                **(
+                    {"heuristic_first_max_tier": "MEDIUM"}
+                    if classifier == "heuristic_first" else {"hybrid_boundary_margin": 0.1}
+                ),
+            },
+        }
+        fake: Final = self._FakeDb([])
+        router: Final = self._live_router_holding_one_capability(1, other_config) if other_config is not None else None
+        with (
+            patch("litellm.proxy.proxy_server._license_check.auto_router_capability_limit", return_value=1),  # test-quality-ok: [TQ008] the guard reads the proxy license singleton
+            patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: [TQ008] the guard reads the proxy router singleton
+            patch("litellm.proxy.proxy_server.heuristic_v1_tuning_baselines", {}),  # test-quality-ok: [TQ008] the guard reads the proxy baseline singleton
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.publish_config_change", new=AsyncMock()),  # test-quality-ok: [TQ008] Redis publication is outside admission under test
+        ):
+            if denied_subject is not None:
+                with pytest.raises(HTTPException) as failure:
+                    async with _auto_router_capability_slot(fake, effective_params=candidate, model_id="held-id"):
+                        pytest.fail("Exhausted capability allowed a write")
+                assert failure.value.status_code == 403
+                assert denied_subject in str(failure.value.detail)
+            else:
+                async with _auto_router_capability_slot(fake, effective_params=candidate, model_id="held-id") as table:
+                    assert table is fake.tx_obj.litellm_proxymodeltable
+        assert sum("pg_advisory_xact_lock" in sql for sql, _ in fake.tx_obj.raw_calls) == 1
+        counts: Final = tuple((sql, args) for sql, args in fake.tx_obj.raw_calls if "AS model" in sql)
+        assert len(counts) == (1 if denied_subject == "heuristic_v2" else 2)
+        assert all(args == ("held-id",) for _, args in counts)
 
     _TUNED_A = {"classifier_type": "heuristic", "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"}}
     _TUNED_A_EDITED = {**_TUNED_A, "dimension_weights": {"codePresence": 0.9}}
@@ -9090,7 +9141,7 @@ class TestWifBoundaryReadsTheResultingDeployment:
         credential, and lets the write through."""
         from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
 
-        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-9876")
         non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
         federated_row = MagicMock()
         federated_row.litellm_params = {

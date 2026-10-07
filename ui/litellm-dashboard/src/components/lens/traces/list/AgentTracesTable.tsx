@@ -10,6 +10,7 @@ import { usePersistedColumnVisibility } from "@/components/shared/DataTable/useP
 import { InspectorTable, useInspectorTable } from "@/components/shared/InspectorTable";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/cva.config";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
 
 import { SpanIcon } from "../ui/SpanIcon";
@@ -27,6 +28,8 @@ interface AgentTracesTableProps {
   error: Error | null;
   hasMore: boolean;
   isFetching?: boolean;
+  /** Rows from the previous range shown while the new one loads: blurred, and never paged further. */
+  isPlaceholder?: boolean;
   onRetry?: () => void;
   onLoadMore: () => void;
   rangeEmpty?: boolean;
@@ -39,7 +42,34 @@ export const formatCost = (cost: number): string => {
   return `$${cost.toFixed(2)}`;
 };
 
-const firstLine = (text: string): string => text.split("\n")[0] ?? text;
+type RunCost = { label: string; partial: { short: string; long: string } | null };
+
+export const runCost = ({
+  spend,
+  priced_calls,
+  llm_calls,
+}: Pick<TraceSummary, "spend" | "priced_calls" | "llm_calls">): RunCost | null => {
+  if (spend == null || priced_calls === 0) return null;
+  if (priced_calls >= llm_calls) return { label: formatCost(spend), partial: null };
+  return {
+    label: `≥ ${formatCost(spend)}`,
+    partial: { short: `${priced_calls}/${llm_calls} priced`, long: `${priced_calls} of ${llm_calls} calls priced` },
+  };
+};
+
+function CostCell({ run }: { run: TraceSummary }) {
+  const cost = runCost(run);
+  if (!cost) return "—";
+  if (!cost.partial) return cost.label;
+  return (
+    <span className="inline-flex items-baseline gap-1.5" title={cost.partial.long}>
+      {cost.label}
+      <span className="text-xs text-muted-foreground">{cost.partial.short}</span>
+    </span>
+  );
+}
+
+const singleLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 
 const PREFETCH_MARGIN = "0px 0px 480px 0px";
@@ -66,7 +96,7 @@ function InputCell({ run }: { run: TraceSummary }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
       <span className="truncate text-foreground">
-        {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
+        {singleLine(previewText(run.input_preview)) || traceDisplayName(run)}
       </span>
       {run.resolution_limited && (
         <span
@@ -155,7 +185,7 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     id: "cost",
     size: 80,
     header: "Cost",
-    cell: ({ row }) => (row.original.spend == null ? "—" : formatCost(row.original.spend)),
+    cell: ({ row }) => <CostCell run={row.original} />,
     meta: { numeric: true, className: NUM },
   },
   {
@@ -211,6 +241,8 @@ function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetU
   );
 }
 
+const bodyClassName = (blurred?: boolean) => cn("transition-[filter]", blurred && "blur-[1.5px]");
+
 /** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
   traces,
@@ -220,6 +252,7 @@ export function AgentTracesTable({
   error,
   hasMore,
   isFetching = false,
+  isPlaceholder,
   onRetry,
   onLoadMore,
   rangeEmpty = false,
@@ -227,7 +260,7 @@ export function AgentTracesTable({
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
-  const canContinue = settled && hasMore;
+  const canContinue = settled && hasMore && !isPlaceholder;
   const autoContinue = canContinue && traces.length > 0;
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("lens-traces");
   const tableOptions: TableOptions<TraceSummary> = {
@@ -247,6 +280,7 @@ export function AgentTracesTable({
         <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
           <InspectorTable.Header />
           <InspectorTable.Body<TraceSummary>
+            className={bodyClassName(isPlaceholder)}
             rowHeight={() => ROW_HEIGHT}
             after={
               <>

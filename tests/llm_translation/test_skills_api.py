@@ -111,7 +111,7 @@ class BaseSkillsAPITest(ABC):
             pytest.skip(f"No API key provided for {custom_llm_provider}")
 
         litellm.set_verbose = True
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         # Use helper to create skill zip
         skill_name = "test-skill-litellm"
