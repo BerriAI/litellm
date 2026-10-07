@@ -6,11 +6,9 @@ import os
 import time
 import traceback
 
-import pytest
-
-
 import httpx
 import openai
+import pytest
 
 import litellm
 from litellm import Router
@@ -211,49 +209,6 @@ async def test_router_retry_policy(error_type):
         assert customHandler.previous_models == 3
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="This is a local only test, use this to confirm if retry policy works"
-)
-async def test_router_retry_policy_on_429_errprs():
-    from litellm.router import RetryPolicy
-
-    retry_policy = RetryPolicy(
-        RateLimitErrorRetries=2,
-    )
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",  # openai model name
-                "litellm_params": {
-                    "model": "vertex_ai/gemini-1.5-pro-001",
-                },
-            },
-        ],
-        retry_policy=retry_policy,
-        # set_verbose=True,
-        # debug_level="DEBUG",
-        allowed_fails=10,
-    )
-
-    customHandler = MyCustomHandler()
-    litellm.callbacks = [customHandler]
-    try:
-        # litellm.set_verbose = True
-        _one_message = [{"role": "user", "content": "Hello good morning"}]
-
-        messages = [_one_message] * 5
-        print("messages: ", messages)
-        responses = await router.abatch_completion(
-            models=["gpt-3.5-turbo"],
-            messages=messages,
-        )
-        print("responses: ", responses)
-    except Exception as e:
-        print("got an exception", e)
-        pass
-    await asyncio.sleep(0.05)
-    print("customHandler.previous_models: ", customHandler.previous_models)
 
 
 @pytest.mark.parametrize("model_group", ["gpt-3.5-turbo", "bad-model"])
@@ -812,7 +767,7 @@ def test_no_retry_when_no_healthy_deployments():
 
 @pytest.mark.asyncio
 async def test_router_retries_model_specific_and_global():
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     litellm.num_retries = 0
     router = Router(
@@ -847,7 +802,8 @@ async def test_router_retries_model_specific_and_global():
 
 @pytest.mark.asyncio
 async def test_router_timeout_model_specific_and_global():
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     router = Router(

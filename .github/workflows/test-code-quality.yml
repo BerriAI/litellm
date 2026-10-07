@@ -4,13 +4,10 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
   push:
     branches:
       - main
-      - litellm_internal_staging
 
 permissions:
   contents: read
@@ -47,7 +44,19 @@ jobs:
           version: "0.10.9"
 
       - name: Cache uv dependencies
+        if: github.ref == 'refs/heads/main'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Cache uv dependencies
+        if: github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cache/uv
@@ -82,6 +91,16 @@ jobs:
 
       - name: test_e2e_changed_gate
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_changed_gate.py tests/code_coverage_tests/test_e2e_idp_stack.py
+
+      - name: test_e2e_metadata
+        env:
+          PYTHONPATH: tests/e2e
+        run: |
+          export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)"
+          uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_metadata.py tests/code_coverage_tests/test_e2e_junit_report.py
+
+      - name: Check merge smoke harness
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_merge_smoke.py
 
       - name: router_code_coverage
         run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py
@@ -145,6 +164,15 @@ jobs:
 
       - name: check_migrations_no_data_rewrites
         run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_no_data_rewrites.py
+
+      - name: check_no_publicly_known_master_key
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_no_publicly_known_master_key.py
+
+      - name: test_check_no_publicly_known_master_key
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_no_publicly_known_master_key.py
+
+      - name: check_unbounded_in_lists (fails on findings not in the baseline)
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_unbounded_in_lists.py
 
       - name: memory_test
         run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py

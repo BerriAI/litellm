@@ -3,8 +3,8 @@ A2A Protocol Transformation for LiteLLM
 """
 
 import uuid
-from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -23,9 +23,8 @@ from ..common_utils import (
 from .streaming_iterator import A2AModelResponseIterator
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 _REGISTRY_PARAMS_KEPT_OUT_OF_OPTIONAL_PARAMS: Final = (
@@ -49,12 +48,12 @@ def _registry_api_key(agent_litellm_params: Mapping[str, object]) -> str | None:
     return configured_api_key if isinstance(configured_api_key, str) else None
 
 
-def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, Any] | None:
+def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, object] | None:
     stored_headers: Final = agent_litellm_params.get("headers")
     if not isinstance(stored_headers, Mapping):
         return None
     entra_owns_authorization: Final = _agent_authenticates_with_entra(agent_litellm_params)
-    return {  # mutable-ok: completion() and httpx take the request headers as a dict
+    return {
         name: value
         for name, value in stored_headers.items()
         if not (entra_owns_authorization and str(name).lower() == "authorization")
@@ -73,9 +72,9 @@ class A2AConfig(BaseConfig):
         agent_name: str,
         api_base: str | None,
         api_key: str | None,
-        headers: dict[str, Any] | None,
-        optional_params: dict[str, Any],
-    ) -> tuple[str | None, str | None, dict[str, Any] | None]:
+        headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+    ) -> tuple[str | None, str | None, dict[str, object] | None]:
         """
         Resolve agent configuration from the registry for a registered agent.
 
@@ -292,7 +291,7 @@ class A2AConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -377,7 +376,7 @@ class A2AConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator | Any,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
     ) -> BaseModelResponseIterator:
@@ -398,7 +397,7 @@ class A2AConfig(BaseConfig):
             json_mode=json_mode,
         )
 
-    def _openai_message_to_a2a_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    def _openai_message_to_a2a_message(self, message: Mapping[str, object]) -> dict[str, object]:
         """
         Convert OpenAI message to A2A message format.
 

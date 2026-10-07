@@ -21,7 +21,7 @@ async def test_websearch_interception_non_streaming():
     Test WebSearch interception with non-streaming request.
     Validates that agentic loop executes transparently.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     print("\n" + "=" * 80)
     print("E2E TEST 1: WebSearch Interception (Non-Streaming)")
@@ -921,7 +921,7 @@ async def test_pre_request_hook_modifies_request_body():
     from unittest.mock import AsyncMock, patch, MagicMock
     from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     print("\n" + "=" * 80)
     print("UNIT TEST: Pre-Request Hook Modifies Request Body")
@@ -993,7 +993,7 @@ async def test_pre_request_hook_modifies_request_body():
 
     # Patch the anthropic_messages_handler function (called after hooks)
     with patch(
-        "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler",
+        "litellm.llms.anthropic.pass_through.messages.handler.anthropic_messages_handler",
         side_effect=mock_anthropic_messages_handler,
     ), patch(  # test-quality-ok: the hook imports this process-global router at call time; no injection seam exists to register search_tools
         "litellm.proxy.proxy_server.llm_router",

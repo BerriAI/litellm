@@ -15,6 +15,7 @@ import databricksLogo from "../../public/assets/logos/databricks.svg";
 import deepgramLogo from "../../public/assets/logos/deepgram.png";
 import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
 import deepseekLogo from "../../public/assets/logos/deepseek.svg";
+import edenaiLogo from "../../public/assets/logos/edenai.svg";
 import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
 import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
 import featherlessLogo from "../../public/assets/logos/featherless.svg";
@@ -54,6 +55,7 @@ import sapLogo from "../../public/assets/logos/sap.png";
 import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
+import tencentLogo from "../../public/assets/logos/tencent.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
 import topazLogo from "../../public/assets/logos/topaz.svg";
 import v0Logo from "../../public/assets/logos/v0.svg";
@@ -103,6 +105,7 @@ export enum Providers {
   Deepseek = "Deepseek",
   DOCKER_MODEL_RUNNER = "Docker Model Runner",
   DOTPROMPT = "Dotprompt",
+  EDENAI = "Eden AI",
   ElevenLabs = "ElevenLabs",
   EMPOWER = "Empower",
   FalAI = "Fal AI",
@@ -152,18 +155,20 @@ export enum Providers {
   PETALS = "Petals",
   PG_VECTOR = "Pg Vector",
   PREDIBASE = "Predibase",
-  Qwen_AI_Platform = "Qwen AI Platform",
+  Qwen_AI_Platform = "Qianwen AI Platform",
   QwenCloud = "QwenCloud",
   RECRAFT = "Recraft",
   REPLICATE = "Replicate",
   RunwayML = "RunwayML",
   SAGEMAKER_LEGACY = "Sagemaker",
+  Sail = "Sail",
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
   SCX_AI = "SCX.ai",
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
+  Tencent = "Tencent",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
   Triton = "Triton",
@@ -219,6 +224,7 @@ export const provider_map: Record<string, string> = {
   Deepseek: "deepseek",
   DOCKER_MODEL_RUNNER: "docker_model_runner",
   DOTPROMPT: "dotprompt",
+  EDENAI: "edenai",
   ElevenLabs: "elevenlabs",
   EMPOWER: "empower",
   FalAI: "fal_ai",
@@ -275,12 +281,14 @@ export const provider_map: Record<string, string> = {
   RunwayML: "runwayml",
   SAGEMAKER_LEGACY: "sagemaker",
   SageMaker: "sagemaker_chat",
+  Sail: "sail",
   Sambanova: "sambanova",
   SAP: "sap",
   SCX_AI: "scx-ai",
   Snowflake: "snowflake",
   Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
+  Tencent: "tencent",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
   Triton: "triton",
@@ -331,6 +339,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Deepseek]: deepseekLogo.src,
   [Providers.Deepgram]: deepgramLogo.src,
   [Providers.DeepInfra]: deepinfraLogo.src,
+  [Providers.EDENAI]: edenaiLogo.src,
   [Providers.ElevenLabs]: elevenlabsLogo.src,
   [Providers.FalAI]: falAiLogo.src,
   [Providers.FEATHERLESS_AI]: featherlessLogo.src,
@@ -378,6 +387,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.SCX_AI]: scxAiLogo.src,
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
+  [Providers.Tencent]: tencentLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
   [Providers.TogetherAI]: togetheraiLogo.src,
   [Providers.TOPAZ]: topazLogo.src,
@@ -436,6 +446,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Cognition]: "cognition/swe-1.7",
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
+  [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
@@ -443,8 +454,10 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Oracle]: "oci/xai.grok-4",
   [Providers.RunwayML]: "runwayml/gen4_turbo",
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
+  [Providers.Sail]: "sail/openai/gpt-oss-120b",
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
   [Providers.Snowflake]: "snowflake/mistral-7b",
+  [Providers.Tencent]: "tencent/deepseek-v4-pro",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
   [Providers.Voyage]: "voyage/",

@@ -7,7 +7,7 @@ from litellm.llms.gemini.google_genai.guardrail_translation.handler import (
 )
 from litellm.types.utils import CallTypes
 
-guardrail_translation_mappings: Final = {  # mutable-ok: discover_guardrail_translation_mappings only accepts isinstance(mappings, dict)
+guardrail_translation_mappings: Final = {
     CallTypes.generate_content: GoogleGenAIGenerateContentHandler,
     CallTypes.agenerate_content: GoogleGenAIGenerateContentHandler,
     CallTypes.generate_content_stream: GoogleGenAIGenerateContentHandler,

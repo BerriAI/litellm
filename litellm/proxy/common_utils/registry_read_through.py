@@ -36,6 +36,7 @@ READ_THROUGH_MAX_RESYNCS_PER_WINDOW: Final = 20
 
 class RegistryReadThrough:
     __slots__ = (
+        "_is_loaded",
         "_lock",
         "_max_resyncs_per_window",
         "_miss_ttl_seconds",
@@ -49,11 +50,13 @@ class RegistryReadThrough:
     def __init__(
         self,
         resync: Callable[[str], Awaitable[bool]],
+        is_loaded: Callable[[str], bool],
         miss_ttl_seconds: float = READ_THROUGH_MISS_TTL_SECONDS,
         max_resyncs_per_window: int = READ_THROUGH_MAX_RESYNCS_PER_WINDOW,
         resync_window_seconds: float = READ_THROUGH_RESYNC_WINDOW_SECONDS,
     ) -> None:
         self._resync = resync
+        self._is_loaded = is_loaded
         self._miss_ttl_seconds = miss_ttl_seconds
         self._max_resyncs_per_window = max_resyncs_per_window
         self._resync_window_seconds = resync_window_seconds
@@ -78,6 +81,8 @@ class RegistryReadThrough:
         async with self._lock:
             if self._recent_misses.get_cache(key) is not None:
                 return False
+            if self._is_loaded(key):
+                return True
             if not self._consume_resync_budget():
                 verbose_proxy_logger.warning(
                     "registry read-through for %r skipped: resync budget of %s per %ss exhausted",
@@ -136,9 +141,9 @@ async def _resync_guardrails(guardrail_name: str) -> bool:
     from litellm.proxy.guardrails.guardrail_registry import (
         GUARDRAIL_RECONCILE_LOCK,
         IN_MEMORY_GUARDRAIL_HANDLER,
+        guardrail_from_db_row,
     )
     from litellm.repositories.table_repositories import GuardrailsRepository
-    from litellm.types.guardrails import Guardrail
 
     if not _db_backed_registries_enabled("guardrails"):
         return False
@@ -152,7 +157,7 @@ async def _resync_guardrails(guardrail_name: str) -> bool:
     if row is None:
         return False
     async with GUARDRAIL_RECONCILE_LOCK:
-        IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=Guardrail(**dict(row)))
+        IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=guardrail_from_db_row(row))
     return _initialized_guardrail(guardrail_name) is not None
 
 
@@ -174,7 +179,10 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
     table: Final = agents_table(prisma_client)
     id_filter: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": agent_id_or_name}
     name_filter: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_name": agent_id_or_name}
-    include_permission: Final[LiteLLM_AgentsTableInclude] = {"object_permission": True}
+    include_permission: Final[LiteLLM_AgentsTableInclude] = {
+        "object_permission": True,
+        "identity": True,
+    }
     async with AGENT_RECONCILE_LOCK:
         if _agent_from_registry(agent_id_or_name) is not None:
             return True
@@ -187,9 +195,26 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
         return True
 
 
-model_registry_read_through: Final = RegistryReadThrough(resync=_resync_model_deployments)
-guardrail_registry_read_through: Final = RegistryReadThrough(resync=_resync_guardrails)
-agent_registry_read_through: Final = RegistryReadThrough(resync=_resync_agents)
+def _model_is_loaded(model_name_or_id: str) -> bool:
+    from litellm.proxy import proxy_server
+
+    router: Final = proxy_server.llm_router
+    if router is None:
+        return False
+    return model_name_or_id in router.model_names or router.has_model_id(model_name_or_id)
+
+
+def _guardrail_is_loaded(guardrail_name: str) -> bool:
+    return _initialized_guardrail(guardrail_name) is not None
+
+
+def _agent_is_loaded(agent_id_or_name: str) -> bool:
+    return _agent_from_registry(agent_id_or_name) is not None
+
+
+model_registry_read_through: Final = RegistryReadThrough(resync=_resync_model_deployments, is_loaded=_model_is_loaded)
+guardrail_registry_read_through: Final = RegistryReadThrough(resync=_resync_guardrails, is_loaded=_guardrail_is_loaded)
+agent_registry_read_through: Final = RegistryReadThrough(resync=_resync_agents, is_loaded=_agent_is_loaded)
 
 
 def _agent_from_registry(agent_id_or_name: str) -> "AgentResponse | None":

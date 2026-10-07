@@ -11,22 +11,21 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmTableNames,
-    LitellmUserRoles,
     Member,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_update uses
-    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_update uses
     _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
     member_budget_patch,
 )
@@ -41,6 +40,7 @@ from litellm.proxy.management_helpers.bulk_user_deletion import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkTeamMemberBudgetUpdateRequest,
     TeamMemberBudgetPatch,
@@ -87,7 +87,7 @@ async def _shared_budget_ids(tx: "Prisma", budget_ids: frozenset[str]) -> frozen
     return frozenset(budget_id for budget_id in budget_ids if sum(1 for row in rows if row.budget_id == budget_id) > 1)
 
 
-class _AuditedMemberBudget(BaseModel):
+class _AuditedMemberBudget(LiteLLMBaseModel):
     """One member's limits as the audit log's before/after values record them."""
 
     model_config = ConfigDict(frozen=True)
@@ -102,7 +102,7 @@ class _AuditedMemberBudget(BaseModel):
     allowed_models: tuple[str, ...] | None = None
 
 
-class _AuditedMemberBudgets(BaseModel):
+class _AuditedMemberBudgets(LiteLLMBaseModel):
     """The audit-log columns hold a JSON object, so the per-member list is nested under a key."""
 
     model_config = ConfigDict(frozen=True)
@@ -180,11 +180,7 @@ async def bulk_update_team_member_budgets(
     if team is None:
         raise _team_not_found(team_id)
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, team, TEAM_OR_ORG_ADMIN):
         raise _forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "
             f"route='/management/v1/teams/{team_id}/members/bulk_update'"

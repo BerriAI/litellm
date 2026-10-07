@@ -3,23 +3,27 @@
 import asyncio
 import importlib
 import os
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain, count
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, GUARDRAIL_ROTATION_ATTEMPTS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_tool_message_for_guardrail,
 )
+from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
+from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX, is_sensitive_callback_key
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
 )
@@ -75,6 +79,129 @@ class _GuardrailRowLike(Protocol):
 def _guardrail_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_GuardrailsTable]":
     """Typed view of the guardrails table actions exposed by the Prisma repository."""
     return GuardrailsRepository(prisma_client).table
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+
+
+def _as_json_object(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return _JSON_OBJECT.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _as_json_array(value: object) -> list[object] | None:
+    return _JSON_ARRAY.validate_python(value) if isinstance(value, list) else None
+
+
+def contains_encrypted_marker(value: object, depth: int = 0) -> bool:
+    """True if any string in value, at any JSON depth, starts with the encrypted-value prefix."""
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return False
+    if isinstance(value, str):
+        return value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
+    json_object: Final = _as_json_object(value)
+    if json_object is not None:
+        return any(contains_encrypted_marker(v, depth + 1) for v in json_object.values())
+    json_array: Final = _as_json_array(value)
+    return json_array is not None and any(contains_encrypted_marker(item, depth + 1) for item in json_array)
+
+
+def _encrypted_param(key: str, value: object, new_encryption_key: str | None, depth: int = 0) -> object:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return value
+    json_object: Final = _as_json_object(value)
+    if json_object is not None:
+        return {k: _encrypted_param(k, v, new_encryption_key, depth + 1) for k, v in json_object.items()}
+    json_array: Final = _as_json_array(value)
+    if json_array is not None:
+        return [_encrypted_param(key, item, new_encryption_key, depth + 1) for item in json_array]
+    if not (
+        isinstance(value, str)
+        and value
+        and is_sensitive_callback_key(key)
+        and not value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
+    ):
+        return value
+    try:
+        return CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value, new_encryption_key=new_encryption_key)
+    except Exception:  # noqa: BLE001  # no salt key or master key configured: store the value as written
+        return value
+
+
+def _decrypted_param(key: str, value: object, depth: int = 0) -> object:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return value
+    json_object: Final = _as_json_object(value)
+    if json_object is not None:
+        return {k: _decrypted_param(k, v, depth + 1) for k, v in json_object.items()}
+    json_array: Final = _as_json_array(value)
+    if json_array is not None:
+        return [_decrypted_param(key, item, depth + 1) for item in json_array]
+    if not (isinstance(value, str) and value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)):
+        return value
+    decrypted: Final = decrypt_value_helper(
+        value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX),
+        key=key,
+        exception_type="debug",
+        return_original_value=False,
+    )
+    return value if decrypted is None else decrypted
+
+
+def encrypt_guardrail_litellm_params(
+    litellm_params: Mapping[str, object], new_encryption_key: str | None = None
+) -> dict[str, object]:
+    """Encrypt every string stored under a sensitive key (at any dict depth) for the guardrails table."""
+    return {key: _encrypted_param(key, value, new_encryption_key) for key, value in litellm_params.items()}
+
+
+def decrypt_guardrail_litellm_params(litellm_params: Mapping[str, object]) -> dict[str, object]:
+    """Decrypt values written by encrypt_guardrail_litellm_params; plaintext values pass through unchanged."""
+    return {key: _decrypted_param(key, value) for key, value in litellm_params.items()}
+
+
+def guardrail_from_db_row(row: Iterable[tuple[str, object]]) -> Guardrail:
+    """Build a Guardrail from a guardrails table row with its litellm_params decrypted."""
+    fields: Final = dict(row)
+    stored_params: Final = _as_json_object(fields.get("litellm_params"))
+    if stored_params is None:
+        return Guardrail(**fields)
+    return Guardrail(**{**fields, "litellm_params": decrypt_guardrail_litellm_params(stored_params)})
+
+
+async def _rotate_guardrail_row(
+    prisma_client: PrismaClient,
+    row: "prisma_models.LiteLLM_GuardrailsTable | None",
+    encryption_key: str,
+    attempts_left: int = GUARDRAIL_ROTATION_ATTEMPTS,
+) -> int:
+    """Re-encrypt one row's params under encryption_key with a compare-and-set on updated_at.
+    A row edited since it was read is re-read and retried, up to attempts_left writes. Returns 1 when rewritten."""
+    if row is None or not isinstance(row.litellm_params, Mapping):
+        return 0
+    rotated_params: Final = encrypt_guardrail_litellm_params(
+        decrypt_guardrail_litellm_params(row.litellm_params), new_encryption_key=encryption_key
+    )
+    if rotated_params == row.litellm_params:
+        return 0
+    if await _guardrail_table(prisma_client).update_many(
+        where={"guardrail_id": row.guardrail_id, "updated_at": row.updated_at},
+        data={"litellm_params": safe_dumps(rotated_params)},
+    ):
+        return 1
+    if attempts_left <= 1:
+        verbose_proxy_logger.warning(
+            "Guardrail %s kept changing during master key rotation; its secrets were not re-encrypted",
+            row.guardrail_id,
+        )
+        return 0
+    latest_row: Final = await _guardrail_table(prisma_client).find_unique(where={"guardrail_id": row.guardrail_id})
+    return await _rotate_guardrail_row(prisma_client, latest_row, encryption_key, attempts_left - 1)
 
 
 guardrail_initializer_registry: Final = {
@@ -295,7 +422,7 @@ class GuardrailRegistry:
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
                 litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
-            litellm_params: Final[str] = safe_dumps(litellm_params_dict)
+            litellm_params: Final[str] = safe_dumps(encrypt_guardrail_litellm_params(litellm_params_dict))
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
@@ -341,7 +468,7 @@ class GuardrailRegistry:
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
                 litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
-            litellm_params: Final[str] = safe_dumps(litellm_params_dict)
+            litellm_params: Final[str] = safe_dumps(encrypt_guardrail_litellm_params(litellm_params_dict))
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
@@ -357,8 +484,7 @@ class GuardrailRegistry:
             if updated_guardrail is None:
                 raise ValueError(f"Guardrail not found, passed guardrail_id={guardrail_id}")
 
-            # Convert to dict and return
-            return dict(updated_guardrail)
+            return dict(guardrail_from_db_row(updated_guardrail))
         except Exception as e:
             raise Exception(f"Error updating guardrail in DB: {e}")
 
@@ -378,7 +504,7 @@ class GuardrailRegistry:
 
             guardrails: Final[list[Guardrail]] = []
             for guardrail in guardrails_from_db:
-                guardrails.append(Guardrail(**(dict(guardrail))))
+                guardrails.append(guardrail_from_db_row(guardrail))
 
             return guardrails
         except Exception as e:
@@ -394,7 +520,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return guardrail_from_db_row(guardrail)
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
@@ -410,9 +536,19 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return guardrail_from_db_row(guardrail)
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
+
+    @staticmethod
+    async def rotate_guardrail_params_master_key(prisma_client: PrismaClient, new_master_key: str) -> int:
+        """Re-encrypt every guardrail row's sensitive litellm_params under the key the proxy decrypts with after the
+        rotation (LITELLM_SALT_KEY when set, otherwise new_master_key). Returns the number of rows rewritten."""
+        salt_key: Final = os.environ.get(SALT_KEY_ENV_VAR)
+        encryption_key: Final = new_master_key if salt_key is None else salt_key
+        rows: Final = await _guardrail_table(prisma_client).find_many()
+        rotated = [await _rotate_guardrail_row(prisma_client, row, encryption_key) for row in rows]
+        return sum(rotated)
 
 
 def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: LitellmParams) -> None:
@@ -857,9 +993,40 @@ class InMemoryGuardrailHandler:
                     verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
             raise ValueError(f"Guardrail initialization failed: {init_error}") from init_error
 
+    def _with_loaded_values_where_undecryptable(self, guardrail_id: str, guardrail: Guardrail) -> Guardrail:
+        """Swap each DB litellm_params value that did not decrypt with the current key for the loaded guardrail's value,
+        or keep the loaded guardrail whole when it has no value for one of them."""
+        existing: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
+        stored_params: Final = guardrail.get("litellm_params")
+        db_params: Final = _as_json_object(
+            stored_params.model_dump() if isinstance(stored_params, BaseModel) else stored_params
+        )
+        if existing is None or db_params is None or not contains_encrypted_marker(db_params):
+            return guardrail
+        loaded_params: Final = self._normalize_litellm_params_for_comparison(existing.get("litellm_params"))
+        verbose_proxy_logger.warning(
+            "Guardrail %s has litellm_params that do not decrypt with the current key; keeping the loaded values for "
+            "them. Restart the proxy if the master key was rotated.",
+            guardrail_id,
+        )
+        if loaded_params is None or any(
+            contains_encrypted_marker(value) and loaded_params.get(key) is None for key, value in db_params.items()
+        ):
+            return existing
+        return Guardrail(
+            **{
+                **guardrail,
+                "litellm_params": {
+                    key: loaded_params.get(key) if contains_encrypted_marker(value) else value
+                    for key, value in db_params.items()
+                },
+            }
+        )
+
     def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
         """
         Sync a guardrail from DB - initializes if new, re-initializes if changed.
+        DB values that do not decrypt with the current key keep the loaded guardrail's values.
         This is the method to call during DB polling.
         """
         guardrail_id: Final = guardrail.get("guardrail_id")
@@ -867,13 +1034,14 @@ class InMemoryGuardrailHandler:
             verbose_proxy_logger.error("Cannot sync guardrail without guardrail_id")
             return None
 
-        if self._has_guardrail_params_changed(guardrail_id, guardrail):
-            guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
+        synced: Final = self._with_loaded_values_where_undecryptable(guardrail_id, guardrail)
+        if self._has_guardrail_params_changed(guardrail_id, synced):
+            guardrail_name: Final = synced.get("guardrail_name", "Unknown")
             verbose_proxy_logger.info(
                 "Guardrail '%s' (ID: %s) params changed, re-initializing...", guardrail_name, guardrail_id
             )
             return self.reinitialize_guardrail(
-                guardrail=guardrail,
+                guardrail=synced,
                 config_file_path=config_file_path,
                 source="db",
             )

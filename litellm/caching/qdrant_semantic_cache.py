@@ -12,6 +12,7 @@ import ast
 import asyncio
 import json
 import os
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
@@ -35,6 +36,8 @@ from ._embedding_router import (
     truncate_embedding_input,
 )
 from .base_cache import BaseCache
+
+_WAIT_FOR_INDEXING: Final = MappingProxyType({"wait": "true"})
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -65,8 +68,8 @@ class QdrantSemanticCache(BaseCache):
         embedding_timeout: float | None = None,
     ):
         from litellm.llms.custom_httpx.http_handler import (
-            _get_httpx_client,
             get_async_httpx_client,
+            get_httpx_client,
             httpxSpecialProvider,
         )
         from litellm.secret_managers.main import get_secret_str
@@ -109,7 +112,7 @@ class QdrantSemanticCache(BaseCache):
 
         self.headers = headers
 
-        self.sync_client = _get_httpx_client()
+        self.sync_client = get_httpx_client()
         self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Caching)
 
         if quantization_config is None:
@@ -313,6 +316,7 @@ class QdrantSemanticCache(BaseCache):
         self.sync_client.put(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
             headers=self.headers,
+            params=_WAIT_FOR_INDEXING,
             json=data,
         )
 
@@ -422,6 +426,7 @@ class QdrantSemanticCache(BaseCache):
         await self.async_client.put(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
             headers=self.headers,
+            params=_WAIT_FOR_INDEXING,
             json=data,
         )
 

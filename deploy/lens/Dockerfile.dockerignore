@@ -1,0 +1,12 @@
+**
+!deploy/
+!deploy/lens/
+!deploy/lens/requirements.lock
+!deploy/lens/python_policy.c
+!deploy/lens/python_runtime.py
+!litellm/
+!litellm/proxy/
+!litellm/proxy/lens/
+!litellm/proxy/lens/*.py
+!litellm/proxy/lens/prompts/
+!litellm/proxy/lens/prompts/**
