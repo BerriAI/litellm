@@ -12526,6 +12526,14 @@ class TestGetAllowedFailsFromPolicy:
         exc = litellm.NotFoundError("404", "openai", "gpt-4")
         assert router.get_allowed_fails_from_policy(exc) == 1
 
+    def test_payment_required_error_uses_bad_request_allowed_fails(self):
+        assert (
+            self._make_router(BadRequestErrorAllowedFails=6).get_allowed_fails_from_policy(
+                litellm.PaymentRequiredError("402 error", "openai", "gpt-4")
+            )
+            == 6
+        )
+
     def test_unmatched_exception_returns_none(self):
         router = self._make_router(InternalServerErrorAllowedFails=5)
         exc = litellm.RateLimitError("429", "openai", "gpt-4")
