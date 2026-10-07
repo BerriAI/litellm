@@ -27,6 +27,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -1843,12 +1844,8 @@ class BedrockEventStreamDecoderBase:
     """
 
     def __init__(self):
-        try:
-            from botocore.parsers import EventStreamJSONParser
-        except ModuleNotFoundError as error:
-            if error.name != "botocore":
-                raise
-            raise ImportError("Bedrock event decoding requires boto3. Run 'pip install boto3'.") from error
+        ensure_optional_import("botocore")
+        from botocore.parsers import EventStreamJSONParser
 
         self.parser = EventStreamJSONParser()
 
@@ -2068,11 +2065,9 @@ class CommonBatchFilesUtils:
         Returns:
             Tuple of (signed_headers, signed_data)
         """
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
         aws_region_name: Final = self._base_aws.get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final = self._base_aws.resolve_credentials(

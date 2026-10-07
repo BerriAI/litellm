@@ -2376,7 +2376,9 @@ def exception_type(
         return original_exception
     if _is_guardrail_block(original_exception):
         return original_exception
-    if custom_llm_provider in ("bedrock", "bedrock_mantle") and isinstance(original_exception, ImportError):
+    if isinstance(original_exception, ImportError) and (
+        original_exception.name in ("boto3", "botocore") or custom_llm_provider in ("bedrock", "bedrock_mantle")
+    ):
         return original_exception
     exception_mapping_worked = False
     exception_provider = custom_llm_provider

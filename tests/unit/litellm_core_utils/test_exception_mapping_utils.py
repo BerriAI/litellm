@@ -2384,3 +2384,18 @@ def _pre_call_utils_httpx(
             original_function = litellm.atext_completion
 
     return data, original_function, mapped_target
+
+
+@pytest.mark.parametrize("provider", ["sagemaker", "sagemaker_chat", "aws_polly", "openai"])
+@pytest.mark.parametrize("dependency", ["boto3", "botocore"])
+def test_missing_aws_dependency_is_not_mapped_to_provider_failure(provider, dependency):
+    failure = ModuleNotFoundError(f"No module named '{dependency}'", name=dependency)
+    assert exception_type(
+        model="test-model", original_exception=failure, custom_llm_provider=provider
+    ) is failure
+
+
+@pytest.mark.parametrize("failure", [ImportError("broken import"), ModuleNotFoundError(name="unrelated_dependency")])
+def test_non_aws_import_failure_keeps_provider_mapping(failure):
+    with pytest.raises(litellm.APIConnectionError):
+        exception_type(model="test-model", original_exception=failure, custom_llm_provider="openai")

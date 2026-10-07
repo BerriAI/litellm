@@ -4203,3 +4203,15 @@ def test_direct_credentials_report_missing_aws_without_masking_other_imports(mis
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure
+
+
+def test_shared_json_signer_preserves_body_and_signs_for_the_requested_service():
+    from litellm.llms.bedrock.base_aws_llm import sign_aws_json_post
+
+    body = '{"message":"ping"}'
+    request = sign_aws_json_post(
+        lambda: Credentials("test-key", "test-secret"), "s3", "us-west-2",
+        "https://s3.us-west-2.amazonaws.com", body, {"Content-Type": "application/json"},
+    )
+    assert request.body == body
+    assert "/us-west-2/s3/aws4_request" in request.headers["Authorization"]

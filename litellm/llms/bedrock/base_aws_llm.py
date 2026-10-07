@@ -33,6 +33,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn, get_aws_dns_suffix
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag
@@ -455,74 +456,70 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         # iam_cache: static keys, ambient env (including skip-AssumeRole path), web identity, and
         # AssumeRole. Do not cache profile / explicit session-token paths here.
         #########################################################
-        try:
-            if self._is_auth_with_web_identity_token(
-                aws_web_identity_token,
-                aws_role_name,
-                aws_session_name,
-            ):
-                return self._get_or_set_cached_credentials(
-                    args,
-                    lambda: self._auth_with_web_identity_token(
-                        aws_web_identity_token=cast(str, aws_web_identity_token),
-                        aws_role_name=cast(str, aws_role_name),
-                        aws_session_name=cast(str, aws_session_name),
-                        aws_region_name=aws_region_name,
-                        aws_sts_endpoint=aws_sts_endpoint,
-                        aws_external_id=aws_external_id,
-                        ssl_verify=ssl_verify,
-                    ),
-                )
-            elif self._is_auth_with_aws_role(aws_role_name):
-                return self._get_or_set_cached_credentials(
-                    args,
-                    lambda: self._resolve_role_credentials(
-                        aws_access_key_id=aws_access_key_id,
-                        aws_secret_access_key=aws_secret_access_key,
-                        aws_session_token=aws_session_token,
-                        aws_role_name=cast(str, aws_role_name),
-                        aws_session_name=aws_session_name,
-                        aws_region_name=aws_region_name,
-                        aws_sts_endpoint=aws_sts_endpoint,
-                        aws_external_id=aws_external_id,
-                        aws_session_tags=session_tags,
-                        ssl_verify=ssl_verify,
-                    ),
-                )
+        ensure_optional_import("botocore")
+        if self._is_auth_with_web_identity_token(
+            aws_web_identity_token,
+            aws_role_name,
+            aws_session_name,
+        ):
+            return self._get_or_set_cached_credentials(
+                args,
+                lambda: self._auth_with_web_identity_token(
+                    aws_web_identity_token=cast(str, aws_web_identity_token),
+                    aws_role_name=cast(str, aws_role_name),
+                    aws_session_name=cast(str, aws_session_name),
+                    aws_region_name=aws_region_name,
+                    aws_sts_endpoint=aws_sts_endpoint,
+                    aws_external_id=aws_external_id,
+                    ssl_verify=ssl_verify,
+                ),
+            )
+        elif self._is_auth_with_aws_role(aws_role_name):
+            return self._get_or_set_cached_credentials(
+                args,
+                lambda: self._resolve_role_credentials(
+                    aws_access_key_id=aws_access_key_id,
+                    aws_secret_access_key=aws_secret_access_key,
+                    aws_session_token=aws_session_token,
+                    aws_role_name=cast(str, aws_role_name),
+                    aws_session_name=aws_session_name,
+                    aws_region_name=aws_region_name,
+                    aws_sts_endpoint=aws_sts_endpoint,
+                    aws_external_id=aws_external_id,
+                    aws_session_tags=session_tags,
+                    ssl_verify=ssl_verify,
+                ),
+            )
 
-            elif self._is_auth_with_aws_profile(aws_profile_name):
-                credentials, _cache_ttl = self._auth_with_aws_profile(cast(str, aws_profile_name))
-                return credentials
-            elif self._is_auth_with_aws_session_token_tuple(
-                aws_access_key_id,
-                aws_secret_access_key,
-                aws_session_token,
-            ):
-                credentials, _cache_ttl = self._auth_with_aws_session_token(
+        elif self._is_auth_with_aws_profile(aws_profile_name):
+            credentials, _cache_ttl = self._auth_with_aws_profile(cast(str, aws_profile_name))
+            return credentials
+        elif self._is_auth_with_aws_session_token_tuple(
+            aws_access_key_id,
+            aws_secret_access_key,
+            aws_session_token,
+        ):
+            credentials, _cache_ttl = self._auth_with_aws_session_token(
+                aws_access_key_id=cast(str, aws_access_key_id),
+                aws_secret_access_key=cast(str, aws_secret_access_key),
+                aws_session_token=cast(str, aws_session_token),
+            )
+            return credentials
+        elif self._is_auth_with_access_key_and_secret_key(
+            aws_access_key_id,
+            aws_secret_access_key,
+            aws_region_name,
+        ):
+            return self._get_or_set_cached_credentials(
+                args,
+                lambda: self._auth_with_access_key_and_secret_key(
                     aws_access_key_id=cast(str, aws_access_key_id),
                     aws_secret_access_key=cast(str, aws_secret_access_key),
-                    aws_session_token=cast(str, aws_session_token),
-                )
-                return credentials
-            elif self._is_auth_with_access_key_and_secret_key(
-                aws_access_key_id,
-                aws_secret_access_key,
-                aws_region_name,
-            ):
-                return self._get_or_set_cached_credentials(
-                    args,
-                    lambda: self._auth_with_access_key_and_secret_key(
-                        aws_access_key_id=cast(str, aws_access_key_id),
-                        aws_secret_access_key=cast(str, aws_secret_access_key),
-                        aws_region_name=cast(str, aws_region_name),
-                    ),
-                )
-            else:
-                return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
-        except ModuleNotFoundError as error:
-            if error.name not in {"boto3", "botocore"}:
-                raise
-            raise ImportError("Missing boto3 for AWS credentials. Run 'pip install boto3'.") from error
+                    aws_region_name=cast(str, aws_region_name),
+                ),
+            )
+        else:
+            return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
 
     def resolve_credentials(self, auth_params: AwsAuthParams, aws_region_name: str | None) -> Credentials:
         return self.get_credentials(
@@ -789,6 +786,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 aws_region_name = standard_aws_region_name
         if aws_region_name is None:
             try:
+                ensure_optional_import("boto3")
                 import boto3
 
                 with tracer.trace("boto3.Session()"):
@@ -972,6 +970,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
         # For ECS/EC2: call sts:GetCallerIdentity to check if already running as the role
         try:
+            ensure_optional_import("boto3")
             import boto3
 
             with tracer.trace("boto3.client(sts).get_caller_identity"):
@@ -1031,6 +1030,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         """
         Authenticate with AWS Web Identity Token
         """
+        ensure_optional_import("boto3")
         import boto3
 
         verbose_logger.debug(
@@ -1130,6 +1130,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_session_tags: Sequence[AwsSessionTag] | None = None,
     ) -> dict:
         """Handle cross-account role assumption for IRSA."""
+        ensure_optional_import("boto3")
         import boto3
 
         verbose_logger.debug("Cross-account role assumption detected")
@@ -1195,6 +1196,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_session_tags: Sequence[AwsSessionTag] | None = None,
     ) -> dict:
         """Handle same-account role assumption for IRSA."""
+        ensure_optional_import("boto3")
         import boto3
 
         irsa_sts_kwargs: Final = self._build_sts_client_kwargs(
@@ -1301,6 +1303,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         """
         Authenticate with AWS Role
         """
+        ensure_optional_import("boto3")
         import boto3
         from botocore.credentials import Credentials
 
@@ -1424,6 +1427,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         """
         Authenticate with AWS profile
         """
+        ensure_optional_import("boto3")
         import boto3
 
         # uses auth values from AWS profile usually stored in ~/.aws/credentials
@@ -1462,6 +1466,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         """
         Authenticate with AWS Access Key and Secret Key
         """
+        ensure_optional_import("boto3")
         import boto3
 
         # Check if credentials are already in cache. These credentials have no expiry time.
@@ -1482,6 +1487,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         """
         Authenticate with AWS Environment Variables
         """
+        ensure_optional_import("boto3")
         import boto3
 
         with tracer.trace("boto3.Session()"):
@@ -1620,14 +1626,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 body=bearer_request.content,
             )
         else:
-            try:
-                from botocore.auth import SigV4Auth
-                from botocore.awsrequest import AWSRequest
-                from botocore.exceptions import NoCredentialsError
-            except ModuleNotFoundError as error:
-                if error.name not in {"boto3", "botocore"}:
-                    raise
-                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.") from error
+            ensure_optional_import("botocore")
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from botocore.exceptions import NoCredentialsError
 
             if credentials is None:
                 raise NoCredentialsError()
@@ -1720,14 +1722,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             return headers, json.dumps(request_data).encode()
 
         # If no bearer token is set, proceed with the existing SigV4 authentication
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
-        except ModuleNotFoundError as error:
-            if error.name not in {"boto3", "botocore"}:
-                raise
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.") from error
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+        from botocore.credentials import Credentials
 
         auth_params: Final = AwsAuthParams.model_validate(optional_params)
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
@@ -1773,13 +1771,9 @@ def sign_aws_json_post(
     body: str,
     headers: Mapping[str, str],
 ) -> AWSPreparedRequest:
-    try:
-        from botocore.auth import SigV4Auth
-        from botocore.awsrequest import AWSRequest
-    except ModuleNotFoundError as error:
-        if error.name not in {"boto3", "botocore"}:
-            raise
-        raise ImportError(f"Missing boto3 to call {service_name}. Run 'pip install boto3'.") from error
+    ensure_optional_import("botocore")
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
 
     aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=headers)
     SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)

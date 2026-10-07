@@ -6017,3 +6017,38 @@ async def test_transcription_model_names_pass_through(
     assert response.text == "hello"
     assert route.call_count == 1
     assert f'name="model"\r\n\r\n{model}\r\n'.encode() in route.calls[0].request.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("model", ["sagemaker/test-endpoint", "sagemaker_chat/test-endpoint"])
+async def test_sagemaker_missing_dependency_remains_actionable_with_retries(monkeypatch, use_async, model):
+    import sys
+
+    monkeypatch.setattr(litellm, "num_retries", None)
+    for dependency in ("botocore", "boto3", "tenacity"):
+        monkeypatch.setitem(sys.modules, dependency, None)
+    if use_async:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            await litellm.acompletion(model=model, messages=[{"role": "user", "content": "ping"}], num_retries=1)
+    else:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            litellm.completion(model=model, messages=[{"role": "user", "content": "ping"}], num_retries=1)
+    assert caught.value.name == "botocore"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_polly_missing_dependency_remains_actionable_with_retries(monkeypatch, use_async):
+    import sys
+
+    monkeypatch.setattr(litellm, "num_retries", None)
+    for dependency in ("botocore", "boto3", "tenacity"):
+        monkeypatch.setitem(sys.modules, dependency, None)
+    if use_async:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            await litellm.aspeech(model="aws_polly/standard", input="ping", voice="Joanna", num_retries=1)
+    else:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            litellm.speech(model="aws_polly/standard", input="ping", voice="Joanna", num_retries=1)
+    assert caught.value.name == "botocore"

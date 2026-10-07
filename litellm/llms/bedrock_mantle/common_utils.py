@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from functools import partial
 from typing import Final, Literal
 
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
 from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
 from litellm.secret_managers.main import get_secret_str
@@ -93,17 +94,13 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         )
         if bearer:
             return sign(headers=headers, optional_params=optional_params)
-        try:
-            from botocore.exceptions import (
-                CredentialRetrievalError,
-                NoCredentialsError,
-                PartialCredentialsError,
-                ProfileNotFound,
-            )
-        except ModuleNotFoundError as error:
-            if error.name != "botocore":
-                raise
-            raise ImportError("AWS signing requires boto3. Run 'pip install boto3'.") from error
+        ensure_optional_import("botocore")
+        from botocore.exceptions import (
+            CredentialRetrievalError,
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+        )
 
         # Pin the credential-scope region to the region of the actual signing URL
         # so the SigV4 scope and URL host can never disagree, even when a stale
