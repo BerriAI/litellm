@@ -438,6 +438,20 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
             </MountedFormField>
 
             <MountedFormField
+              name="kubernetes_pod_discovery"
+              label={labelWithHint(
+                "Kubernetes pod discovery",
+                "Treat the API Base hostname as a Kubernetes headless service: resolve it to its ready pod IPs " +
+                  "and spread requests across the pods. LiteLLM must run inside the same cluster.",
+              )}
+              className="mb-4"
+            >
+              {(control) => (
+                <Switch id={control.id} checked={control.value === true} onCheckedChange={control.onChange} />
+              )}
+            </MountedFormField>
+
+            <MountedFormField
               name="cache_control"
               label={labelWithHint(CACHE_CONTROL_LABEL, CACHE_CONTROL_TOOLTIP)}
               className="mb-4"

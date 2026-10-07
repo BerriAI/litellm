@@ -7,6 +7,12 @@ from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_ran
 
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
+KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS: Final = float(
+    os.getenv("KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS", "5")
+)
+KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS: Final = float(
+    os.getenv("KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS", "300")
+)
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
 ROUTER_MAX_FALLBACKS: Final = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
