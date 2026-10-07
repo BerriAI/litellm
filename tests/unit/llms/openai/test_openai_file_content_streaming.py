@@ -1,5 +1,5 @@
 import pytest
-from typing import AsyncIterator, Iterator, cast
+from typing import AsyncIterator, Final, Iterator, cast
 
 import litellm
 from litellm.files import main as files_main
@@ -328,112 +328,75 @@ def test_file_content_streaming_passes_exception_to_context_manager_exit():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport_module", ["httpx", "httpx2"])
-async def test_afile_content_streaming_maps_a_read_timeout_to_litellm_timeout(monkeypatch, transport_module):
-    transport = pytest.importorskip(transport_module)
-    raw_timeout = transport.ReadTimeout("timed out")
+async def test_afile_content_streaming_maps_a_read_timeout_to_litellm_timeout(transport_module: str):
+    transport: Final = pytest.importorskip(transport_module)
+    raw_timeout: Final = transport.ReadTimeout("timed out")
 
-    async def _mock_stream():
+    async def _stalled_stream() -> AsyncIterator[bytes]:
         yield b"hello"
         raise raw_timeout
 
-    monkeypatch.setattr(
-        files_main.openai_files_instance,
-        "file_content_streaming",
-        lambda **kwargs: FileContentStreamingResult(stream_iterator=_mock_stream(), headers={}),
+    stream: Final = FileContentStreamingResponse(
+        stream_iterator=_stalled_stream(),
+        file_id="file-abc123",
+        model=None,
+        custom_llm_provider="openai",
+        logging_obj=None,
     )
 
-    stream_result = cast(
-        FileContentStreamingResult,
-        await files_main.afile_content(
-            file_id="file-abc123",
-            custom_llm_provider="openai",
-            api_key="sk-test",
-            api_base="https://api.openai.com/v1",
-            stream=True,
-        ),
-    )
-
-    received: list[bytes] = []
-
-    async def _drain() -> None:
-        async for part in cast(AsyncIterator[bytes], stream_result.stream_iterator):
-            received.append(part)
+    assert await stream.__anext__() == b"hello"
 
     with pytest.raises(litellm.Timeout) as excinfo:
-        await _drain()
+        await stream.__anext__()
 
-    assert received == [b"hello"]
     assert excinfo.value.__cause__ is raw_timeout
     assert excinfo.value.llm_provider == "openai"
 
 
 @pytest.mark.parametrize("transport_module", ["httpx", "httpx2"])
-def test_file_content_streaming_maps_a_dropped_connection_to_litellm_api_connection_error(
-    monkeypatch, transport_module
-):
-    transport = pytest.importorskip(transport_module)
-    raw_error = transport.ReadError("peer closed connection")
+def test_file_content_streaming_maps_a_dropped_connection_to_litellm_api_connection_error(transport_module: str):
+    transport: Final = pytest.importorskip(transport_module)
+    raw_error: Final = transport.ReadError("peer closed connection")
 
-    def _mock_stream():
+    def _dropped_stream() -> Iterator[bytes]:
         yield b"hello"
         raise raw_error
 
-    monkeypatch.setattr(
-        files_main.openai_files_instance,
-        "file_content_streaming",
-        lambda **kwargs: FileContentStreamingResult(stream_iterator=_mock_stream(), headers={}),
+    stream: Final = FileContentStreamingResponse(
+        stream_iterator=_dropped_stream(),
+        file_id="file-abc123",
+        model=None,
+        custom_llm_provider="openai",
+        logging_obj=None,
     )
 
-    stream_result = cast(
-        FileContentStreamingResult,
-        files_main.file_content(
-            file_id="file-abc123",
-            custom_llm_provider="openai",
-            api_key="sk-test",
-            api_base="https://api.openai.com/v1",
-            stream=True,
-        ),
-    )
-
-    received: list[bytes] = []
-
-    def _drain() -> None:
-        for part in cast(Iterator[bytes], stream_result.stream_iterator):
-            received.append(part)
+    assert next(stream) == b"hello"
 
     with pytest.raises(litellm.APIConnectionError) as excinfo:
-        _drain()
+        next(stream)
 
-    assert received == [b"hello"]
     assert excinfo.value.__cause__ is raw_error
     assert excinfo.value.llm_provider == "openai"
 
 
-def test_file_content_streaming_leaves_a_non_transport_failure_as_is(monkeypatch):
-    raw_error = ValueError("decoder failure")
+def test_file_content_streaming_leaves_a_non_transport_failure_as_is():
+    raw_error: Final = ValueError("decoder failure")
 
-    def _mock_stream():
+    def _broken_stream() -> Iterator[bytes]:
         yield b"hello"
         raise raw_error
 
-    monkeypatch.setattr(
-        files_main.openai_files_instance,
-        "file_content_streaming",
-        lambda **kwargs: FileContentStreamingResult(stream_iterator=_mock_stream(), headers={}),
+    stream: Final = FileContentStreamingResponse(
+        stream_iterator=_broken_stream(),
+        file_id="file-abc123",
+        model=None,
+        custom_llm_provider="openai",
+        logging_obj=None,
     )
 
-    stream_result = cast(
-        FileContentStreamingResult,
-        files_main.file_content(
-            file_id="file-abc123",
-            custom_llm_provider="openai",
-            api_key="sk-test",
-            api_base="https://api.openai.com/v1",
-            stream=True,
-        ),
-    )
+    assert next(stream) == b"hello"
 
     with pytest.raises(ValueError, match="decoder failure") as excinfo:
-        list(cast(Iterator[bytes], stream_result.stream_iterator))
+        next(stream)
 
     assert excinfo.value is raw_error

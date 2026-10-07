@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+from collections.abc import AsyncIterator
 from types import ModuleType
 from typing import Final
 from unittest.mock import Mock
@@ -12,7 +13,7 @@ from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm.llms.openai.openai import OpenAIChatCompletion
-from litellm.types.utils import ImageResponse
+from litellm.types.utils import ImageResponse, ModelResponseStream
 
 
 @pytest.mark.parametrize(
@@ -186,7 +187,7 @@ async def test_acompletion_ends_a_finished_stream_cleanly_when_the_connection_dr
     runs on (httpx2 on openai 3, which 3.25+ wraps in APIConnectionError); the stream still ends cleanly."""
     sdk_httpx: Final = _sdk_httpx()
 
-    def chunk(delta: dict, finish: str | None) -> bytes:
+    def chunk(delta: dict[str, str], finish: str | None) -> bytes:
         body: Final = {
             "id": "chatcmpl-drop",
             "object": "chat.completion.chunk",
@@ -197,12 +198,12 @@ async def test_acompletion_ends_a_finished_stream_cleanly_when_the_connection_dr
         return f"data: {json.dumps(body)}\n\n".encode()
 
     class DroppedAfterFinish(sdk_httpx.AsyncByteStream):
-        async def __aiter__(self):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
             yield chunk({"role": "assistant", "content": "Hel"}, None)
             yield chunk({"content": "lo"}, "stop")
             raise sdk_httpx.ReadError("peer reset the connection before [DONE]")
 
-    def respond(request):
+    def respond(_request: object) -> object:
         return sdk_httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=DroppedAfterFinish())
 
     async with sdk_httpx.AsyncClient(transport=sdk_httpx.MockTransport(respond)) as http_client:
@@ -216,13 +217,10 @@ async def test_acompletion_ends_a_finished_stream_cleanly_when_the_connection_dr
             num_retries=0,
             max_retries=0,
         )
-        chunks: Final = []
+        async def drain() -> list[ModelResponseStream]:
+            return [part async for part in stream]
 
-        async def drain() -> None:
-            async for part in stream:
-                chunks.append(part)
-
-        await asyncio.wait_for(drain(), timeout=10)
+        chunks: Final = await asyncio.wait_for(drain(), timeout=10)
         assert (
             "".join(part.choices[0].delta.content or "" for part in chunks if part.choices and part.choices[0].delta)
             == "Hello"
