@@ -278,7 +278,7 @@ pub fn normalize_response(
         None => model.to_string(),
     };
     Ok(LiteLLMOcrResponse {
-        extra_fields: ocr_data
+        extra: ocr_data
             .iter()
             .filter(|(name, _)| {
                 !matches!(
@@ -657,7 +657,7 @@ mod tests {
             assert_eq!(normalized.pages.len(), 1);
             assert_eq!(normalized.pages[0].index, 2);
             assert_eq!(normalized.pages[0].markdown, "");
-            assert!(normalized.pages[0].extra_fields.is_empty());
+            assert!(normalized.pages[0].extra.is_empty());
             assert_eq!(
                 normalized
                     .usage_info

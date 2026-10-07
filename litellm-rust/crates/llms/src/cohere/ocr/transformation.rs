@@ -111,7 +111,7 @@ impl BaseOcrConfig for CohereParseConfig {
     fn get_health_check_document(&self) -> OcrDocument {
         OcrDocument::ImageUrl {
             image_url: COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI.into(),
-            extra_fields: Default::default(),
+            extra: Default::default(),
         }
     }
 
@@ -308,7 +308,7 @@ fn normalize_page(page: CoherePage, position: usize) -> Result<OcrPage, Error> {
         }
         None => (String::new(), None),
     };
-    let extra_fields = page
+    let extra = page
         .blocks
         .map(|blocks| {
             (
@@ -322,7 +322,7 @@ fn normalize_page(page: CoherePage, position: usize) -> Result<OcrPage, Error> {
         index,
         markdown,
         images,
-        extra_fields,
+        extra,
         ..Default::default()
     })
 }
@@ -417,7 +417,7 @@ mod tests {
         let response = normalize_response("parse", response).unwrap();
         assert_eq!(response.pages[0].index, 2);
         assert_eq!(response.usage_info.unwrap().pages_processed, Some(0));
-        assert_eq!(response.pages[0].extra_fields["blocks"], blocks);
+        assert_eq!(response.pages[0].extra["blocks"], blocks);
         let images = response.pages[0].images.as_ref().unwrap();
         assert_eq!(
             images[0].bbox.as_ref().unwrap().x,
@@ -425,8 +425,8 @@ mod tests {
                 serde_json::Number::from(1)
             ))
         );
-        assert_eq!(images[0].extra_fields["category"], "future");
-        assert_eq!(images[0].extra_fields.get("extension"), Some(&Value::Null));
+        assert_eq!(images[0].extra["category"], "future");
+        assert_eq!(images[0].extra.get("extension"), Some(&Value::Null));
         assert_eq!(images[1].image_base64.as_deref(), Some("encoded"));
         assert!(images[1].bbox.is_none());
     }
@@ -519,17 +519,17 @@ mod tests {
             original_image["bounding_box"]
         );
         assert_eq!(
-            image.extra_fields["bounding_box_normalized"],
+            image.extra["bounding_box_normalized"],
             original_image["bounding_box_normalized"]
         );
-        assert_eq!(image.extra_fields["id"], original_image["id"]);
-        assert_eq!(image.extra_fields["description"], "scan");
-        assert_eq!(image.extra_fields["category"], "logo");
-        assert_eq!(image.extra_fields["provider_extension"], "preserved");
+        assert_eq!(image.extra["id"], original_image["id"]);
+        assert_eq!(image.extra["description"], "scan");
+        assert_eq!(image.extra["category"], "logo");
+        assert_eq!(image.extra["provider_extension"], "preserved");
         assert_eq!(normalized.pages[1].index, 1);
         assert_eq!(normalized.pages[1].markdown, "");
         assert_eq!(
-            normalized.pages[1].extra_fields["blocks"][0]["text"]["content"],
+            normalized.pages[1].extra["blocks"][0]["text"]["content"],
             "total"
         );
         assert_eq!(normalized.usage_info.unwrap().pages_processed, Some(3));
@@ -631,7 +631,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            normalized.pages[0].extra_fields["blocks"],
+            normalized.pages[0].extra["blocks"],
             payload["pages"][0]["blocks"]
         );
         assert_eq!(normalized.pages[0].markdown, "");

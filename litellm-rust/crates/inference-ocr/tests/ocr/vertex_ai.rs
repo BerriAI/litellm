@@ -149,10 +149,7 @@ async fn deepseek_is_served_at_the_openai_compatible_endpoint() {
     let response = perform(request).await.unwrap();
 
     assert_eq!(response.pages[0].markdown, "recognized");
-    assert_eq!(
-        response.usage_info.unwrap().extra_fields["prompt_tokens"],
-        1
-    );
+    assert_eq!(response.usage_info.unwrap().extra["prompt_tokens"], 1);
     let sent = only_request(&upstream).await;
     assert_eq!(
         sent.url.path(),

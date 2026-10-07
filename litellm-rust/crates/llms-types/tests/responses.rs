@@ -1,7 +1,10 @@
 use litellm_llms_types::{
-    formats::responses::streaming_websocket::{ResponsesWsEvent, ResponsesWsEventType},
+    formats::responses::streaming_websocket::{
+        ResponsesErrorFrame, ResponsesWsEvent, ResponsesWsEventType,
+    },
     formats::responses::{
-        ResponsesAnnotation, ResponsesApiResponse, ResponsesContentPart, ResponsesOutputItem,
+        ResponsesAnnotation, ResponsesApiResponse, ResponsesCodeOutput, ResponsesContentPart,
+        ResponsesOutputItem, ResponsesWebSearchAction,
     },
     recognized::Recognized,
 };
@@ -77,6 +80,19 @@ fn response_output_exposes_content_annotations_and_function_arguments() {
 }
 
 #[rstest]
+fn websocket_error_frame_round_trips_from_value() {
+    let wire = json!({
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "missing model"
+        }
+    });
+    let parsed: ResponsesErrorFrame = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+}
+
+#[rstest]
 #[case::reasoning(json!({"type":"reasoning","summary":[{"type":"summary_text","text":"summary"}],"encrypted_content":null}))]
 #[case::web_search(json!({"type":"web_search_call","action":{"type":"search","queries":["q"],"sources":[{"type":"url","url":"https://example.test"}]}}))]
 #[case::file_search(json!({"type":"file_search_call","queries":["q"],"results":[{"file_id":"file_1","score":1,"attributes":{"custom":[1,null]}}]}))]
@@ -86,7 +102,43 @@ fn response_output_exposes_content_annotations_and_function_arguments() {
 #[case::mcp(json!({"type":"mcp_call","server_label":"server","name":"lookup","arguments":"{}","output":null}))]
 fn known_output_items_round_trip(#[case] wire: Value) {
     let parsed: Recognized<ResponsesOutputItem> = serde_json::from_value(wire.clone()).unwrap();
-    assert!(parsed.known().is_some());
+    match parsed.known().unwrap() {
+        ResponsesOutputItem::WebSearchCall(call) => assert!(matches!(
+            call.action.as_ref().and_then(Recognized::known),
+            Some(ResponsesWebSearchAction::Search {
+                queries: Some(Recognized::Known(queries)),
+                ..
+            }) if queries == &vec!["q".to_string()]
+        )),
+        ResponsesOutputItem::FileSearchCall(call) => {
+            let result = call
+                .results
+                .as_ref()
+                .and_then(Recognized::known)
+                .and_then(|results| results.first())
+                .and_then(Recognized::known)
+                .unwrap();
+            assert_eq!(result.file_id, Some(Recognized::Known("file_1".into())));
+        }
+        ResponsesOutputItem::CodeInterpreterCall(call) => assert!(matches!(
+            call.outputs
+                .as_ref()
+                .and_then(Recognized::known)
+                .and_then(|outputs| outputs.first())
+                .and_then(Recognized::known),
+            Some(ResponsesCodeOutput::Logs { logs, .. }) if logs == "done"
+        )),
+        ResponsesOutputItem::McpCall(call) => {
+            assert_eq!(call.arguments, Some(Recognized::Known("{}".into())));
+        }
+        ResponsesOutputItem::Message(_)
+        | ResponsesOutputItem::FunctionCall(_)
+        | ResponsesOutputItem::CustomToolCall(_)
+        | ResponsesOutputItem::Reasoning(_)
+        | ResponsesOutputItem::ImageGenerationCall(_) => {
+            assert!(parsed.known().is_some());
+        }
+    }
     assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
 }
 

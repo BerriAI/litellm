@@ -191,7 +191,7 @@ pub fn normalize_response(
         None => model.to_string(),
     };
     Ok(LiteLLMOcrResponse {
-        extra_fields: response.extra_fields,
+        extra: response.extra_fields,
         document_annotation: response.document_annotation,
         usage_info: response.usage_info,
         ..LiteLLMOcrResponse::new(model, response.pages)
@@ -335,7 +335,7 @@ mod tests {
         let native = response.provider_native_response.unwrap();
         assert_eq!(native["pages"][0]["index"], "2");
         assert_eq!(native["provider_extension"], false);
-        assert_eq!(response.extra_fields["provider_extension"], false);
+        assert_eq!(response.extra["provider_extension"], false);
     }
 
     #[rstest]

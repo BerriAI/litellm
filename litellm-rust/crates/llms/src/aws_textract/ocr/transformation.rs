@@ -135,7 +135,7 @@ mod tests {
     fn document(#[default("data:image/png;base64,aGVsbG8=")] source: &str) -> OcrDocument {
         OcrDocument::DocumentUrl {
             document_url: source.into(),
-            extra_fields: Default::default(),
+            extra: Default::default(),
         }
     }
 

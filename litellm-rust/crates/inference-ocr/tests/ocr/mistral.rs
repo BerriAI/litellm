@@ -27,7 +27,7 @@ async fn direct_mistral_sends_one_request_with_every_option() {
     .unwrap();
 
     assert_eq!(result.pages[0].markdown, "hello");
-    assert_eq!(result.pages[0].extra_fields["custom"], "preserved");
+    assert_eq!(result.pages[0].extra["custom"], "preserved");
     let sent = only_request(&upstream).await;
     assert_eq!(sent.url.path(), "/v1/ocr");
     assert_eq!(sent.header("authorization"), Some("Bearer test-key"));

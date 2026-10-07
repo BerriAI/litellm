@@ -1,6 +1,7 @@
 use super::{ChatCompletionsUsage, ChatLogprobs};
 use crate::formats::messages::CacheControl;
 use crate::recognized::Recognized;
+use crate::serde_compat::deserialize_present;
 use serde_json::{Map, Value};
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -30,7 +31,11 @@ pub enum ChatCompletionThinkingBlock {
         thinking: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present"
+        )]
         cache_control: Option<Recognized<CacheControl>>,
     },
     RedactedThinking {

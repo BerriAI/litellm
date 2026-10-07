@@ -1,6 +1,7 @@
 use litellm_llms_types::{
     formats::chat_completions::{
-        ChatContentPart, ChatLogprobs, ChatMediaUrl, ChatMessageContent, ReasoningEffort,
+        ChatCompletionThinkingBlock, ChatContentPart, ChatLogprobs, ChatMediaUrl,
+        ChatMessageContent, ReasoningEffort,
     },
     recognized::Recognized,
 };
@@ -15,6 +16,23 @@ use serde_json::{Value, json};
 #[case::file(json!({"type":"file","file":{"file_id":"file_1","video_metadata":{"fps":1,"start_offset":"1s"}}}))]
 #[case::refusal(json!({"type":"refusal","refusal":"refused"}))]
 fn known_content_parts_are_typed_and_lossless(#[case] wire: Value) {
+    let parsed: Recognized<ChatContentPart> = serde_json::from_value(wire.clone()).unwrap();
+    assert!(parsed.known().is_some());
+    assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+}
+
+#[rstest]
+#[case::null(json!({"type":"thinking","cache_control":null}))]
+#[case::cache_type_null(json!({"type":"thinking","cache_control":{"type":null}}))]
+fn thinking_cache_control_preserves_explicit_null(#[case] wire: Value) {
+    let parsed: ChatCompletionThinkingBlock = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+}
+
+#[rstest]
+#[case::null(json!({"type":"text","text":"hello","cache_control":null}))]
+#[case::cache_type_null(json!({"type":"text","text":"hello","cache_control":{"type":null}}))]
+fn text_cache_control_preserves_explicit_null(#[case] wire: Value) {
     let parsed: Recognized<ChatContentPart> = serde_json::from_value(wire.clone()).unwrap();
     assert!(parsed.known().is_some());
     assert_eq!(serde_json::to_value(parsed).unwrap(), wire);

@@ -276,7 +276,7 @@ mod tests {
     fn document() -> OcrDocument {
         OcrDocument::ImageUrl {
             image_url: "data:image/png;base64,aGk=".into(),
-            extra_fields: Default::default(),
+            extra: Default::default(),
         }
     }
 

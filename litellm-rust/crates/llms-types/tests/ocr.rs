@@ -88,7 +88,7 @@ fn response_serialization_preserves_extensions_and_native_presence(
     #[case] native: Option<Map<String, Value>>,
 ) {
     let response = LiteLLMOcrResponse {
-        extra_fields: Map::from_iter([("provider_field".into(), json!("kept"))]),
+        extra: Map::from_iter([("provider_field".into(), json!("kept"))]),
         provider_native_response: native.clone(),
         ..LiteLLMOcrResponse::new("model", vec![])
     };

@@ -84,16 +84,16 @@ impl ResponsesWsEvent {
 #[derive(Eq)]
 pub struct ResponsesErrorFrame {
     #[serde(rename = "type")]
-    pub frame_type: &'static str,
+    pub frame_type: String,
     pub error: ResponsesErrorBody,
 }
 
 impl ResponsesErrorFrame {
     pub fn invalid_request(message: impl Into<String>) -> Self {
         Self {
-            frame_type: "error",
+            frame_type: "error".into(),
             error: ResponsesErrorBody {
-                error_type: "invalid_request_error",
+                error_type: "invalid_request_error".into(),
                 message: message.into(),
             },
         }
@@ -104,7 +104,7 @@ impl ResponsesErrorFrame {
 #[derive(Eq)]
 pub struct ResponsesErrorBody {
     #[serde(rename = "type")]
-    pub error_type: &'static str,
+    pub error_type: String,
     pub message: String,
 }
 

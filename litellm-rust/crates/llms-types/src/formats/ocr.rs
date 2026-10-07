@@ -14,13 +14,13 @@ pub enum OcrDocument {
     DocumentUrl {
         document_url: String,
         #[serde(flatten)]
-        extra_fields: BTreeMap<String, Option<String>>,
+        extra: BTreeMap<String, Option<String>>,
     },
     #[serde(rename = "image_url")]
     ImageUrl {
         image_url: String,
         #[serde(flatten)]
-        extra_fields: BTreeMap<String, Option<String>>,
+        extra: BTreeMap<String, Option<String>>,
     },
 }
 
@@ -39,13 +39,13 @@ impl OcrDocument {
 
     pub fn with_source(self, source: String) -> Self {
         match self {
-            Self::DocumentUrl { extra_fields, .. } => Self::DocumentUrl {
+            Self::DocumentUrl { extra, .. } => Self::DocumentUrl {
                 document_url: source,
-                extra_fields,
+                extra,
             },
-            Self::ImageUrl { extra_fields, .. } => Self::ImageUrl {
+            Self::ImageUrl { extra, .. } => Self::ImageUrl {
                 image_url: source,
-                extra_fields,
+                extra,
             },
         }
     }
@@ -78,7 +78,7 @@ pub struct OcrPageImage {
     pub image_base64: Option<String>,
     pub bbox: Option<OcrBoundingBox>,
     #[serde(flatten)]
-    pub extra_fields: Map<String, Value>,
+    pub extra: Map<String, Value>,
 }
 
 #[serde_as]
@@ -91,7 +91,7 @@ pub struct OcrPage {
     pub images: Option<Vec<OcrPageImage>>,
     pub dimensions: Option<OcrPageDimensions>,
     #[serde(flatten)]
-    pub extra_fields: Map<String, Value>,
+    pub extra: Map<String, Value>,
 }
 
 #[serde_as]
@@ -107,7 +107,7 @@ pub struct OcrUsageInfo {
     #[serde_as(deserialize_as = "Option<LaxI64>")]
     pub doc_size_bytes: Option<i64>,
     #[serde(flatten)]
-    pub extra_fields: Map<String, Value>,
+    pub extra: Map<String, Value>,
 }
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -123,7 +123,7 @@ pub struct LiteLLMOcrResponse {
     #[serde(default = "ocr_object")]
     pub object: String,
     #[serde(flatten)]
-    pub extra_fields: Map<String, Value>,
+    pub extra: Map<String, Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_native_response: Option<Map<String, Value>>,
 }
@@ -139,7 +139,7 @@ impl LiteLLMOcrResponse {
             tables: None,
             key_value_pairs: None,
             object: ocr_object(),
-            extra_fields: Map::new(),
+            extra: Map::new(),
             provider_native_response: None,
         }
     }

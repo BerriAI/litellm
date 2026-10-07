@@ -63,12 +63,12 @@ pub fn encode_file_document(
     Ok(if mime_type.starts_with("image/") {
         OcrDocument::ImageUrl {
             image_url: source,
-            extra_fields: Map::new(),
+            extra: Map::new(),
         }
     } else {
         OcrDocument::DocumentUrl {
             document_url: source,
-            extra_fields: Map::new(),
+            extra: Map::new(),
         }
     })
 }
@@ -115,7 +115,7 @@ mod tests {
     fn document(source: &str) -> OcrDocument {
         OcrDocument::DocumentUrl {
             document_url: source.into(),
-            extra_fields: Map::new(),
+            extra: Map::new(),
         }
     }
 
@@ -125,7 +125,7 @@ mod tests {
             encode_file_document(b"abc", Some("scan.png"), None).unwrap(),
             OcrDocument::ImageUrl {
                 image_url: "data:image/png;base64,YWJj".into(),
-                extra_fields: Map::new(),
+                extra: Map::new(),
             }
         );
         assert_eq!(
@@ -165,7 +165,7 @@ mod tests {
             .unwrap(),
             OcrDocument::ImageUrl {
                 image_url: "data:image/png;base64,YWJj".into(),
-                extra_fields: Map::new(),
+                extra: Map::new(),
             }
         );
         assert_eq!(

@@ -418,7 +418,7 @@ fn page(index: i64, markdown: String, blocks: Option<Value>) -> OcrPage {
     OcrPage {
         index,
         markdown,
-        extra_fields: blocks
+        extra: blocks
             .map(|blocks| ("blocks".into(), blocks))
             .into_iter()
             .collect(),
@@ -646,10 +646,7 @@ mod tests {
         let normalized = normalize_response("model", response).unwrap();
         assert_eq!(normalized.pages[0].index, 1);
         assert_eq!(normalized.pages[0].markdown, "kept");
-        assert_eq!(
-            normalized.pages[0].extra_fields["blocks"][0]["bbox"]["page"],
-            2.5
-        );
+        assert_eq!(normalized.pages[0].extra["blocks"][0]["bbox"]["page"], 2.5);
         assert_eq!(normalized.usage_info.unwrap().credits, Some(1.0));
     }
 

@@ -3,6 +3,7 @@ use strum::IntoStaticStr;
 
 use crate::formats::chat_completions::ReasoningEffort;
 use crate::recognized::Recognized;
+use crate::serde_compat::{Nullable, deserialize_present};
 
 #[macro_rules_attribute::apply(wire_type)]
 #[serde(untagged)]
@@ -105,12 +106,25 @@ impl ContentBlock {
 #[macro_rules_attribute::apply(wire_type)]
 #[derive(Default)]
 pub struct CacheControl {
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub cache_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ttl: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
+    #[serde(
+        default,
+        rename = "type",
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    pub cache_type: Option<Nullable<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    pub ttl: Option<Nullable<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    pub scope: Option<Nullable<String>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

@@ -302,7 +302,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
     fn get_health_check_document(&self) -> OcrDocument {
         OcrDocument::DocumentUrl {
             document_url: HEALTH_CHECK_PDF_DATA_URI.into(),
-            extra_fields: Default::default(),
+            extra: Default::default(),
         }
     }
 

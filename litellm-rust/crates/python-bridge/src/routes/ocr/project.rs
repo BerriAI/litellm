@@ -183,7 +183,7 @@ mod tests {
     fn url_document(url: &str) -> OcrDocumentInput {
         OcrDocument::DocumentUrl {
             document_url: url.into(),
-            extra_fields: Default::default(),
+            extra: Default::default(),
         }
         .into()
     }

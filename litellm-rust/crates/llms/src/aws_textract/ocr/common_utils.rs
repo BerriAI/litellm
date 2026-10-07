@@ -225,7 +225,7 @@ impl OcrEnvironment for TextractEnvironment {
 pub(super) fn health_check_document() -> OcrDocument {
     OcrDocument::ImageUrl {
         image_url: HEALTH_CHECK_IMAGE_DATA_URI.into(),
-        extra_fields: Default::default(),
+        extra: Default::default(),
     }
 }
 
@@ -498,21 +498,21 @@ mod tests {
     #[case::image_url(
         OcrDocument::ImageUrl {
             image_url: "data:image/png;base64,aGVsbG8=".into(),
-            extra_fields: Default::default(),
+            extra: Default::default(),
         },
         "aGVsbG8="
     )]
     #[case::document_url(
         OcrDocument::DocumentUrl {
             document_url: "data:application/pdf;base64,YWJj".into(),
-            extra_fields: Default::default(),
+            extra: Default::default(),
         },
         "YWJj"
     )]
     #[case::percent_encoded_data_uri_is_re_encoded_as_base64(
         OcrDocument::DocumentUrl {
             document_url: "data:,abc".into(),
-            extra_fields: Default::default(),
+            extra: Default::default(),
         },
         "YWJj"
     )]
@@ -536,7 +536,7 @@ mod tests {
     ) {
         let error = document_bytes(&OcrDocument::DocumentUrl {
             document_url,
-            extra_fields: Default::default(),
+            extra: Default::default(),
         })
         .unwrap_err();
 
