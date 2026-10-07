@@ -9086,6 +9086,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Feedback */
+        get: operations["read_feedback_lens_feedback_get"];
+        /** Submit Feedback */
+        put: operations["submit_feedback_lens_feedback_put"];
+        post?: never;
+        /** Delete Feedback */
+        delete: operations["delete_feedback_lens_feedback_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/feedback/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Feedback Summary */
+        post: operations["feedback_summary_lens_feedback_summary_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/preview/sample": {
         parameters: {
             query?: never;
@@ -32390,6 +32426,51 @@ export interface components {
              */
             model: string;
         };
+        /** Feedback */
+        Feedback: {
+            /** Author */
+            author: string;
+            /** Comment */
+            comment: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Score */
+            score: number;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** FeedbackSubmission */
+        FeedbackSubmission: {
+            /**
+             * Comment
+             * @default
+             */
+            comment: string;
+            /** Score */
+            score: number;
+            /** Session Id */
+            session_id?: string | null;
+            /** Trace Id */
+            trace_id?: string | null;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
         /** FieldDetail */
         FieldDetail: {
             /** Field Default Value */
@@ -47640,6 +47721,44 @@ export interface components {
             /** Spans */
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
+        };
+        /** TraceFeedback */
+        TraceFeedback: {
+            /** Feedback */
+            feedback: components["schemas"]["Feedback"][];
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+            /**
+             * Viewer
+             * @default
+             */
+            viewer: string;
+        };
+        /** TraceFeedbackRequest */
+        TraceFeedbackRequest: {
+            /** Traces */
+            traces: components["schemas"]["TraceIdentity"][];
+        };
+        /** TraceFeedbackSummary */
+        TraceFeedbackSummary: {
+            /** Average */
+            average: number | null;
+            /** Count */
+            count: number;
+            /** Lowest */
+            lowest: number | null;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
         };
         /** TraceFindingCount */
         TraceFindingCount: {
@@ -63223,6 +63342,136 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EvalCases"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_feedback_lens_feedback_get: {
+        parameters: {
+            query?: {
+                trace_id?: string | null;
+                session_id?: string | null;
+                trace_ref?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceFeedback"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_feedback_lens_feedback_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackSubmission"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Feedback"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_feedback_lens_feedback_delete: {
+        parameters: {
+            query?: {
+                trace_id?: string | null;
+                session_id?: string | null;
+                trace_ref?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    feedback_summary_lens_feedback_summary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceFeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceFeedbackSummary"][];
                 };
             };
             /** @description Validation Error */

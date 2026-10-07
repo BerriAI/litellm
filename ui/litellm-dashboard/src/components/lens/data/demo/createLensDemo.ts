@@ -1,5 +1,6 @@
 import { ApiError } from "@/lib/http/client";
 import type { TracesApi } from "@/components/lens/traces/api";
+import type { Feedback, TraceSummary } from "@/components/lens/traces/types";
 import type { LensServices } from "../LensServices";
 import type { LensApi } from "../service";
 import { demoDatasetsApi } from "./demoDatasets";
@@ -49,8 +50,26 @@ function demoLensApi(data: LensDemoData): LensApi {
   };
 }
 
+const DEMO_FEEDBACK = [
+  { score: 3, comment: "Picked the wrong file before retrying; the final answer was right.", author: "reviewer@demo" },
+  { score: 9, comment: "Clean run, exactly what I asked for.", author: "reviewer@demo" },
+] as const;
+
+function demoFeedback(runs: LensDemoData["runs"]): Feedback[] {
+  return DEMO_FEEDBACK.flatMap((entry, index) => {
+    const summary: TraceSummary | undefined = runs[index]?.trace.summary;
+    if (!summary) return [];
+    const at = summary.start_time;
+    return [
+      { ...entry, trace_id: summary.trace_id, trace_ref: summary.trace_ref ?? "", created_at: at, updated_at: at },
+    ];
+  });
+}
+
 function demoTracesApi(data: LensDemoData): TracesApi {
   const run = (traceId: string) => data.runs.find(({ trace }) => trace.summary.trace_id === traceId);
+  const feedback = demoFeedback(data.runs);
+  const feedbackFor = (traceId: string) => feedback.filter((entry) => entry.trace_id === traceId);
   return {
     live: false,
     handoff: (traceId, spanId) => {
@@ -94,6 +113,23 @@ function demoTracesApi(data: LensDemoData): TracesApi {
       }),
     signals: async (traces) =>
       traces.map((trace) => ({ ...trace, status: "unclassified" as const, flags: [], model: "", classified_at: null })),
+    feedbackSummary: async (traces) =>
+      traces.map((trace) => {
+        const scores = feedbackFor(trace.trace_id).map((entry) => entry.score);
+        return {
+          trace_id: trace.trace_id,
+          trace_ref: trace.trace_ref ?? "",
+          count: scores.length,
+          average: scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : null,
+          lowest: scores.length ? Math.min(...scores) : null,
+        };
+      }),
+    feedback: async (traceId) => {
+      const summary = (await found(run(traceId))).trace.summary;
+      return { trace_id: traceId, trace_ref: summary.trace_ref ?? "", feedback: feedbackFor(traceId), viewer: "" };
+    },
+    submitFeedback: readOnly,
+    deleteFeedback: readOnly,
     anyRecorded: async () => data.runs.length > 0,
     trace: (traceId) => found(run(traceId)?.trace),
     span: (traceId, spanId) => found(run(traceId)?.details.find((span) => span.span_id === spanId)),
