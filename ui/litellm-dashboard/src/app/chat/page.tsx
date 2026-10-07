@@ -77,6 +77,7 @@ export default function ChatConversationPage() {
   const [modelSearchText, setModelSearchText] = useState("");
 
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
+  const responsesSessionGenerationRef = useRef(0);
   const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
@@ -129,6 +130,7 @@ export default function ChatConversationPage() {
   }
 
   const selectModel = useCallback((model: string) => {
+    responsesSessionGenerationRef.current += 1;
     setSelectedModel(model);
     setResponsesSessionId(null);
     localStorage.setItem(LOCALSTORAGE_MODEL_KEY, model);
@@ -141,6 +143,7 @@ export default function ChatConversationPage() {
       const trimmed = text.trim();
       if (!trimmed || !selectedModel || isStreaming) return;
       const model = selectedModel;
+      const sessionGeneration = responsesSessionGenerationRef.current;
       setInputText("");
 
       let convId = activeConversationId;
@@ -213,7 +216,11 @@ export default function ChatConversationPage() {
           undefined,
           selectedMCPServers.length > 0 ? selectedMCPServers : undefined,
           previousResponseId,
-          (id: string) => setResponsesSessionId(id),
+          (id: string) => {
+            if (responsesSessionGenerationRef.current === sessionGeneration) {
+              setResponsesSessionId(id);
+            }
+          },
           (event: MCPEvent) => {
             // Accumulate locally only — persisted once in finally to avoid
             // one full localStorage write per MCP event during streaming.

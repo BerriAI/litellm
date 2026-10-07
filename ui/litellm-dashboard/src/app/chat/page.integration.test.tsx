@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatHistory } from "@/components/chat/useChatHistory";
 import ChatConversationPage from "./page";
@@ -146,6 +146,44 @@ describe("/ui/chat request metrics", () => {
 
     const second = mockMakeOpenAIResponsesRequest.mock.calls[1];
     expect(second[2]).toBe("second-model");
+    expect(second[14]).toBeNull();
+    expect(second[0]).toEqual([
+      { role: "user", content: "How much did this cost?" },
+      { role: "assistant", content: "First answer" },
+      { role: "user", content: "Follow up" },
+    ]);
+  });
+
+  it.each([false, true])("ignores late response IDs after model changes ($0)", async (switchBack) => {
+    vi.mocked(fetchAvailableModels).mockResolvedValue([
+      { model_group: "gpt-5.4-mini", providers: ["openai"] },
+      { model_group: "second-model", providers: ["openai"] },
+    ]);
+    const firstCompletion = Promise.withResolvers<void>();
+    mockMakeOpenAIResponsesRequest.mockImplementationOnce(async (...args: unknown[]) => {
+      await firstCompletion.promise;
+      (args[1] as (role: string, delta: string) => void)("assistant", "First answer");
+      (args[15] as (id: string) => void)("response-first");
+    });
+    mockMakeOpenAIResponsesRequest.mockResolvedValue(undefined);
+
+    await sendOneMessage();
+    fireEvent.click(screen.getByRole("button", { name: /gpt-5\.4-mini/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "second-model" }));
+    if (switchBack) {
+      fireEvent.click(screen.getByRole("button", { name: "second-model" }));
+      fireEvent.click(await screen.findByRole("button", { name: "gpt-5.4-mini" }));
+    }
+
+    await act(async () => firstCompletion.resolve());
+    expect(await screen.findByText("First answer")).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Follow up" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const second = mockMakeOpenAIResponsesRequest.mock.calls[1];
+    expect(second[2]).toBe(switchBack ? "gpt-5.4-mini" : "second-model");
     expect(second[14]).toBeNull();
     expect(second[0]).toEqual([
       { role: "user", content: "How much did this cost?" },
