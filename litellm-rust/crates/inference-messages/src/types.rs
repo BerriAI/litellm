@@ -126,6 +126,11 @@ mod tests {
                 supports_output_config: true,
                 supports_sampling_params: false,
                 supports_speed: true,
+                supports_mid_conversation_system: false,
+                supports_cache_control_ttl: false,
+                supports_native_structured_output: false,
+                supports_tool_search: false,
+                effort_ceiling: None,
                 effort_tiers: SupportedEffortTiers {
                     minimal: false,
                     low: true,
