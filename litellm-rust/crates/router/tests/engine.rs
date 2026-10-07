@@ -16,7 +16,7 @@ use litellm_router::{
 };
 use rstest::rstest;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Scripted {
     Ok,
     Fail(i64, ExceptionClass),
@@ -445,7 +445,7 @@ async fn a_stream_failing_before_content_falls_back_without_retrying_the_group()
     );
     let before_content = Scripted::Stream(StreamFailure::BeforeContent);
     let host = ScriptedHost::default()
-        .script("a", &[before_content.clone()])
+        .script("a", &[before_content])
         .script("b", &[before_content]);
 
     let routed = engine.route(&host, call("g")).await.ok().unwrap();
