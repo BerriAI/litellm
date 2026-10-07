@@ -1,3 +1,4 @@
+import builtins
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Optional, Union
 
@@ -163,6 +164,14 @@ class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class DecodedResponseId(TypedDict, total=False):

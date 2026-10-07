@@ -41,7 +41,7 @@ class BaseSearchTest(ABC):
         """
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         search_provider = self.get_search_provider()
         print("Search Provider=", search_provider)
 

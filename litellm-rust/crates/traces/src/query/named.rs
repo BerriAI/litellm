@@ -15,7 +15,7 @@ pub struct ReadAccessParams {
     pub team_ids: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ListTracesParams {
     #[serde(flatten)]
     pub access: ReadAccessParams,
@@ -26,7 +26,7 @@ pub struct ListTracesParams {
     pub limit: u32,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ListTracesRow {
     pub trace_id: String,
     pub trace_ref: String,
@@ -56,7 +56,7 @@ pub struct ListTracesRow {
     pub request_ids: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TraceSpansParams {
     #[serde(flatten)]
     pub access: ReadAccessParams,
@@ -68,6 +68,8 @@ pub struct TraceSpansParams {
 pub struct TraceSpansRow {
     #[serde(default)]
     pub trace_id: String,
+    #[serde(default)]
+    pub original_trace_id: String,
     pub span_id: String,
     pub parent_span_id: String,
     pub name: String,
@@ -113,7 +115,17 @@ pub struct TraceSpansRow {
     pub user_id: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl TraceSpansRow {
+    pub(crate) fn transport_trace_id(&self) -> &str {
+        if self.original_trace_id.is_empty() {
+            &self.trace_id
+        } else {
+            &self.original_trace_id
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TracePageSpansParams {
     #[serde(flatten)]
     pub access: ReadAccessParams,
@@ -131,7 +143,7 @@ pub struct SpanDetailParams {
     pub span_id: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpanDetailRow {
     pub span_id: String,
     pub input: String,
@@ -139,7 +151,7 @@ pub struct SpanDetailRow {
     pub attributes: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpanErrorParams {
     #[serde(flatten)]
     pub access: ReadAccessParams,
@@ -150,7 +162,7 @@ pub struct SpanErrorParams {
     pub error_version: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpanErrorRow {
     pub span_id: String,
     pub message: String,
@@ -158,23 +170,26 @@ pub struct SpanErrorRow {
     pub version: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpendByResponseIdsParams {
     #[serde(flatten)]
     pub access: ReadAccessParams,
     pub response_ids: Vec<String>,
+    pub provider_request_ids: Vec<String>,
     pub request_ids: Vec<String>,
     pub trace_ids: Vec<String>,
     pub start_ms: i64,
     pub end_ms: i64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpendByResponseIdsRow {
     pub request_id: String,
     pub litellm_call_id: String,
     pub response_id: String,
     pub upstream_response_id: String,
+    #[serde(default)]
+    pub provider_request_id: String,
     pub trace_id: String,
     pub span_id: String,
     pub team_id: String,

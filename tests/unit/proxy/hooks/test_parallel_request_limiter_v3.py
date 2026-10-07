@@ -271,7 +271,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
     Test the sliding window rate limiting functionality
     """
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "2")
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=3)
     local_cache = DualCache()
@@ -364,7 +364,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller
     Test that the rate limiter script returns both counter and window values correctly
     """
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "2")
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=3)
     local_cache = DualCache()
@@ -505,7 +505,7 @@ async def test_normal_router_call_tpm_v3(
         num_retries=3,
     )  # type: ignore
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     if rate_limit_object == "api_key":
         user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10)
@@ -682,7 +682,7 @@ async def test_token_rate_limit_type_respected_v3(monkeypatch, token_rate_limit_
     # Set up environment and mock general_settings
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=100)
     local_cache = DualCache()
@@ -792,7 +792,7 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(
     """
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
 
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache())
     )
@@ -839,7 +839,7 @@ async def test_async_log_failure_event_v3():
     no-ops that can never free another request's slot (releasing more than
     was acquired is what previously let concurrency exceed the limit).
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -892,7 +892,7 @@ async def test_failure_event_without_acquired_slot_does_not_release_v3():
     above the configured limit. Without the acquired-slot marker the gauge
     must stay untouched.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -934,7 +934,7 @@ async def test_max_parallel_requests_not_reset_by_window_roll_v3():
         internal_usage_cache=InternalUsageCache(local_cache),
         time_provider=controller.now,
     )
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
 
     for _ in range(2):
@@ -970,7 +970,7 @@ async def test_rejected_request_does_not_consume_parallel_slot_v3():
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
 
     admitted_data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
@@ -1025,7 +1025,7 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=5)
     counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
 
@@ -1095,7 +1095,7 @@ async def test_should_rate_limit_only_called_when_limits_exist_v3():
     Test that should_rate_limit is only called when actual rate limits are configured.
     This verifies the optimization that avoids unnecessary rate limit checks.
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -1237,7 +1237,7 @@ async def test_model_specific_rate_limits_only_called_when_configured_v3():
         get_key_model_tpm_limit,
     )
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -1298,7 +1298,7 @@ async def test_model_specific_rate_limits_only_called_when_configured_v3():
 @pytest.mark.asyncio
 async def test_tpm_api_key_rate_limits_v3():
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key_hash = hash_token(_api_key)
     model = "gpt-3.5-turbo"
     rpm_limit = 2
@@ -1393,7 +1393,7 @@ async def test_tpm_api_key_rate_limits_v3():
 @pytest.mark.asyncio
 async def test_rpm_api_key_rate_limits_v3():
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key_hash = hash_token(_api_key)
     model = "gpt-3.5-turbo"
     rpm_limit = 2
@@ -1490,7 +1490,7 @@ async def test_team_member_rate_limits_v3():
     """
     Test that team member RPM/TPM rate limits are properly applied for team member combinations.
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _team_id = "team_123"
     _user_id = "user_456"
@@ -1559,7 +1559,7 @@ async def test_team_member_rate_limits_v3_raises_429_when_over_limit():
     pre-call hook raises HTTP 429 with rate_limit headers — same contract as
     test_rpm_api_key_rate_limits_v3 / test_tpm_api_key_rate_limits_v3.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     _team_id = "team_123"
     _user_id = "user_456"
 
@@ -1638,7 +1638,7 @@ async def test_dynamic_rate_limiting_v3():
     - If model has no failures, rate limits should NOT be enforced (allow exceeding)
     - If model has failures above threshold, rate limits SHOULD be enforced
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key_hash = hash_token(_api_key)
     model = "gpt-3.5-turbo"
 
@@ -1890,7 +1890,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             Exception(
                 "EVALSHA - all keys must map to the same key slot"
             ),  # First group fails
-            [1234, 1, 1234, 2],  # Second group succeeds
+            [1234, 2],  # Second group succeeds
         ]
         handler.batch_rate_limiter_script = mock_script
 
@@ -1910,8 +1910,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             keys_to_fetch=test_keys, now_int=1234
         )
 
-        # Verify results: 2 from fallback + 4 from successful script = 6 total
-        assert len(results) == 6, f"Expected 6 results, got {len(results)}"
+        assert results == [1234, 1, 1234, 2]
 
         # Verify script was called twice (once per slot group)
         assert mock_script.call_count == 2
@@ -1949,7 +1948,7 @@ async def test_multiple_rate_limits_per_descriptor():
     3. The old floor(i / 2) mapping would fail with IndexError
     4. The new descriptor_key-based lookup works correctly
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key_hash = hash_token(_api_key)
 
     # Create a user with multiple rate limit types to trigger multiple statuses per descriptor
@@ -2032,7 +2031,7 @@ async def test_missing_descriptor_fallback():
     This tests an edge case where somehow the descriptor_key in status doesn't match
     any descriptor key (shouldn't happen in normal operation but good for robustness).
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key_hash = hash_token(_api_key)
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -2153,7 +2152,7 @@ async def test_async_log_success_event_with_dict_usage(
     """
     from unittest.mock import MagicMock
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -2243,7 +2242,7 @@ async def test_async_log_success_event_with_dict_usage_missing_fields(monkeypatc
     """
     from unittest.mock import MagicMock
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -2389,7 +2388,7 @@ async def test_agent_level_rate_limit_descriptors():
 
     from litellm.types.agents import AgentResponse
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_abc123"
 
@@ -2455,7 +2454,7 @@ async def test_agent_session_rate_limit_descriptors():
 
     from litellm.types.agents import AgentResponse
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_abc123"
     _session_id = "sess_xyz789"
@@ -2525,7 +2524,7 @@ async def test_agent_session_rate_limit_skipped_without_session_id():
 
     from litellm.types.agents import AgentResponse
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_abc123"
 
@@ -2585,7 +2584,7 @@ async def test_agent_rate_limit_from_metadata_agent_id():
 
     from litellm.types.agents import AgentResponse
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_from_header"
 
@@ -2654,7 +2653,7 @@ async def test_agent_both_agent_and_session_rate_limits():
 
     from litellm.types.agents import AgentResponse
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_dual"
     _session_id = "sess_dual"
@@ -2728,7 +2727,7 @@ async def test_agent_rate_limit_tpm_increment_on_success(monkeypatch):
     Test that async_log_success_event increments agent and session
     TPM counters when agent_id and session_id are in metadata.
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_tpm_test"
     _session_id = "sess_tpm_test"
@@ -2814,7 +2813,7 @@ async def test_agent_rate_limit_429_on_over_limit(monkeypatch, time_controller):
     from litellm.types.agents import AgentResponse
 
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "2")
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_429_test"
 
@@ -4181,7 +4180,7 @@ async def test_release_max_parallel_requests_on_disconnect_v3():
     by one per cancelled request until the key wedges at its limit. The release
     must decrement the api-key max_parallel_requests counter by exactly one.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4214,7 +4213,7 @@ async def test_release_on_disconnect_works_when_key_config_changed_v3():
     cleared on the key while a request is in flight, the acquired slot still
     has to be released or it lingers until TTL pruning.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4245,7 +4244,7 @@ async def test_post_call_failure_hook_releases_parallel_slot_v3():
     rejection rates wedge the key at its limit. The release must also be
     idempotent with a later failure callback in the same flow.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4300,7 +4299,7 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
     acquired, freeing capacity for the next request; without it every
     completed request would keep occupying the gauge until TTL pruning.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4350,7 +4349,7 @@ async def test_read_only_gauge_check_counts_without_acquiring_v3():
     a count-script failure must degrade to the local mirror instead of
     raising.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4407,7 +4406,7 @@ async def test_redis_release_script_updates_local_mirror_v3():
     request's slot id per gauge key, and the returned in-flight counts are
     mirrored into the local cache so the local first-pass check stays fresh.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4447,7 +4446,7 @@ async def test_tpm_over_limit_rejection_releases_parallel_slot_v3(monkeypatch):
     slot until TTL pruning.
     """
     monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4496,7 +4495,7 @@ async def test_in_memory_fallback_respects_mirrored_redis_count_v3():
     registry, which would double the admitted concurrency during a Redis
     outage.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4548,7 +4547,7 @@ async def test_release_max_parallel_requests_on_disconnect_noop_v3():
     (no api_key, or max_parallel_requests unset). Otherwise a cancelled
     no-limit request would drive an unrelated counter negative.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -6738,14 +6737,109 @@ class _ScriptedRedis:
         return run
 
 
-def _handler_with_redis(redis, fail_closed: bool | None = None):
+def _handler_with_redis(
+    redis,
+    fail_closed: bool | None = None,
+    force_hash_tag_grouping: bool | None = None,
+):
     internal_usage_cache = InternalUsageCache(DualCache(redis_cache=redis))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
-    if fail_closed is None:
+    if fail_closed is None and force_hash_tag_grouping is None:
         return _PROXY_MaxParallelRequestsHandler(internal_usage_cache=internal_usage_cache)
+    if fail_closed is None:
+        return _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=internal_usage_cache,
+            force_hash_tag_grouping_resolver=lambda: force_hash_tag_grouping,
+        )
+    if force_hash_tag_grouping is None:
+        return _PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=internal_usage_cache,
+            fail_closed_resolver=lambda: fail_closed,
+        )
     return _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=internal_usage_cache,
         fail_closed_resolver=lambda: fail_closed,
+        force_hash_tag_grouping_resolver=lambda: force_hash_tag_grouping,
     )
+
+
+@pytest.mark.parametrize("force_hash_tag_grouping", [True, False], ids=["forced", "default"])
+@pytest.mark.asyncio
+async def test_redis_batch_rate_limiter_respects_hash_tag_grouping_opt_in(force_hash_tag_grouping: bool):
+    redis: Final = _ScriptedRedis()
+    handler: Final = _handler_with_redis(redis, force_hash_tag_grouping=force_hash_tag_grouping)
+    keys: Final = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+
+    await handler._execute_redis_batch_rate_limiter_script(keys_to_fetch=keys, now_int=1234)
+
+    expected_calls: Final = (
+        [
+            [
+                "{api_key:sk-abc}:window",
+                "{api_key:sk-abc}:requests",
+                "{end_user:u28551}:window",
+                "{end_user:u28551}:requests",
+            ],
+            ["{team:t1}:window", "{team:t1}:requests"],
+        ]
+        if force_hash_tag_grouping
+        else [keys]
+    )
+    assert redis.batch_call_keys == expected_calls
+
+
+@pytest.mark.asyncio
+async def test_redis_batch_rate_limiter_returns_values_in_caller_order():
+    redis: Final = _ScriptedRedis()
+    handler: Final = _handler_with_redis(redis, force_hash_tag_grouping=True)
+    now: Final = 1234
+    keys_to_fetch: Final = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+
+    results: Final = await handler._execute_redis_batch_rate_limiter_script(
+        keys_to_fetch=keys_to_fetch, now_int=now
+    )
+
+    assert results == [now, 1, now, 2, now, 1]
+
+
+def test_default_hash_tag_grouping_resolver_uses_litellm_setting(monkeypatch: pytest.MonkeyPatch):
+    redis: Final = _ScriptedRedis()
+    handler: Final = _handler_with_redis(redis)
+    keys: Final = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", True)
+    assert list(handler._group_keys_by_hash_tag(keys).values()) == [
+        [
+            "{api_key:sk-abc}:window",
+            "{api_key:sk-abc}:requests",
+            "{end_user:u28551}:window",
+            "{end_user:u28551}:requests",
+        ],
+        ["{team:t1}:window", "{team:t1}:requests"],
+    ]
+
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", False)
+    assert handler._group_keys_by_hash_tag(keys) == {"all_keys": keys}
 
 
 async def _admit(handler, auth, data=None):

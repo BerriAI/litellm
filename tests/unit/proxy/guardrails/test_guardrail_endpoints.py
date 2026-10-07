@@ -223,7 +223,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_db_guardrails(mocker):
         "litellm_params": {
             "guardrail": "azure/text_moderations",
             "mode": "pre_call",
-            "api_key": "sk-1234567890abcdef",
+            "api_key": "sk-9876567890abcdef",
             "api_base": "https://api.secret.example.com",
         },
         "guardrail_info": {"description": "Test guardrail"},
@@ -257,7 +257,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_db_guardrails(mocker):
         params = litellm_params.model_dump() if hasattr(litellm_params, "model_dump") else dict(litellm_params)
 
     # Sensitive keys (containing "key", "secret", "token", etc.) should be masked
-    assert params["api_key"] != "sk-1234567890abcdef"
+    assert params["api_key"] != "sk-9876567890abcdef"
     assert "****" in str(params["api_key"])
     # Non-sensitive keys should remain unchanged
     assert params["guardrail"] == "azure/text_moderations"
@@ -1646,7 +1646,7 @@ async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
 
     # Mock _get_masked_values to return values as-is
     mocker.patch(
-        "litellm.litellm_core_utils.litellm_logging._get_masked_values",
+        "litellm.litellm_core_utils.litellm_logging.get_masked_values",
         side_effect=lambda x, **kwargs: x,
     )
 

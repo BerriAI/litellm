@@ -1,4 +1,10 @@
-use litellm_storage_clickhouse::Query;
+use litellm_storage_clickhouse::{Query, ReadLimits};
+
+const SAMPLE_READ_LIMITS: ReadLimits = ReadLimits {
+    result_rows: 10_000,
+    response_bytes: 16 * 1024 * 1024,
+    ..litellm_storage_clickhouse::READ_LIMITS
+};
 
 pub const LENS_QUERIES: [litellm_traces::ReadQuery; 5] = [
     litellm_traces::ReadQuery::Availability,
@@ -188,6 +194,7 @@ impl Query for LensSample {
     type Params = LensSampleParams;
     type Row = LensSampleRow;
 
+    const READ_LIMITS: ReadLimits = SAMPLE_READ_LIMITS;
     const SQL: &'static str = include_str!("../../query/lens_sample.sql");
 }
 
@@ -202,6 +209,7 @@ pub struct LensContentParams {
     pub source: ContentSource,
     pub id: String,
     pub record_team: String,
+    pub start_time: String,
     pub trace_ref: String,
     pub cursor: String,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -216,6 +224,8 @@ pub struct LensContentRow {
     pub parent_span_id: String,
     pub name: String,
     pub kind: String,
+    pub start_time: String,
+    pub end_time: String,
     pub content: String,
     #[serde(deserialize_with = "super::number::flag")]
     #[cfg_attr(
@@ -243,6 +253,7 @@ pub struct LensEvidenceParams {
     pub source: ContentSource,
     pub id: String,
     pub record_team: String,
+    pub start_time: String,
     pub trace_ref: String,
     pub span: String,
     pub quote: String,

@@ -100,7 +100,7 @@ const eslintConfig = [
     rules: { "local/no-ad-hoc-z-index": ["error", { allowPopupLayer: true }] },
   },
   {
-    files: ["src/components/view_logs/TraceView/**/*.tsx", "src/components/lens/**/*.tsx"],
+    files: ["src/components/lens/**/*.tsx"],
     ignores: ["src/**/*.test.tsx"],
     rules: { "local/no-arbitrary-design-value": "error" },
   },

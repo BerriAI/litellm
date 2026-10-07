@@ -30,6 +30,7 @@ from litellm.integrations.otel.model.utils import (
     as_str_mapping,
     as_str_tuple,
 )
+from litellm.integrations.otel.routing import RoutingAttributeValue, routing_decision_attributes
 
 # ``RequestIdentity`` and the request-metadata translation now live in
 # :mod:`metadata`; re-exported here so existing ``model.payloads`` imports keep
@@ -439,6 +440,7 @@ class LLMCallSpanData:
     session_id: str | None = None
     embedding_output: EmbeddingOutput | None = None
     promoted_metadata: Mapping[str, str] = field(default_factory=lambda: _EMPTY_METADATA)
+    routing_attributes: Mapping[str, RoutingAttributeValue] = field(default_factory=lambda: MappingProxyType({}))
 
     @classmethod
     def from_standard_logging_payload(
@@ -458,6 +460,8 @@ class LLMCallSpanData:
         # model split, the response model, api base, and identity all come from
         # here rather than being re-derived from the raw payload dicts.
         context: Final = RequestContext.from_standard_logging_payload(payload)
+        metadata: Final = payload.get("metadata")
+        decision: Final = metadata["routing_decision"] if metadata and "routing_decision" in metadata else None
         # Normalize ``response`` to a dict once so the content/id reads below are a
         # plain ``.get`` — no repeated ``isinstance`` guards.
         raw_response: Final = payload.get("response")
@@ -502,6 +506,7 @@ class LLMCallSpanData:
             trace=trace or TraceControls(),
             session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
+            routing_attributes=routing_decision_attributes(decision),
         )
 
 

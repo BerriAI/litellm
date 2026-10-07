@@ -369,7 +369,7 @@ async def test_moderation_endpoint_with_api_base():
 
     # Mock the OpenAI client to verify api_base is passed
     with patch(
-        "litellm.main.openai_chat_completions._get_openai_client"
+        "litellm.main.openai_chat_completions.get_openai_client"
     ) as mock_get_client:
         mock_client = AsyncMock()
         mock_response = MagicMock()
@@ -392,7 +392,7 @@ async def test_moderation_endpoint_with_api_base():
             model="openai/omni-moderation-latest", input="hello this is a test"
         )
 
-        # Verify that _get_openai_client was called with the custom api_base
+        # Verify that get_openai_client was called with the custom api_base
         mock_get_client.assert_called()
         call_kwargs = mock_get_client.call_args.kwargs
         assert (
@@ -1237,7 +1237,7 @@ async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallb
     )
     router._ageneric_api_call_with_fallbacks = AsyncMock()
 
-    managed_id = ResponsesAPIRequestUtils._build_container_id(
+    managed_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id="azure-router-model",
         container_id="cfile_upstream_abc",
@@ -1271,7 +1271,7 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_unwraps
     router = Router(model_list=[])
     mock_original_function = AsyncMock(return_value={"ok": True})
 
-    managed_id = ResponsesAPIRequestUtils._build_container_id(
+    managed_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="openai",
         model_id=None,
         container_id="cfile_upstream_abc",
@@ -1304,7 +1304,7 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_applies
     router = Router(model_list=[])
     mock_original_function = AsyncMock(return_value={"ok": True})
 
-    managed_id = ResponsesAPIRequestUtils._build_container_id(
+    managed_id = ResponsesAPIRequestUtils.build_container_id(
         custom_llm_provider="azure",
         model_id=None,
         container_id="cfile_upstream_abc",

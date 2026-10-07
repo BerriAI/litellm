@@ -1219,6 +1219,34 @@ async def test_legacy_update_without_budget_fields_skips_budget_write(monkeypatc
     assert prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]["organization_alias"] == "renamed"
 
 
+@pytest.mark.asyncio
+async def test_legacy_update_writes_sent_metadata_to_the_organization_row(monkeypatch):
+    prisma = await _run_legacy_update_organization(
+        monkeypatch,
+        body={"organization_id": "org-1", "metadata": {"team": "search", "limits": {"rpm": 5}}},
+        existing_budget_id="budget-1",
+    )
+
+    organization_write = prisma.db.litellm_organizationtable.update.await_args
+    assert organization_write.kwargs["where"] == {"organization_id": "org-1"}
+    assert json.loads(organization_write.kwargs["data"]["metadata"]) == {"team": "search", "limits": {"rpm": 5}}
+    prisma.db.litellm_budgettable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [[], ["litellm_budget_table"], "organization_id", 5, 1.5, True, None])
+async def test_legacy_update_rejects_json_body_that_is_not_an_object_before_reading_the_database(monkeypatch, body):
+    from pydantic import ValidationError
+
+    from litellm.proxy import proxy_server
+
+    with pytest.raises(ValidationError):
+        await _run_legacy_update_organization(monkeypatch, body=body, existing_budget_id="budget-1")
+
+    proxy_server.prisma_client.db.litellm_organizationtable.find_unique.assert_not_awaited()
+    proxy_server.prisma_client.db.litellm_organizationtable.update.assert_not_awaited()
+
+
 def test_build_budget_write_data_recomputes_reset_at_on_duration():
     """A sent budget_duration recomputes budget_reset_at so the reset window follows the new duration."""
     from litellm.proxy.management_endpoints.organization_endpoints import build_budget_write_data

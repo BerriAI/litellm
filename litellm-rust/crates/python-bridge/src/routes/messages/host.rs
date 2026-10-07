@@ -2,12 +2,12 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_core::messages::{
+use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
+use litellm_http::transport::Error as TransportError;
+use litellm_inference_messages::{
     Error, MessagesCall, MessagesShaping, messages_body,
     route::{Messages, MessagesStreamHead},
 };
-use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
-use litellm_http::transport::Error as TransportError;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use pyo3::{
     exceptions::{PyException, PyValueError},

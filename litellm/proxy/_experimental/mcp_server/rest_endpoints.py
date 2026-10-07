@@ -23,6 +23,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     ModifyResponseException,
 )
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
     MCPServerURLCredentialsError,
@@ -569,9 +570,8 @@ if MCP_AVAILABLE:
             "alias": server.alias,
         }
         return [
-            ListMCPToolsRestAPIResponseObject(
-                **tool.model_dump(by_alias=True, exclude={"mcp_info"}),
-                mcp_info=enriched_mcp_info,
+            ListMCPToolsRestAPIResponseObject.model_validate(
+                {**tool.model_dump(by_alias=True, exclude={"mcp_info"}), "mcp_info": enriched_mcp_info}
             )
             for tool in tools
         ]
@@ -705,16 +705,18 @@ if MCP_AVAILABLE:
         *,
         record_listing: bool,
     ) -> list[MCPTool]:
-        return await global_mcp_server_manager._get_tools_from_server(
-            server=server,
-            mcp_auth_header=server_auth_header,
-            extra_headers=extra_headers,
-            add_prefix=False,
-            raw_headers=raw_headers,
-            client_ip=client_ip,
-            user_api_key_auth=user_api_key_auth,
-            proxy_logging_obj=proxy_logging_obj,
-            record_listing=record_listing,
+        return list(
+            await global_mcp_server_manager._get_tools_from_server(
+                server=server,
+                mcp_auth_header=server_auth_header,
+                extra_headers=extra_headers,
+                add_prefix=False,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                record_listing=record_listing,
+            )
         )
 
     async def _get_tools_for_single_server(
@@ -949,6 +951,7 @@ if MCP_AVAILABLE:
         return await _apply_toolset_scope(user_api_key_dict, toolset.toolset_id)
 
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
+    @catalog_operation(global_manager)
     async def list_tool_rest_api(
         request: Request,
         server_id: str | None = Query(None, description="The server id to list tools for"),
@@ -1173,6 +1176,7 @@ if MCP_AVAILABLE:
             }
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
+    @catalog_operation(global_manager)
     async def call_tool_rest_api(
         request: Request,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
