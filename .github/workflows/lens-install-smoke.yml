@@ -1,0 +1,51 @@
+name: Lens installation smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - helm/**
+      - deploy/lens/**
+      - litellm-rust/crates/lens/**
+      - tests/e2e/migrations/lens_helm_smoke.sh
+      - .github/workflows/lens-install-smoke.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lens-install-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  helm-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          persist-credentials: false
+      - name: Build the matching release images
+        run: |
+          for component in gateway backend ui migrations; do
+            docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci \
+              -f "$component/Dockerfile" -t "lens-ci-$component:v0.0.0-lens-ci" .
+          done
+          docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci \
+            -f Dockerfile -t lens-ci-monolith:v0.0.0-lens-ci .
+          docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci \
+            -f deploy/lens/Dockerfile -t lens-ci-worker:v0.0.0-lens-ci .
+      - name: Install pinned Kubernetes test tools
+        run: |
+          curl --fail --location --output "$RUNNER_TEMP/kind" \
+            https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          echo "a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b  $RUNNER_TEMP/kind" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/kind"
+          curl --fail --location --output "$RUNNER_TEMP/helm.tar.gz" \
+            https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
+          echo "a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496  $RUNNER_TEMP/helm.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/helm.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/linux-amd64" >> "$GITHUB_PATH"
+      - name: Install, ingest, upgrade, and restart both charts
+        run: bash tests/e2e/migrations/lens_helm_smoke.sh
