@@ -23,7 +23,6 @@ def aws_test_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
 
 
-
 @pytest.mark.parametrize(
     "model,expected",
     [
@@ -75,22 +74,18 @@ def test_map_openai_params():
     non_default_params = {"n": 2, "size": "1024x1024"}
     optional_params = {"cfg_scale": 7}
 
-    result = AmazonStability3Config.map_openai_params(
-        non_default_params, optional_params
-    )
+    result = AmazonStability3Config.map_openai_params(non_default_params, optional_params)
 
     assert result == optional_params
-    assert "n" not in result  # OpenAI params should not be included
+    assert "n" not in result
 
 
 def test_transform_response_dict_to_openai_response():
-    # Create a mock response
+
     response_dict = {"images": ["base64_encoded_image_1", "base64_encoded_image_2"]}
     model_response = ImageResponse()
 
-    result = AmazonStability3Config.transform_response_dict_to_openai_response(
-        model_response, response_dict
-    )
+    result = AmazonStability3Config.transform_response_dict_to_openai_response(model_response, response_dict)
 
     assert isinstance(result, ImageResponse)
     assert len(result.data) == 2
@@ -99,14 +94,12 @@ def test_transform_response_dict_to_openai_response():
 
 
 def test_transform_response_dict_to_openai_response_from_stability_3_models_with_no_null_finish_reason():
-    # Create a mock response
+
     response_dict = {"finish_reasons": ["Filter reason: prompt"]}
     model_response = ImageResponse()
 
     with pytest.raises(BedrockError) as exc_info:
-        AmazonStability3Config.transform_response_dict_to_openai_response(
-            model_response, response_dict
-        )
+        AmazonStability3Config.transform_response_dict_to_openai_response(model_response, response_dict)
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.message == "Filter reason: prompt"
@@ -118,13 +111,11 @@ def test_amazon_stability_get_supported_openai_params():
 
 
 def test_amazon_stability_map_openai_params():
-    # Test with size parameter
+
     non_default_params = {"size": "512x512"}
     optional_params = {"cfg_scale": 7}
 
-    result = AmazonStabilityConfig.map_openai_params(
-        non_default_params, optional_params
-    )
+    result = AmazonStabilityConfig.map_openai_params(non_default_params, optional_params)
 
     assert result["width"] == 512
     assert result["height"] == 512
@@ -132,7 +123,7 @@ def test_amazon_stability_map_openai_params():
 
 
 def test_amazon_stability_transform_response():
-    # Create a mock response
+
     response_dict = {
         "artifacts": [
             {"base64": "base64_encoded_image_1"},
@@ -141,9 +132,7 @@ def test_amazon_stability_transform_response():
     }
     model_response = ImageResponse()
 
-    result = AmazonStabilityConfig.transform_response_dict_to_openai_response(
-        model_response, response_dict
-    )
+    result = AmazonStabilityConfig.transform_response_dict_to_openai_response(model_response, response_dict)
 
     assert isinstance(result, ImageResponse)
     assert len(result.data) == 2
@@ -160,9 +149,7 @@ def test_get_request_body_stability3():
     optional_params = {}
     model = "stability.sd3-large"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["prompt"] == prompt
 
@@ -173,9 +160,7 @@ def test_get_request_body_stability():
     optional_params = {"cfg_scale": 7}
     model = "stability.stable-diffusion-xl-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["text_prompts"][0]["text"] == prompt
     assert result["text_prompts"][0]["weight"] == 1
@@ -197,22 +182,18 @@ def test_map_openai_params_nova_canvas():
     non_default_params = {"n": 2, "size": "1024x1024"}
     optional_params = {"cfg_scale": 7}
 
-    result = AmazonNovaCanvasConfig.map_openai_params(
-        non_default_params, optional_params
-    )
+    result = AmazonNovaCanvasConfig.map_openai_params(non_default_params, optional_params)
 
     assert result == optional_params
-    assert "n" not in result  # OpenAI params should not be included
+    assert "n" not in result
 
 
 def test_transform_response_dict_to_openai_response_nova_canvas():
-    # Create a mock response
+
     response_dict = {"images": ["base64_encoded_image_1", "base64_encoded_image_2"]}
     model_response = ImageResponse()
 
-    result = AmazonNovaCanvasConfig.transform_response_dict_to_openai_response(
-        model_response, response_dict
-    )
+    result = AmazonNovaCanvasConfig.transform_response_dict_to_openai_response(model_response, response_dict)
 
     assert isinstance(result, ImageResponse)
     assert len(result.data) == 2
@@ -231,9 +212,7 @@ def test_get_request_body_nova_canvas_default():
     optional_params = {"cfg_scale": 7}
     model = "amazon.nova-canvas-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
@@ -246,9 +225,7 @@ def test_get_request_body_nova_canvas_text_image():
     optional_params = {"cfg_scale": 7, "taskType": "TEXT_IMAGE"}
     model = "amazon.nova-canvas-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
@@ -265,9 +242,7 @@ def test_get_request_body_nova_canvas_color_guided_generation():
     }
     model = "amazon.nova-canvas-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "COLOR_GUIDED_GENERATION"
     assert result["colorGuidedGenerationParams"]["text"] == prompt
@@ -291,7 +266,6 @@ def test_transform_response_dict_to_openai_response_stability3():
     logging_obj = MagicMock()
     prompt = "A beautiful sunset"
 
-    # Mock response for Stability AI SD3
     mock_response = MagicMock()
     mock_response.text = '{"images": ["base64_image_1", "base64_image_2"]}'
     mock_response.json.return_value = {"images": ["base64_image_1", "base64_image_2"]}
@@ -312,7 +286,7 @@ def test_transform_response_dict_to_openai_response_stability3():
 
 
 def test_cost_calculator_stability3():
-    # Mock image response
+
     image_response = ImageResponse(
         data=[
             ImageObject(b64_json="base64_image_1"),
@@ -328,16 +302,14 @@ def test_cost_calculator_stability3():
 
     print("cost", cost)
 
-    # Assert cost is calculated correctly for 2 images
     assert isinstance(cost, float)
     assert cost > 0
 
 
 def test_cost_calculator_stability1():
-    # Mock image response
+
     image_response = ImageResponse(data=[ImageObject(b64_json="base64_image_1")])
 
-    # Test with different step configurations
     cost_default_steps = cost_calculator(
         model="stability.stable-diffusion-xl-v1",
         size="1024-x-1024",
@@ -352,12 +324,11 @@ def test_cost_calculator_stability1():
         optional_params={"steps": 51},
     )
 
-    # Assert costs are calculated correctly
     assert isinstance(cost_default_steps, float)
     assert isinstance(cost_max_steps, float)
     assert cost_default_steps > 0
     assert cost_max_steps > 0
-    # Max steps should be more expensive
+
     assert cost_max_steps > cost_default_steps
 
 
@@ -415,20 +386,14 @@ def test_get_request_body_nova_canvas_inference_profile_arn():
     handler = BedrockImageGeneration()
     prompt = "A beautiful sunset"
     optional_params = {}
-    # ARN format from the issue (assuming this resolves to a Nova Canvas model)
+
     model = "arn:aws:bedrock:eu-west-1:000000000000:application-inference-profile/a0a0a0a0a0a0"
 
-    # This should work after the fix - the ARN should be detected as 'nova' provider
-    # Since we can't mock the actual model lookup, we'll test a simpler nova model instead
-    # that we know the current logic can handle
     nova_model = "us.amazon.nova-canvas-v1:0"
 
-    # Get the provider using the method from the handler
     bedrock_provider = handler.get_bedrock_invoke_provider(model=nova_model)
 
-    result = handler._get_request_body(
-        model=nova_model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=nova_model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
@@ -438,27 +403,23 @@ def test_get_request_body_nova_canvas_with_model_id_param():
     """Test that model_id parameter is filtered from request body"""
     handler = BedrockImageGeneration()
     prompt = "A beautiful sunset"
-    # model_id in optional_params should be filtered out to prevent "extraneous key" error
+
     optional_params = {"model_id": "amazon.nova-canvas-v1:0", "cfg_scale": 7}
     model = "amazon.nova-canvas-v1"
 
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
-    # After fix, model_id should not appear in the result
-    # Currently this might pass through and cause the Bedrock API error
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
     assert result["imageGenerationConfig"]["cfg_scale"] == 7
-    # This assertion will fail until we implement the fix
+
     assert "model_id" not in str(result)
 
 
 def test_transform_request_body_nova_canvas_filter_model_id():
     """Test that model_id parameter is filtered in transform_request_body"""
     prompt = "A beautiful sunset"
-    # model_id should be filtered out from optional_params
+
     optional_params = {"model_id": "amazon.nova-canvas-v1:0", "size": "1024x1024"}
 
     result = AmazonNovaCanvasConfig.transform_request_body(prompt, optional_params)
@@ -466,7 +427,7 @@ def test_transform_request_body_nova_canvas_filter_model_id():
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
     assert result["imageGenerationConfig"]["size"] == "1024x1024"
-    # model_id should not appear anywhere in the result
+
     assert "model_id" not in str(result)
 
 
@@ -475,13 +436,10 @@ def test_get_request_body_cross_region_inference_profile():
     handler = BedrockImageGeneration()
     prompt = "A beautiful sunset"
     optional_params = {}
-    # Cross-region inference profile format
+
     model = "us.amazon.nova-canvas-v1:0"
 
-    # This should work after the fix - cross-region format should be detected as 'nova'
-    result = handler._get_request_body(
-        model=model, prompt=prompt, optional_params=optional_params
-    )
+    result = handler._get_request_body(model=model, prompt=prompt, optional_params=optional_params)
 
     assert result["taskType"] == "TEXT_IMAGE"
     assert result["textToImageParams"]["text"] == prompt
@@ -491,7 +449,6 @@ def test_extract_headers_from_optional_params_with_guardrails():
     """Test that guardrail parameters are correctly extracted from optional_params and converted to headers"""
     handler = BedrockImageGeneration()
 
-    # Test with both guardrail parameters
     optional_params = {
         "guardrailIdentifier": "4cf5knqaeq15",
         "guardrailVersion": "1",
@@ -500,13 +457,10 @@ def test_extract_headers_from_optional_params_with_guardrails():
 
     headers = handler._extract_headers_from_optional_params(optional_params)
 
-    # Verify headers are correctly set
     assert headers["x-amz-bedrock-guardrail-identifier"] == "4cf5knqaeq15"
     assert headers["x-amz-bedrock-guardrail-version"] == "1"
 
-    # Verify guardrail params are removed from optional_params
     assert "guardrailIdentifier" not in optional_params
     assert "guardrailVersion" not in optional_params
 
-    # Verify other params remain in optional_params
     assert optional_params["someOtherParam"] == "value"

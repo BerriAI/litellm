@@ -73,9 +73,3 @@ class TestBedrockInvokeNovaJson(BaseLLMChatTest):
                 "Live Bedrock Nova response-schema E2E tests cannot run under VCR replay"
             )
         super().test_json_response_pydantic_obj()
-
-
-
-
-
-

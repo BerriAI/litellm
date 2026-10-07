@@ -11,17 +11,11 @@ from litellm.llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 def test_get_llm_provider_lambda_ai() -> None:
     """Test that get_llm_provider correctly identifies Lambda AI"""
 
-
-    model, provider, api_key, api_base = get_llm_provider(
-        "lambda_ai/llama3.1-8b-instruct"
-    )
+    model, provider, api_key, api_base = get_llm_provider("lambda_ai/llama3.1-8b-instruct")
     assert model == "llama3.1-8b-instruct"
     assert provider == "lambda_ai"
 
-
-    model, provider, api_key, api_base = get_llm_provider(
-        "llama3.1-8b-instruct", api_base="https://api.lambda.ai/v1"
-    )
+    model, provider, api_key, api_base = get_llm_provider("llama3.1-8b-instruct", api_base="https://api.lambda.ai/v1")
     assert model == "llama3.1-8b-instruct"
     assert provider == "lambda_ai"
     assert api_base == "https://api.lambda.ai/v1"
@@ -37,12 +31,10 @@ def test_lambda_ai_get_openai_compatible_provider_info() -> None:
     """Test Lambda AI provider info retrieval"""
     config = LambdaAIChatConfig()
 
-
     with mock.patch.dict(os.environ, {}, clear=True):
         api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://api.lambda.ai/v1"
         assert api_key is None
-
 
     with mock.patch.dict(
         os.environ,
@@ -54,7 +46,6 @@ def test_lambda_ai_get_openai_compatible_provider_info() -> None:
         api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://custom.lambda.ai/v1"
         assert api_key == "test-key"
-
 
     with mock.patch.dict(
         os.environ,

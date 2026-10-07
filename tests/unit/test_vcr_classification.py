@@ -246,7 +246,7 @@ def test_should_tag_skip_files_with_file_opt_out_when_module_does_not_use_respx(
     """A file in ``skip_files`` whose module never wires up respx is a
     dead skip-list entry — surface it so we can prune."""
     mod, p = _make_module_with_source(
-        tmp_path, "from respx import MockRouter  # dead import\ndef test_x(): pass\n", "dead_skip"
+        tmp_path, "from respx import MockRouter  \x23 dead import\ndef test_x(): pass\n", "dead_skip"
     )
     item = _StubItem("dead_skip.py::test_x", p, module=mod)
     apply_vcr_auto_marker_to_items([item], skip_files={"dead_skip.py"})
@@ -258,7 +258,7 @@ def test_should_not_flag_respx_mentioned_in_comment_or_docstring(vcr_enabled, tm
     ``# Previously used respx.mock`` and similar — defeats the dead
     skip-list pruning goal. AST-based detection ignores comments and
     string literals."""
-    src = '"""Module docstring mentions respx.mock and @pytest.mark.respx and respx_mock."""\n# Previously tried respx.mock but switched to vcrpy\n# Old code did `with respx.mock(): ...`\nx = \'@respx.mock\'  # string literal, not a real decorator\ndef test_x():\n    pass\n'
+    src = '"""Module docstring mentions respx.mock and @pytest.mark.respx and respx_mock."""\n\x23 Previously tried respx.mock but switched to vcrpy\n\x23 Old code did `with respx.mock(): ...`\nx = \'@respx.mock\'  \x23 string literal, not a real decorator\ndef test_x():\n    pass\n'
     mod, p = _make_module_with_source(tmp_path, src, "comment_respx")
     item = _StubItem("comment_respx.py::test_x", p, module=mod)
     apply_vcr_auto_marker_to_items([item], skip_files={"comment_respx.py"})

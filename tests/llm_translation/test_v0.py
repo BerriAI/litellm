@@ -41,5 +41,3 @@ async def test_v0_completion_call():
         if "v0" not in str(e) and "provider" not in str(e).lower():
             # Re-raise if it's not a provider-related error
             raise
-
-

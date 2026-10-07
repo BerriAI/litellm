@@ -718,9 +718,7 @@ def test_drop_nested_params_add_prop_and_strict(provider, model):
         "name": tools[0]["function"]["name"],
         "description": tools[0]["function"]["description"],
         "parameters": {
-            key: value
-            for key, value in tools[0]["function"]["parameters"].items()
-            if key != "additionalProperties"
+            key: value for key, value in tools[0]["function"]["parameters"].items() if key != "additionalProperties"
         },
     }
 

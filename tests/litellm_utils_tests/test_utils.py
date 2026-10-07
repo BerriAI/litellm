@@ -715,11 +715,3 @@ def test_get_valid_models_from_dynamic_api_key():
     )
     assert len(valid_models) > 0
     assert "anthropic/claude-sonnet-4-6" in valid_models
-
-
-
-
-
-
-
-

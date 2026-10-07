@@ -14,7 +14,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     anthropic_pt,
     claude_2_1_pt,
-    convert_to_anthropic_image_obj,
     convert_to_anthropic_tool_invoke,
     convert_url_to_base64,
     create_anthropic_image_param,
@@ -235,53 +234,3 @@ def test_convert_generic_image_chunk_to_openai_image_obj():
 
 # ============ _attempt_json_repair Tests ============
 # Tests for the JSON repair utility that fixes truncated tool call arguments
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

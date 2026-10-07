@@ -55,7 +55,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
                 responses_api_request={"previous_response_id": "123"},
                 litellm_trace_id="original-trace",
             )
-            # ensure acompletion called once with merged trace_id
+
             assert mock_acompletion.call_count == 1
             assert mock_acompletion.call_args.kwargs["litellm_trace_id"] == "session-trace"
 

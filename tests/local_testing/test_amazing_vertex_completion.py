@@ -782,6 +782,104 @@ def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
 
 
 
+@pytest.mark.parametrize(
+    "model, vertex_location, supports_response_schema",
+    [
+        ("vertex_ai_beta/gemini-2.0-flash-001", "us-central1", True),
+        ("vertex_ai_beta/gemini-2.5-flash-lite", "us-central1", True),
+        ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
+    ],
+)
+@pytest.mark.parametrize("invalid_response", [True, False])
+@pytest.mark.parametrize("enforce_validation", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_pro_json_schema_args_sent_httpx(
+    model,
+    supports_response_schema,
+    vertex_location,
+    invalid_response,
+    enforce_validation,
+):
+    load_vertex_ai_credentials()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.set_verbose = True
+    messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "recipes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"recipe_name": {"type": "string"}},
+                    "required": ["recipe_name"],
+                },
+            }
+        },
+        "required": ["recipes"],
+        "additionalProperties": False,
+    }
+    client = HTTPHandler()
+    httpx_response = MagicMock()
+    if invalid_response is True:
+        if "claude" in model:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response_anthropic
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response
+    else:
+        if "claude" in model:
+            httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_valid_response
+    resp = None
+    with patch.object(client, "post", new=httpx_response) as mock_call:
+        litellm.set_verbose = True
+        print(f"model entering completion: {model}")
+        try:
+            resp = completion(
+                model=model,
+                messages=messages,
+                response_format={
+                    "type": "json_object",
+                    "response_schema": response_schema,
+                    "enforce_validation": enforce_validation,
+                },
+                vertex_location=vertex_location,
+                client=client,
+            )
+            print("Received={}".format(resp))
+            if invalid_response is True and enforce_validation is True:
+                pytest.fail("Expected this to fail")
+        except litellm.JSONSchemaValidationError as e:
+            if invalid_response is False:
+                pytest.fail("Expected this to pass. Got={}".format(e))
+        mock_call.assert_called_once()
+        if "claude" not in model:
+            print(mock_call.call_args.kwargs)
+            print(mock_call.call_args.kwargs["json"]["generationConfig"])
+            if supports_response_schema:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
+                assert (
+                    "response_schema" in gen_config
+                    or "response_json_schema" in gen_config
+                ), f"Expected response_schema or response_json_schema in {gen_config}"
+            else:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
+                assert (
+                    "response_schema" not in gen_config
+                    and "response_json_schema" not in gen_config
+                )
+                assert (
+                    "Use this JSON schema:"
+                    in mock_call.call_args.kwargs["json"]["contents"][0]["parts"][1]["text"]
+                )
+        elif resp is not None:
+            assert resp.model == model.split("/")[1]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_message_via_anthropic_messages():
     from unittest.mock import AsyncMock
@@ -861,8 +959,103 @@ async def test_anthropic_message_via_anthropic_messages():
 
 
 @pytest.mark.parametrize(
+    "model, vertex_location, supports_response_schema",
+    [
+        ("vertex_ai_beta/gemini-2.0-flash-001", "us-central1", True),
+        ("vertex_ai_beta/gemini-2.5-flash-lite", "us-central1", True),
+        ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
+    ],
+)
+@pytest.mark.parametrize("invalid_response", [True, False])
+@pytest.mark.parametrize("enforce_validation", [True, False])
+@pytest.mark.asyncio
+async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
+    model,
+    supports_response_schema,
+    vertex_location,
+    invalid_response,
+    enforce_validation,
+):
+    from typing import List
+
+    if enforce_validation:
+        litellm.enable_json_schema_validation = True
+    from pydantic import BaseModel
+
+    load_vertex_ai_credentials()
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.set_verbose = True
+    messages = [{"role": "user", "content": "List 5 cookie recipes"}]
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    class Recipe(BaseModel):
+        recipe_name: str
+
+    class ResponseSchema(BaseModel):
+        recipes: List[Recipe]
+
+    client = HTTPHandler()
+    httpx_response = MagicMock()
+    if invalid_response is True:
+        if "claude" in model:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response_anthropic
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_invalid_schema_response
+    else:
+        if "claude" in model:
+            httpx_response.side_effect = vertex_httpx_mock_post_valid_response_anthropic
+        else:
+            httpx_response.side_effect = vertex_httpx_mock_post_valid_response
+    with patch.object(client, "post", new=httpx_response) as mock_call:
+        print("SENDING CLIENT POST={}".format(client.post))
+        try:
+            resp = completion(
+                model=model,
+                messages=messages,
+                response_format=ResponseSchema,
+                vertex_location=vertex_location,
+                client=client,
+            )
+            print("Received={}".format(resp))
+            if invalid_response is True and enforce_validation is True:
+                pytest.fail("Expected this to fail")
+        except litellm.JSONSchemaValidationError as e:
+            if invalid_response is False:
+                pytest.fail("Expected this to pass. Got={}".format(e))
+        mock_call.assert_called_once()
+        if "claude" not in model:
+            print(mock_call.call_args.kwargs)
+            print(mock_call.call_args.kwargs["json"]["generationConfig"])
+            if supports_response_schema:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
+                assert (
+                    "response_schema" in gen_config
+                    or "response_json_schema" in gen_config
+                ), f"Expected response_schema or response_json_schema in {gen_config}"
+                assert (
+                    "response_mime_type"
+                    in mock_call.call_args.kwargs["json"]["generationConfig"]
+                )
+                assert (
+                    mock_call.call_args.kwargs["json"]["generationConfig"]["response_mime_type"]
+                    == "application/json"
+                )
+            else:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
+                assert (
+                    "response_schema" not in gen_config
+                    and "response_json_schema" not in gen_config
+                )
+                assert (
+                    "Use this JSON schema:"
+                    in mock_call.call_args.kwargs["json"]["contents"][0]["parts"][1]["text"]
+                )
+
+
+@pytest.mark.parametrize(
     "model", ["gemini-2.5-flash-lite", "claude-3-5-sonnet@20240620"]
-)  # "vertex_ai",
+)
 @pytest.mark.asyncio
 async def test_gemini_pro_httpx_custom_api_base(model):
     load_vertex_ai_credentials()
@@ -926,6 +1119,55 @@ async def test_gemini_pro_httpx_custom_api_base(model):
 
 
 
+
+
+@pytest.mark.parametrize(
+    ("route", "provider"),
+    [
+        ("completion", "vertex_ai"),
+        ("embedding", "vertex_ai"),
+        ("image_generation", "gemini"),
+    ],
+    ids=[
+        "completion-vertex_ai",
+        "embedding-vertex_ai",
+        "image_generation-gemini",
+    ],
+)
+def test_litellm_api_base(monkeypatch, route, provider):
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    import litellm
+
+    monkeypatch.setattr(litellm, "api_base", "https://litellm.com")
+    load_vertex_ai_credentials()
+    if route == "image_generation" and provider == "gemini":
+        pytest.skip("Gemini does not support image generation")
+    with patch.object(client, "post", new=MagicMock()) as mock_client:
+        try:
+            if route == "completion":
+                response = completion(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    messages=[{"role": "user", "content": "Hello, world!"}],
+                    client=client,
+                )
+            elif route == "embedding":
+                response = embedding(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    input=["Hello, world!"],
+                    client=client,
+                )
+            elif route == "image_generation":
+                response = image_generation(
+                    model=f"{provider}/gemini-2.0-flash-001",
+                    prompt="Hello, world!",
+                    client=client,
+                )
+        except Exception as e:
+            print(e)
+        mock_client.assert_called()
+        assert mock_client.call_args.kwargs["url"].startswith("https://litellm.com")
 
 
 def test_prompt_factory():

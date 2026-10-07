@@ -21,7 +21,6 @@ import pytest
 
 import litellm
 from litellm import (
-    AnthropicConfig,
     Router,
     adapter_completion,
 )
