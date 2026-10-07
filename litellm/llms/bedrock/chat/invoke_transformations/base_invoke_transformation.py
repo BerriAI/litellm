@@ -119,7 +119,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         Get the complete url for the request
         """
         provider: Final = self.get_bedrock_invoke_provider(model)
-        unencoded_model_id: Final = optional_params.get("model_id")
+        model_id_param: Final = optional_params.get("model_id")
+        unencoded_model_id: Final[str | None] = model_id_param if isinstance(model_id_param, str) else None
         modelId: Final = self.get_bedrock_model_id(
             model=model,
             provider=provider,
