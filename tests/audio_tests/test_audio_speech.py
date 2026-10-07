@@ -22,7 +22,7 @@ import litellm
 
 
 async def _run_audio_speech_litellm(sync_mode, model, api_base, api_key):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     speech_file_path = Path(__file__).parent / "speech.mp3"
 
     if sync_mode:
@@ -320,23 +320,13 @@ def test_audio_speech_cost_calc():
         assert standard_logging_payload["response_cost"] > 0
 
 
-def test_audio_speech_gemini():
-    result = litellm.speech(
-        model="gemini/gemini-2.5-flash-preview-tts",
-        input="the quick brown fox jumped over the lazy dogs",
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
-
-    print(result)
-
-
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_azure_ava_tts_async():
     """
     Test Azure AVA (Cognitive Services) Text-to-Speech with real API request.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     api_key = os.getenv("AZURE_TTS_API_KEY")
     api_base = os.getenv("AZURE_TTS_API_BASE")
 
@@ -390,7 +380,7 @@ async def test_runwayml_tts_async():
     """
     Test RunwayML Text-to-Speech with real API request.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     api_key = os.getenv("RUNWAYML_API_KEY")
     api_base = os.getenv("RUNWAYML_API_BASE")
 

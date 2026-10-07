@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import os
 import time
 import traceback
@@ -10,6 +11,7 @@ import json
 load_dotenv()
 import tempfile
 from uuid import uuid4
+from typing import Final
 
 import pytest
 import litellm
@@ -22,6 +24,8 @@ from litellm.secret_managers.main import (
     _should_read_secret_from_secret_manager,
 )
 from unittest.mock import AsyncMock, patch, MagicMock
+
+_AWS_FIXTURE_MASTER_KEY_SHA256: Final = "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
 
 
 def load_vertex_ai_credentials():
@@ -76,7 +80,9 @@ def test_aws_secret_manager():
     # cast json to dict
     secret_val = json.loads(secret_val)
 
-    assert secret_val["litellm_master_key"] == "sk-1234"
+    assert (
+        hashlib.sha256(secret_val["litellm_master_key"].encode()).hexdigest() == _AWS_FIXTURE_MASTER_KEY_SHA256
+    ), "Expected the fixture value stored in the CI AWS account's litellm_master_key secret"
 
 
 def redact_oidc_signature(secret_val):

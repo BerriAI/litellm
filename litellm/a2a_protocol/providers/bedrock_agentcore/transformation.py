@@ -219,7 +219,7 @@ class BedrockAgentCoreA2ATransformation:
         return url, signed_headers, signed_body
 
     @staticmethod
-    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, Any]]:
+    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, object]]:
         """
         Parse SSE events from an httpx streaming response.
 

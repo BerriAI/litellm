@@ -57,6 +57,37 @@ describe("buildSeries", () => {
       { date: "2026-01-03", a: 10 },
     ]);
   });
+
+  it("starts the chart at the first bucket with usage so bars stay wide on a long range", () => {
+    const rows = [row({ date: "2026-03-10", requests: 1 }), row({ date: "2026-03-20", requests: 2 })];
+    const daily = buildSeries(rows, ["a"], "requests", { start: "2025-03-21", end: "2026-03-20", granularity: "day" });
+    expect(daily[0]).toEqual({ date: "2026-02-19", a: 0 });
+    expect(daily).toHaveLength(30);
+    expect(daily.at(-1)).toEqual({ date: "2026-03-20", a: 2 });
+
+    const early = [row({ date: "2025-12-01", requests: 1 }), ...rows];
+    const fromFirstUse = buildSeries(early, ["a"], "requests", {
+      start: "2025-03-21",
+      end: "2026-03-20",
+      granularity: "day",
+    });
+    expect(fromFirstUse[0]).toEqual({ date: "2025-12-01", a: 1 });
+    expect(fromFirstUse.at(-1)?.date).toBe("2026-03-20");
+  });
+
+  it("keeps weekly buckets on the original grid when trimming idle weeks", () => {
+    const rows = [row({ date: "2026-03-20", requests: 3 })];
+    const weekly = buildSeries(rows, ["a"], "requests", {
+      start: "2025-03-21",
+      end: "2026-03-20",
+      granularity: "week",
+    });
+    expect(weekly).toHaveLength(12);
+    expect(weekly.map((week) => (Date.parse(String(week.date)) - Date.parse("2025-03-21")) % (7 * 86_400_000))).toEqual(
+      Array(12).fill(0),
+    );
+    expect(weekly.at(-1)).toEqual({ date: "2026-03-20", a: 3 });
+  });
 });
 
 describe("buildBucketTotals", () => {

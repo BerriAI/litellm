@@ -5708,6 +5708,41 @@ async def test_unbuffered_end_of_stream_hook_yields_chunks_before_scan():
 
 
 @pytest.mark.asyncio
+async def test_unbuffered_end_of_stream_hook_scans_released_chunks_when_the_client_closes_early():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-audit-mode",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        streaming_buffer_until_moderated=False,
+        streaming_end_of_stream_only=True,
+    )
+    scans = []
+
+    async def record_scan(*args, **kwargs):
+        scans.append(kwargs["source"])
+        return {"action": "NONE", "assessments": [], "outputs": []}
+
+    async def mock_stream():
+        yield _chat_chunk("Hello", None)
+        yield _chat_chunk(" world", None)
+        yield _chat_chunk("", "stop")
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
+        stream = guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_stream(),
+            request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        first = await stream.__anext__()
+        await stream.aclose()
+
+    assert first.choices[0].delta.content == "Hello"
+    assert scans == ["OUTPUT"]
+
+
+@pytest.mark.asyncio
 async def test_buffered_default_hook_scans_before_any_chunk():
     guardrail = BedrockGuardrail(
         guardrail_name="bedrock-buffered-default",

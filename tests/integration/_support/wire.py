@@ -30,6 +30,7 @@ class Reply:
     gate_after_first: threading.Event | None = None
     pause_between_chunks: float = 0
     headers: Mapping[str, str] = MappingProxyType({})
+    drop_connection: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +82,10 @@ def wire_server(
             except Exception as error:
                 errors.put(error)
                 reply = Reply(status=500)
+            if reply.drop_connection:
+                self.close_connection = True
+                disconnected.put(request.target)
+                return
             self.send_response(reply.status)
             self.send_header("content-type", reply.content_type)
             for name, value in reply.headers.items():
@@ -128,6 +133,7 @@ def wire_server(
 
     class OwnedHTTPServer(ThreadingHTTPServer):
         daemon_threads = False
+        request_queue_size = 128
 
         def server_bind(self) -> None:
             super().server_bind()

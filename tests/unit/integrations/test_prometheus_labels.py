@@ -581,9 +581,9 @@ def test_prometheus_label_value_sanitization():
 
 def test_prometheus_label_value_sanitization_unicode_paragraph_separator():
     """Test that U+2029 (Paragraph Separator) is also stripped."""
-    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+    from litellm.types.integrations.prometheus import sanitize_prometheus_label_value
 
-    result = _sanitize_prometheus_label_value("model\u2029name")
+    result = sanitize_prometheus_label_value("model\u2029name")
     assert result == "modelname"
     assert "\u2029" not in result
 
@@ -592,20 +592,20 @@ def test_prometheus_label_value_sanitization_unicode_paragraph_separator():
 
 def test_prometheus_label_value_sanitization_none():
     """Test that None values pass through unchanged."""
-    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+    from litellm.types.integrations.prometheus import sanitize_prometheus_label_value
 
-    assert _sanitize_prometheus_label_value(None) is None
+    assert sanitize_prometheus_label_value(None) is None
 
     print("✅ None values pass through unchanged")
 
 
 def test_prometheus_label_value_sanitization_non_string_types():
     """Test that non-string values (int, bool, etc.) are coerced to str."""
-    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+    from litellm.types.integrations.prometheus import sanitize_prometheus_label_value
 
-    assert _sanitize_prometheus_label_value(200) == "200"
-    assert _sanitize_prometheus_label_value(True) == "True"
-    assert _sanitize_prometheus_label_value(3.14) == "3.14"
+    assert sanitize_prometheus_label_value(200) == "200"
+    assert sanitize_prometheus_label_value(True) == "True"
+    assert sanitize_prometheus_label_value(3.14) == "3.14"
 
     print("✅ Non-string values are coerced to str")
 

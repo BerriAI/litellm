@@ -658,7 +658,7 @@ class TestAzureContainerKnownFailureRegressions:
 
         from litellm.proxy.container_endpoints import handler_factory
 
-        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+        encoded_id = ResponsesAPIRequestUtils.build_container_id(
             custom_llm_provider="azure",
             model_id="model_abc123",
             container_id="cntr_123",
@@ -729,7 +729,7 @@ class TestAzureContainerKnownFailureRegressions:
 
         from litellm.proxy.container_endpoints import handler_factory
 
-        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+        encoded_id = ResponsesAPIRequestUtils.build_container_id(
             custom_llm_provider="azure",
             model_id="model_abc123",
             container_id="cntr_123",
@@ -807,7 +807,7 @@ class TestAzureContainerKnownFailureRegressions:
         from litellm.proxy.common_utils import http_parsing_utils
         from litellm.proxy.container_endpoints import handler_factory
 
-        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+        encoded_id = ResponsesAPIRequestUtils.build_container_id(
             custom_llm_provider="azure",
             model_id="model_abc123",
             container_id="cntr_123",
@@ -893,7 +893,7 @@ class TestAzureContainerKnownFailureRegressions:
             get_container_forwarding_params,
         )
 
-        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+        encoded_id = ResponsesAPIRequestUtils.build_container_id(
             custom_llm_provider="azure",
             model_id="deployment-uuid-123",
             container_id="cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df",
@@ -932,7 +932,7 @@ class TestAzureContainerKnownFailureRegressions:
         )
 
         native_id = "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
-        encoded_stored_id = ResponsesAPIRequestUtils._build_container_id(
+        encoded_stored_id = ResponsesAPIRequestUtils.build_container_id(
             custom_llm_provider="azure",
             model_id="deployment-uuid-123",
             container_id=native_id,

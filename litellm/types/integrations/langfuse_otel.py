@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     Protocol = Literal["otlp_grpc", "otlp_http"]
@@ -9,7 +9,7 @@ else:
     Protocol = Any
 
 
-class LangfuseOtelConfig(BaseModel):
+class LangfuseOtelConfig(LiteLLMBaseModel):
     otlp_auth_headers: str | None = None
     protocol: Protocol = "otlp_http"
 

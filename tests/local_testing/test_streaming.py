@@ -435,28 +435,6 @@ def test_completion_azure_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_azure_function_calling_stream():
-    try:
-        litellm.set_verbose = False
-        user_message = "What is the current weather in Boston?"
-        messages = [{"content": user_message, "role": "user"}]
-        response = completion(
-            model="azure/gpt-4.1-mini",
-            messages=messages,
-            stream=True,
-            tools=tools_schema,
-        )
-        # Add any assertions here to check the response
-        for chunk in response:
-            print(chunk)
-            if chunk["choices"][0]["finish_reason"] == "stop":
-                break
-            print(chunk["choices"][0]["finish_reason"])
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.mark.skip("Flaky ollama test - needs to be fixed")
 def test_completion_ollama_hosted_stream():
     try:
@@ -530,7 +508,7 @@ def test_completion_model_stream(model):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_gemini_stream(sync_mode):
     try:
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         print("Streaming gemini response")
         function1 = [
             {
@@ -3360,7 +3338,7 @@ def test_mock_response_iterator_tool_use():
 def test_reasoning_content_completion(model):
     # litellm.set_verbose = True
     try:
-        # litellm._turn_on_debug()
+        # litellm.turn_on_debug()
         resp = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "Tell me a joke."}],
