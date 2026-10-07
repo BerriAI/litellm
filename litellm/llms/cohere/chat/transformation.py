@@ -1,9 +1,11 @@
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import cohere_messages_pt_v2
@@ -21,6 +23,35 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CohereToolCall(TypedDict):
+    name: NotRequired[ReadOnly[object]]
+    generation_id: NotRequired[ReadOnly[object]]
+    parameters: NotRequired[ReadOnly[object]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CohereBilledUnits(TypedDict):
+    input_tokens: NotRequired[ReadOnly[int | float]]
+    output_tokens: NotRequired[ReadOnly[int | float]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CohereMeta(TypedDict):
+    billed_units: NotRequired[ReadOnly[_CohereBilledUnits]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CohereChatResponse(TypedDict):
+    text: ReadOnly[str | None]
+    citations: NotRequired[ReadOnly[object]]
+    tool_calls: NotRequired[ReadOnly[Sequence[_CohereToolCall] | None]]
+    meta: NotRequired[ReadOnly[_CohereMeta]]
+
+
+_COHERE_CHAT_RESPONSE: Final = TypeAdapter(_CohereChatResponse)
 
 
 class CohereError(BaseLLMException):
@@ -231,7 +262,7 @@ class CohereChatConfig(BaseConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _COHERE_CHAT_RESPONSE.validate_python(raw_response.json())
             model_response.choices[0].message.content = raw_response_json["text"]
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
