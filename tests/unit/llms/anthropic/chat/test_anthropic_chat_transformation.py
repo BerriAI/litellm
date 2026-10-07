@@ -6798,3 +6798,62 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[0]["messages"]] == ["user", "assistant", "user"]
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
+
+
+def test_thinking_forwarded_from_extra_body():
+    """https://github.com/BerriAI/litellm/issues/44197
+
+    `thinking` passed via OpenAI-style `extra_body` (e.g. ChatOpenAI through the
+    LiteLLM proxy) must be forwarded as a top-level `thinking` block in the
+    Anthropic payload instead of being silently dropped.
+    """
+    config = AnthropicConfig()
+    data = config.transform_request(
+        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "max_tokens": 2048,
+            "extra_body": {"thinking": {"type": "disabled"}},
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert data.get("thinking") == {"type": "disabled"}
+
+
+def test_invalid_thinking_type_from_extra_body_raises():
+    """https://github.com/BerriAI/litellm/issues/44197
+
+    An unrecognised `thinking.type` arriving via `extra_body` must raise a
+    validation error instead of passing through silently.
+    """
+    config = AnthropicConfig()
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        config.transform_request(
+            model="claude-sonnet-4-5-20250929",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={
+                "max_tokens": 2048,
+                "extra_body": {"thinking": {"type": "abcdef"}},
+            },
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_top_level_thinking_takes_precedence_over_extra_body():
+    """A top-level `thinking` param (e.g. litellm.completion(thinking=...)) wins
+    over a `thinking` nested in `extra_body`."""
+    config = AnthropicConfig()
+    data = config.transform_request(
+        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={
+            "max_tokens": 2048,
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "extra_body": {"thinking": {"type": "disabled"}},
+        },
+        litellm_params={},
+        headers={},
+    )
+    assert data.get("thinking") == {"type": "enabled", "budget_tokens": 1024}
