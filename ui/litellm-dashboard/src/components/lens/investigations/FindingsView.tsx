@@ -27,6 +27,7 @@ import { FINDING_PANEL_WIDTH_KEY } from "../storage";
 import { EvidenceView } from "./Evidence";
 import { FindingDetails } from "./FindingDetails";
 import { InvestigationError, InvestigationsLoading } from "./InvestigationStates";
+import { PRIORITY_LABEL, PRIORITY_ORDER, PriorityDot } from "./PriorityMark";
 
 const PRIORITIES: { value: Priority | "all"; label: string }[] = [
   { value: "all", label: "All priorities" },
@@ -34,17 +35,6 @@ const PRIORITIES: { value: Priority | "all"; label: string }[] = [
   { value: "medium", label: "Medium" },
   { value: "low", label: "Low" },
 ];
-
-const DAY_MS = 86_400_000;
-
-function dayGroup(iso: string, now: number): string {
-  const startOfToday = new Date(now).setHours(0, 0, 0, 0);
-  const seen = Date.parse(iso);
-  if (seen >= startOfToday) return "Today";
-  if (seen >= startOfToday - DAY_MS) return "Yesterday";
-  if (seen >= startOfToday - 7 * DAY_MS) return "This week";
-  return "Earlier";
-}
 
 function FilterSelect<T extends string>({
   label,
@@ -59,7 +49,11 @@ function FilterSelect<T extends string>({
 }) {
   return (
     <Select items={items} value={value} onValueChange={(next: T | null) => next !== null && onChange(next)}>
-      <SelectTrigger size="sm" className="h-7 min-w-0 flex-1 text-xs" aria-label={label}>
+      <SelectTrigger
+        size="sm"
+        className="h-7 min-w-0 flex-1 border-transparent bg-muted/60 text-xs shadow-none hover:bg-muted"
+        aria-label={label}
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -84,17 +78,19 @@ function FindingRow({ row, now }: { row: InboxRow; now: number }) {
           role="row"
           tabIndex={0}
           aria-label={row.title}
-          className="mx-2 block cursor-pointer space-y-1 rounded-md px-2 py-2 transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60 data-[state=selected]:bg-muted"
+          className="mx-2 block cursor-pointer space-y-1 rounded-md px-2 py-2 transition-[background-color] duration-150 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=selected]:bg-muted"
         />
       }
     >
-      <div role="gridcell" className="line-clamp-2 text-xs text-foreground">
+      <div role="gridcell" className="line-clamp-2 text-xs leading-snug text-pretty text-foreground">
         {row.title}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span title={formatActivityTimestamp(row.lastSeen)}>{agoLabel(Date.parse(row.lastSeen), now)}</span>
+        <span className="tabular-nums" title={formatActivityTimestamp(row.lastSeen)}>
+          {agoLabel(Date.parse(row.lastSeen), now)}
+        </span>
         <span
-          className="whitespace-nowrap text-foreground/70 tabular-nums"
+          className="whitespace-nowrap text-foreground/75 tabular-nums"
           title={`${row.runs} affected ${row.runs === 1 ? "trace" : "traces"} across ${row.sources.map(({ lens }) => lens.settings.name).join(", ")}`}
         >
           {percent ? `${percent} affected` : `${row.runs} ${row.runs === 1 ? "trace" : "traces"}`}
@@ -105,20 +101,26 @@ function FindingRow({ row, now }: { row: InboxRow; now: number }) {
 }
 
 function FindingList({ rows, now }: { rows: readonly InboxRow[]; now: number }) {
-  const groups = [...new Set(rows.map((row) => dayGroup(row.lastSeen, now)))];
+  const groups = PRIORITY_ORDER.map((priority) => ({
+    priority,
+    rows: rows.filter((row) => row.priority === priority),
+  })).filter((group) => group.rows.length > 0);
   return (
-    <div role="grid" aria-label="Findings" className="min-h-0 flex-1 overflow-y-auto pb-2">
+    <div role="grid" aria-label="Findings" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
       {groups.map((group) => (
-        <div role="rowgroup" key={group} aria-label={`${group} findings`}>
-          <div role="row" className="sticky top-0 z-raised bg-background px-4 pt-2 pb-1 text-xs text-muted-foreground">
-            <span role="columnheader">{group}</span>
+        <div role="rowgroup" key={group.priority} aria-label={`${PRIORITY_LABEL[group.priority]} priority findings`}>
+          <div
+            role="row"
+            className="sticky top-0 z-raised flex items-center gap-2 bg-background/95 px-4 pt-3 pb-1.5 text-xs font-medium text-muted-foreground backdrop-blur"
+          >
+            <PriorityDot priority={group.priority} />
+            <span role="columnheader">{PRIORITY_LABEL[group.priority]} priority</span>
+            <span className="ml-auto tabular-nums">{group.rows.length}</span>
           </div>
-          <div className="space-y-1 pt-1">
-            {rows
-              .filter((row) => dayGroup(row.lastSeen, now) === group)
-              .map((row) => (
-                <FindingRow key={row.key} row={row} now={now} />
-              ))}
+          <div className="space-y-0.5">
+            {group.rows.map((row) => (
+              <FindingRow key={row.key} row={row} now={now} />
+            ))}
           </div>
         </div>
       ))}
