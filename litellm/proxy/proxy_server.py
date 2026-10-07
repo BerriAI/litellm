@@ -1616,7 +1616,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             await offerings_client.close()
             raise ValueError("Initial external offering configuration is invalid")
         llm_router = offerings_manager.router
-    offerings_guard: Final = OfferingAccessGuard(offerings_manager.router) if offerings_manager is not None else None
+    offerings_guard: Final = (
+        OfferingAccessGuard(offerings_manager.router, general_settings) if offerings_manager is not None else None
+    )
     if offerings_guard is not None:
         litellm.logging_callback_manager.add_litellm_callback(offerings_guard)
     offerings_task: Final = asyncio.create_task(offerings_manager.run()) if offerings_manager is not None else None

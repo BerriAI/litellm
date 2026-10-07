@@ -11,8 +11,10 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.chatgpt.authenticator import prevent_device_login
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator, alias_target, caller_alias_maps
 from litellm.router import Router
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
 
@@ -95,14 +97,40 @@ class OfferingSnapshotMiddleware:
 
 
 class OfferingAccessGuard(CustomLogger):
-    def __init__(self, router: OfferingRouterView) -> None:
+    def __init__(self, router: OfferingRouterView, general_settings: Mapping[str, object] | None = None) -> None:
         self.router = router
+        self.general_settings = general_settings if general_settings is not None else {}
+
+    def _offering_name(self, name: str, auth: UserAPIKeyAuth) -> str:
+        snapshot: Final = self.router.serving_snapshot()
+        caller_target: Final = (
+            alias_target(
+                name,
+                caller_alias_maps(auth.aliases, auth.team_model_aliases, auth.team_id, auth.team_id),
+                snapshot.available_models | frozenset(snapshot.unavailable_models),
+            )
+            or name
+        )
+        target: Final = resolve_model_group_alias(snapshot.router.model_group_alias, caller_target) or caller_target
+        names: Final = [
+            row["model_name"]
+            for row in (snapshot.router.get_model_list() or [])
+            if isinstance(row.get("model_name"), str)
+            and (
+                auth.user_role == LitellmUserRoles.PROXY_ADMIN
+                or not isinstance(row.get("model_info"), Mapping)
+                or row["model_info"].get("team_id") in (None, auth.team_id)
+            )
+        ]
+        return TeamModelNameTranslator.resolve_public_name(target, names, snapshot.router, self.general_settings)
 
     async def async_filter_listed_models(
         self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
     ) -> Sequence[str]:
         snapshot: Final = self.router.serving_snapshot()
-        return tuple(name for name in model_names if name in snapshot.available_models)
+        return tuple(
+            name for name in model_names if self._offering_name(name, user_api_key_dict) in snapshot.available_models
+        )
 
     async def async_pre_call_hook(
         self,
@@ -133,9 +161,10 @@ class OfferingAccessGuard(CustomLogger):
         if not isinstance(model, str):
             return None
         snapshot: Final = self.router.serving_snapshot()
-        if model in snapshot.available_models:
+        offering: Final = self._offering_name(model, user_api_key_dict)
+        if offering in snapshot.available_models:
             return None
-        reason: Final = snapshot.unavailable_models.get(model)
+        reason: Final = snapshot.unavailable_models.get(offering)
         if reason is not None:
             return litellm.ServiceUnavailableError(
                 message=f"Model '{model}' is unavailable: {reason}", model=model, llm_provider=""

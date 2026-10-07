@@ -4,7 +4,13 @@ from typing import Final
 import litellm
 import pytest
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import LiteLLM_EndUserTable, ModelAccessDeniedProxyException, ProxyErrorTypes, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_EndUserTable,
+    LitellmUserRoles,
+    ModelAccessDeniedProxyException,
+    ProxyErrorTypes,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.auth_checks import can_customer_access_model, can_key_call_model
 from litellm.proxy.offering_router import OfferingAccessGuard, OfferingRouterView, OfferingServingSnapshot
 from litellm.router import Router
@@ -91,3 +97,52 @@ async def test_globally_available_offerings_preserve_customer_and_key_model_perm
             await can_key_call_model("restricted", None, UserAPIKeyAuth(models=["allowed"]), router)
         assert denied_key.value.code == "403"
         assert denied_key.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+async def test_public_and_router_aliases_follow_offering_availability_without_crossing_teams() -> None:
+    active: Final = "model_name_team1_active"
+    missing: Final = "model_name_team1_missing"
+    other_team: Final = "model_name_team2_active"
+    native: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {"model": f"openai/{name}", "api_key": "fixture-key"},
+                "model_info": {"team_id": team, "team_public_model_name": public},
+            }
+            for name, team, public in (
+                (active, "team1", "fast"),
+                (missing, "team1", "gone"),
+                (other_team, "team2", "gone"),
+            )
+        ],
+        model_group_alias={"active-alias": active, "missing-alias": missing},
+    )
+    view: Final = OfferingRouterView(
+        OfferingServingSnapshot(
+            native, frozenset({active, other_team}), MappingProxyType({missing: "absent"}), frozenset()
+        )
+    )
+    auth: Final = UserAPIKeyAuth(team_id="team1", aliases={"my-fast": active, "my-gone": missing})
+    guard: Final = OfferingAccessGuard(view)
+    with view.pin_snapshot():
+        assert await guard.async_filter_listed_models(
+            auth, ("fast", "gone", "active-alias", "missing-alias", "my-fast", "my-gone")
+        ) == (
+            "fast",
+            "active-alias",
+            "my-fast",
+        )
+        assert await guard.async_pre_call_hook(auth, DualCache(), {"model": "fast"}, "acompletion") is None
+        assert isinstance(
+            await guard.async_pre_call_hook(auth, DualCache(), {"model": "gone"}, "acompletion"),
+            litellm.ServiceUnavailableError,
+        )
+        assert isinstance(
+            await guard.async_pre_call_hook(auth, DualCache(), {"model": "missing-alias"}, "acompletion"),
+            litellm.ServiceUnavailableError,
+        )
+        admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        assert await guard.async_filter_listed_models(admin, ("fast",)) == ("fast",)
+        legacy: Final = OfferingAccessGuard(view, {"use_team_public_model_name": False})
+        assert await legacy.async_filter_listed_models(auth, ("fast", active)) == (active,)
