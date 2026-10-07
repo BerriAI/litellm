@@ -849,6 +849,46 @@ def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logg
     assert excinfo.value.generated_content == ""
 
 
+@pytest.mark.asyncio
+async def test_bridged_stream_mid_stream_fallback_error_is_not_wrapped_again(logging_obj: Logging):
+    """A MidStreamFallbackError raised by an inner stream (the chat-to-Responses bridge consumes a
+    Responses stream) passes through untouched, so the Router's one-level unwrap surfaces the
+    provider's RateLimitError instead of the inner sentinel."""
+    from litellm.exceptions import MidStreamFallbackError, RateLimitError
+
+    rate_limit_error: Final = RateLimitError(
+        message="Your requests to gpt-6.1-sol have exceeded token rate limit.",
+        llm_provider="azure",
+        model="gpt-6.1-sol",
+    )
+    inner_error: Final = MidStreamFallbackError(
+        message=str(rate_limit_error),
+        model="gpt-6.1-sol",
+        llm_provider="azure",
+        original_exception=rate_limit_error,
+        is_pre_first_chunk=True,
+    )
+
+    async def _raise_inner_error(**kwargs):
+        raise inner_error
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-6.1-sol",
+        logging_obj=logging_obj,
+        custom_llm_provider="azure",
+        make_call=_raise_inner_error,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value is inner_error
+    assert excinfo.value.original_exception is rate_limit_error
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.message == f"litellm.MidStreamFallbackError: {rate_limit_error}"
+
+
 def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     """Ensure __next__ raises BadRequestError (400) directly, not MidStreamFallbackError.
 

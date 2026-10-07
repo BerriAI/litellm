@@ -2270,8 +2270,16 @@ class CustomStreamWrapper:
 
         429 (rate-limit) is explicitly exempted from the 4xx filter because
         it is transient and the Router should switch to another model group.
+
+        An error an inner stream already wrapped (the chat-to-Responses bridge
+        consumes a Responses stream) is re-raised untouched, so the Router's
+        one-level unwrap surfaces the provider exception.
         """
         from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(e, MidStreamFallbackError):
+            self._restore_consumer_correlation_context()
+            raise e
 
         # Map to OpenAI exception format. Some providers' mappers (e.g.
         # _map_anthropic_exception, _map_aleph_alpha_exception) synchronously
