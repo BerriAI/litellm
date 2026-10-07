@@ -6,7 +6,9 @@ use time::OffsetDateTime;
 use crate::{
     normalize::ObservationType,
     query::named::{ListTracesRow, SpendByResponseIdsRow as SpendRow, TraceSpansRow},
-    view::{AgentNode, RunSource, Span, SpanStatus, SpendMatch, Trace, TraceSummary},
+    view::{
+        AgentNode, RunSource, RunSourceType, Span, SpanStatus, SpendMatch, Trace, TraceSummary,
+    },
 };
 
 use super::{
@@ -140,6 +142,8 @@ pub fn iso_time(ms: i64) -> String {
 
 fn source(row: &TraceSpansRow) -> Option<RunSource> {
     row.source_url.starts_with("https://").then(|| RunSource {
+        kind: serde_json::from_value(serde_json::Value::from(row.source_type.as_str()))
+            .unwrap_or(RunSourceType::Custom),
         url: row.source_url.clone(),
         title: row.source_title.clone(),
     })
