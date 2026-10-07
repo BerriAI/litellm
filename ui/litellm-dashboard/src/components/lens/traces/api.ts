@@ -9,6 +9,7 @@ import {
   apiClient,
   getProxyBaseUrl,
 } from "../../networking";
+import type { AgentSummary } from "../agents/agentRollup";
 import type {
   SpanDetail,
   SpanQuery,
@@ -20,6 +21,8 @@ import type {
   TraceFindingCount,
   TraceFindingsRequest,
   TraceSignals,
+  TraceAgentList,
+  TraceAgentsQuery,
 } from "./types";
 
 export interface TraceWindow {
@@ -38,6 +41,7 @@ export interface TracesApi {
   readonly live: boolean;
   handoff(traceId: string, spanId?: string | null, traceRef?: string): TraceHandoff;
   list(window: TraceWindow): Promise<TracePage>;
+  agents(window: TraceWindow): Promise<AgentSummary[]>;
   findings(traces: TraceFindingsRequest["traces"]): Promise<TraceFindingCount[]>;
   signals(traces: TraceFindingsRequest["traces"]): Promise<TraceSignals[]>;
   anyRecorded(): Promise<boolean>;
@@ -79,6 +83,13 @@ export function liveTracesApi(accessToken: string): TracesApi {
       copied: "Command copied",
     }),
     list: (window) => agentTraceListCall({ accessToken, ...window }),
+    agents: async ({ startMs, endMs }) => {
+      const page = await apiClient.get<TraceAgentList>("/v1/traces/agents", {
+        accessToken,
+        query: { start_ms: startMs, end_ms: endMs } satisfies TraceAgentsQuery,
+      });
+      return page.agents ?? [];
+    },
     findings: (traces) =>
       apiClient.post<TraceFindingCount[]>("/lens/traces/findings", {
         accessToken,
