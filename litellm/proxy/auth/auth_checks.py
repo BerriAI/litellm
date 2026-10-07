@@ -4595,7 +4595,7 @@ def check_model_access_helper(
 _check_model_access_helper: Final = check_model_access_helper
 
 
-def can_object_call_model(
+def _can_object_call_model(
     model: str | list[str],
     llm_router: Router | None,
     models: list[str],
@@ -4625,7 +4625,7 @@ def can_object_call_model(
         raise Exception(f"Unable to parse model, max fallback depth exceeded - received model: {model}")
     if isinstance(model, list):
         for m in model:
-            can_object_call_model(
+            _can_object_call_model(
                 model=m,
                 llm_router=llm_router,
                 models=models,
@@ -4695,7 +4695,7 @@ def can_object_call_model(
     )
 
 
-_can_object_call_model: Final = can_object_call_model
+can_object_call_model: Final = _can_object_call_model
 
 
 def _resolve_team_alias(
