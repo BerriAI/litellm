@@ -15,9 +15,12 @@ Pins (PR2):
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
+from typing import Callable, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
 
 import litellm
 from litellm.proxy import proxy_server
@@ -275,11 +278,6 @@ def test_run_thread_error(client, auth_as, no_router, path):
     assert len(response.content) > 0
 
 
-# ---------------------------------------------------------------------------
-# Provider errors keep their mapped status on every threads route
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("method", "path", "router_method", "payload"),
     [
@@ -291,17 +289,23 @@ def test_run_thread_error(client, auth_as, no_router, path):
     ],
 )
 def test_threads_routes_keep_the_mapped_provider_status(
-    client, auth_as, patched_threads, method, path, router_method, payload
-):
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    patched_threads: MagicMock,
+    method: str,
+    path: str,
+    router_method: str,
+    payload: dict[str, str] | None,
+) -> None:
     """A litellm NotFoundError carries status 404 and the SDK's ``code=None``; the route answers 404 with its message."""
-    upstream_error = litellm.NotFoundError(
+    upstream_error: Final = litellm.NotFoundError(
         message="NotFoundError: OpenAIException - Error code: 404",
         model="gpt-5.4-mini",
         llm_provider="openai",
     )
     getattr(patched_threads, router_method).side_effect = upstream_error
     with auth_as():
-        response = client.request(method, path, json=payload)
+        response: Final = client.request(method, path, json=payload)
     assert response.status_code == 404
     assert response.json()["error"] == {
         "message": upstream_error.message,
