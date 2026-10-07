@@ -24,6 +24,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import Choices, Message, ModelResponse
+import time
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
@@ -2418,7 +2419,9 @@ async def test_openai_responses_litellm_router_no_metadata():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "Hello world!", "annotations": []}],
+                "content": [
+                    {"type": "output_text", "text": "Hello world!", "annotations": []}
+                ],
             }
         ],
         "parallel_tool_calls": True,
@@ -2429,6 +2432,7 @@ async def test_openai_responses_litellm_router_no_metadata():
             "output_tokens_details": {"reasoning_tokens": 0},
         },
         "text": {"format": {"type": "text"}},
+        # Adding all required fields
         "error": None,
         "incomplete_details": None,
         "instructions": None,
@@ -2451,13 +2455,14 @@ async def test_openai_responses_litellm_router_no_metadata():
             self.text = str(json_data)
             self.headers = httpx.Headers({})
 
-        def json(self):
+        def json(self):  # Changed from async to sync
             return self._json_data
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
     ) as mock_post:
+        # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
@@ -2473,14 +2478,20 @@ async def test_openai_responses_litellm_router_no_metadata():
             ]
         )
 
+        # Call the handler with metadata
         await router.aresponses(
             model="gpt4o-special-alias",
             input="Hello, can you tell me a short joke?",
         )
 
+        # Check the request body
         request_body = mock_post.call_args.kwargs["json"]
+        print("Request body:", json.dumps(request_body, indent=4))
 
-        assert "metadata" not in request_body, "metadata should not be in the request body"
+        # Assert metadata is not in the request
+        assert (
+            "metadata" not in request_body
+        ), "metadata should not be in the request body"
         mock_post.assert_called_once()
 
 
@@ -2507,7 +2518,9 @@ async def test_openai_responses_litellm_router_with_metadata():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "Hello world!", "annotations": []}],
+                "content": [
+                    {"type": "output_text", "text": "Hello world!", "annotations": []}
+                ],
             }
         ],
         "parallel_tool_calls": True,
@@ -2521,7 +2534,7 @@ async def test_openai_responses_litellm_router_with_metadata():
         "error": None,
         "incomplete_details": None,
         "instructions": None,
-        "metadata": test_metadata,
+        "metadata": test_metadata,  # Include the test metadata in response
         "temperature": 1.0,
         "tool_choice": "auto",
         "tools": [],
@@ -2547,6 +2560,7 @@ async def test_openai_responses_litellm_router_with_metadata():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
     ) as mock_post:
+        # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
@@ -2562,15 +2576,21 @@ async def test_openai_responses_litellm_router_with_metadata():
             ]
         )
 
+        # Call the handler with metadata
         await router.aresponses(
             model="gpt4o-special-alias",
             input="Hello, can you tell me a short joke?",
             metadata=test_metadata,
         )
 
+        # Check the request body
         request_body = mock_post.call_args.kwargs["json"]
+        print("Request body:", json.dumps(request_body, indent=4))
 
-        assert request_body["metadata"] == test_metadata, "metadata in request body should match what was passed"
+        # Assert metadata matches exactly what was passed
+        assert (
+            request_body["metadata"] == test_metadata
+        ), "metadata in request body should match what was passed"
         mock_post.assert_called_once()
 
 
@@ -2654,8 +2674,11 @@ def test_bad_request_bad_param_error():
     try:
         litellm.responses(model="gpt-5.5", input="This should fail", temperature=2000)
         pytest.fail("Expected BadRequestError but no exception was raised")
-    except litellm.BadRequestError:
-        pass
+    except litellm.BadRequestError as e:
+        print(f"Exception raised: {e}")
+        print(f"Exception type: {type(e)}")
+        print(f"Exception args: {e.args}")
+        print(f"Exception details: {e.__dict__}")
     except Exception as e:
         pytest.fail(f"Unexpected exception raised: {e}")
 
@@ -2664,23 +2687,27 @@ def test_bad_request_bad_param_error():
 async def test_async_bad_request_bad_param_error():
     """Raise a BadRequestError when an invalid parameter value is provided"""
     try:
-        await litellm.aresponses(model="gpt-5.5", input="This should fail", temperature=2000)
+        await litellm.aresponses(
+            model="gpt-5.5", input="This should fail", temperature=2000
+        )
         pytest.fail("Expected BadRequestError but no exception was raised")
-    except litellm.BadRequestError:
-        pass
+    except litellm.BadRequestError as e:
+        print(f"Exception raised: {e}")
+        print(f"Exception type: {type(e)}")
+        print(f"Exception args: {e.args}")
+        print(f"Exception details: {e.__dict__}")
     except Exception as e:
         pytest.fail(f"Unexpected exception raised: {e}")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.usefixtures("restore_litellm_set_verbose")
 async def test_openai_o1_pro_response_api(sync_mode):
     """
     Test that LiteLLM correctly handles an incomplete response from OpenAI's o1-pro model
     due to reaching max_output_tokens limit.
     """
-
+    # Mock response from o1-pro
     mock_response = {
         "id": "resp_67dc3dd77b388190822443a85252da5a0e13d8bdc0e28d88",
         "object": "response",
@@ -2726,50 +2753,58 @@ async def test_openai_o1_pro_response_api(sync_mode):
             self.text = json.dumps(json_data)
             self.headers = httpx.Headers({})
 
-        def json(self):
+        def json(self):  # Changed from async to sync
             return self._json_data
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
     ) as mock_post:
+        # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
+        litellm.set_verbose = True
 
+        # Call o1-pro with max_output_tokens=20
         response = await litellm.aresponses(
             model="openai/o1-pro",
-            api_key="test-key",
             input="Write a detailed essay about artificial intelligence and its impact on society",
             max_output_tokens=20,
         )
 
+        # Verify the request was made correctly
         mock_post.assert_called_once()
         request_body = mock_post.call_args.kwargs["json"]
         assert request_body["model"] == "o1-pro"
         assert request_body["max_output_tokens"] == 20
 
+        # Validate the response
+        print("Response:", json.dumps(response, indent=4, default=str))
+
+        # Check that the response has the expected structure
         assert response["id"] is not None
         assert response["status"] == "incomplete"
         assert response["incomplete_details"].reason == "max_output_tokens"
         assert response["max_output_tokens"] == 20
 
+        # Validate usage information
         assert response["usage"]["input_tokens"] == 73
         assert response["usage"]["output_tokens"] == 20
         assert response["usage"]["total_tokens"] == 93
 
+        # Validate that the response is properly identified as incomplete
         validate_responses_api_response(response, final_chunk=True)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.usefixtures("restore_litellm_set_verbose")
 async def test_openai_o1_pro_response_api_streaming(sync_mode):
     """
     Test that LiteLLM correctly handles an incomplete response from OpenAI's o1-pro model
     due to reaching max_output_tokens limit in both sync and async streaming modes.
     """
-
+    # Mock response from o1-pro
     mock_response = {
         "id": "resp_67dc3dd77b388190822443a85252da5a0e13d8bdc0e28d88",
         "object": "response",
@@ -2822,43 +2857,60 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
     ) as mock_post:
+        # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
+        litellm.set_verbose = True
 
+        # Verify the request was made correctly
         if sync_mode:
+            # For sync mode, we need to patch the sync HTTP handler
             with patch(
                 "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
                 return_value=MockResponse(mock_response, 200),
             ) as mock_sync_post:
                 response = litellm.responses(
                     model="openai/o1-pro",
-                    api_key="test-key",
                     input="Write a detailed essay about artificial intelligence and its impact on society",
                     max_output_tokens=20,
                     stream=True,
                 )
 
-                for _ in response:
-                    continue
+                # Process the sync stream
+                event_count = 0
+                for event in response:
+                    print(
+                        f"Sync litellm response #{event_count}:",
+                        json.dumps(event, indent=4, default=str),
+                    )
+                    event_count += 1
 
+                # Verify the sync request was made correctly
                 mock_sync_post.assert_called_once()
                 request_body = mock_sync_post.call_args.kwargs["json"]
                 assert request_body["model"] == "o1-pro"
                 assert request_body["max_output_tokens"] == 20
                 assert "stream" not in request_body
         else:
+            # For async mode
             response = await litellm.aresponses(
                 model="openai/o1-pro",
-                api_key="test-key",
                 input="Write a detailed essay about artificial intelligence and its impact on society",
                 max_output_tokens=20,
                 stream=True,
             )
 
-            async for _ in response:
-                continue
+            # Process the async stream
+            event_count = 0
+            async for event in response:
+                print(
+                    f"Async litellm response #{event_count}:",
+                    json.dumps(event, indent=4, default=str),
+                )
+                event_count += 1
 
+            # Verify the async request was made correctly
             mock_post.assert_called_once()
             request_body = mock_post.call_args.kwargs["json"]
             assert request_body["model"] == "o1-pro"
@@ -2866,13 +2918,13 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
             assert "stream" not in request_body
 
 
-@pytest.mark.usefixtures("restore_litellm_set_verbose")
 def test_basic_computer_use_preview_tool_call():
     """
     Test that LiteLLM correctly handles a computer_use_preview tool call where the environment is set to "linux"
 
     linux is an unsupported environment for the computer_use_preview tool, but litellm users should still be able to pass it to openai
     """
+    # Mock response from OpenAI
 
     mock_response = {
         "id": "resp_67dc3dd77b388190822443a85252da5a0e13d8bdc0e28d88",
@@ -2927,16 +2979,17 @@ def test_basic_computer_use_preview_tool_call():
         return_value=MockResponse(mock_response, 200),
     ) as mock_post:
         litellm.turn_on_debug()
+        litellm.set_verbose = True
 
-        litellm.responses(
+        # Call the responses API with computer_use_preview tool
+        response = litellm.responses(
             model="openai/computer-use-preview",
-            api_key="test-key",
             tools=[
                 {
                     "type": "computer_use_preview",
                     "display_width": 1024,
                     "display_height": 768,
-                    "environment": "linux",
+                    "environment": "linux",  # other possible values: "mac", "windows", "ubuntu"
                 }
             ],
             input="Check the latest OpenAI news on bing.com.",
@@ -2944,9 +2997,11 @@ def test_basic_computer_use_preview_tool_call():
             truncation="auto",
         )
 
+        # Verify the request was made correctly
         mock_post.assert_called_once()
         request_body = mock_post.call_args.kwargs["json"]
 
+        # Validate the request structure
         assert request_body["model"] == "computer-use-preview"
         assert len(request_body["tools"]) == 1
         assert request_body["tools"][0]["type"] == "computer_use_preview"
@@ -2954,9 +3009,11 @@ def test_basic_computer_use_preview_tool_call():
         assert request_body["tools"][0]["display_height"] == 768
         assert request_body["tools"][0]["environment"] == "linux"
 
+        # Check that reasoning was passed correctly
         assert request_body["reasoning"]["summary"] == "concise"
         assert request_body["truncation"] == "auto"
 
+        # Validate the input format
         assert isinstance(request_body["input"], str)
         assert request_body["input"] == "Check the latest OpenAI news on bing.com."
 
@@ -2966,16 +3023,18 @@ async def test_store_field_transformation():
     """Test store field transformation with mocked API responses"""
     config = OpenAIResponsesAPIConfig()
 
+    # Initialize logging object with required parameters
     logging_obj = LiteLLMLoggingObj(
         model="gpt-5.5",
         messages=[],
         stream=False,
         call_type="aresponses",
-        start_time=0.0,
+        start_time=time.time(),
         litellm_call_id="test-call-id",
         function_id="test-function-id",
     )
 
+    # Base response data with all required fields
     base_response = {
         "id": "test_id",
         "created_at": 1751443898,
@@ -2987,7 +3046,9 @@ async def test_store_field_transformation():
                 "id": "msg_1",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "Hello", "annotations": []}],
+                "content": [
+                    {"type": "output_text", "text": "Hello", "annotations": []}
+                ],
             }
         ],
         "parallel_tool_calls": True,
@@ -3009,48 +3070,70 @@ async def test_store_field_transformation():
         "user": "test_user",
     }
 
+    # Test case 1: API returns store=True
     mock_response_store_true = httpx.Response(
         status_code=200, content=json.dumps({**base_response, "store": True}).encode()
     )
 
+    # Test case 2: API returns store=False
     mock_response_store_false = httpx.Response(
         status_code=200, content=json.dumps({**base_response, "store": False}).encode()
     )
 
+    # Test case 3: API returns store=null
     mock_response_store_null = httpx.Response(
         status_code=200, content=json.dumps({**base_response, "store": None}).encode()
     )
 
-    mock_response_no_store = httpx.Response(status_code=200, content=json.dumps(base_response).encode())
+    # Test case 4: API omits store field
+    mock_response_no_store = httpx.Response(
+        status_code=200, content=json.dumps(base_response).encode()
+    )
 
+    # Test when store=True in request
     logging_obj.optional_params = {"store": True}
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_store_true, logging_obj=logging_obj
     )
-    assert response.store is True, "store should be True when specified in request and API returns True"
+    assert (
+        response.store is True
+    ), "store should be True when specified in request and API returns True"
 
+    # Test when store=False in request
     logging_obj.optional_params = {"store": False}
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_store_false, logging_obj=logging_obj
     )
-    assert response.store is False, "store should be False when specified in request and API returns False"
+    assert (
+        response.store is False
+    ), "store should be False when specified in request and API returns False"
 
+    # Test when store not in request but API returns null
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_store_null, logging_obj=logging_obj
     )
-    assert response.store is None, "store should be None when not specified in request and API returns null"
+    assert (
+        response.store is None
+    ), "store should be None when not specified in request and API returns null"
 
+    # Test when store not in request and API omits store field
     response = config.transform_response_api_response(
         model="gpt-5.5", raw_response=mock_response_no_store, logging_obj=logging_obj
     )
-    assert response.store is None, "store should be None when not specified in request and API omits store"
+    assert (
+        response.store is None
+    ), "store should be None when not specified in request and API omits store"
 
-    assert isinstance(response.created_at, int), "created_at should always be converted to integer"
-    assert response.created_at == 1751443898, "created_at should maintain the same value after conversion"
+    # Verify created_at is always converted to integer
+    assert isinstance(
+        response.created_at, int
+    ), "created_at should always be converted to integer"
+    assert (
+        response.created_at == 1751443898
+    ), "created_at should maintain the same value after conversion"
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("restore_litellm_set_verbose")
 async def test_aresponses_service_tier_and_safety_identifier():
     """
     Test that service_tier and safety_identifier parameters are correctly sent in the request body
@@ -3108,32 +3191,44 @@ async def test_aresponses_service_tier_and_safety_identifier():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
     ) as mock_post:
+        # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
+        litellm.set_verbose = True
 
-        await litellm.aresponses(
+        # Call aresponses with service_tier and safety_identifier
+        response = await litellm.aresponses(
             model="openai/gpt-5.5",
-            api_key="test-key",
             input="Test with service tier and safety identifier",
             service_tier="flex",
             safety_identifier="123",
         )
 
+        # Verify the request was made correctly
         mock_post.assert_called_once()
         request_body = mock_post.call_args.kwargs["json"]
+        print("request_body=", json.dumps(request_body, indent=4, default=str))
 
-        assert request_body["service_tier"] == "flex", "service_tier should be 'flex' in request body"
-        assert request_body["safety_identifier"] == "123", "safety_identifier should be '123' in request body"
+        # Validate that both parameters are present in the request body
+        assert (
+            request_body["service_tier"] == "flex"
+        ), "service_tier should be 'flex' in request body"
+        assert (
+            request_body["safety_identifier"] == "123"
+        ), "safety_identifier should be '123' in request body"
         assert request_body["model"] == "gpt-5.5"
         assert request_body["input"] == "Test with service tier and safety identifier"
 
+        # Validate the response
+        print("Response:", json.dumps(response, indent=4, default=str))
+
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("restore_litellm_set_verbose")
 async def test_openai_gpt5_reasoning_effort_parameter():
     """Test that reasoning_effort parameter is properly sent in the HTTP request for GPT-5 models."""
 
+    # Mock response for GPT-5 responses API (correct format)
     mock_response = {
         "id": "resp_01ABC123",
         "object": "response",
@@ -3193,24 +3288,36 @@ async def test_openai_gpt5_reasoning_effort_parameter():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
     ) as mock_post:
+        # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
+        litellm.set_verbose = True
 
-        await litellm.aresponses(
+        # Call aresponses with reasoning_effort parameter
+        response = await litellm.aresponses(
             model="openai/gpt-5-mini",
-            api_key="test-key",
             input="What is the capital of France?",
             reasoning={"effort": "minimal"},
         )
 
+        # Verify the request was made correctly
         mock_post.assert_called_once()
         request_body = mock_post.call_args.kwargs["json"]
-
-        assert "reasoning" in request_body, "reasoning should be present in request body"
-        assert request_body["reasoning"]["effort"] == "minimal", "reasoning_effort should be 'minimal' in request body"
+        print("request_body=", json.dumps(request_body, indent=4, default=str))
+        print("reasoning=", request_body["reasoning"])
+        # Validate that reasoning_effort is present in the request body
+        assert (
+            "reasoning" in request_body
+        ), "reasoning should be present in request body"
+        assert (
+            request_body["reasoning"]["effort"] == "minimal"
+        ), "reasoning_effort should be 'minimal' in request body"
         assert request_body["model"] == "gpt-5-mini"
         assert request_body["input"] == "What is the capital of France?"
+
+        # Validate the response
+        print("Response:", json.dumps(response, indent=4, default=str))
 
 
 class MockResponse:
@@ -3262,7 +3369,6 @@ async def test_aresponses_extra_body_params_passed(extra_body_mock_response_data
 
         response = await litellm.aresponses(
             model="gpt-5.5",
-            api_key="test-key",
             input="Test input",
             max_output_tokens=20,
             extra_body={
@@ -3295,7 +3401,6 @@ def test_responses_extra_body_params_passed_sync(extra_body_mock_response_data):
     ) as mock_post:
         response = litellm.responses(
             model="gpt-5.5",
-            api_key="test-key",
             input="Sync test",
             max_output_tokens=20,
             extra_body={
@@ -3327,7 +3432,6 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
 
         await litellm.aresponses(
             model="gpt-5.5",
-            api_key="test-key",
             input="Test",
             temperature=1,
             max_output_tokens=20,

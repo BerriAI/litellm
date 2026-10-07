@@ -9,6 +9,7 @@ import pytest
 
 import litellm
 from litellm._uuid import uuid
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 
 def test_timeout():
@@ -179,6 +180,31 @@ def test_hanging_request_openai():
 # test_timeout()
 
 
+def test_timeout_streaming():
+    # this Will Raise a timeout
+    litellm.set_verbose = False
+    try:
+        response = litellm.completion(
+            model="openai/slow-endpoint",
+            messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
+            api_base=FAKE_OPENAI_API_BASE,
+            api_key="fake-key",
+            timeout=0.5,
+            stream=True,
+        )
+        for chunk in response:
+            print(chunk)
+        pytest.fail("Did not raise error `openai.APITimeoutError`. The stream completed instead")
+    except openai.APITimeoutError as e:
+        print(
+            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
+        )
+        print(type(e))
+        pass
+    except Exception as e:
+        pytest.fail(
+            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
+        )
 
 
 # test_timeout_streaming()

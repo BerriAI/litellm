@@ -440,6 +440,7 @@ async def test_azure_image_edit_litellm_sdk():
     """Test Azure image edit with mocked httpx request to validate request body and URL"""
     from litellm import aimage_edit
 
+    # Mock response for Azure image edit
     mock_response = {
         "created": 1589478378,
         "data": [
@@ -463,6 +464,7 @@ async def test_azure_image_edit_litellm_sdk():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
     ) as mock_post:
+        # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
@@ -471,6 +473,7 @@ async def test_azure_image_edit_litellm_sdk():
         Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
         """
 
+        # Set up test environment variables
         test_api_base = "https://ai-api-gw-uae-north.openai.azure.com"
         test_api_key = "test-api-key"
         test_api_version = "2025-04-01-preview"
@@ -484,8 +487,10 @@ async def test_azure_image_edit_litellm_sdk():
             image=_make_test_images(),
         )
 
+        # Verify the request was made correctly
         mock_post.assert_called_once()
 
+        # Check the URL
         call_args = mock_post.call_args
         expected_url = f"{test_api_base}/openai/deployments/gpt-image-1/images/edits?api-version={test_api_version}"
         actual_url = (
@@ -497,13 +502,16 @@ async def test_azure_image_edit_litellm_sdk():
             actual_url == expected_url
         ), f"URL mismatch. Expected: {expected_url}, Got: {actual_url}"
 
+        # Check the request body
         if "data" in call_args.kwargs:
+            # For multipart form data, check the data parameter
             form_data = call_args.kwargs["data"]
             print(
                 "Form data keys:",
                 list(form_data.keys()) if hasattr(form_data, "keys") else "Not a dict",
             )
 
+            # Deployment is in the URL path; Azure rejects model in multipart for this route.
             assert (
                 "model" not in form_data
             ), "model must not be in form data for Azure /openai/deployments/.../images/edits"
@@ -512,6 +520,7 @@ async def test_azure_image_edit_litellm_sdk():
                 prompt.strip() in form_data["prompt"]
             ), f"Expected prompt to contain '{prompt.strip()}'"
 
+        # Check headers
         headers = call_args.kwargs.get("headers", {})
         print("Request headers:", headers)
         assert (
@@ -524,17 +533,28 @@ async def test_azure_image_edit_litellm_sdk():
 
         print("result from image edit", result)
 
+        # Validate the response meets expected schema
         ImageResponse.model_validate(result)
 
+        if isinstance(result, ImageResponse) and result.data:
+            image_base64 = result.data[0].b64_json
+            if image_base64:
+                image_bytes = base64.b64decode(image_base64)
+
+                # Save the image to a file
+                with open("test_image_edit.png", "wb") as f:
+                    f.write(image_bytes)
+
 @pytest.mark.asyncio
-async def test_openai_image_edit_cost_tracking(monkeypatch: pytest.MonkeyPatch):
+async def test_openai_image_edit_cost_tracking():
     """Test OpenAI image edit cost tracking with custom logger"""
     from litellm import aimage_edit, image_edit
 
-    test_custom_logger = _ImageEditTestLogger()
+    test_custom_logger = TestCustomLogger()
     litellm.logging_callback_manager._reset_all_callbacks()
-    monkeypatch.setattr(litellm, "callbacks", [test_custom_logger])
+    litellm.callbacks = [test_custom_logger]
 
+    # Mock response for Azure image edit with usage data for cost tracking
     mock_response = {
         "created": 1589478378,
         "data": [
@@ -564,6 +584,7 @@ async def test_openai_image_edit_cost_tracking(monkeypatch: pytest.MonkeyPatch):
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
     ) as mock_post:
+        # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response, 200)
 
         litellm.turn_on_debug()
@@ -572,18 +593,30 @@ async def test_openai_image_edit_cost_tracking(monkeypatch: pytest.MonkeyPatch):
         Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
         """
 
+        # Set up test environment variables
 
         result = await aimage_edit(
             prompt=prompt,
             model="openai/gpt-image-1",
             image=_make_test_images(),
         )
-        await test_custom_logger.logging_completed.wait()
 
+        # Verify the request was made correctly
         mock_post.assert_called_once()
 
+        # Validate the response meets expected schema
         ImageResponse.model_validate(result)
 
+        if isinstance(result, ImageResponse) and result.data:
+            image_base64 = result.data[0].b64_json
+            if image_base64:
+                image_bytes = base64.b64decode(image_base64)
+
+                # Save the image to a file
+                with open("test_image_edit.png", "wb") as f:
+                    f.write(image_bytes)
+
+        await asyncio.sleep(5)
         print(
             "standard logging payload",
             json.dumps(
@@ -591,12 +624,14 @@ async def test_openai_image_edit_cost_tracking(monkeypatch: pytest.MonkeyPatch):
             ),
         )
 
+        # check model
         assert test_custom_logger.standard_logging_payload["model"] == "gpt-image-1"
         assert (
             test_custom_logger.standard_logging_payload["custom_llm_provider"]
             == "openai"
         )
 
+        # check response_cost
         assert test_custom_logger.standard_logging_payload["response_cost"] is not None
         assert test_custom_logger.standard_logging_payload["response_cost"] > 0
 
@@ -707,3 +742,12 @@ async def test_image_edit_array_handling():
         ImageResponse.model_validate(result2)
 
         assert mock_post.call_count == 2
+
+
+class TestCustomLogger(CustomLogger):
+    def __init__(self):
+        self.standard_logging_payload: Optional[StandardLoggingPayload] = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.standard_logging_payload = kwargs.get("standard_logging_object", None)
+        pass

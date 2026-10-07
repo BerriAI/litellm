@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
@@ -539,10 +540,10 @@ def test_azure_ai_stripping_does_not_mutate_caller_messages():
         ),
     ],
 )
-def test_azure_ai_services_handler(api_base, expected_url, monkeypatch: pytest.MonkeyPatch):
+def test_azure_ai_services_handler(api_base, expected_url):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
 
     client = HTTPHandler()
 
@@ -567,7 +568,7 @@ def test_azure_ai_services_handler(api_base, expected_url, monkeypatch: pytest.M
 
 
 def test_azure_ai_services_with_api_version():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
     client = HTTPHandler()
 
@@ -593,7 +594,7 @@ def test_azure_ai_services_with_api_version():
 
 
 @pytest.mark.asyncio
-async def test_azure_ai_with_image_url(monkeypatch: pytest.MonkeyPatch):
+async def test_azure_ai_with_image_url():
     """
     Important test:
 
@@ -601,7 +602,7 @@ async def test_azure_ai_with_image_url(monkeypatch: pytest.MonkeyPatch):
     """
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
 
     client = AsyncHTTPHandler()
 
@@ -620,7 +621,9 @@ async def test_azure_ai_with_image_url(monkeypatch: pytest.MonkeyPatch):
                             },
                             {
                                 "type": "image_url",
-                                "image_url": {"url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"},
+                                "image_url": {
+                                    "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+                                },
                             },
                         ],
                     },
@@ -632,10 +635,11 @@ async def test_azure_ai_with_image_url(monkeypatch: pytest.MonkeyPatch):
             traceback.print_exc()
             print(f"Error: {e}")
 
+        # Verify the request was made
         mock_client.assert_called_once()
 
         print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
-
+        # Check the request body
         request_body = json.loads(mock_client.call_args.kwargs["data"])
         assert request_body["model"] == "Phi-3-5-vision-instruct-dcvov"
         assert request_body["messages"] == [
@@ -645,7 +649,9 @@ async def test_azure_ai_with_image_url(monkeypatch: pytest.MonkeyPatch):
                     {"type": "text", "text": "What is in this image?"},
                     {
                         "type": "image_url",
-                        "image_url": {"url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"},
+                        "image_url": {
+                            "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+                        },
                     },
                 ],
             }
@@ -654,8 +660,6 @@ async def test_azure_ai_with_image_url(monkeypatch: pytest.MonkeyPatch):
 
 def test_azure_deepseek_reasoning_content():
     import json
-
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
 
@@ -678,7 +682,7 @@ def test_azure_deepseek_reasoning_content():
         )
 
         mock_response.status_code = 200
-
+        # Add required response attributes
         mock_response.headers = {"Content-Type": "application/json"}
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response

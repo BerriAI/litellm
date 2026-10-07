@@ -1144,10 +1144,10 @@ async def test_perform_health_check_with_health_check_model():
 async def test_image_generation_health_check_prompt(monkeypatch):
     """Health checks should respect default and environment-configured prompts."""
 
+    import importlib
+
     import litellm.constants as litellm_constants
     import litellm.proxy.health_check as health_check
-
-    original_prompt: Final[str | None] = os.environ.get("DEFAULT_HEALTH_CHECK_PROMPT")
 
     def reload_modules():
         reloaded_constants = importlib.reload(litellm_constants)
@@ -1184,58 +1184,55 @@ async def test_image_generation_health_check_prompt(monkeypatch):
 
         return health_check_calls
 
-    try:
-        monkeypatch.delenv("DEFAULT_HEALTH_CHECK_PROMPT", raising=False)
-        reloaded_constants, reloaded_health_check = reload_modules()
-        health_check_calls = await run_health_check(reloaded_health_check)
+    # Default prompt is used when env var is unset
+    monkeypatch.delenv("DEFAULT_HEALTH_CHECK_PROMPT", raising=False)
+    reloaded_constants, reloaded_health_check = reload_modules()
+    health_check_calls = await run_health_check(reloaded_health_check)
 
-        assert len(health_check_calls) == 1
-        assert (
-            health_check_calls[0]["prompt"]
-            == reloaded_constants.DEFAULT_HEALTH_CHECK_PROMPT
-        )
+    assert len(health_check_calls) == 1
+    assert (
+        health_check_calls[0]["prompt"] == reloaded_constants.DEFAULT_HEALTH_CHECK_PROMPT
+    )
 
-        override_prompt = "environment override prompt"
-        monkeypatch.setenv("DEFAULT_HEALTH_CHECK_PROMPT", override_prompt)
-        _, reloaded_health_check = reload_modules()
-        health_check_calls = await run_health_check(reloaded_health_check)
+    # Environment override should change the prompt without code changes
+    override_prompt = "environment override prompt"
+    monkeypatch.setenv("DEFAULT_HEALTH_CHECK_PROMPT", override_prompt)
+    _, reloaded_health_check = reload_modules()
+    health_check_calls = await run_health_check(reloaded_health_check)
 
-        assert len(health_check_calls) == 1
-        assert health_check_calls[0]["prompt"] == override_prompt
-    finally:
-        if original_prompt is None:
-            monkeypatch.delenv("DEFAULT_HEALTH_CHECK_PROMPT", raising=False)
-        else:
-            monkeypatch.setenv("DEFAULT_HEALTH_CHECK_PROMPT", original_prompt)
-        reload_modules()
+    assert len(health_check_calls) == 1
+    assert health_check_calls[0]["prompt"] == override_prompt
+
 
 @pytest.mark.asyncio
-async def test_health_check_with_custom_llm_provider():
-    """
-    Test that ahealth_check correctly uses custom_llm_provider from model_params.
+async def test_health_check_with_custom_llm_provider(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://example.com/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "deepseek-r1-distill-qwen-1.5B-q4",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
 
-    This test verifies the fix for the issue where the UI's "Test connect" button
-    failed with "LLM Provider NOT provided" error for OpenAI-compatible self-hosted
-    providers, even when a provider was selected in the dropdown.
+    response: Final = await litellm.ahealth_check(
+        model_params={
+            "model": "deepseek-r1-distill-qwen-1.5B-q4",
+            "custom_llm_provider": "openai",
+            "api_base": "https://example.com/v1",
+            "api_key": "fake-key",
+        },
+        mode="chat",
+    )
 
-    The fix ensures that when custom_llm_provider is passed in model_params,
-    it's properly forwarded to get_llm_provider() to identify the correct provider.
-    """
-    from unittest.mock import MagicMock
-
-    mock_response = MagicMock()
-    mock_response._hidden_params = {"headers": {"x-ratelimit-remaining-tokens": "1000"}}
-
-    with patch("litellm.acompletion", return_value=mock_response):
-        response = await litellm.ahealth_check(
-            model_params={
-                "model": "deepseek-r1-distill-qwen-1.5B-q4",
-                "custom_llm_provider": "openai",
-                "api_base": "https://example.com/v1",
-                "api_key": "fake-key",
-            },
-            mode="chat",
-        )
-
-        assert "error" not in response
-        assert isinstance(response, dict)
+    assert "error" not in response, response
+    assert upstream.called
+    assert json.loads(upstream.calls[0].request.content)["model"] == "deepseek-r1-distill-qwen-1.5B-q4"

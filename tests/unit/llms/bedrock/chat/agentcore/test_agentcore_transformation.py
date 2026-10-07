@@ -642,12 +642,14 @@ class TestAgentCoreMultimodalContent:
         assert payload["content"] == content
         assert payload["content"] is not content
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_agentcore_without_api_key_uses_sigv4():
     """
     Test that AgentCore uses AWS SigV4 signing when api_key is not provided
     """
     import json
 
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -662,8 +664,7 @@ def test_bedrock_agentcore_without_api_key_uses_sigv4():
                         "content": "Test SigV4",
                     }
                 ],
-                aws_access_key_id="test-access-key",
-                aws_secret_access_key="test-secret-key",
+                # No api_key provided - should use SigV4
                 runtimeSessionId="sigv4-test-session",
                 client=client,
             )
@@ -674,16 +675,23 @@ def test_bedrock_agentcore_without_api_key_uses_sigv4():
         call_kwargs = mock_post.call_args.kwargs
         print(f"mock_post.call_args.kwargs: {call_kwargs}")
 
+        # Verify headers - should have AWS SigV4 headers, not Bearer token
         assert "headers" in call_kwargs
         headers = call_kwargs["headers"]
         print(f"Headers: {headers}")
 
+        # Should NOT have Bearer Authorization when using SigV4
         if "Authorization" in headers:
             assert not headers["Authorization"].startswith("Bearer ")
+            # Should have AWS4-HMAC-SHA256 signature
             assert "AWS4-HMAC-SHA256" in headers["Authorization"]
 
+        # Session ID should still be present
         assert "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id" in headers
-        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "sigv4-test-session"
+        assert (
+            headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
+            == "sigv4-test-session"
+        )
 
 
 def test_agentcore_transform_response_sse():
@@ -737,12 +745,14 @@ data: {"message":{"role":"assistant","content":[{"text":"SSE response"}]}}
     assert result.usage.total_tokens == 30
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_agentcore_with_runtime_user_id():
     """
     Test AgentCore with runtimeUserId parameter
     """
     import json
 
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -757,8 +767,6 @@ def test_bedrock_agentcore_with_runtime_user_id():
                         "content": "Hello",
                     }
                 ],
-                aws_access_key_id="test-access-key",
-                aws_secret_access_key="test-secret-key",
                 runtimeUserId="test-user-123",
                 client=client,
             )
@@ -769,6 +777,7 @@ def test_bedrock_agentcore_with_runtime_user_id():
         call_kwargs = mock_post.call_args.kwargs
         print(f"mock_post.call_args.kwargs: {call_kwargs}")
 
+        # Verify headers - user ID should be in header
         assert "headers" in call_kwargs
         headers = call_kwargs["headers"]
         print(f"Headers: {headers}")
@@ -801,6 +810,7 @@ data: {"event":{"contentBlockDelta":{"delta":{"text":"third"}}}}
     assert parsed["final_message"] is None
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_agentcore_synchronous_non_streaming_response():
     """
     Test that synchronous (non-streaming) AgentCore calls still work correctly
@@ -817,8 +827,10 @@ def test_agentcore_synchronous_non_streaming_response():
     """
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
+    litellm.turn_on_debug()
     client = HTTPHandler()
 
+    # Mock a JSON response (typical for synchronous AgentCore calls)
     mock_json_response = {
         "result": {
             "role": "assistant",
@@ -826,12 +838,14 @@ def test_agentcore_synchronous_non_streaming_response():
         }
     }
 
+    # Create a mock response object
     mock_response = Mock(spec=httpx.Response)
     mock_response.status_code = 200
     mock_response.headers = {"content-type": "application/json"}
     mock_response.json.return_value = mock_json_response
 
     with patch.object(client, "post", return_value=mock_response) as mock_post:
+        # Make a synchronous (non-streaming) completion call
         response = litellm.completion(
             model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/hosted_agent_r9jvp-3ySZuRHjLC",
             messages=[
@@ -840,24 +854,26 @@ def test_agentcore_synchronous_non_streaming_response():
                     "content": "Test synchronous response",
                 }
             ],
-            aws_access_key_id="test-access-key",
-            aws_secret_access_key="test-secret-key",
-            stream=False,
+            stream=False,  # Explicitly disable streaming
             client=client,
         )
 
+        # Verify the response structure
         assert response is not None
         assert hasattr(response, "choices")
         assert len(response.choices) > 0
 
+        # Verify content
         message = response.choices[0].message
         assert message is not None
         assert message.content == "This is a synchronous response from AgentCore."
         assert message.role == "assistant"
 
+        # Verify completion metadata
         assert response.choices[0].finish_reason == "stop"
         assert response.choices[0].index == 0
 
+        # Verify usage data exists (either from API or calculated)
         assert hasattr(response, "usage")
         assert response.usage is not None
         assert response.usage.prompt_tokens > 0
@@ -904,12 +920,14 @@ data: {"message":{"role":"assistant","content":[{"text":"Hello from SSE"}]}}
     assert parsed["final_message"]["role"] == "assistant"
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_agentcore_with_all_parameters():
     """
     Test AgentCore with all parameters: api_key, runtimeSessionId, runtimeUserId
     """
     import json
 
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -938,23 +956,33 @@ def test_bedrock_agentcore_with_all_parameters():
         call_kwargs = mock_post.call_args.kwargs
         print(f"mock_post.call_args.kwargs: {call_kwargs}")
 
+        # Verify URL includes qualifier
         assert "url" in call_kwargs
         url = call_kwargs["url"]
         print(f"URL: {url}")
         assert "qualifier=LATEST" in url
 
+        # Verify all headers are present
         assert "headers" in call_kwargs
         headers = call_kwargs["headers"]
         print(f"Headers: {headers}")
 
+        # Check Bearer token authorization
         assert "Authorization" in headers
         assert headers["Authorization"] == f"Bearer {test_jwt_token}"
 
+        # Check session and user IDs
         assert "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id" in headers
-        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "full-test-session-id"
+        assert (
+            headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
+            == "full-test-session-id"
+        )
         assert "X-Amzn-Bedrock-AgentCore-Runtime-User-Id" in headers
-        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] == "full-test-user-id"
+        assert (
+            headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] == "full-test-user-id"
+        )
 
+        # Verify JSON body
         assert "data" in call_kwargs
         request_data = json.loads(call_kwargs["data"])
         print(f"Request data: {json.dumps(request_data, indent=2)}")
@@ -962,12 +990,14 @@ def test_bedrock_agentcore_with_all_parameters():
         assert request_data["prompt"] == "Complete test"
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_agentcore_with_api_key_bearer_token():
     """
     Test AgentCore with api_key parameter for JWT/Bearer token authentication
     """
     import json
 
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -993,6 +1023,7 @@ def test_bedrock_agentcore_with_api_key_bearer_token():
         call_kwargs = mock_post.call_args.kwargs
         print(f"mock_post.call_args.kwargs: {call_kwargs}")
 
+        # Verify Authorization header with Bearer token
         assert "headers" in call_kwargs
         headers = call_kwargs["headers"]
         print(f"Headers: {headers}")
@@ -1000,6 +1031,7 @@ def test_bedrock_agentcore_with_api_key_bearer_token():
         assert headers["Authorization"] == f"Bearer {test_jwt_token}"
         assert headers["Content-Type"] == "application/json"
 
+        # Verify the request body is JSON-encoded (not SigV4 signed)
         assert "data" in call_kwargs
         request_data = json.loads(call_kwargs["data"])
         print(f"Request data: {json.dumps(request_data, indent=2)}")
@@ -1007,12 +1039,14 @@ def test_bedrock_agentcore_with_api_key_bearer_token():
         assert request_data["prompt"] == "Test JWT authentication"
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_agentcore_with_session_and_user():
     """
     Test AgentCore with both runtimeSessionId and runtimeUserId
     """
     import json
 
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -1027,8 +1061,6 @@ def test_bedrock_agentcore_with_session_and_user():
                         "content": "Test message",
                     }
                 ],
-                aws_access_key_id="test-access-key",
-                aws_secret_access_key="test-secret-key",
                 runtimeSessionId="session-abc-123",
                 runtimeUserId="user-xyz-789",
                 client=client,
@@ -1040,11 +1072,14 @@ def test_bedrock_agentcore_with_session_and_user():
         call_kwargs = mock_post.call_args.kwargs
         print(f"mock_post.call_args.kwargs: {call_kwargs}")
 
+        # Verify headers contain both session and user IDs
         assert "headers" in call_kwargs
         headers = call_kwargs["headers"]
         print(f"Headers: {headers}")
         assert "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id" in headers
-        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "session-abc-123"
+        assert (
+            headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "session-abc-123"
+        )
         assert "X-Amzn-Bedrock-AgentCore-Runtime-User-Id" in headers
         assert headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] == "user-xyz-789"
 
@@ -1117,12 +1152,14 @@ def test_agentcore_transform_response_json():
     assert result.choices[0].index == 0
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_agentcore_with_custom_params():
     """
     Test AgentCore request structure with custom parameters
     """
     import json
 
+    litellm.turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     client = HTTPHandler()
@@ -1137,8 +1174,6 @@ def test_bedrock_agentcore_with_custom_params():
                         "content": "Explain machine learning in simple terms",
                     }
                 ],
-                aws_access_key_id="test-access-key",
-                aws_secret_access_key="test-secret-key",
                 runtimeSessionId="litellm-test-session-id-12345678901234567890",
                 qualifier="DEFAULT",
                 client=client,
@@ -1150,6 +1185,7 @@ def test_bedrock_agentcore_with_custom_params():
         call_kwargs = mock_post.call_args.kwargs
         print(f"mock_post.call_args.kwargs: {call_kwargs}")
 
+        # Verify URL structure - should include ARN and qualifier
         assert "url" in call_kwargs
         url = call_kwargs["url"]
         print(f"URL: {url}")
@@ -1159,14 +1195,20 @@ def test_bedrock_agentcore_with_custom_params():
         )
         assert "qualifier=DEFAULT" in url
 
+        # Verify headers - session ID should be in header
         assert "headers" in call_kwargs
         headers = call_kwargs["headers"]
         print(f"Headers: {headers}")
         assert "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id" in headers
-        assert headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] == "litellm-test-session-id-12345678901234567890"
+        assert (
+            headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"]
+            == "litellm-test-session-id-12345678901234567890"
+        )
 
+        # Verify the request body - should just be the payload
         assert "data" in call_kwargs or "json" in call_kwargs
 
+        # Parse the request data
         if "data" in call_kwargs:
             request_data = json.loads(call_kwargs["data"])
         else:
@@ -1174,5 +1216,6 @@ def test_bedrock_agentcore_with_custom_params():
 
         print(f"Request data: {json.dumps(request_data, indent=2)}")
 
+        # Body should just contain the prompt
         assert "prompt" in request_data
         assert request_data["prompt"] == "Explain machine learning in simple terms"

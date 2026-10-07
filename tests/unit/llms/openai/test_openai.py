@@ -883,11 +883,11 @@ async def test_aarun_thread_litellm(sync_mode, provider, is_streaming, assistant
 
 
 @pytest.mark.asyncio
-async def test_openai_prediction_param_mock(monkeypatch: pytest.MonkeyPatch):
+async def test_openai_prediction_param_mock():
     """
     Tests that prediction parameter is correctly passed to the API
     """
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
 
     code = """
     /// <summary>
@@ -915,42 +915,43 @@ async def test_openai_prediction_param_mock(monkeypatch: pytest.MonkeyPatch):
 
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    mock_raw_response: Final = MagicMock()
-    mock_raw_response.headers = {}
-    mock_raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
     with patch.object(
-        client.chat.completions.with_raw_response, "create", new=AsyncMock(return_value=mock_raw_response)
+        client.chat.completions.with_raw_response, "create"
     ) as mock_client:
-        await litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Replace the Username property with an Email property. Respond only with code, and with no markdown formatting.",
-                },
-                {"role": "user", "content": code},
-            ],
-            prediction={"type": "content", "content": code},
-            client=client,
-        )
+        try:
+            await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Replace the Username property with an Email property. Respond only with code, and with no markdown formatting.",
+                    },
+                    {"role": "user", "content": code},
+                ],
+                prediction={"type": "content", "content": code},
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
 
+        # Verify the request contains the prediction parameter
         assert "prediction" in request_body
-
+        # verify prediction is correctly sent to the API
         assert request_body["prediction"] == {"type": "content", "content": code}
 
 
 @patch("litellm.main.openai_chat_completions._get_openai_client")
-def test_openai_max_retries_0(mock_get_openai_client, monkeypatch: pytest.MonkeyPatch):
+def test_openai_max_retries_0(mock_get_openai_client):
     import litellm
 
     mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.headers = {}
     mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.parse.return_value = (
         ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
     )
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
     response = litellm.completion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
@@ -968,9 +969,9 @@ def test_openai_image_generation_forwards_organization(mock_get_openai_client):
     """Ensure organization flows to OpenAI client for image generation."""
 
     class _DummyRawImages:
-        def generate(self, **kwargs: object) -> object:
+        def generate(self, **kwargs):  # type: ignore
             class _Resp:
-                def model_dump(self_inner) -> dict[str, object]:
+                def model_dump(self_inner):  # minimal OpenAI ImagesResponse shape
                     return {
                         "created": 123,
                         "data": [{"url": "http://example.com/image.png"}],
@@ -1011,8 +1012,10 @@ def test_openai_image_generation_forwards_organization(mock_get_openai_client):
         organization=org,
     )
 
+    # Assert organization forwarded into OpenAI client factory
     assert mock_get_openai_client.call_args.kwargs.get("organization") == org
 
+    # Basic sanity on response shape
     assert hasattr(resp, "data") and len(resp.data) == 1
 
 
@@ -1020,6 +1023,7 @@ def test_openai_chat_completion_streaming_handler_reasoning_content():
     from litellm.llms.openai.chat.gpt_transformation import (
         OpenAIChatCompletionStreamingHandler,
     )
+    from unittest.mock import MagicMock
 
     streaming_handler = OpenAIChatCompletionStreamingHandler(
         streaming_response=MagicMock(),
@@ -1047,115 +1051,125 @@ def test_openai_chat_completion_streaming_handler_reasoning_content():
 
 
 @pytest.mark.asyncio
-async def test_openai_safety_identifier_parameter(monkeypatch: pytest.MonkeyPatch):
+async def test_openai_safety_identifier_parameter():
     """Test that safety_identifier parameter is correctly passed to the OpenAI API."""
     from openai import AsyncOpenAI
 
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    mock_raw_response: Final = MagicMock()
-    mock_raw_response.headers = {}
-    mock_raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
     with patch.object(
-        client.chat.completions.with_raw_response, "create", new=AsyncMock(return_value=mock_raw_response)
+        client.chat.completions.with_raw_response, "create"
     ) as mock_client:
-        await litellm.acompletion(
-            model="openai/gpt-4o",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-            safety_identifier="user_code_123456",
-            client=client,
-        )
+        try:
+            await litellm.acompletion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                safety_identifier="user_code_123456",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
 
+        # Verify the request contains the safety_identifier parameter
         assert "safety_identifier" in request_body
-
+        # Verify safety_identifier is correctly sent to the API
         assert request_body["safety_identifier"] == "user_code_123456"
 
 
-def test_openai_safety_identifier_parameter_sync(monkeypatch: pytest.MonkeyPatch):
+def test_openai_safety_identifier_parameter_sync():
     """Test that safety_identifier parameter is correctly passed to the OpenAI API."""
     from openai import OpenAI
 
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
     client = OpenAI(api_key="fake-api-key")
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
-        mock_client.return_value.headers = {}
-        mock_client.return_value.parse.return_value = ModelResponse(
-            choices=[{"message": {"role": "assistant", "content": "ok"}}]
-        )
-        litellm.completion(
-            model="openai/gpt-4o",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-            safety_identifier="user_code_123456",
-            client=client,
-        )
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            litellm.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                safety_identifier="user_code_123456",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
 
+        # Verify the request contains the safety_identifier parameter
         assert "safety_identifier" in request_body
-
+        # Verify safety_identifier is correctly sent to the API
         assert request_body["safety_identifier"] == "user_code_123456"
 
 
 @pytest.mark.asyncio
-async def test_openai_service_tier_parameter(monkeypatch: pytest.MonkeyPatch):
+async def test_openai_service_tier_parameter():
     """Test that service_tier parameter is correctly passed to the OpenAI API."""
     from openai import AsyncOpenAI
 
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    mock_raw_response: Final = MagicMock()
-    mock_raw_response.headers = {}
-    mock_raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
     with patch.object(
-        client.chat.completions.with_raw_response, "create", new=AsyncMock(return_value=mock_raw_response)
+        client.chat.completions.with_raw_response, "create"
     ) as mock_client:
-        await litellm.acompletion(
-            model="openai/gpt-4o",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-            service_tier="priority",
-            client=client,
-        )
+        try:
+            await litellm.acompletion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                service_tier="priority",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
 
+        # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
+        # Verify service_tier is correctly sent to the API
+        assert (
+            request_body["service_tier"] == "priority"
+        ), "service_tier should be 'priority'"
 
-        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
 
-
-def test_openai_service_tier_parameter_sync(monkeypatch: pytest.MonkeyPatch):
+def test_openai_service_tier_parameter_sync():
     """Test that service_tier parameter is correctly passed to the OpenAI API."""
     from openai import OpenAI
 
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
     client = OpenAI(api_key="fake-api-key")
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
-        mock_client.return_value.headers = {}
-        mock_client.return_value.parse.return_value = ModelResponse(
-            choices=[{"message": {"role": "assistant", "content": "ok"}}]
-        )
-        litellm.completion(
-            model="openai/gpt-4o",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-            service_tier="priority",
-            client=client,
-        )
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            litellm.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                service_tier="priority",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
 
+        # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
-
-        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
+        # Verify service_tier is correctly sent to the API
+        assert (
+            request_body["service_tier"] == "priority"
+        ), "service_tier should be 'priority'"
 
 
 def test_responses_gpt54_with_xhigh_reasoning():

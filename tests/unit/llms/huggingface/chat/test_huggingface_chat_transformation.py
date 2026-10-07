@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from unittest.mock import MagicMock, patch
 
 import pytest
 import respx
@@ -20,8 +21,40 @@ def isolate_huggingface_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator
     _fetch_inference_provider_mapping.cache_clear()
 
 
-def test_build_chat_completion_url_function() -> None:
+PROVIDER_MAPPING_RESPONSE = {
+    "fireworks-ai": {
+        "status": "live",
+        "providerId": "accounts/fireworks/models/llama-v3-8b-instruct",
+        "task": "conversational",
+    },
+    "together": {
+        "status": "live",
+        "providerId": "meta-llama/Meta-Llama-3-8B-Instruct-Turbo",
+        "task": "conversational",
+    },
+    "hf-inference": {
+        "status": "live",
+        "providerId": "meta-llama/Meta-Llama-3-8B-Instruct",
+        "task": "conversational",
+    },
+}
+
+
+@pytest.fixture
+def mock_provider_mapping() -> Iterator[MagicMock]:
+    with patch(
+        "litellm.llms.huggingface.chat.transformation.fetch_inference_provider_mapping"
+    ) as mock:
+        mock.return_value = PROVIDER_MAPPING_RESPONSE
+        yield mock
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_build_chat_completion_url_function():
     """Test the _build_chat_completion_url helper function"""
+    from litellm.llms.huggingface.chat.transformation import (
+        _build_chat_completion_url,
+    )
 
     test_cases = [
         ("https://example.com", "https://example.com/v1/chat/completions"),
@@ -70,8 +103,9 @@ def test_build_chat_completion_url_function() -> None:
         ),
     ],
 )
-def test_get_complete_url(model: str, expected_url: str) -> None:
+def test_get_complete_url(model, expected_url):
     """Test that the complete URL is constructed correctly for different providers"""
+    from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
 
     config = HuggingFaceChatConfig()
     url = config.get_complete_url(
@@ -120,9 +154,8 @@ def test_get_complete_url(model: str, expected_url: str) -> None:
         ),
     ],
 )
-def test_get_complete_url_inference_endpoints(
-    api_base: str, model: str, expected_url: str
-) -> None:
+def test_get_complete_url_inference_endpoints(api_base, model, expected_url):
+    from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
 
     config = HuggingFaceChatConfig()
     url = config.get_complete_url(
@@ -136,6 +169,7 @@ def test_get_complete_url_inference_endpoints(
     assert url == expected_url
 
 
+@pytest.mark.usefixtures("mock_provider_mapping")
 @pytest.mark.parametrize(
     "model, expected_model",
     [
@@ -149,29 +183,11 @@ def test_get_complete_url_inference_endpoints(
         ),
     ],
 )
-def test_transform_request(
-    model: str, expected_model: str, respx_mock: respx.MockRouter
-) -> None:
+def test_transform_request(model, expected_model):
+    from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
 
     config = HuggingFaceChatConfig()
     messages = [{"role": "user", "content": "Hello"}]
-
-    if model.startswith("together/"):
-        respx_mock.get(
-            "https://huggingface.co/api/models/meta-llama/Llama-3-8B-Instruct",
-            params={"expand": "inferenceProviderMapping"},
-        ).respond(
-            200,
-            json={
-                "inferenceProviderMapping": {
-                    "together": {
-                        "status": "live",
-                        "providerId": "meta-llama/Meta-Llama-3-8B-Instruct-Turbo",
-                        "task": "conversational",
-                    }
-                }
-            },
-        )
 
     transformed_request = config.transform_request(
         model=model,
@@ -185,8 +201,10 @@ def test_transform_request(
     assert transformed_request["messages"] == messages
 
 
-def test_validate_environment() -> None:
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_validate_environment():
     """Test that the environment is validated correctly"""
+    from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
 
     config = HuggingFaceChatConfig()
 

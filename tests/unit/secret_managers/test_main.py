@@ -53,14 +53,18 @@ def redact_oidc_signature(secret_val: str) -> list[str]:
     return secret_val.split(".")[:-1] + ["SIGNATURE_REMOVED"]
 
 
-def test_oidc_env_variable(monkeypatch):
+def test_oidc_env_variable():
+    # Create a unique environment variable name
     env_var_name = "OIDC_TEST_PATH_" + uuid4().hex
-    monkeypatch.setenv(env_var_name, "secret-" + uuid4().hex)
+    os.environ[env_var_name] = "secret-" + uuid4().hex
     secret_val = get_secret(f"oidc/env/{env_var_name}")
 
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
     assert secret_val == os.environ[env_var_name]
+
+    # now unset the environment variable
+    del os.environ[env_var_name]
 
 
 def test_oidc_file(monkeypatch):
@@ -78,74 +82,96 @@ def test_oidc_file(monkeypatch):
         assert secret_val == secret_value
 
 
-def test_oidc_env_path(monkeypatch):
+def test_oidc_env_path():
+    # Create a temporary file
     with tempfile.NamedTemporaryFile(mode="w+") as temp_file:
         secret_value = "secret-" + uuid4().hex
         temp_file.write(secret_value)
         temp_file.flush()
         temp_file_path = temp_file.name
 
+        # Create a unique environment variable name
         env_var_name = "OIDC_TEST_PATH_" + uuid4().hex
 
-        monkeypatch.setenv(env_var_name, temp_file_path)
+        # Set the environment variable to the temporary file path
+        os.environ[env_var_name] = temp_file_path
 
+        # Test getting the secret using the environment variable
         secret_val = get_secret(f"oidc/env_path/{env_var_name}")
 
         print(f"secret_val: {redact_oidc_signature(secret_val)}")
 
         assert secret_val == secret_value
 
+        del os.environ[env_var_name]
 
-def test_should_read_secret_from_secret_manager(monkeypatch):
+
+def test_should_read_secret_from_secret_manager():
     """
     Test that _should_read_secret_from_secret_manager returns correct values based on access mode
     """
     from litellm.types.secret_managers.main import KeyManagementSettings
 
-    monkeypatch.setattr(litellm, "secret_manager_client", None)
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings())
+    # Test when secret manager client is None
+    litellm.secret_manager_client = None
+    litellm._key_management_settings = KeyManagementSettings()
     assert _should_read_secret_from_secret_manager() is False
 
-    monkeypatch.setattr(litellm, "secret_manager_client", "dummy_client")
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    # Test with secret manager client and read_only access
+    litellm.secret_manager_client = "dummy_client"
+    litellm._key_management_settings = KeyManagementSettings(access_mode="read_only")
     assert _should_read_secret_from_secret_manager() is True
 
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_and_write"))
+    # Test with secret manager client and read_and_write access
+    litellm._key_management_settings = KeyManagementSettings(
+        access_mode="read_and_write"
+    )
     assert _should_read_secret_from_secret_manager() is True
 
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="write_only"))
+    # Test with secret manager client and write_only access
+    litellm._key_management_settings = KeyManagementSettings(access_mode="write_only")
     assert _should_read_secret_from_secret_manager() is False
 
-    monkeypatch.setattr(litellm, "secret_manager_client", None)
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings())
+    # Reset global variables
+    litellm.secret_manager_client = None
+    litellm._key_management_settings = KeyManagementSettings()
 
 
-def test_get_secret_with_access_mode(monkeypatch):
+def test_get_secret_with_access_mode():
     """
     Test that get_secret respects access mode settings
     """
     from litellm.types.secret_managers.main import KeyManagementSettings
 
+    # Set up test environment
     test_secret_name = "TEST_SECRET_KEY"
     test_secret_value = "test_secret_value"
-    monkeypatch.setenv(test_secret_name, test_secret_value)
+    os.environ[test_secret_name] = test_secret_value
 
-    monkeypatch.setattr(litellm, "secret_manager_client", "dummy_client")
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="write_only"))
+    # Test with write_only access (should read from os.environ)
+    litellm.secret_manager_client = "dummy_client"
+    litellm._key_management_settings = KeyManagementSettings(access_mode="write_only")
     assert get_secret(test_secret_name) == test_secret_value
 
-    monkeypatch.setattr(litellm, "secret_manager_client", "dummy_client")
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings())
+    # Test with no KeyManagementSettings but secret_manager_client set
+    litellm.secret_manager_client = "dummy_client"
+    litellm._key_management_settings = KeyManagementSettings()
     assert _should_read_secret_from_secret_manager() is True
 
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    # Test with read_only access
+    litellm._key_management_settings = KeyManagementSettings(access_mode="read_only")
     assert _should_read_secret_from_secret_manager() is True
 
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_and_write"))
+    # Test with read_and_write access
+    litellm._key_management_settings = KeyManagementSettings(
+        access_mode="read_and_write"
+    )
     assert _should_read_secret_from_secret_manager() is True
 
-    monkeypatch.setattr(litellm, "secret_manager_client", None)
-    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings())
+    # Reset global variables
+    litellm.secret_manager_client = None
+    litellm._key_management_settings = KeyManagementSettings()
+    del os.environ[test_secret_name]
 
 
 def test_key_management_settings_defaults():
@@ -199,22 +225,21 @@ async def test_async_write_secret_receives_description_and_tags(monkeypatch):
     from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
     from litellm.types.secret_managers.main import KeyManagementSettings
 
+    # Mock out AWS network calls
     mock_async_write = AsyncMock(return_value={"Name": "litellm/test_secret"})
-    secret_manager_client = MagicMock(spec=AWSSecretsManagerV2)
-    secret_manager_client.async_write_secret = mock_async_write
+    monkeypatch.setattr(AWSSecretsManagerV2, "async_write_secret", mock_async_write)
 
-    monkeypatch.setattr(
-        litellm,
-        "_key_management_settings",
-        KeyManagementSettings(
-            store_virtual_keys=True,
-            description="LiteLLM Unit Test Secret",
-            tags={"Owner": "UnitTest", "Purpose": "Validation"},
-        ),
+    # Setup settings
+    litellm._key_management_settings = KeyManagementSettings(
+        store_virtual_keys=True,
+        description="LiteLLM Unit Test Secret",
+        tags={"Owner": "UnitTest", "Purpose": "Validation"},
     )
 
-    monkeypatch.setattr(litellm, "secret_manager_client", secret_manager_client)
+    # Instantiate fake client
+    litellm.secret_manager_client = AWSSecretsManagerV2()
 
+    # Call the helper method that stores a virtual key
     from litellm.proxy.hooks.key_management_event_hooks import (
         KeyManagementEventHooks,
     )
@@ -223,6 +248,7 @@ async def test_async_write_secret_receives_description_and_tags(monkeypatch):
         secret_name="test_secret", secret_token="test_value"
     )
 
+    # Verify async_write_secret was called with correct metadata
     mock_async_write.assert_called_once()
     args, kwargs = mock_async_write.call_args
 

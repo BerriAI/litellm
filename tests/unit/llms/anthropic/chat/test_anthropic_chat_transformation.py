@@ -20,6 +20,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.llms.anthropic.chat import ModelResponseIterator
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -7003,22 +7004,22 @@ def _make_transform_request(optional_params: dict, litellm_params: dict) -> dict
     )
 
 
-def test_anthropic_tool_streaming(monkeypatch: pytest.MonkeyPatch):
+def test_anthropic_tool_streaming():
     """
     OpenAI starts tool_use indexes at 0 for the first tool, regardless of preceding text.
 
     Anthropic gives tool_use indexes starting at the first chunk, meaning they often start at 1
     when they should start at 0
     """
-    from litellm.llms.anthropic.chat.handler import ModelResponseIterator
-
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
     response_iter = ModelResponseIterator([], False)
 
+    # First index is 0, we'll start earlier because incrementing is easier
     correct_tool_index = -1
     for chunk in anthropic_chunk_list:
         parsed_chunk = response_iter.chunk_parser(chunk)
         if tool_use := parsed_chunk.get("tool_use"):
+            # We only increment when a new block starts
             if tool_use.get("id") is not None:
                 correct_tool_index += 1
             assert tool_use["index"] == correct_tool_index
@@ -7493,51 +7494,51 @@ def test_anthropic_json_mode_and_tool_call_response(json_mode, tool_calls, expec
 @pytest.mark.parametrize(
     "stop_input,expected_output,drop_params",
     [
-        ("stop", ["stop"], True),
-        (["stop1", "stop2"], ["stop1", "stop2"], True),
+        ("stop", ["stop"], True),  # basic string
+        (["stop1", "stop2"], ["stop1", "stop2"], True),  # list of strings
         (
             "   ",
             None,
             True,
-        ),
+        ),  # whitespace string should be dropped when drop_params is True
         (
             "   ",
             ["   "],
             False,
-        ),
+        ),  # whitespace string should be kept when drop_params is False
         (
             ["stop1", "  ", "stop2"],
             ["stop1", "stop2"],
             True,
-        ),
+        ),  # list with whitespace that should be filtered
         (
             ["stop1", "  ", "stop2"],
             ["stop1", "  ", "stop2"],
             False,
-        ),
-        (None, None, True),
+        ),  # list with whitespace that should be kept
+        (None, None, True),  # None input
     ],
 )
-def test_map_stop_sequences(stop_input, expected_output, drop_params, monkeypatch: pytest.MonkeyPatch):
+def test_map_stop_sequences(stop_input, expected_output, drop_params):
     """Test the _map_stop_sequences method of AnthropicConfig"""
-    monkeypatch.setattr(litellm, "drop_params", drop_params)
+    litellm.drop_params = drop_params
     config = AnthropicConfig()
     result = config.map_stop_sequences(stop_input)
     assert result == expected_output
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 @pytest.mark.parametrize(
     "model",
     ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229"],
 )
 @pytest.mark.asyncio()
-async def test_anthropic_api_max_completion_tokens(model: str, monkeypatch: pytest.MonkeyPatch):
+async def test_anthropic_api_max_completion_tokens(model: str):
     """
     Tests that:
     - max_completion_tokens is passed as max_tokens to anthropic models
     """
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-api-key")
+    litellm.set_verbose = True
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     mock_response = {
@@ -7571,7 +7572,9 @@ async def test_anthropic_api_max_completion_tokens(model: str, monkeypatch: pyte
         print("request_body: ", request_body)
 
         assert request_body == {
-            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]}
+            ],
             "max_tokens": 10,
             "model": model.split("/")[-1],
         }
@@ -7780,16 +7783,21 @@ def test_metadata_filter_applies_to_azure_anthropic():
     assert data.get("metadata") == {"user_id": "u2"}
 
 
-def test_anthropic_api_prompt_caching_with_content_str():
+@pytest.mark.asyncio()
+async def test_anthropic_api_prompt_caching_with_content_str():
     system_message = [
         {
             "role": "system",
             "content": "Here is the full text of a complex legal agreement",
             "cache_control": {"type": "ephemeral"},
-        }
+        },
     ]
-    translated_system_message = AnthropicConfig().translate_system_message(messages=system_message)
+    translated_system_message = litellm.AnthropicConfig().translate_system_message(
+        messages=system_message
+    )
+
     assert translated_system_message == [
+        # System Message
         {
             "type": "text",
             "text": "Here is the full text of a complex legal agreement",
@@ -7797,6 +7805,7 @@ def test_anthropic_api_prompt_caching_with_content_str():
         }
     ]
     user_messages = [
+        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
         {
             "role": "user",
             "content": "What are the key terms and conditions in this agreement?",
@@ -7806,17 +7815,20 @@ def test_anthropic_api_prompt_caching_with_content_str():
             "role": "assistant",
             "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
         },
+        # The final turn is marked with cache-control, for continuing in followups.
         {
             "role": "user",
             "content": "What are the key terms and conditions in this agreement?",
             "cache_control": {"type": "ephemeral"},
         },
     ]
+
     translated_messages = anthropic_messages_pt(
         messages=user_messages,
         model="claude-3-5-sonnet-20240620",
         llm_provider="anthropic",
     )
+
     expected_messages = [
         {
             "role": "user",
@@ -7837,6 +7849,7 @@ def test_anthropic_api_prompt_caching_with_content_str():
                 }
             ],
         },
+        # The final turn is marked with cache-control, for continuing in followups.
         {
             "role": "user",
             "content": [
@@ -7848,11 +7861,17 @@ def test_anthropic_api_prompt_caching_with_content_str():
             ],
         },
     ]
-    assert translated_messages == expected_messages
+
+    assert len(translated_messages) == len(expected_messages)
+    for idx, i in enumerate(translated_messages):
+        assert (
+            i == expected_messages[idx]
+        ), "Error on idx={}. Got={}, Expected={}".format(idx, i, expected_messages[idx])
 
 
-def test_is_prompt_caching_enabled():
-    anthropic_messages = [
+@pytest.fixture
+def anthropic_messages():
+    return [
         {
             "role": "system",
             "content": [
@@ -7888,6 +7907,10 @@ def test_is_prompt_caching_enabled():
             ],
         },
     ]
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_is_prompt_caching_enabled(anthropic_messages):
     assert litellm.utils.is_prompt_caching_valid_prompt(
         messages=anthropic_messages,
         tools=None,

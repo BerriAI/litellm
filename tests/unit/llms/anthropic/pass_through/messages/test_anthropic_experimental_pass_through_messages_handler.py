@@ -25,6 +25,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StreamingChoices,
 )
+import unittest.mock
 
 
 def test_anthropic_experimental_pass_through_messages_handler():
@@ -1690,9 +1691,14 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_litellm_router_latency_metadata_tracking() -> None:
-    with patch("litellm.anthropic_messages") as mock_anthropic_messages:
-        mock_response: Final = {
+async def test_anthropic_messages_litellm_router_latency_metadata_tracking():
+    """
+    Test the anthropic_messages with routing strategy and verify that _latency_per_deployment
+    field is passed in litellm_metadata when calling litellm.anthropic_messages
+    """
+    with unittest.mock.patch("litellm.anthropic_messages") as mock_anthropic_messages:
+        # Mock the return value
+        mock_response = {
             "id": "msg_123456",
             "type": "message",
             "role": "assistant",
@@ -1702,54 +1708,107 @@ async def test_anthropic_messages_litellm_router_latency_metadata_tracking() -> 
             "usage": {"input_tokens": 10, "output_tokens": 20},
         }
         mock_anthropic_messages.return_value = mock_response
+        # Set the __name__ attribute that the router expects
         mock_anthropic_messages.__name__ = "anthropic_messages"
 
-        model_group: Final = "claude-special-alias"
-        router: Final = Router(
+        MODEL_GROUP = "claude-special-alias"
+        router = Router(
             model_list=[
                 {
-                    "model_name": model_group,
+                    "model_name": MODEL_GROUP,
                     "litellm_params": {
                         "model": "claude-haiku-4-5-20251001",
-                        "api_key": "test-api-key",
+                        "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     },
                 }
             ],
             routing_strategy="latency-based-routing",
         )
-        messages: Final = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
-        response: Final = await router.aanthropic_messages(
+
+        # Set up test parameters
+        messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+
+        # Call the handler
+        response = await router.aanthropic_messages(
             messages=messages,
-            model=model_group,
+            model=MODEL_GROUP,
             max_tokens=100,
-            metadata={"user_id": "hello"},
+            metadata={
+                "user_id": "hello",
+            },
         )
 
+        # Verify response
         assert response == mock_response
+
+        # Verify that litellm.anthropic_messages was called
         mock_anthropic_messages.assert_called_once()
 
-        call_kwargs: Final = mock_anthropic_messages.call_args.kwargs
-        assert "litellm_metadata" in call_kwargs
-        litellm_metadata: Final = call_kwargs["litellm_metadata"]
-        assert litellm_metadata is not None
-        assert isinstance(litellm_metadata, dict)
-        assert "_latency_per_deployment" in litellm_metadata
-        assert isinstance(litellm_metadata["_latency_per_deployment"], dict)
-        assert litellm_metadata["model_group"] == model_group
+        # Get the call arguments
+        call_args = mock_anthropic_messages.call_args
+        call_kwargs = call_args.kwargs
+
+        print("Call kwargs:", json.dumps(call_kwargs, indent=2, default=str))
+
+        # Verify that litellm_metadata was passed and contains _latency_per_deployment
+        assert (
+            "litellm_metadata" in call_kwargs
+        ), "litellm_metadata should be passed to anthropic_messages"
+
+        litellm_metadata = call_kwargs["litellm_metadata"]
+        assert litellm_metadata is not None, "litellm_metadata should not be None"
+        assert isinstance(
+            litellm_metadata, dict
+        ), "litellm_metadata should be a dictionary"
+
+        # Verify _latency_per_deployment is present
+        assert (
+            "_latency_per_deployment" in litellm_metadata
+        ), "litellm_metadata should contain _latency_per_deployment field"
+
+        # Verify the structure of _latency_per_deployment
+        latency_per_deployment = litellm_metadata["_latency_per_deployment"]
+        assert isinstance(
+            latency_per_deployment, dict
+        ), "_latency_per_deployment should be a dictionary"
+
+        print(f"✅ Latency per deployment data: {latency_per_deployment}")
+
+        # Verify other expected fields in litellm_metadata
+        assert "model_group" in litellm_metadata
+        assert litellm_metadata["model_group"] == MODEL_GROUP
         assert "deployment" in litellm_metadata
         assert "model_info" in litellm_metadata
+
+        # Verify other call parameters
         assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
         assert call_kwargs["messages"] == messages
         assert call_kwargs["max_tokens"] == 100
         assert call_kwargs["metadata"] == {"user_id": "hello"}
 
+        print(
+            "✅ Successfully verified that _latency_per_deployment is passed in litellm_metadata to anthropic_messages"
+        )
+
+        return response
+
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_with_extra_headers() -> None:
-    api_key: Final = "test-api-key"
-    messages: Final = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
-    extra_headers: Final = {"anthropic-version": "custom-version-for-test"}
-    mock_response: Final = MagicMock()
+async def test_anthropic_messages_with_extra_headers():
+    """
+    Test the anthropic_messages with extra headers
+    """
+    # Get API key from environment
+    api_key = os.getenv("ANTHROPIC_API_KEY", "fake-api-key")
+
+    # Set up test parameters
+    messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+    extra_headers = {
+        "anthropic-version": "custom-version-for-test",
+    }
+
+    # Create a mock response
+    mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = {
         "id": "msg_123456",
@@ -1765,10 +1824,13 @@ async def test_anthropic_messages_with_extra_headers() -> None:
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
-    mock_client: Final = MagicMock(spec=AsyncHTTPHandler)
+
+    # Create a mock client with AsyncMock for the post method
+    mock_client = MagicMock(spec=AsyncHTTPHandler)
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    response: Final = await litellm.anthropic.messages.acreate(
+    # Call the handler with extra_headers and our mocked client
+    response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
         model="claude-haiku-4-5-20251001",
@@ -1780,20 +1842,36 @@ async def test_anthropic_messages_with_extra_headers() -> None:
         },
     )
 
+    # Verify the post method was called with the right parameters
     mock_client.post.assert_called_once()
-    call_kwargs: Final = mock_client.post.call_args.kwargs
-    headers: Final = call_kwargs.get("headers", {})
+    call_kwargs = mock_client.post.call_args.kwargs
+
+    # Verify headers were passed correctly
+    headers = call_kwargs.get("headers", {})
+    print("HEADERS IN REQUEST", headers)
     for key, value in extra_headers.items():
         assert key in headers
         assert headers[key] == value
+
+    # Verify the response was processed correctly
     assert response == mock_response.json.return_value
+
+    return response
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_with_thinking() -> None:
-    api_key: Final = "test-api-key"
-    messages: Final = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
-    mock_response: Final = MagicMock()
+async def test_anthropic_messages_with_thinking():
+    """
+    Test the anthropic_messages with thinking
+    """
+    # Get API key from environment
+    api_key = os.getenv("ANTHROPIC_API_KEY", "fake-api-key")
+
+    # Set up test parameters
+    messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+
+    # Create a mock response
+    mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = {
         "id": "msg_123456",
@@ -1809,10 +1887,13 @@ async def test_anthropic_messages_with_thinking() -> None:
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
-    mock_client: Final = MagicMock(spec=AsyncHTTPHandler)
+
+    # Create a mock client with AsyncMock for the post method
+    mock_client = MagicMock(spec=AsyncHTTPHandler)
     mock_client.post = AsyncMock(return_value=mock_response)
 
-    response: Final = await litellm.anthropic.messages.acreate(
+    # Call the handler with extra_headers and our mocked client
+    response = await litellm.anthropic.messages.acreate(
         messages=messages,
         api_key=api_key,
         model="claude-haiku-4-5-20251001",
@@ -1821,29 +1902,51 @@ async def test_anthropic_messages_with_thinking() -> None:
         thinking={"budget_tokens": 100},
     )
 
+    # Verify the post method was called with the right parameters
     mock_client.post.assert_called_once()
-    call_kwargs: Final = mock_client.post.call_args.kwargs
-    request_body: Final = json.loads(call_kwargs.get("data", {}))
+    call_kwargs = mock_client.post.call_args.kwargs
+    print("CALL KWARGS", call_kwargs)
+
+    # Verify headers were passed correctly
+    request_body = json.loads(call_kwargs.get("data", {}))
+    print("REQUEST BODY", request_body)
     assert request_body["max_tokens"] == 100
     assert request_body["model"] == "claude-haiku-4-5-20251001"
     assert request_body["messages"] == messages
     assert request_body["thinking"] == {"budget_tokens": 100}
+
+    # Verify the response was processed correctly
     assert response == mock_response.json.return_value
+
+    return response
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_bedrock_credentials_passthrough() -> None:
-    with patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials:
-        mock_credentials: Final = MagicMock()
+async def test_anthropic_messages_bedrock_credentials_passthrough():
+    """
+    Test that AWS credentials are correctly passed through to BaseAWSLLM.get_credentials
+    when using anthropic.messages.acreate with a bedrock model
+    """
+    # Mock the get_credentials method
+    with unittest.mock.patch.object(
+        BaseAWSLLM, "get_credentials"
+    ) as mock_get_credentials:
+        # Create a proper mock for credentials with the necessary attributes
+        mock_credentials = unittest.mock.MagicMock()
         mock_credentials.access_key = "mock_access_key"
         mock_credentials.secret_key = "mock_secret_key"
         mock_credentials.token = "mock_session_token"
         mock_get_credentials.return_value = mock_credentials
 
-        with patch("botocore.auth.SigV4Auth.add_auth"):
-            with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
-                mock_response: Final = MagicMock()
-                mock_response.raise_for_status = MagicMock()
+        # We also need to mock the actual AWS request signing to avoid real API calls
+        with unittest.mock.patch("botocore.auth.SigV4Auth.add_auth"):
+            # Set up mock for AsyncHTTPHandler.post to avoid actual API calls
+            with unittest.mock.patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+            ) as mock_post:
+                # Configure mock response
+                mock_response = unittest.mock.MagicMock()
+                mock_response.raise_for_status = unittest.mock.MagicMock()
                 mock_response.json.return_value = {
                     "id": "msg_bedrock_123",
                     "type": "message",
@@ -1854,7 +1957,9 @@ async def test_anthropic_messages_bedrock_credentials_passthrough() -> None:
                     "usage": {"input_tokens": 10, "output_tokens": 20},
                 }
                 mock_post.return_value = mock_response
-                aws_params: Final = {
+
+                # Test AWS credentials parameters - separate from function call parameters
+                aws_params = {
                     "aws_access_key_id": "test_access_key",
                     "aws_secret_access_key": "test_secret_key",
                     "aws_session_token": "test_session_token",
@@ -1866,6 +1971,7 @@ async def test_anthropic_messages_bedrock_credentials_passthrough() -> None:
                     "aws_sts_endpoint": "https://sts.test-region.amazonaws.com",
                 }
 
+                # Call the function with AWS credentials
                 await litellm.anthropic.messages.acreate(
                     messages=[{"role": "user", "content": "Hello, test credentials"}],
                     model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -1873,15 +1979,24 @@ async def test_anthropic_messages_bedrock_credentials_passthrough() -> None:
                     **aws_params,
                 )
 
+                # Verify get_credentials was called with the correct parameters
                 mock_get_credentials.assert_called_once()
-                call_args: Final = mock_get_credentials.call_args[1]
+                call_args = mock_get_credentials.call_args[1]
+
+                # Assert that our test credentials were passed correctly
                 for param_name, param_value in aws_params.items():
-                    assert call_args[param_name] == param_value
+                    assert (
+                        call_args[param_name] == param_value
+                    ), f"Parameter {param_name} was not passed correctly"
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_bedrock_dynamic_region() -> None:
-    mock_response: Final = MagicMock()
+async def test_anthropic_messages_bedrock_dynamic_region():
+    """
+    Test that when aws_region_name is provided, it is used in request url
+    """
+    # Mock the HTTP response
+    mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = {
         "id": "msg_bedrock_123",
@@ -1892,21 +2007,31 @@ async def test_anthropic_messages_bedrock_dynamic_region() -> None:
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
-    mock_client: Final = AsyncMock(spec=AsyncHTTPHandler)
+
+    # Create a mock client with AsyncMock for the post method
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
     mock_client.post = AsyncMock(return_value=mock_response)
 
+    # Patch necessary AWS components
     with (
-        patch("botocore.auth.SigV4Auth.add_auth"),
-        patch.object(BaseAWSLLM, "get_credentials") as mock_get_credentials,
+        unittest.mock.patch("botocore.auth.SigV4Auth.add_auth"),
+        unittest.mock.patch.object(
+            BaseAWSLLM, "get_credentials"
+        ) as mock_get_credentials,
     ):
-        mock_credentials: Final = MagicMock()
+
+        # Setup mock credentials
+        mock_credentials = unittest.mock.MagicMock()
         mock_credentials.access_key = "test_access_key"
         mock_credentials.secret_key = "test_secret_key"
         mock_credentials.token = "test_session_token"
         mock_get_credentials.return_value = mock_credentials
-        test_region: Final = "us-east-1"
 
-        response: Final = await litellm.anthropic.messages.acreate(
+        # Test with specific region
+        test_region = "us-east-1"
+
+        # Call anthropic.messages.acreate with aws_region_name
+        response = await litellm.anthropic.messages.acreate(
             messages=[{"role": "user", "content": "Hello, test region"}],
             model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             max_tokens=100,
@@ -1914,11 +2039,20 @@ async def test_anthropic_messages_bedrock_dynamic_region() -> None:
             client=mock_client,
         )
 
+        # Verify response
         assert response == mock_response.json.return_value
+
+        # Verify the post method was called with the correct URL containing the region
         mock_client.post.assert_called_once()
-        call_args: Final = mock_client.post.call_args
-        url: Final = call_args.kwargs.get("url", "")
-        assert f"bedrock-runtime.{test_region}.amazonaws.com" in url
+        call_args = mock_client.post.call_args
+
+        # Check that the URL contains the correct region
+        url = call_args.kwargs.get("url", "")
+        assert (
+            f"bedrock-runtime.{test_region}.amazonaws.com" in url
+        ), f"URL does not contain the correct region. URL: {url}"
+
+        # Verify get_credentials was called with the correct region
         mock_get_credentials.assert_called_once()
-        credentials_args: Final = mock_get_credentials.call_args.kwargs
+        credentials_args = mock_get_credentials.call_args.kwargs
         assert credentials_args.get("aws_region_name") == test_region

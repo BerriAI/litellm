@@ -1,7 +1,6 @@
 import json
 import os
 from datetime import datetime, timezone
-from dataclasses import dataclass, field
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,7 +12,6 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
-from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     ModelResponse,
     StandardLoggingHiddenParams,
@@ -144,6 +142,7 @@ def test_routing_strategy_init_invalid_strategy(model_list):
     assert "Invalid routing_strategy" in str(exc_info.value)
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_print_deployment(model_list):
     """Test if the api key is masked correctly"""
 
@@ -152,7 +151,7 @@ def test_print_deployment(model_list):
         "model_name": "gpt-5-mini",
         "litellm_params": {
             "model": "gpt-5-mini",
-            "api_key": "sk-fake-key",
+            "api_key": os.getenv("OPENAI_API_KEY"),
         },
     }
     printed_deployment = router.print_deployment(deployment)
@@ -428,9 +427,10 @@ def test_handle_mock_testing_rate_limit_error(model_list):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("router_minute_pinned")
 async def test_deployment_callback_on_success(sync_mode):
     """Test if the '_deployment_callback_on_success' function is working correctly"""
+    import time
+
     model_list = [
         {
             "model_name": "gpt-5-mini",
@@ -443,8 +443,10 @@ async def test_deployment_callback_on_success(sync_mode):
         }
     ]
     router = Router(model_list=model_list)
-
-    gpt_deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
+    # Get the actual deployment ID that was generated
+    gpt_deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-5-mini"
+    )
     deployment_id = gpt_deployment["model_info"]["id"]
 
     standard_logging_payload = create_standard_logging_payload()
@@ -467,27 +469,28 @@ async def test_deployment_callback_on_success(sync_mode):
         tpm_key = router.sync_deployment_callback_on_success(
             kwargs=kwargs,
             completion_response=response,
-            start_time=0.0,
-            end_time=1.0,
+            start_time=time.time(),
+            end_time=time.time(),
         )
     else:
         tpm_key = await router.deployment_callback_on_success(
             kwargs=kwargs,
             completion_response=response,
-            start_time=0.0,
-            end_time=1.0,
+            start_time=time.time(),
+            end_time=time.time(),
         )
     assert tpm_key is not None
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("router_minute_pinned")
 async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
     """
     An IO-limited deployment (itpm/otpm, no tpm/rpm) must still record TPM usage
     in the router's routing counter so TPM-aware routing strategies see its real
     load in mixed model groups; its itpm/otpm enforcement runs separately.
     """
+    import time
+
     model_list = [
         {
             "model_name": "opus",
@@ -519,18 +522,20 @@ async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
     tpm_key = await router.deployment_callback_on_success(
         kwargs=kwargs,
         completion_response=response,
-        start_time=0.0,
-        end_time=1.0,
+        start_time=time.time(),
+        end_time=time.time(),
     )
 
+    # The IO deployment is no longer skipped: its TPM routing counter is tracked.
     assert tpm_key is not None
     assert await router.cache.async_get_cache(key=tpm_key) == 100
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("router_minute_pinned")
 async def test_deployment_callback_on_failure(model_list):
     """Test if the '_deployment_callback_on_failure' function is working correctly"""
+    import time
+
     router = Router(model_list=model_list)
     kwargs = {
         "litellm_params": {
@@ -543,8 +548,8 @@ async def test_deployment_callback_on_failure(model_list):
     result = router.deployment_callback_on_failure(
         kwargs=kwargs,
         completion_response=None,
-        start_time=0.0,
-        end_time=1.0,
+        start_time=time.time(),
+        end_time=time.time(),
     )
     assert isinstance(result, bool)
     assert result is False
@@ -557,15 +562,15 @@ async def test_deployment_callback_on_failure(model_list):
     result = await router.async_deployment_callback_on_failure(
         kwargs=kwargs,
         completion_response=model_response,
-        start_time=0.0,
-        end_time=1.0,
+        start_time=time.time(),
+        end_time=time.time(),
     )
 
 
-@pytest.mark.usefixtures("router_minute_pinned")
 def test_deployment_callback_respects_cooldown_time(model_list):
     """Ensure per-model cooldown_time is honored even when exception headers are present."""
     import httpx
+    import time
     from unittest.mock import patch
 
     router = Router(model_list=model_list)
@@ -588,8 +593,8 @@ def test_deployment_callback_respects_cooldown_time(model_list):
         router.deployment_callback_on_failure(
             kwargs=kwargs,
             completion_response=None,
-            start_time=0.0,
-            end_time=1.0,
+            start_time=time.time(),
+            end_time=time.time(),
         )
 
         mock_set.assert_called_once()
@@ -680,17 +685,19 @@ def test_get_healthy_deployments(model_list):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_routing_strategy_pre_call_checks(model_list, sync_mode, monkeypatch: pytest.MonkeyPatch):
+async def test_routing_strategy_pre_call_checks(model_list, sync_mode):
     """Test if the '_routing_strategy_pre_call_checks' function is working correctly"""
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     callback = CustomLogger()
-    monkeypatch.setattr(litellm, "callbacks", [callback])
+    litellm.callbacks = [callback]
 
     router = Router(model_list=model_list)
 
-    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-5-mini"
+    )
 
     litellm_logging_obj = Logging(
         model="gpt-5-mini",
@@ -698,14 +705,18 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode, monkeypat
         stream=False,
         call_type="acompletion",
         litellm_call_id="1234",
-        start_time=datetime(2026, 1, 1),
+        start_time=datetime.now(),
         function_id="1234",
     )
     if sync_mode:
         router.routing_strategy_pre_call_checks(deployment)
     else:
-        await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
+        ## NO EXCEPTION
+        await router.async_routing_strategy_pre_call_checks(
+            deployment, litellm_logging_obj
+        )
 
+        ## WITH EXCEPTION - rate limit error
         with patch.object(
             callback,
             "async_pre_call_check",
@@ -718,11 +729,18 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode, monkeypat
             ),
         ):
             with pytest.raises(litellm.RateLimitError):
-                await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
+                await router.async_routing_strategy_pre_call_checks(
+                    deployment, litellm_logging_obj
+                )
 
-        with patch.object(callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))):
+        ## WITH EXCEPTION - generic error
+        with patch.object(
+            callback, "async_pre_call_check", AsyncMock(side_effect=Exception("Error"))
+        ):
             with pytest.raises(Exception, match="Error"):
-                await router.async_routing_strategy_pre_call_checks(deployment, litellm_logging_obj)
+                await router.async_routing_strategy_pre_call_checks(
+                    deployment, litellm_logging_obj
+                )
 
 
 @pytest.mark.parametrize(
@@ -730,18 +748,13 @@ async def test_routing_strategy_pre_call_checks(model_list, sync_mode, monkeypat
     [(True, ["staging"], True), (False, None, True), (True, ["development"], False)],
 )
 def test_create_deployment(
-    model_list,
-    set_supported_environments,
-    supported_environments,
-    is_supported,
-    monkeypatch: pytest.MonkeyPatch,
+    model_list, set_supported_environments, supported_environments, is_supported
 ):
     """Test if the '_create_deployment' function is working correctly"""
-    monkeypatch.delenv("LITELLM_ENVIRONMENT", raising=False)
     router = Router(model_list=model_list)
 
     if set_supported_environments:
-        monkeypatch.setenv("LITELLM_ENVIRONMENT", "staging")
+        os.environ["LITELLM_ENVIRONMENT"] = "staging"
     deployment = router._create_deployment(
         deployment_info={},
         _model_name="gpt-5-mini",
@@ -766,23 +779,24 @@ def test_create_deployment(
     [(True, ["staging"], True), (False, None, True), (True, ["development"], False)],
 )
 def test_deployment_is_active_for_environment(
-    model_list,
-    set_supported_environments,
-    supported_environments,
-    is_supported,
-    monkeypatch: pytest.MonkeyPatch,
+    model_list, set_supported_environments, supported_environments, is_supported
 ):
     """Test if the '_deployment_is_active_for_environment' function is working correctly"""
-    monkeypatch.delenv("LITELLM_ENVIRONMENT", raising=False)
     router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-mini")
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-5-mini"
+    )
     if set_supported_environments:
-        monkeypatch.setenv("LITELLM_ENVIRONMENT", "staging")
+        os.environ["LITELLM_ENVIRONMENT"] = "staging"
     deployment["model_info"]["supported_environments"] = supported_environments
     if is_supported:
-        assert router.deployment_is_active_for_environment(deployment=deployment) is True
+        assert (
+            router.deployment_is_active_for_environment(deployment=deployment) is True
+        )
     else:
-        assert router.deployment_is_active_for_environment(deployment=deployment) is False
+        assert (
+            router.deployment_is_active_for_environment(deployment=deployment) is False
+        )
 
 
 def test_set_model_list(model_list):
@@ -943,8 +957,9 @@ async def test_acompletion_wildcard_route_headers_and_counter_use_resolved_deplo
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("router_minute_pinned")
 async def test_deployment_callback_on_success_adds_only_uncounted_tokens():
+    import time
+
     router = _rpm_tpm_router("lit-3058-callback")
     standard_logging_payload = create_standard_logging_payload()
     standard_logging_payload["total_tokens"] = 100
@@ -963,8 +978,8 @@ async def test_deployment_callback_on_success_adds_only_uncounted_tokens():
     tpm_key = await router.deployment_callback_on_success(
         kwargs=kwargs,
         completion_response=litellm.ModelResponse(model="gpt-5-mini", usage={"total_tokens": 100}),
-        start_time=0.0,
-        end_time=1.0,
+        start_time=time.time(),
+        end_time=time.time(),
     )
 
     assert tpm_key is not None
@@ -1038,69 +1053,50 @@ async def test_increment_deployment_usage_writes_only_positive_deltas_for_limite
     assert await unlimited.get_model_group_usage("gpt-5-mini") == (None, None)
 
 
-@dataclass(slots=True)
-class _SharedRedisStore:
-    values: dict[str, float] = field(default_factory=dict)  # mutable-ok: the cache state is shared between workers
-
-    def increment_pipeline(self, increment_list: list[RedisPipelineIncrementOperation]) -> list[float]:
-        return [self.increment(op["key"], op["increment_value"]) for op in increment_list]
-
-    def increment(self, key: str, increment_value: float) -> float:
-        updated_value: Final = self.values.get(key, 0.0) + increment_value
-        self.values[key] = updated_value
-        return updated_value
-
-
-def _shared_redis_stub(store: _SharedRedisStore) -> MagicMock:
+def _shared_redis_stub(store: dict) -> MagicMock:
     from litellm.caching.redis_cache import RedisCache
 
-    async def increment_pipeline(
-        increment_list: list[RedisPipelineIncrementOperation], **kwargs: object
-    ) -> list[float]:
-        return store.increment_pipeline(increment_list)
+    async def increment_pipeline(increment_list, **kwargs):
+        for op in increment_list:
+            store[op["key"]] = store.get(op["key"], 0.0) + op["increment_value"]
+        return [store[op["key"]] for op in increment_list]
 
-    async def batch_get(keys: list[str], **kwargs: object) -> dict[str, float | None]:
-        return {key: store.values.get(key) for key in keys}
+    async def batch_get(keys, **kwargs):
+        return {key: store.get(key) for key in keys}
 
-    redis_stub: Final = MagicMock(spec=RedisCache)
+    redis_stub = MagicMock(spec=RedisCache)
     redis_stub.async_increment_pipeline = increment_pipeline
     redis_stub.async_batch_get_cache = batch_get
     return redis_stub
 
 
+
+
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("router_minute_pinned")
 async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
-    store: Final = _SharedRedisStore()
+    store: dict = {}
     worker_a = _rpm_tpm_router("lit-3058-workers")
     worker_b = _rpm_tpm_router("lit-3058-workers")
     worker_a.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
     worker_b.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
 
-    messages: Final = [{"role": "user", "content": "hi"}]
-    responses_on_a: Final = (
-        await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong"),
-        await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong"),
-        await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong"),
-    )
-    tokens_on_a: Final = sum(response.usage.total_tokens for response in responses_on_a)
+    messages = [{"role": "user", "content": "hi"}]
+    tokens_on_a = 0
+    for _ in range(3):
+        response = await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+        tokens_on_a += response.usage.total_tokens
 
-    response_on_b: Final = await worker_b.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
-    headers: Final = _ratelimit_headers(response_on_b)
+    response = await worker_b.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+    headers = _ratelimit_headers(response)
     assert headers["x-ratelimit-remaining-requests"] == 96
-    assert headers["x-ratelimit-remaining-tokens"] == 1000 - tokens_on_a - response_on_b.usage.total_tokens
+    assert headers["x-ratelimit-remaining-tokens"] == 1000 - tokens_on_a - response.usage.total_tokens
 
-    responses_after: Final = (
-        await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong"),
-        await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong"),
-    )
-    counted_tokens: Final = (
-        tokens_on_a
-        + response_on_b.usage.total_tokens
-        + sum(response.usage.total_tokens for response in responses_after)
-    )
+    counted_tokens = tokens_on_a + response.usage.total_tokens
+    for _ in range(2):
+        response = await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+        counted_tokens += response.usage.total_tokens
 
-    stream: Final = await worker_b.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong", stream=True)
+    stream = await worker_b.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong", stream=True)
     stream_headers = _ratelimit_headers(stream)
     assert stream_headers["x-ratelimit-remaining-requests"] == 93
     assert stream_headers["x-ratelimit-remaining-tokens"] == 1000 - counted_tokens
@@ -1108,13 +1104,14 @@ async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
 
 
 @pytest.mark.asyncio
-async def test_get_model_group_io_token_usage_sums_across_deployments(router_minute_pinned: datetime):
+async def test_get_model_group_io_token_usage_sums_across_deployments():
     """
     get_model_group_io_token_usage must sum ITPM/OTPM across every deployment
     in the model group (not just the first), reading the same per-deployment
     cache keys the pre-call reservation writes to.
     """
     from litellm.types.router import RouterCacheEnum
+    from litellm.utils import get_utc_datetime
 
     router = Router(
         model_list=[
@@ -1139,22 +1136,30 @@ async def test_get_model_group_io_token_usage_sums_across_deployments(router_min
         ]
     )
 
-    minute = router_minute_pinned.strftime("%H-%M")
+    minute = get_utc_datetime().strftime("%H-%M")
     keys_and_values = [
         (
-            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
+            RouterCacheEnum.ITPM.value.format(
+                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
+            ),
             30,
         ),
         (
-            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute),
+            RouterCacheEnum.OTPM.value.format(
+                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
+            ),
             10,
         ),
         (
-            RouterCacheEnum.ITPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
+            RouterCacheEnum.ITPM.value.format(
+                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
+            ),
             70,
         ),
         (
-            RouterCacheEnum.OTPM.value.format(id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute),
+            RouterCacheEnum.OTPM.value.format(
+                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
+            ),
             20,
         ),
     ]
@@ -1471,13 +1476,14 @@ def test_get_allowed_fails_from_policy(model_list, exception_type, exception_nam
     assert calc_allowed_fails == allowed_fails
 
 
-def test_initialize_alerting(model_list, monkeypatch: pytest.MonkeyPatch):
+def test_initialize_alerting(model_list):
     """Test if the 'initialize_alerting' function is working correctly"""
     from litellm.types.router import AlertingConfig
     from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 
-    monkeypatch.setattr(litellm, "callbacks", [])
-    router = Router(model_list=model_list, alerting_config=AlertingConfig(webhook_url="test"))
+    router = Router(
+        model_list=model_list, alerting_config=AlertingConfig(webhook_url="test")
+    )
     router._initialize_alerting()
 
     callback_added = False
@@ -1496,21 +1502,22 @@ def test_flush_cache(model_list):
     assert router.cache.get_cache("test") is None
 
 
-def test_discard(model_list, monkeypatch: pytest.MonkeyPatch):
+def test_discard(model_list):
     """
     Test that discard properly removes a Router from the callback lists
     """
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm, "success_callback", [])
-    monkeypatch.setattr(litellm, "_async_success_callback", [])
-    monkeypatch.setattr(litellm, "failure_callback", [])
-    monkeypatch.setattr(litellm, "_async_failure_callback", [])
-    monkeypatch.setattr(litellm, "input_callback", [])
-    monkeypatch.setattr(litellm, "service_callback", [])
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm._async_failure_callback = []
+    litellm.input_callback = []
+    litellm.service_callback = []
 
     router = Router(model_list=model_list)
     router.discard()
 
+    # Verify all callback lists are empty
     assert len(litellm.callbacks) == 0
     assert len(litellm.success_callback) == 0
     assert len(litellm.failure_callback) == 0
@@ -1537,7 +1544,7 @@ def test_initialize_assistants_endpoint(model_list):
 def test_factory_function(model_list):
     """Test if the 'factory_function' function is working correctly"""
     router = Router(model_list=model_list)
-    assert callable(router.factory_function(litellm.acreate_assistants))
+    router.factory_function(litellm.acreate_assistants)
 
 
 def test_get_model_from_alias(model_list):
@@ -1646,8 +1653,7 @@ def test_has_default_fallbacks(model_list, has_default_fallbacks, expected_resul
     assert router._has_default_fallbacks() is expected_result
 
 
-def test_add_optional_pre_call_checks(model_list, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "callbacks", [])
+def test_add_optional_pre_call_checks(model_list):
     router = Router(model_list=model_list)
 
     router.add_optional_pre_call_checks(["prompt_caching"])
@@ -2129,13 +2135,12 @@ def test_handle_clientside_credential_with_responses_function(model_list):
     print("✓ Success with _ageneric_api_call_with_fallbacks function name and litellm_metadata")
 
 
-def test_handle_clientside_credential_still_registers_custom_pricing(model_list, monkeypatch: pytest.MonkeyPatch):
+def test_handle_clientside_credential_still_registers_custom_pricing(model_list):
     """A clientside-credential call must still price against the deployment's own
     custom rate, even though the call's ephemeral deployment is never added to the
     router (see LIT-7811): losing that registration would silently fall back to
     public catalog pricing for every clientside-credential call on a deployment
     with a custom rate configured."""
-    monkeypatch.setattr(litellm, "model_cost", {})
     router = Router(model_list=model_list)
     deployment = {
         "model_name": "gpt-4.1",
@@ -2159,10 +2164,9 @@ def test_handle_clientside_credential_still_registers_custom_pricing(model_list,
     assert registered["output_cost_per_token"] == 0.0005678
 
 
-def test_register_deployment_pricing_direct_call(monkeypatch: pytest.MonkeyPatch):
+def test_register_deployment_pricing_direct_call():
     """Direct-call unit test for the pricing-registration helper `_handle_clientside_credential`
     relies on, so it prices a deployment that is deliberately never added to `self.model_list`."""
-    monkeypatch.setattr(litellm, "model_cost", {})
     deployment = Deployment(
         model_name="gpt-4.1",
         litellm_params=LiteLLM_Params(

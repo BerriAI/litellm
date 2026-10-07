@@ -86,21 +86,21 @@ def create_model_call_details(
     }
 
 
-def test_get_callback_env_vars() -> None:
-    env_vars: Final = CustomLogger.get_callback_env_vars("langfuse")
+def test_get_callback_env_vars():
+    env_vars = CustomLogger.get_callback_env_vars("langfuse")
     assert env_vars == [
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",
         "LANGFUSE_HOST",
     ]
 
-    alias_env_vars: Final = CustomLogger.get_callback_env_vars("langfuse_otel")
+    alias_env_vars = CustomLogger.get_callback_env_vars("langfuse_otel")
     assert alias_env_vars == env_vars
 
-    missing_env_vars: Final = CustomLogger.get_callback_env_vars("does_not_exist")
+    missing_env_vars = CustomLogger.get_callback_env_vars("does_not_exist")
     assert missing_env_vars == []
 
-    none_env_vars: Final = CustomLogger.get_callback_env_vars(None)
+    none_env_vars = CustomLogger.get_callback_env_vars(None)
     assert none_env_vars == []
 
 

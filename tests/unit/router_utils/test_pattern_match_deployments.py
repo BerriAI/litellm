@@ -16,6 +16,8 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.router import Deployment, LiteLLM_Params
 from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 from litellm.types.router import ModelInfo, RouterErrors
+import json
+from unittest.mock import MagicMock
 
 
 def _wildcard_deployment(model_name: str) -> dict:
@@ -118,19 +120,19 @@ def test_route_never_sorts_and_the_most_specific_pattern_still_wins_after_regist
     assert _matched_models(router.route("openai/o3")) == ["openai/o3"]
 
 
-def test_pattern_match_router_initialization() -> None:
-    router: Final = PatternMatchRouter()
+def test_pattern_match_router_initialization():
+    router = PatternMatchRouter()
     assert router.patterns == {}
 
 
-def test_add_pattern() -> None:
+def test_add_pattern():
     """
     Tests that openai/* is added to the patterns
 
     when we try to get the pattern, it should return the deployment
     """
-    router: Final = PatternMatchRouter()
-    deployment: Final = Deployment(
+    router = PatternMatchRouter()
+    deployment = Deployment(
         model_name="openai-1",
         litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
         model_info=ModelInfo(),
@@ -139,17 +141,20 @@ def test_add_pattern() -> None:
     assert len(router.patterns) == 1
     assert list(router.patterns.keys())[0] == "openai/(.*)"
 
-    assert router.route(request="openai/gpt-15") == [deployment.to_json(exclude_none=True)]
+    # try getting the pattern
+    assert router.route(request="openai/gpt-15") == [
+        deployment.to_json(exclude_none=True)
+    ]
 
 
-def test_add_pattern_vertex_ai() -> None:
+def test_add_pattern_vertex_ai():
     """
     Tests that vertex_ai/* is added to the patterns
 
     when we try to get the pattern, it should return the deployment
     """
-    router: Final = PatternMatchRouter()
-    deployment: Final = Deployment(
+    router = PatternMatchRouter()
+    deployment = Deployment(
         model_name="this-can-be-anything",
         litellm_params=LiteLLM_Params(model="vertex_ai/gemini-1.5-flash-latest"),
         model_info=ModelInfo(),
@@ -158,22 +163,25 @@ def test_add_pattern_vertex_ai() -> None:
     assert len(router.patterns) == 1
     assert list(router.patterns.keys())[0] == "vertex_ai/(.*)"
 
-    assert router.route(request="vertex_ai/gemini-1.5-flash-latest") == [deployment.to_json(exclude_none=True)]
+    # try getting the pattern
+    assert router.route(request="vertex_ai/gemini-1.5-flash-latest") == [
+        deployment.to_json(exclude_none=True)
+    ]
 
 
-def test_add_multiple_deployments() -> None:
+def test_add_multiple_deployments():
     """
     Tests adding multiple deployments for the same pattern
 
     when we try to get the pattern, it should return the deployment
     """
-    router: Final = PatternMatchRouter()
-    deployment1: Final = Deployment(
+    router = PatternMatchRouter()
+    deployment1 = Deployment(
         model_name="openai-1",
         litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
         model_info=ModelInfo(),
     )
-    deployment2: Final = Deployment(
+    deployment2 = Deployment(
         model_name="openai-2",
         litellm_params=LiteLLM_Params(model="gpt-4"),
         model_info=ModelInfo(),
@@ -183,100 +191,109 @@ def test_add_multiple_deployments() -> None:
     assert len(router.route("openai/gpt-4o")) == 2
 
 
-def test_pattern_to_regex() -> None:
+def test_pattern_to_regex():
     """
     Tests that the pattern is converted to a regex
     """
-    router: Final = PatternMatchRouter()
+    router = PatternMatchRouter()
     assert router.pattern_to_regex("openai/*") == "openai/(.*)"
-    assert router.pattern_to_regex("openai/fo::*::static::*") == "openai/fo::(.*)::static::(.*)"
+    assert (
+        router.pattern_to_regex("openai/fo::*::static::*")
+        == "openai/fo::(.*)::static::(.*)"
+    )
 
 
-def test_route_with_none() -> None:
+def test_route_with_none():
     """
     Tests that the router returns None when the request is None
     """
-    router: Final = PatternMatchRouter()
+    router = PatternMatchRouter()
     assert router.route(None) is None
 
 
-def test_route_with_multiple_matching_patterns() -> None:
+def test_route_with_multiple_matching_patterns():
     """
     Tests that the router returns the first matching pattern when there are multiple matching patterns
     """
-    router: Final = PatternMatchRouter()
-    deployment1: Final = Deployment(
+    router = PatternMatchRouter()
+    deployment1 = Deployment(
         model_name="openai-1",
         litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
         model_info=ModelInfo(),
     )
-    deployment2: Final = Deployment(
+    deployment2 = Deployment(
         model_name="openai-2",
         litellm_params=LiteLLM_Params(model="gpt-4"),
         model_info=ModelInfo(),
     )
     router.add_pattern("openai/*", deployment1.to_json(exclude_none=True))
     router.add_pattern("openai/gpt-*", deployment2.to_json(exclude_none=True))
-    assert router.route("openai/gpt-3.5-turbo") == [deployment2.to_json(exclude_none=True)]
+    assert router.route("openai/gpt-3.5-turbo") == [
+        deployment2.to_json(exclude_none=True)
+    ]
 
 
-def test_route_with_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_with_exception():
     """
     Tests that the router returns None when there is an exception calling router.route()
     """
-    router: Final = PatternMatchRouter()
-    deployment: Final = Deployment(
+    router = PatternMatchRouter()
+    deployment = Deployment(
         model_name="openai-1",
         litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
         model_info=ModelInfo(),
     )
     router.add_pattern("openai/*", deployment.to_json(exclude_none=True))
 
-    monkeypatch.setattr(router, "patterns", [])
+    router.patterns = (
+        []
+    )  # this will cause router.route to raise an exception, since router.patterns should be a dict
 
-    result: Final = router.route("openai/gpt-3.5-turbo")
+    result = router.route("openai/gpt-3.5-turbo")
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_route_with_no_matching_pattern() -> None:
+async def test_route_with_no_matching_pattern():
     """
     Tests that the router returns None when there is no matching pattern
     """
-    router: Final = Router(
+    from litellm.types.router import RouterErrors
+
+    router = Router(
         model_list=[
             {
                 "model_name": "*meta.llama3*",
-                "litellm_params": {
-                    "model": "bedrock/meta.llama3*",
-                    "api_key": "test-key",
-                },
+                "litellm_params": {"model": "bedrock/meta.llama3*"},
             }
         ]
     )
 
-    wildcard_response: Final = await router.acompletion(
+    ## WORKS
+    result = await router.acompletion(
         model="bedrock/meta.llama3-70b",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="Works",
     )
-    assert wildcard_response.choices[0].message.content == "Works"
+    assert result.choices[0].message.content == "Works"
 
-    unqualified_response: Final = await router.acompletion(
+    ## WORKS
+    result = await router.acompletion(
         model="meta.llama3-70b-instruct-v1:0",
         messages=[{"role": "user", "content": "Hello, world!"}],
         mock_response="Works",
     )
-    assert unqualified_response.choices[0].message.content == "Works"
+    assert result.choices[0].message.content == "Works"
 
-    with pytest.raises(litellm.BadRequestError) as error_info:
+    ## FAILS
+    with pytest.raises(litellm.BadRequestError) as e:
         await router.acompletion(
             model="my-fake-model",
             messages=[{"role": "user", "content": "Hello, world!"}],
             mock_response="Works",
         )
 
-    assert RouterErrors.no_deployments_available.value not in str(error_info.value)
+    assert RouterErrors.no_deployments_available.value not in str(e.value)
 
     with pytest.raises(litellm.BadRequestError):
         await router.aembedding(
@@ -285,12 +302,14 @@ async def test_route_with_no_matching_pattern() -> None:
         )
 
 
-def test_router_pattern_match_e2e() -> None:
+def test_router_pattern_match_e2e():
     """
     Tests the end to end flow of the router
     """
-    client: Final = HTTPHandler()
-    router: Final = Router(
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    router = Router(
         model_list=[
             {
                 "model_name": "llmengine/*",
@@ -299,20 +318,8 @@ def test_router_pattern_match_e2e() -> None:
         ]
     )
 
-    response: Final = httpx.Response(
-        status_code=200,
-        json={
-            "id": "msg_test",
-            "type": "message",
-            "role": "assistant",
-            "model": "my-custom-model",
-            "content": [{"type": "text", "text": "Hello"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 1, "output_tokens": 1},
-        },
-    )
-    with patch.object(client, "post", new=Mock(return_value=response)) as mock_post:
+    with patch.object(client, "post", new=MagicMock()) as mock_post:
+
         router.completion(
             model="llmengine/my-custom-model",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -320,20 +327,18 @@ def test_router_pattern_match_e2e() -> None:
             api_key="test",
         )
         mock_post.assert_called_once()
-        call_args: Final = mock_post.call_args
-        assert call_args is not None
-        request_body: Final = TypeAdapter(dict[str, object]).validate_json(call_args.kwargs["data"])
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
         assert request_body["model"] == "my-custom-model"
         assert request_body["messages"] == [
             {"role": "user", "content": [{"type": "text", "text": "Hello, how are you?"}]}
         ]
 
 
-def test_pattern_matching_router_with_default_wildcard_and_model_wildcard() -> None:
+def test_pattern_matching_router_with_default_wildcard_and_model_wildcard():
     """
     Match to more specific pattern first.
     """
-    router: Final = Router(
+    router = Router(
         model_list=[
             {
                 "model_name": "*",
@@ -349,18 +354,19 @@ def test_pattern_matching_router_with_default_wildcard_and_model_wildcard() -> N
 
     assert len(router.pattern_router.patterns) > 0
 
-    pattern_router: Final = router.pattern_router
-    deployments: Final = pattern_router.route("llmengine/gpt-3.5-turbo")
-    assert deployments is not None
+    pattern_router = router.pattern_router
+    deployments = pattern_router.route("llmengine/gpt-3.5-turbo")
     assert len(deployments) == 1
     assert deployments[0]["model_name"] == "llmengine/*"
 
 
-def test_sorted_patterns() -> None:
+def test_sorted_patterns():
     """
     Tests that the pattern specificity is calculated correctly
     """
-    sorted_patterns: Final = PatternUtils.sorted_patterns(
+    from litellm.router_utils.pattern_match_deployments import PatternUtils
+
+    sorted_patterns = PatternUtils.sorted_patterns(
         {
             "llmengine/*": [{"model_name": "anthropic/claude-3-5-sonnet"}],
             "*": [{"model_name": "openai/*"}],
@@ -369,12 +375,14 @@ def test_sorted_patterns() -> None:
     assert sorted_patterns[0][0] == "llmengine/*"
 
 
-def test_calculate_pattern_specificity() -> None:
+def test_calculate_pattern_specificity():
+    from litellm.router_utils.pattern_match_deployments import PatternUtils
+
     assert PatternUtils.calculate_pattern_specificity("llmengine/*") == (11, 1)
     assert PatternUtils.calculate_pattern_specificity("*") == (1, 1)
 
 
-def test_wildcard_priority_over_deployment_names() -> None:
+def test_wildcard_priority_over_deployment_names():
     """
     Test that wildcard routes take priority over deployment_names (litellm_params.model) matching.
 
@@ -391,7 +399,7 @@ def test_wildcard_priority_over_deployment_names() -> None:
     2. Wildcard model_name match
     3. deployment_names (litellm_params.model) match
     """
-    router: Final = Router(
+    router = Router(
         model_list=[
             {
                 "model_name": "zapier-multi-provider-text-embedding-3-small",
@@ -400,7 +408,9 @@ def test_wildcard_priority_over_deployment_names() -> None:
                     "api_base": "http://localhost:8080/openai",
                     "api_key": "test-key-1",
                 },
-                "model_info": {"id": "zapier-multi-provider-text-embedding-3-small-openai"},
+                "model_info": {
+                    "id": "zapier-multi-provider-text-embedding-3-small-openai"
+                },
             },
             {
                 "model_name": "*",
@@ -421,26 +431,33 @@ def test_wildcard_priority_over_deployment_names() -> None:
         ]
     )
 
-    wildcard_deployments: Final = router.get_model_list(model_name="openai/text-embedding-3-small")
+    # Test 1: Request "openai/text-embedding-3-small" should match wildcard "openai/*", not deployment_names
+    deployments = router.get_model_list(model_name="openai/text-embedding-3-small")
 
-    assert wildcard_deployments is not None, "No deployments found"
-    assert len(wildcard_deployments) == 1, f"Expected 1 deployment, got {len(wildcard_deployments)}"
-    assert wildcard_deployments[0]["litellm_params"]["api_base"] == "http://localhost:8082/openai", (
-        f"Expected wildcard deployment (8082), got {wildcard_deployments[0]['litellm_params']['api_base']}"
+    assert deployments is not None, "No deployments found"
+    assert len(deployments) == 1, f"Expected 1 deployment, got {len(deployments)}"
+
+    # Should match the "openai/*" wildcard deployment (api_base ending in 8082)
+    assert (
+        deployments[0]["litellm_params"]["api_base"] == "http://localhost:8082/openai"
+    ), f"Expected wildcard deployment (8082), got {deployments[0]['litellm_params']['api_base']}"
+
+    # Test 2: Request exact model_name should still work
+    deployments = router.get_model_list(
+        model_name="zapier-multi-provider-text-embedding-3-small"
     )
 
-    exact_deployments: Final = router.get_model_list(model_name="zapier-multi-provider-text-embedding-3-small")
+    assert deployments is not None, "No deployments found"
+    assert len(deployments) == 1, f"Expected 1 deployment, got {len(deployments)}"
+    assert (
+        deployments[0]["litellm_params"]["api_base"] == "http://localhost:8080/openai"
+    ), f"Expected exact match deployment (8080), got {deployments[0]['litellm_params']['api_base']}"
 
-    assert exact_deployments is not None, "No deployments found"
-    assert len(exact_deployments) == 1, f"Expected 1 deployment, got {len(exact_deployments)}"
-    assert exact_deployments[0]["litellm_params"]["api_base"] == "http://localhost:8080/openai", (
-        f"Expected exact match deployment (8080), got {exact_deployments[0]['litellm_params']['api_base']}"
-    )
+    # Test 3: Request with "*" wildcard should match the "*" deployment
+    deployments = router.get_model_list(model_name="some-random-model")
 
-    catch_all_deployments: Final = router.get_model_list(model_name="some-random-model")
-
-    assert catch_all_deployments is not None, "No deployments found"
-    assert len(catch_all_deployments) == 1, f"Expected 1 deployment, got {len(catch_all_deployments)}"
-    assert catch_all_deployments[0]["litellm_params"]["api_base"] == "http://localhost:8081/openai", (
-        f"Expected '*' wildcard deployment (8081), got {catch_all_deployments[0]['litellm_params']['api_base']}"
-    )
+    assert deployments is not None, "No deployments found"
+    assert len(deployments) == 1, f"Expected 1 deployment, got {len(deployments)}"
+    assert (
+        deployments[0]["litellm_params"]["api_base"] == "http://localhost:8081/openai"
+    ), f"Expected '*' wildcard deployment (8081), got {deployments[0]['litellm_params']['api_base']}"

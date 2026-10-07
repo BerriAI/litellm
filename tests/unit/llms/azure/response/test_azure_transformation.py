@@ -698,6 +698,9 @@ async def test_azure_responses_api_status_error():
     Test that 'status' field is not sent in the final request body to Azure API.
     The status field should be filtered out from input messages before making the API call.
     """
+    from unittest.mock import MagicMock
+    import json
+
     request_data = {
         "model": "computer-use-preview",
         "input": [
@@ -733,6 +736,7 @@ async def test_azure_responses_api_status_error():
         "tools": [],
     }
 
+    # Mock response
     mock_response_data = {
         "id": "resp_123",
         "object": "response",
@@ -745,7 +749,9 @@ async def test_azure_responses_api_status_error():
                 "role": "assistant",
                 "type": "message",
                 "status": "completed",
-                "content": [{"type": "output_text", "text": "Here's an interesting fact."}],
+                "content": [
+                    {"type": "output_text", "text": "Here's an interesting fact."}
+                ],
             }
         ],
     }
@@ -753,6 +759,7 @@ async def test_azure_responses_api_status_error():
     captured_request_body = {}
 
     async def mock_post(*args, **kwargs):
+        # Capture the request body
         nonlocal captured_request_body
         if "json" in kwargs:
             captured_request_body = kwargs["json"]
@@ -761,13 +768,18 @@ async def test_azure_responses_api_status_error():
 
         import httpx
 
+        # Create a proper httpx Response object
         response_content = json.dumps(mock_response_data).encode("utf-8")
-        return httpx.Response(
+        response = httpx.Response(
             status_code=200,
             headers={"content-type": "application/json"},
             content=response_content,
             request=httpx.Request(method="POST", url="https://test.openai.azure.com"),
         )
+        return response
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from unittest.mock import patch
 
     with patch.object(AsyncHTTPHandler, "post", new=mock_post):
         response = await litellm.aresponses(
@@ -779,7 +791,10 @@ async def test_azure_responses_api_status_error():
             input=request_data["input"],
         )
 
-    print("Final request body:", json.dumps(captured_request_body, indent=4, default=str))
+    # Verify that 'status' field is not present in any of the input messages
+    print(
+        "Final request body:", json.dumps(captured_request_body, indent=4, default=str)
+    )
     assert "input" in captured_request_body, "Request body should contain 'input' field"
 
     expected_input = [
@@ -842,12 +857,14 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
         ],
     }
 
+    # Mock headers that Azure returns - exactly like in the issue
     mock_headers = {
         "date": "Wed, 12 Nov 2025 15:31:28 GMT",
         "server": "uvicorn",
         "content-type": "application/json",
         "x-ratelimit-remaining-tokens": "5010000",
         "x-ratelimit-limit-tokens": "5010000",
+        # These are the Azure-specific headers that should be forwarded with llm_provider- prefix
         "x-request-id": "12086715-aca3-4006-a29f-2f1e1d552043",
         "apim-request-id": "25664b0d-cf4b-4e10-8d27-c7272e7efd49",
         "x-ms-region": "Sweden Central",
@@ -855,12 +872,13 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
 
     async def mock_post(*args, **kwargs):
         response_content = json.dumps(mock_response_data).encode("utf-8")
-        return httpx.Response(
+        response = httpx.Response(
             status_code=200,
             headers=mock_headers,
             content=response_content,
             request=httpx.Request(method="POST", url="https://test.openai.azure.com"),
         )
+        return response
 
     with patch.object(AsyncHTTPHandler, "post", new=mock_post):
         response = await litellm.aresponses(
@@ -871,21 +889,34 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
             input="Hello, can you tell me a short joke?",
         )
 
+    # Check that the response has the expected headers structure
     assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
-    assert "additional_headers" in response._hidden_params, (
-        "Response _hidden_params should contain 'additional_headers' with the LLM provider headers"
-    )
+    assert (
+        "additional_headers" in response._hidden_params
+    ), "Response _hidden_params should contain 'additional_headers' with the LLM provider headers"
 
     headers = response._hidden_params["additional_headers"]
 
+    # Verify that Azure-specific headers are present with llm_provider- prefix
     assert "llm_provider-x-request-id" in headers, (
-        f"Response should contain 'llm_provider-x-request-id' header. Headers: {list(headers.keys())}"
+        f"Response should contain 'llm_provider-x-request-id' header. "
+        f"Headers: {list(headers.keys())}"
     )
     assert "llm_provider-apim-request-id" in headers, (
-        f"Response should contain 'llm_provider-apim-request-id' header. Headers: {list(headers.keys())}"
+        f"Response should contain 'llm_provider-apim-request-id' header. "
+        f"Headers: {list(headers.keys())}"
     )
-    assert headers["llm_provider-x-request-id"] == "12086715-aca3-4006-a29f-2f1e1d552043"
-    assert headers["llm_provider-apim-request-id"] == "25664b0d-cf4b-4e10-8d27-c7272e7efd49"
+
+    # Verify the header values match
+    assert (
+        headers["llm_provider-x-request-id"] == "12086715-aca3-4006-a29f-2f1e1d552043"
+    )
+    assert (
+        headers["llm_provider-apim-request-id"]
+        == "25664b0d-cf4b-4e10-8d27-c7272e7efd49"
+    )
     assert headers["llm_provider-x-ms-region"] == "Sweden Central"
+
+    # Also verify openai-compatible headers are included
     assert "x-ratelimit-limit-tokens" in headers
     assert "x-ratelimit-remaining-tokens" in headers

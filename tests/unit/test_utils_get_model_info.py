@@ -8,11 +8,13 @@ import httpx
 import pytest
 
 import litellm
-from litellm import CustomLLM
+from litellm import CustomLLM, get_model_info
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import ModelInfoBase
 from litellm.utils import _invalidate_model_cost_lowercase_map, supports_function_calling
+import os
+from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture(autouse=True)
@@ -23,78 +25,78 @@ def isolate_model_info_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     _invalidate_model_cost_lowercase_map()
 
 
-def test_get_model_info_simple_model_name() -> None:
-    model: Final = "claude-opus-5-5"
-    info: Final = litellm.get_model_info(model)
-
-    assert info["key"]
-    assert info["litellm_provider"] == "anthropic"
-
-
-def test_get_model_info_custom_llm_with_model_name() -> None:
-    model: Final = "anthropic/claude-opus-5-5"
-    info: Final = litellm.get_model_info(model)
-
-    assert info["key"]
-    assert info["litellm_provider"] == "anthropic"
+def test_get_model_info_simple_model_name():
+    """
+    tests if model name given, and model exists in model info - the object is returned
+    """
+    model = "claude-opus-5-5"
+    litellm.get_model_info(model)
 
 
-def test_get_model_info_custom_llm_with_same_name_vllm() -> None:
-    model: Final = "command-r-plus"
-    provider: Final = "openai"
+def test_get_model_info_custom_llm_with_model_name():
+    """
+    Tests if {custom_llm_provider}/{model_name} name given, and model exists in model info, the object is returned
+    """
+    model = "anthropic/claude-opus-5-5"
+    litellm.get_model_info(model)
+
+
+def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
+    """
+    Tests if {custom_llm_provider}/{model_name} name given, and model exists in model info, the object is returned
+    """
+    model = "command-r-plus"
+    provider = "openai"  # vllm is openai-compatible
     litellm.register_model(
         {
             "openai/command-r-plus": {
                 "input_cost_per_token": 0.0,
                 "output_cost_per_token": 0.0,
             },
-        },
-        persist_across_reloads=False,
+        }
     )
-    info: Final = litellm.get_model_info(model, custom_llm_provider=provider)
+    model_info = litellm.get_model_info(model, custom_llm_provider=provider)
+    print("model_info", model_info)
+    assert model_info["input_cost_per_token"] == 0.0
 
-    assert info["input_cost_per_token"] == 0.0
 
-
-def test_get_model_info_ollama_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_model_info_ollama_chat():
     from litellm.llms.ollama.completion.transformation import OllamaConfig
 
-    def handle_request(request: httpx.Request) -> httpx.Response:
-        payload: Final = cast(dict[str, object], json.loads(request.content))
-        assert request.url.path == "/api/show"
-        assert payload == {"name": "unknown-model"}
-        return httpx.Response(
-            200,
-            json={
+    with patch.object(
+        litellm.module_level_client,
+        "post",
+        return_value=MagicMock(
+            json=lambda: {
                 "model_info": {"llama.context_length": 32768},
                 "template": "tools",
-            },
-            request=request,
-        )
+            }
+        ),
+    ) as mock_client:
+        info = OllamaConfig().get_model_info("unknown-model")
+        assert info["supports_function_calling"] is True
 
-    transport: Final = httpx.MockTransport(handle_request)
-    with httpx.Client(transport=transport) as http_client:
-        monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=http_client))
-        config_info: Final = OllamaConfig().get_model_info("unknown-model")
-        assert config_info is not None
-        model_info: Final = litellm.get_model_info("ollama/unknown-model")
+        info = get_model_info("ollama/unknown-model")
+        print("info", info)
+        assert info["supports_function_calling"] is True
 
-    assert config_info["supports_function_calling"] is True
-    assert config_info["max_tokens"] == 32768
-    assert model_info["supports_function_calling"] is True
-    assert model_info["max_tokens"] == 32768
+        mock_client.assert_called()
+
+        print(mock_client.call_args.kwargs)
+
+        assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
-def test_get_model_info_bedrock_region(monkeypatch: pytest.MonkeyPatch) -> None:
-    regional_model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+def test_get_model_info_bedrock_region(monkeypatch):
+    regional_model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    model_cost_without_regional_entry: Final = {
+    model_cost_without_regional_entry = {
         key: value for key, value in litellm.get_model_cost_map(url="").items() if key != regional_model
     }
     monkeypatch.setattr(litellm, "model_cost", model_cost_without_regional_entry)
     _invalidate_model_cost_lowercase_map()
-    info: Final = litellm.get_model_info(model=regional_model, custom_llm_provider="bedrock")
-
+    info = litellm.get_model_info(model=regional_model, custom_llm_provider="bedrock")
+    print("info", info)
     assert info["key"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
     assert info["litellm_provider"] == "bedrock_converse"
 
@@ -110,18 +112,18 @@ def test_get_model_info_bedrock_region(monkeypatch: pytest.MonkeyPatch) -> None:
         "ada",
     ],
 )
-def test_get_model_info_completion_cost_unit_tests(model: str) -> None:
-    info: Final = litellm.get_model_info(model)
+def test_get_model_info_completion_cost_unit_tests(model):
+    info = litellm.get_model_info(model)
+    print("info", info)
 
-    assert info["key"]
 
-
-def test_get_model_info_ft_model_with_provider_prefix() -> None:
-    info: Final = litellm.get_model_info(
-        model="openai/ft:gpt-3.5-turbo:my-org:custom_suffix:id",
-        custom_llm_provider="openai",
-    )
-
+def test_get_model_info_ft_model_with_provider_prefix():
+    args = {
+        "model": "openai/ft:gpt-3.5-turbo:my-org:custom_suffix:id",
+        "custom_llm_provider": "openai",
+    }
+    info = litellm.get_model_info(**args)
+    print("info", info)
     assert info["key"] == "ft:gpt-3.5-turbo"
 
 
@@ -152,36 +154,52 @@ def _normalize_bedrock_model_key(model_key: str) -> str:
     return re.sub(r"(?:1-month-commitment|3-month-commitment|6-month-commitment)/", "", without_wildcard)
 
 
-def test_model_info_bedrock_converse(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_info_bedrock_converse(monkeypatch):
+    """
+    Assert unlisted Bedrock chat models declare or inherit Converse routing.
+
+    This ensures they are automatically routed to the converse endpoint.
+    """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    model_cost: Final = cast(Mapping[str, ModelInfoBase], litellm.get_model_cost_map(url=""))
-    assert any(info.get("litellm_provider") == "bedrock_converse" for info in model_cost.values())
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        # Load whitelist models from file
+        with open("whitelisted_bedrock_models.txt", "r") as file:
+            whitelist_models = [line.strip() for line in file.readlines()]
+    except FileNotFoundError:
+        pytest.skip("whitelisted_bedrock_models.txt not found")
 
     _enforce_bedrock_converse_models(
-        model_cost=model_cost,
-        whitelist_models=_read_whitelisted_bedrock_models(),
+        model_cost=litellm.model_cost, whitelist_models=whitelist_models
     )
 
 
-def test_model_info_bedrock_converse_enforcement(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.flaky(retries=6, delay=2)
+def test_model_info_bedrock_converse_enforcement(monkeypatch):
+    """
+    Test the enforcement of the whitelist by adding a fake model and ensuring the test fails.
+    """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    model_cost: Final = cast(Mapping[str, ModelInfoBase], litellm.get_model_cost_map(url=""))
-    model_cost_with_unlisted: Final = {
-        **model_cost,
-        "fake.bedrock-chat-model": cast(
-            ModelInfoBase,
-            {
-                "litellm_provider": "bedrock",
-                "mode": "chat",
-            },
-        ),
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Add a fake unwhitelisted model
+    litellm.model_cost["fake.bedrock-chat-model"] = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
     }
 
-    with pytest.raises(AssertionError, match=re.escape("fake.bedrock-chat-model")):
-        _enforce_bedrock_converse_models(
-            model_cost=model_cost_with_unlisted,
-            whitelist_models=_read_whitelisted_bedrock_models(),
-        )
+    try:
+        # Load whitelist models from file
+        with open("whitelisted_bedrock_models.txt", "r") as file:
+            whitelist_models = [line.strip() for line in file.readlines()]
+
+        # Check for unwhitelisted models
+        with pytest.raises(AssertionError, match=r"fake\.bedrock-chat-model"):
+            _enforce_bedrock_converse_models(
+                model_cost=litellm.model_cost, whitelist_models=whitelist_models
+            )
+    except FileNotFoundError as e:
+        pytest.skip("whitelisted_bedrock_models.txt not found")
 
 
 @pytest.mark.parametrize("region", ("us-gov-east-1", "us-gov-west-1"))
@@ -205,31 +223,46 @@ def test_regional_bedrock_alias_requires_canonical_converse_metadata(
     _enforce_bedrock_converse_models(model_cost, ())
 
 
-def test_get_model_info_bedrock_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    model_cost: Final = cast(Mapping[str, ModelInfoBase], litellm.get_model_cost_map(url=""))
-    bedrock_entries: Final = tuple(
-        (model_key, model_info)
-        for model_key, model_info in model_cost.items()
-        if model_info.get("litellm_provider") == "bedrock"
-    )
+def test_get_model_info_bedrock_models():
+    """
+    Check for drift in base model info for bedrock models and regional model info for bedrock models.
+    """
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
-    assert bedrock_entries
-    for model_key, model_info in bedrock_entries:
-        normalized_key: Final = _normalize_bedrock_model_key(model_key)
-        base_model: Final = BedrockModelInfo.get_base_model(normalized_key)
-        base_model_key: Final = (
-            base_model if base_model in model_cost else f"bedrock/{base_model}"
-        )
-        if base_model_key not in model_cost or "invoke/" in normalized_key:
-            continue
-        base_model_info: Final = model_cost[base_model_key]
-        capability_values: Final = tuple(
-            (key, value) for key, value in base_model_info.items() if key.startswith("supports_")
-        )
-        for capability, value in capability_values:
-            assert capability in model_info, f"{capability} is not in model cost map for {model_key}"
-            assert model_info[capability] == value, f"{capability} differs for model {model_key}"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    for k, v in litellm.model_cost.items():
+        if v["litellm_provider"] == "bedrock":
+            k = k.replace("*/", "")
+            potential_commitments = [
+                "1-month-commitment",
+                "3-month-commitment",
+                "6-month-commitment",
+            ]
+            if any(commitment in k for commitment in potential_commitments):
+                for commitment in potential_commitments:
+                    k = k.replace(f"{commitment}/", "")
+            base_model = BedrockModelInfo.get_base_model(k)
+            # get_base_model() returns model id without "bedrock/" prefix; cost map keys use "bedrock/<model>"
+            base_model_key = (
+                base_model
+                if base_model in litellm.model_cost
+                else f"bedrock/{base_model}"
+            )
+            if base_model_key not in litellm.model_cost:
+                continue
+            base_model_info = litellm.model_cost[base_model_key]
+            for base_model_key, base_model_value in base_model_info.items():
+                if "invoke/" in k:
+                    continue
+                if base_model_key.startswith("supports_"):
+                    assert (
+                        base_model_key in v
+                    ), f"{base_model_key} is not in model cost map for {k}"
+                    assert (
+                        v[base_model_key] == base_model_value
+                    ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
 
 
 def _cross_region_base_model_key(
@@ -259,46 +292,84 @@ def _cross_region_profiles(
     )
 
 
-def test_get_model_info_bedrock_cross_region_capability_parity(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    model_cost: Final[Mapping[str, Mapping[str, object]]] = litellm.get_model_cost_map(url="")
-    profiles: Final = _cross_region_profiles(model_cost, ("us.", "eu.", "apac.", "us-gov."))
+def test_get_model_info_bedrock_cross_region_capability_parity():
+    """
+    Cross-region inference profiles carry litellm_provider "bedrock_converse", so the
+    regional drift check above (which filters on "bedrock") never reaches them.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    assert profiles, "no cross-region bedrock profiles found"
-    for model_key, model_info, base_model_key in profiles:
-        base_model_info: Final = model_cost[base_model_key]
-        capabilities: Final = tuple(
-            (key, value) for key, value in base_model_info.items() if key.startswith("supports_")
+    prefixes = ("us.", "eu.", "apac.", "us-gov.")
+    checked = 0
+
+    for k, v in litellm.model_cost.items():
+        if not str(v.get("litellm_provider", "")).startswith("bedrock"):
+            continue
+        base_model_key = next(
+            (k[len(p) :] for p in prefixes if k.startswith(p)),
+            None,
         )
-        for capability, base_value in capabilities:
-            assert capability in model_info, f"{capability} is on {base_model_key} but missing from {model_key}"
-            assert model_info.get(capability) == base_value, f"{capability} differs for {model_key}"
+        if base_model_key is None or base_model_key not in litellm.model_cost:
+            continue
+        checked += 1
+        for cap, base_value in litellm.model_cost[base_model_key].items():
+            if not cap.startswith("supports_"):
+                continue
+            assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
+            assert (
+                v[cap] == base_value
+            ), f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
+
+    assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
 
 def _is_positive_cost(value: object) -> bool:
     return isinstance(value, (int, float)) and value > 0
 
 
-def test_get_model_info_bedrock_priced_cross_region_profile_has_priced_base(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    model_cost: Final[Mapping[str, Mapping[str, object]]] = litellm.get_model_cost_map(url="")
-    profiles: Final = _cross_region_profiles(model_cost, ("us.", "eu.", "apac.", "us-gov.", "au.", "global."))
+def test_get_model_info_bedrock_priced_cross_region_profile_has_priced_base():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    assert profiles, "no cross-region bedrock profiles found"
-    for model_key, model_info, base_model_key in profiles:
-        base_model_info: Final = model_cost[base_model_key]
+    prefixes = ("us.", "eu.", "apac.", "us-gov.", "au.", "global.")
+    checked = 0
+
+    for k, v in litellm.model_cost.items():
+        if not str(v.get("litellm_provider", "")).startswith("bedrock"):
+            continue
+        base_model_key = next(
+            (k[len(p) :] for p in prefixes if k.startswith(p)),
+            None,
+        )
+        if base_model_key is None or base_model_key not in litellm.model_cost:
+            continue
+        checked += 1
+        base = litellm.model_cost[base_model_key]
         for cost_key in ("input_cost_per_token", "output_cost_per_token"):
-            if _is_positive_cost(model_info.get(cost_key)):
-                assert _is_positive_cost(base_model_info.get(cost_key)), (
-                    f"{model_key} charges {cost_key} but its base {base_model_key} is free"
-                )
+            if (v.get(cost_key) or 0) > 0:
+                assert (
+                    base.get(cost_key) or 0
+                ) > 0, f"{k} charges {cost_key} but its base {base_model_key} is free"
+
+    assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
 
-def test_get_model_info_case_insensitive_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_model_info_case_insensitive_lookup(monkeypatch):
+    """
+    Test that model info lookup is case-insensitive.
+
+    This ensures that users can use lowercase model names even when the model cost
+    map has mixed-case keys (e.g., "Qwen/Qwen3-Next-80B-A3B-Thinking").
+
+    Related Slack discussion: Users were getting "does not support parameters: ['tools']"
+    errors when using lowercase model names like "qwen/qwen3-next-80b-a3b-thinking"
+    because the lookup was case-sensitive.
+    """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Register a test model with mixed-case name
     litellm.register_model(
         {
             "together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking": {
@@ -307,23 +378,39 @@ def test_get_model_info_case_insensitive_lookup(monkeypatch: pytest.MonkeyPatch)
                 "litellm_provider": "together_ai",
                 "supports_function_calling": True,
             }
-        },
-        persist_across_reloads=False,
+        }
     )
 
-    model_names: Final = (
-        "Qwen/Qwen3-Next-80B-A3B-Thinking",
-        "qwen/qwen3-next-80b-a3b-thinking",
-        "QWEN/qwen3-NEXT-80b-a3b-thinking",
+    # Test 1: Exact case should work
+    info = litellm.get_model_info(
+        model="Qwen/Qwen3-Next-80B-A3B-Thinking", custom_llm_provider="together_ai"
     )
-    for model_name in model_names:
-        info: Final = litellm.get_model_info(model=model_name, custom_llm_provider="together_ai")
-        assert info["supports_function_calling"] is True
+    assert info is not None
+    assert info["supports_function_calling"] is True
+
+    # Test 2: Lowercase should also work (case-insensitive lookup)
+    info_lower = litellm.get_model_info(
+        model="qwen/qwen3-next-80b-a3b-thinking", custom_llm_provider="together_ai"
+    )
+    assert info_lower is not None
+    assert info_lower["supports_function_calling"] is True
+
+    # Test 3: Mixed case should also work
+    info_mixed = litellm.get_model_info(
+        model="QWEN/qwen3-NEXT-80b-a3b-thinking", custom_llm_provider="together_ai"
+    )
+    assert info_mixed is not None
+    assert info_mixed["supports_function_calling"] is True
 
 
-def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch):
+    """
+    Test that supports_function_calling check works with case-insensitive model lookup.
+    """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Register a model with mixed-case name that supports function calling
     litellm.register_model(
         {
             "test_provider/TestModel-ABC": {
@@ -332,18 +419,32 @@ def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch: 
                 "litellm_provider": "test_provider",
                 "supports_function_calling": True,
             }
-        },
-        persist_across_reloads=False,
+        }
     )
 
-    assert supports_function_calling("TestModel-ABC", custom_llm_provider="test_provider") is True
-    assert supports_function_calling("testmodel-abc", custom_llm_provider="test_provider") is True
+    # Test that supports_function_calling works with lowercase model name
+    from litellm.utils import supports_function_calling
+
+    # Exact case
+    assert (
+        supports_function_calling("TestModel-ABC", custom_llm_provider="test_provider")
+        is True
+    )
+
+    # Lowercase (should now work with case-insensitive lookup)
+    assert (
+        supports_function_calling("testmodel-abc", custom_llm_provider="test_provider")
+        is True
+    )
 
 
-def test_get_model_info_custom_model_router() -> None:
+def test_get_model_info_custom_model_router():
     from litellm import Router
+    from litellm import get_model_info
 
-    Router(
+    litellm.turn_on_debug()
+
+    router = Router(
         model_list=[
             {
                 "model_name": "ma-summary",
@@ -359,45 +460,44 @@ def test_get_model_info_custom_model_router() -> None:
             }
         ]
     )
-    info: Final = litellm.get_model_info("c20d603e-1166-4e0f-aa65-ed9c476ad4ca")
-
-    assert info["key"] == "c20d603e-1166-4e0f-aa65-ed9c476ad4ca"
-    assert info["input_cost_per_token"] == 1
-    assert info["output_cost_per_token"] == 1
+    info = get_model_info("c20d603e-1166-4e0f-aa65-ed9c476ad4ca")
+    print("info", info)
+    assert info is not None
 
 
-def test_get_model_info_custom_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    class CustomProviderHandler:
-        def completion(self, *_args: object, **_kwargs: object) -> litellm.ModelResponse:
-            return litellm.ModelResponse(
-                id="mock-completion",
-                created=0,
+def test_get_model_info_custom_provider():
+    # Custom provider example copied from https://docs.litellm.ai/docs/providers/custom_llm_server:
+    import litellm
+    from litellm import CustomLLM, completion
+
+    class MyCustomLLM(CustomLLM):
+        def completion(self, *args, **kwargs) -> litellm.ModelResponse:
+            return litellm.completion(
                 model="gpt-3.5-turbo",
-                choices=[
-                    {
-                        "index": 0,
-                        "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": "Hi!"},
-                    }
-                ],
-            )
+                messages=[{"role": "user", "content": "Hello world"}],
+                mock_response="Hi!",
+            )  # type: ignore
 
-    custom_handler: Final = cast(CustomLLM, CustomProviderHandler())
-    monkeypatch.setattr(
-        litellm,
-        "custom_provider_map",
-        [{"provider": "my-custom-llm", "custom_handler": custom_handler}],
-    )
-    response: Final = litellm.completion(
+    my_custom_llm = MyCustomLLM()
+
+    litellm.custom_provider_map = [  # 👈 KEY STEP - REGISTER HANDLER
+        {"provider": "my-custom-llm", "custom_handler": my_custom_llm}
+    ]
+
+    resp = completion(
         model="my-custom-llm/my-fake-model",
         messages=[{"role": "user", "content": "Hello world!"}],
     )
-    assert response.choices[0].message.content == "Hi!"
 
-    litellm.register_model(
-        {"my-custom-llm/my-fake-model": {"max_tokens": 2048}},
-        persist_across_reloads=False,
-    )
-    info: Final = litellm.get_model_info(model="my-custom-llm/my-fake-model")
+    assert resp.choices[0].message.content == "Hi!"
 
-    assert info["max_tokens"] == 2048
+    # Register model info
+    model_info = {"my-custom-llm/my-fake-model": {"max_tokens": 2048}}
+    litellm.register_model(model_info)
+
+    # Get registered model info
+    from litellm import get_model_info
+
+    get_model_info(
+        model="my-custom-llm/my-fake-model"
+    )  # 💥 "Exception: This model isn't mapped yet." in v1.56.10

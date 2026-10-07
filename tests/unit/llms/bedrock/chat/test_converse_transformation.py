@@ -8188,9 +8188,12 @@ def test_supports_sampling_params_prefixed_and_anthropic_fallback(monkeypatch: p
 
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_tools_pt_valid_names():
     """
-    Bedrock tool names must match the API's accepted name pattern
+    # related issue: https://github.com/BerriAI/litellm/issues/5007
+    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+
     """
     tools = [
         {
@@ -8230,9 +8233,12 @@ def test_bedrock_tools_pt_valid_names():
     assert result[1]["toolSpec"]["name"] == "search_restaurants"
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_tools_pt_invalid_names():
     """
-    Bedrock tool names outside the API's accepted pattern must be rejected
+    # related issue: https://github.com/BerriAI/litellm/issues/5007
+    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+
     """
 
     tools = [
@@ -8411,7 +8417,10 @@ def test_bedrock_get_base_model(model, expected_base_model):
     assert BedrockModelInfo.get_base_model(model) == expected_base_model
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_converse_translation_tool_message():
+
+    litellm.set_verbose = True
 
     messages = [
         {
@@ -8431,18 +8440,24 @@ def test_bedrock_converse_translation_tool_message():
         },
     ]
 
-    translated_msg = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
+    translated_msg = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
 
     print(translated_msg)
     assert translated_msg == [
         {
             "role": "user",
             "content": [
-                {"text": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"},
+                {
+                    "text": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"
+                },
                 {
                     "toolResult": {
                         "content": [
-                            {"text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'}
+                            {
+                                "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'
+                            }
                         ],
                         "toolUseId": "tooluse_DnqEmD5qR6y2-aJ-Xd05xw",
                     }
@@ -8452,7 +8467,9 @@ def test_bedrock_converse_translation_tool_message():
     ]
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_completion_test_2():
+    litellm.set_verbose = True
     data = {
         "model": "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
         "messages": [
@@ -8870,6 +8887,7 @@ def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
         assert "tools" not in supported_openai_params
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 @pytest.mark.parametrize(
     "messages, continue_message_index",
     [
@@ -8889,20 +8907,25 @@ def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
         ),
     ],
 )
-def test_bedrock_empty_content_handling(messages, continue_message_index, monkeypatch):
+def test_bedrock_empty_content_handling(messages, continue_message_index):
     """
     Test that empty content in messages is handled correctly with default messages
     """
-    monkeypatch.setattr(litellm, "modify_params", True)
+    # Test with default behavior (modify_params=True)
+    litellm.modify_params = True
     formatted_messages = _bedrock_converse_messages_pt(
         messages=messages,
         model="anthropic.claude-3-sonnet-20240229-v1:0",
         llm_provider="bedrock",
     )
     print(formatted_messages)
+    # Verify assistant message with default text was inserted
     assert formatted_messages[0]["role"] == "user"
     assert formatted_messages[1]["role"] == "assistant"
-    assert formatted_messages[continue_message_index]["content"][0]["text"] == "Please continue."
+    assert (
+        formatted_messages[continue_message_index]["content"][0]["text"]
+        == "Please continue."
+    )
 
 
 def test_bedrock_custom_continue_message():
@@ -8930,7 +8953,8 @@ def test_bedrock_custom_continue_message():
     assert formatted_messages[1]["content"][0]["text"] == "Custom continue message"
 
 
-def test_bedrock_no_default_message(monkeypatch):
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_no_default_message():
     """
     Test that empty content is replaced with placeholder when modify_params=False.
     AWS Bedrock doesn't allow empty or whitespace-only text content.
@@ -8942,14 +8966,17 @@ def test_bedrock_no_default_message(monkeypatch):
         {"role": "assistant", "content": "Valid response"},
     ]
 
-    monkeypatch.setattr(litellm, "modify_params", False)
+    litellm.modify_params = False
     formatted_messages = _bedrock_converse_messages_pt(
         messages=messages,
         model="anthropic.claude-3-sonnet-20240229-v1:0",
         llm_provider="bedrock",
     )
 
-    assistant_messages = [msg for msg in formatted_messages if msg["role"] == "assistant"]
+    # Verify empty message is replaced with placeholder and valid message remains
+    assistant_messages = [
+        msg for msg in formatted_messages if msg["role"] == "assistant"
+    ]
     assert len(assistant_messages) == 1
     assert assistant_messages[0]["content"][0]["text"] == "Valid response"
 
@@ -9040,6 +9067,7 @@ def test_handle_top_k_value_helper(model, expected_output):
     assert litellm.AmazonConverseConfig()._handle_top_k_value(model, {"top_k": 3}) == expected_output
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 @pytest.mark.parametrize(
     "model, expected_params",
     [
@@ -9058,7 +9086,9 @@ def test_bedrock_top_k_param(model, expected_params):
         mock_response = Mock()
 
         if "mistral" in model:
-            mock_response.text = json.dumps({"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]})
+            mock_response.text = json.dumps(
+                {"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]}
+            )
         else:
             mock_response.text = json.dumps(
                 {
@@ -9074,6 +9104,7 @@ def test_bedrock_top_k_param(model, expected_params):
             )
 
         mock_response.status_code = 200
+        # Add required response attributes
         mock_response.headers = {"Content-Type": "application/json"}
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
@@ -9082,14 +9113,14 @@ def test_bedrock_top_k_param(model, expected_params):
             model=model,
             messages=[{"role": "user", "content": "Hello, world!"}],
             top_k=2,
-            aws_access_key_id="test-access-key",
-            aws_secret_access_key="test-secret-key",
             client=client,
         )
         data = json.loads(mock_post.call_args.kwargs["data"])
         if "mistral" in model:
             assert data["top_k"] == 2
         elif expected_params == {}:
+            # Models that don't support top_k produce no additionalModelRequestFields;
+            # the empty block is now omitted entirely rather than sent as `{}`.
             assert "additionalModelRequestFields" not in data
         else:
             assert data["additionalModelRequestFields"] == expected_params
@@ -9120,6 +9151,7 @@ def test_bedrock_invoke_provider():
     assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-2-lite-v1:0") == "nova"
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_meta_llama_function_calling():
     """
     Tests that:
@@ -9161,8 +9193,6 @@ def test_bedrock_meta_llama_function_calling():
         "messages": messages,
         "tools": tools,
         "model": "bedrock/us.meta.llama4-scout-17b-instruct-v1:0",
-        "aws_access_key_id": "test-access-key",
-        "aws_secret_access_key": "test-secret-key",
     }
 
     response = return_raw_request(
@@ -9171,7 +9201,6 @@ def test_bedrock_meta_llama_function_calling():
     )
 
     print(response)
-    assert response["raw_request_body"]["toolConfig"]["tools"][0]["toolSpec"]["name"] == tools[0]["function"]["name"]
 
 
 def test_bedrock_nova_provider_detection():

@@ -4052,30 +4052,28 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
             {"api_base": "https://api.openai.com/v1"},
             {"api_base": "https://api.openai.com/v1"},
             True,
-        ),
+        ),  # should return True
         (
             {"api_base": "https://api.openai.com/v1"},
             {"api_base": "https://api.anthropic.com/v1"},
             False,
-        ),
+        ),  # should return False
         (
-            {"api_base": "^https://litellm.*direct\\.fireworks\\.ai/v1$"},
+            {"api_base": "^https://litellm.*direct\.fireworks\.ai/v1$"},
             {"api_base": "https://litellm-dev.direct.fireworks.ai/v1"},
             True,
         ),
         (
-            {"api_base": "^https://litellm.*novice\\.fireworks\\.ai/v1$"},
+            {"api_base": "^https://litellm.*novice\.fireworks\.ai/v1$"},
             {"api_base": "https://litellm-dev.direct.fireworks.ai/v1"},
             False,
         ),
     ],
 )
 def test_configurable_clientside_parameters(
-    allowed_param: str | dict[str, str],
-    input_value: dict[str, str],
-    should_return_true: bool,
+    allowed_param, input_value, should_return_true
 ):
-    router: Final = Router(
+    router = Router(
         model_list=[
             {
                 "model_name": "dummy-model",
@@ -4087,13 +4085,14 @@ def test_configurable_clientside_parameters(
             }
         ]
     )
-    response: Final = _allow_model_level_clientside_configurable_parameters(
+    resp = _allow_model_level_clientside_configurable_parameters(
         model="dummy-model",
         param="api_base",
         request_body_value=input_value["api_base"],
         llm_router=router,
     )
-    assert response == should_return_true
+    print(resp)
+    assert resp == should_return_true
 
 
 def test_get_customer_user_header_from_mapping_returns_customer_header_with_mixed_roles():
@@ -4105,37 +4104,50 @@ def test_get_customer_user_header_from_mapping_returns_customer_header_with_mixe
 
 
 def test_get_customer_user_header_from_mapping_no_customer_returns_none():
-    mappings: Final[list[dict[str, str]]] = [
+    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+
+    mappings = [
         {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
     ]
-    assert get_customer_user_header_from_mapping(mappings) is None
+    result = get_customer_user_header_from_mapping(mappings)
+    assert result is None
 
-    single_mapping: Final[dict[str, str]] = {
+    # Also support a single mapping dict
+    single_mapping = {
         "header_name": "X-Only-Internal",
         "litellm_user_role": "internal_user",
     }
-    assert get_customer_user_header_from_mapping(single_mapping) is None
+    result = get_customer_user_header_from_mapping(single_mapping)
+    assert result is None
 
 
 def test_get_internal_user_header_from_mapping_returns_internal_header():
-    mappings: Final[list[dict[str, str]]] = [
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    mappings = [
         {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
         {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
     ]
-    assert LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings) == "X-OpenWebUI-User-Id"
+
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    assert result == "X-OpenWebUI-User-Id"
 
 
 def test_get_internal_user_header_from_mapping_no_internal_returns_none():
-    mappings: Final[list[dict[str, str]]] = [
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    mappings = [
         {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}
     ]
-    assert LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings) is None
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    assert result is None
 
-    single_mapping: Final[dict[str, str]] = {
-        "header_name": "X-Only-Customer",
-        "litellm_user_role": "customer",
-    }
-    assert LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(single_mapping) is None
+    # Also support single mapping dict
+    single_mapping = {"header_name": "X-Only-Customer", "litellm_user_role": "customer"}
+    result = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(
+        single_mapping
+    )
+    assert result is None
 
 
 @pytest.mark.parametrize(
@@ -4145,7 +4157,7 @@ def test_get_internal_user_header_from_mapping_no_internal_returns_none():
             {"target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"},
             ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"],
         ),
-        ({"target_model_names": "gpt-3.5-turbo"}, "gpt-3.5-turbo"),
+        ({"target_model_names": "gpt-3.5-turbo"}, ["gpt-3.5-turbo"]),
         (
             {"model": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"},
             ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"],
@@ -4153,16 +4165,21 @@ def test_get_internal_user_header_from_mapping_no_internal_returns_none():
         ({"model": "gpt-3.5-turbo"}, "gpt-3.5-turbo"),
     ],
 )
-def test_get_model_from_request(
-    request_data: dict[str, str],
-    expected_model: str | list[str],
-):
-    assert get_model_from_request(request_data, "/v1/files") == expected_model
+def test_get_model_from_request(request_data, expected_model):
+    from litellm.proxy.auth.auth_utils import get_model_from_request
+
+    request_data = {
+        "target_model_names": "gpt-3.5-turbo, gpt-4o-mini-general-deployment"
+    }
+    route = "/openai/deployments/gpt-3.5-turbo"
+    model = get_model_from_request(request_data, "/v1/files")
+    assert model == ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]
 
 
 @pytest.mark.parametrize(
     "request_data, route, expected_model",
     [
+        # Vertex AI passthrough URL patterns
         (
             {},
             "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
@@ -4178,28 +4195,36 @@ def test_get_model_from_request(
             "/vertex_ai/v1/projects/my-project/locations/asia-southeast1/publishers/google/models/gemini-2.0-flash:generateContent",
             "gemini-2.0-flash",
         ),
+        # Model without method suffix (no colon) - should still extract
         (
             {},
             "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-pro",
-            "gemini-pro",
+            "gemini-pro",  # Should match even without colon
         ),
+        # Request body model takes precedence over URL
         (
             {"model": "gpt-4o"},
             "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
             "gpt-4o",
         ),
+        # Non-vertex route should not extract from vertex pattern
         ({}, "/openai/v1/chat/completions", None),
+        # Azure deployment pattern should still work
         ({}, "/openai/deployments/my-deployment/chat/completions", "my-deployment"),
+        # Custom model_name with slashes (e.g., gcp/google/gemini-2.5-flash)
+        # This is the NVIDIA P0 bug fix - regex should capture full model name including slashes
         (
             {},
             "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/gcp/google/gemini-2.5-flash:generateContent",
             "gcp/google/gemini-2.5-flash",
         ),
+        # Another custom model_name with slashes
         (
             {},
             "/vertex_ai/v1/projects/my-project/locations/global/publishers/google/models/gcp/google/gemini-3-flash-preview:generateContent",
             "gcp/google/gemini-3-flash-preview",
         ),
+        # Model name with single slash
         (
             {},
             "/vertex_ai/v1/projects/my-project/locations/us-central1/publishers/google/models/custom/model:generateContent",
@@ -4208,8 +4233,10 @@ def test_get_model_from_request(
     ],
 )
 def test_get_model_from_request_vertex_ai_passthrough(
-    request_data: dict[str, str],
-    route: str,
-    expected_model: str | None,
+    request_data, route, expected_model
 ):
-    assert get_model_from_request(request_data, route) == expected_model
+    """Test that get_model_from_request correctly extracts Vertex AI model from URL"""
+    from litellm.proxy.auth.auth_utils import get_model_from_request
+
+    model = get_model_from_request(request_data, route)
+    assert model == expected_model

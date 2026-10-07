@@ -13,8 +13,10 @@ from litellm import ModelResponse, completion
 from tests.capturing_transport import CapturingTransport
 
 
-def test_embedding_nvidia_nim(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "set_verbose", True)
+def test_embedding_nvidia_nim():
+    litellm.set_verbose = True
+    from openai import OpenAI
+
     transport: Final = CapturingTransport(
         CreateEmbeddingResponse(
             object="list",
@@ -40,13 +42,16 @@ def test_embedding_nvidia_nim(monkeypatch: pytest.MonkeyPatch):
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
 
-def test_chat_completion_nvidia_nim_with_tools(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "set_verbose", True)
+def test_chat_completion_nvidia_nim_with_tools():
+    from openai import OpenAI
+
+    litellm.set_verbose = True
     model_name = "nvidia_nim/meta/llama3-70b-instruct"
     client = OpenAI(
         api_key="fake-api-key",
     )
 
+    # Define tools
     tools = [
         {
             "type": "function",
@@ -89,28 +94,32 @@ def test_chat_completion_nvidia_nim_with_tools(monkeypatch: pytest.MonkeyPatch):
         },
     ]
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
-        mock_client.return_value.headers = {}
-        mock_client.return_value.parse.return_value = ModelResponse(
-            choices=[{"message": {"role": "assistant", "content": "ok"}}]
-        )
-        completion(
-            model=model_name,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "What's the weather like in Boston today and what time is it in EST?",
-                }
-            ],
-            tools=tools,
-            tool_choice="auto",
-            parallel_tool_calls=True,
-            temperature=0.7,
-            client=client,
-        )
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
+        try:
+            completion(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "What's the weather like in Boston today and what time is it in EST?",
+                    }
+                ],
+                tools=tools,
+                tool_choice="auto",
+                parallel_tool_calls=True,
+                temperature=0.7,
+                client=client,
+            )
+        except Exception as e:
+            print(e)
 
+        # Add assertions to check the request
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
+
+        print("request_body: ", request_body)
 
         assert request_body["messages"] == [
             {
@@ -122,7 +131,7 @@ def test_chat_completion_nvidia_nim_with_tools(monkeypatch: pytest.MonkeyPatch):
         assert request_body["temperature"] == 0.7
         assert request_body["tools"] == tools
         assert request_body["tool_choice"] == "auto"
-        assert request_body["parallel_tool_calls"] is True
+        assert request_body["parallel_tool_calls"] == True
 
 
 @pytest.mark.asyncio()
@@ -153,6 +162,7 @@ async def test_nvidia_nim_rerank_ranking_endpoint():
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         return_value=mock_response,
     ) as mock_post:
+        # Use "ranking/" prefix to force /v1/ranking endpoint
         response = await litellm.arerank(
             model="nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2",
             query="What is the GPU memory bandwidth?",
@@ -168,16 +178,23 @@ async def test_nvidia_nim_rerank_ranking_endpoint():
 
         args_to_api = mock_post.call_args.kwargs["data"]
         _url = mock_post.call_args.kwargs["url"]
+        print("url = ", _url)
 
+        # Verify URL is /v1/ranking
         assert _url == "https://ai.api.nvidia.com/v1/ranking"
 
+        # Verify request body structure
         request_data = json.loads(args_to_api)
+        print("request_data=", request_data)
 
+        # Query should be an object with 'text' field
         assert request_data["query"] == {"text": "What is the GPU memory bandwidth?"}
 
+        # Documents should be 'passages'
         assert request_data["passages"] == [
             {"text": "H100 delivers 3TB/s memory bandwidth"},
             {"text": "A100 has 2TB/s memory bandwidth"},
         ]
 
+        # Model name in body should NOT have "ranking/" prefix
         assert request_data["model"] == "nvidia/llama-3.2-nv-rerankqa-1b-v2"

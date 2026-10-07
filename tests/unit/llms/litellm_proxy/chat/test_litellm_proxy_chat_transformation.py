@@ -86,12 +86,14 @@ def test_litellm_gateway_from_sdk_with_user_param():
 
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk():
+    litellm.set_verbose = True
     messages = [
         {
             "role": "user",
             "content": "Hello world",
         }
     ]
+    from openai import OpenAI
 
     openai_client = OpenAI(api_key="fake-key")
 
@@ -120,6 +122,8 @@ async def test_litellm_gateway_from_sdk():
 @pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_embedding(is_async: bool):
+    litellm.set_verbose = True
+    litellm.turn_on_debug()
 
     transport, response = await _gateway_embedding_via_injected_client(is_async)
 
@@ -143,6 +147,7 @@ async def test_litellm_gateway_from_sdk_embedding_under_foreign_cassette(tmp_pat
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_image_edit(is_async):
+    litellm.turn_on_debug()
 
     mock_response = {
         "created": 1,
@@ -196,13 +201,16 @@ async def test_litellm_gateway_from_sdk_image_edit(is_async):
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_image_generation(is_async):
+    litellm.turn_on_debug()
 
     if is_async:
+        from openai import AsyncOpenAI
 
         openai_client = AsyncOpenAI(api_key="fake-key")
         mock_method = AsyncMock()
         patch_target = openai_client.images.generate
     else:
+        from openai import OpenAI
 
         openai_client = OpenAI(api_key="fake-key")
         mock_method = MagicMock()
@@ -241,7 +249,10 @@ async def test_litellm_gateway_from_sdk_image_generation(is_async):
 
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_provider_credentials")
 async def test_litellm_gateway_from_sdk_rerank(is_async):
+    litellm.set_verbose = True
+    litellm.turn_on_debug()
 
     if is_async:
         client = AsyncHTTPHandler()
@@ -255,7 +266,7 @@ async def test_litellm_gateway_from_sdk_rerank(is_async):
     with patch.object(client, "post", new=mock_method):
         mock_response = MagicMock()
 
-
+        # Create a mock response similar to OpenAI's rerank response
         mock_response.text = json.dumps(
             {
                 "id": "rerank-123456",
@@ -301,7 +312,6 @@ async def test_litellm_gateway_from_sdk_rerank(is_async):
                         "Machine learning is a field of study in artificial intelligence",
                         "Biology is the study of living organisms",
                     ],
-                    api_key="test-api-key",
                     client=client,
                     api_base="my-custom-api-base",
                 )
@@ -313,22 +323,21 @@ async def test_litellm_gateway_from_sdk_rerank(is_async):
                         "Machine learning is a field of study in artificial intelligence",
                         "Biology is the study of living organisms",
                     ],
-                    api_key="test-api-key",
                     client=client,
                     api_base="my-custom-api-base",
                 )
         except Exception as e:
             print(e)
 
-
+        # Verify the request
         mock_method.assert_called_once()
         call_args = mock_method.call_args
         print("call_args=", call_args)
 
-
+        # Check that the URL is correct
         assert "my-custom-api-base/v1/rerank" == call_args.kwargs["url"]
 
-
+        # Check that the request body contains the expected data
         request_body = json.loads(call_args.kwargs["data"])
         assert request_body["query"] == "What is machine learning?"
         assert request_body["model"] == "rerank-english-v2.0"
@@ -338,13 +347,16 @@ async def test_litellm_gateway_from_sdk_rerank(is_async):
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_speech(is_async):
+    litellm.set_verbose = True
 
     if is_async:
+        from openai import AsyncOpenAI
 
         openai_client = AsyncOpenAI(api_key="fake-key")
         mock_method = AsyncMock()
         patch_target = openai_client.audio.speech.create
     else:
+        from openai import OpenAI
 
         openai_client = OpenAI(api_key="fake-key")
         mock_method = MagicMock()
@@ -385,10 +397,13 @@ async def test_litellm_gateway_from_sdk_speech(is_async):
 
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_structured_output():
+    from pydantic import BaseModel
 
     class Result(BaseModel):
         answer: str
 
+    litellm.set_verbose = True
+    from openai import OpenAI
 
     openai_client = OpenAI(api_key="fake-key")
 
@@ -420,13 +435,17 @@ async def test_litellm_gateway_from_sdk_structured_output():
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_litellm_gateway_from_sdk_transcription(is_async):
+    litellm.set_verbose = True
+    litellm.turn_on_debug()
 
     if is_async:
+        from openai import AsyncOpenAI
 
         openai_client = AsyncOpenAI(api_key="fake-key")
         mock_method = AsyncMock()
         patch_target = openai_client.audio.transcriptions.create
     else:
+        from openai import OpenAI
 
         openai_client = OpenAI(api_key="fake-key")
         mock_method = MagicMock()
@@ -459,11 +478,14 @@ async def test_litellm_gateway_from_sdk_transcription(is_async):
 
 
 def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
+    litellm.set_verbose = True
+    litellm.turn_on_debug()
 
+    from openai import OpenAI
 
     openai_client = OpenAI(api_key="fake-key")
 
-
+    # Create mock response object
     mock_response = MagicMock()
     mock_response.headers = {"x-litellm-response-cost": "120"}
     mock_response.parse.return_value = litellm.ModelResponse(
@@ -518,7 +540,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
             client=openai_client,
         )
 
-
+        # Assert the headers were properly passed through
         print(f"additional_headers: {response._hidden_params['additional_headers']}")
         assert (
             response._hidden_params["additional_headers"][
@@ -534,8 +556,9 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
 @pytest.mark.asyncio
 async def test_litellm_gateway_image_generation_direct(is_async):
     """Test image generation using the litellm_proxy provider directly."""
+    litellm.turn_on_debug()
 
-
+    # Create mock response that matches OpenAI's response structure
     mock_openai_response = MagicMock()
     mock_openai_response.model_dump.return_value = {
         "created": 1,
@@ -546,7 +569,7 @@ async def test_litellm_gateway_image_generation_direct(is_async):
     mock_raw_response.headers = {}
 
     if is_async:
-
+        # Mock the AsyncOpenAI client that gets created inside _get_openai_client
         mock_async_client = AsyncMock()
         mock_async_client.images.with_raw_response.generate = AsyncMock(return_value=mock_raw_response)
 
@@ -560,20 +583,20 @@ async def test_litellm_gateway_image_generation_direct(is_async):
                 api_key="sk-9876",
             )
 
-
+            # Verify the AsyncOpenAI client constructor was called with correct parameters
             mock_async_constructor.assert_called_once()
             constructor_kwargs = mock_async_constructor.call_args.kwargs
             print("KWARGS to Async OpenAI constructor=", constructor_kwargs)
             assert constructor_kwargs["api_key"] == "sk-9876"
             assert constructor_kwargs["base_url"] == "http://my-proxy"
 
-
+            # Verify the AsyncOpenAI client was called correctly
             mock_async_client.images.with_raw_response.generate.assert_awaited_once()
             call_kwargs = mock_async_client.images.with_raw_response.generate.call_args.kwargs
             assert call_kwargs["model"] == "dall-e-3"
             assert call_kwargs["prompt"] == "A beautiful sunset over mountains"
     else:
-
+        # Mock the sync OpenAI client that gets created inside _get_openai_client
         mock_sync_client = MagicMock()
         mock_sync_client.images.with_raw_response.generate.return_value = mock_raw_response
 
@@ -587,18 +610,18 @@ async def test_litellm_gateway_image_generation_direct(is_async):
                 api_key="sk-9876",
             )
 
-
+            # Verify the OpenAI client constructor was called with correct parameters
             mock_sync_constructor.assert_called_once()
             constructor_kwargs = mock_sync_constructor.call_args.kwargs
             assert constructor_kwargs["api_key"] == "sk-9876"
             assert constructor_kwargs["base_url"] == "http://my-proxy"
 
-
+            # Verify the OpenAI client was called correctly
             mock_sync_client.images.with_raw_response.generate.assert_called_once()
             call_kwargs = mock_sync_client.images.with_raw_response.generate.call_args.kwargs
             assert call_kwargs["model"] == "dall-e-3"
             assert call_kwargs["prompt"] == "A beautiful sunset over mountains"
 
-
+    # Verify the response structure
     assert response is not None
     assert hasattr(response, "data") or isinstance(response, dict)

@@ -1021,9 +1021,7 @@ def test_completion_registers_cost_per_second_pricing():
         _restore_model_cost_entries(original_entries)
 
 
-def test_update_model_cost() -> None:
-    original_entries: Final = _snapshot_model_cost_entries(("gpt-4",))
-
+def test_update_model_cost():
     try:
         litellm.register_model(
             {
@@ -1036,7 +1034,6 @@ def test_update_model_cost() -> None:
                 },
             }
         )
-
         assert litellm.model_cost["gpt-4"]["input_cost_per_token"] == 0.00002
-    finally:
-        _restore_model_cost_entries(original_entries)
+    except Exception as e:
+        pytest.fail(f"An error occurred: {e}")

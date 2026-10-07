@@ -1870,22 +1870,44 @@ def test_listed_router_request_is_sent_to_the_router_resource_and_billed_at_the_
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
 
 
-def test_map_openai_params_tool_choice() -> None:
-    config: Final = FireworksAIConfig()
-    assert config.map_openai_params({"tool_choice": "required"}, {}, "some_model", drop_params=False) == {
-        "tool_choice": "any"
-    }
-    assert config.map_openai_params({"tool_choice": "auto"}, {}, "some_model", drop_params=False) == {
-        "tool_choice": "auto"
-    }
-    assert config.map_openai_params({"some_other_param": "value"}, {}, "some_model", drop_params=False) == {}
-    assert config.map_openai_params({"tool_choice": None}, {}, "some_model", drop_params=False) == {
-        "tool_choice": None
-    }
+def test_map_openai_params_tool_choice():
+    # Test case 1: tool_choice is "required"
+    result = fireworks.map_openai_params(
+        {"tool_choice": "required"}, {}, "some_model", drop_params=False
+    )
+    assert result == {"tool_choice": "any"}
+
+    # Test case 2: tool_choice is "auto"
+    result = fireworks.map_openai_params(
+        {"tool_choice": "auto"}, {}, "some_model", drop_params=False
+    )
+    assert result == {"tool_choice": "auto"}
+
+    # Test case 3: tool_choice is not present
+    result = fireworks.map_openai_params(
+        {"some_other_param": "value"}, {}, "some_model", drop_params=False
+    )
+    assert result == {}
+
+    # Test case 4: tool_choice is None
+    result = fireworks.map_openai_params(
+        {"tool_choice": None}, {}, "some_model", drop_params=False
+    )
+    assert result == {"tool_choice": None}
 
 
-def test_map_response_format() -> None:
-    response_format: Final = {
+def test_map_response_format():
+    """
+    json_schema response_format is passed through to Fireworks unchanged.
+
+    Fireworks accepts the OpenAI strict json_schema shape natively. The earlier
+    downgrade to {type: json_object, schema: ...} silently dropped `strict` and
+    `name`, producing a request that Fireworks treats as "any valid JSON" per
+    its docs, disabling grammar-guided decoding.
+
+    Ref: https://docs.fireworks.ai/structured-responses/structured-response-formatting
+    """
+    response_format = {
         "type": "json_schema",
         "json_schema": {
             "schema": {
@@ -1897,73 +1919,92 @@ def test_map_response_format() -> None:
             "strict": True,
         },
     }
-
-    assert (
-        FireworksAIConfig().map_openai_params(
-            {"response_format": response_format}, {}, "some_model", drop_params=False
-        )
-        == {"response_format": response_format}
+    result = fireworks.map_openai_params(
+        {"response_format": response_format}, {}, "some_model", drop_params=False
     )
+    assert result == {"response_format": response_format}
 
 
-def test_get_supported_openai_params_transcription_returns_none() -> None:
-    assert (
-        get_supported_openai_params(
-            model="fireworks_ai/accounts/fireworks/models/whisper-v3",
-            custom_llm_provider="fireworks_ai",
-            request_type="transcription",
-        )
-        is None
+def test_get_supported_openai_params_transcription_returns_none():
+    # Fireworks AI deprecated audio transcription on 2026-06-10; the endpoint
+    # is decommissioned. Returning None (not chat-completion params) signals
+    # to callers that transcription is unsupported for this provider.
+    result = get_supported_openai_params(
+        model="fireworks_ai/accounts/fireworks/models/whisper-v3",
+        custom_llm_provider="fireworks_ai",
+        request_type="transcription",
     )
+    assert result is None
 
 
 @pytest.mark.parametrize(
     "content, expected_url",
     [
-        ({"image_url": "http://example.com/image.png"}, "http://example.com/image.png"),
+        (
+            {"image_url": "http://example.com/image.png"},
+            "http://example.com/image.png",
+        ),
         (
             {"image_url": {"url": "http://example.com/image.png"}},
             {"url": "http://example.com/image.png"},
         ),
-        ({"image_url": "data:image/png;base64,iVBORw0KGgo="}, "data:image/png;base64,iVBORw0KGgo="),
+        (
+            {"image_url": "data:image/png;base64,iVBORw0KGgo="},
+            "data:image/png;base64,iVBORw0KGgo=",
+        ),
         (
             {"image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ=="}},
             {"url": "data:image/jpeg;base64,/9j/4AAQ=="},
         ),
-        ({"image_url": "Data:image/png;base64,iVBORw0KGgo="}, "Data:image/png;base64,iVBORw0KGgo="),
+        (
+            {"image_url": "Data:image/png;base64,iVBORw0KGgo="},
+            "Data:image/png;base64,iVBORw0KGgo=",
+        ),
     ],
 )
-def test_transform_inline_no_longer_added(content: dict[str, object], expected_url: object) -> None:
-    messages: Final = [{"role": "user", "content": [{"type": "image_url", **content}]}]
+def test_transform_inline_no_longer_added(content, expected_url):
+    image_block = {"type": "image_url", **content}
+    messages = [{"role": "user", "content": [image_block]}]
 
-    result: Final = FireworksAIConfig()._transform_messages_helper(
+    result = litellm.FireworksAIConfig()._transform_messages_helper(
         messages=messages,
-        model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
+        model=VISION_MODEL,
         litellm_params={},
     )
+    result_image_block = result[0]["content"][0]
+    if isinstance(expected_url, str):
+        assert result_image_block["image_url"] == expected_url
+    else:
+        assert result_image_block["image_url"]["url"] == expected_url["url"]
 
-    assert result == messages
-    assert result[0]["content"][0]["image_url"] == expected_url
 
-
-@pytest.mark.parametrize("is_disabled", [True, False])
-def test_global_disable_flag_no_longer_adds_transform_inline(
-    is_disabled: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "disable_add_transform_inline_image_block", is_disabled)
-    url: Final = "http://example.com/image.png"
-    messages: Final = [
+@pytest.mark.parametrize(
+    "is_disabled",
+    [True, False],
+)
+def test_global_disable_flag_no_longer_adds_transform_inline(is_disabled):
+    url = "http://example.com/image.png"
+    litellm.disable_add_transform_inline_image_block = is_disabled
+    messages = [
         {
             "role": "user",
             "content": [{"type": "image_url", "image_url": url}],
         }
     ]
-
-    result: Final = FireworksAIConfig()._transform_messages_helper(
+    result = litellm.FireworksAIConfig()._transform_messages_helper(
         messages=messages,
-        model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
+        model=VISION_MODEL,
         litellm_params={},
     )
-
-    assert result == messages
     assert result[0]["content"][0]["image_url"] == url
+    litellm.disable_add_transform_inline_image_block = False  # Reset for other tests
+
+
+fireworks = FireworksAIConfig()
+
+
+VISION_MODEL = next(
+    key.removeprefix("fireworks_ai/")
+    for key, info in litellm.model_cost.items()
+    if key.startswith("fireworks_ai/accounts/fireworks/models/") and info.get("supports_vision") is True
+)

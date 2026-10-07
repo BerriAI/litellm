@@ -22,6 +22,8 @@ from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
 
+messages = [{"role": "user", "content": "who is ishaan 5222"}]
+
 
 @pytest.fixture
 def preserve_litellm_set_verbose(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -486,11 +488,14 @@ async def test_a_lookup_already_inside_the_phase_does_not_open_a_second_one(v2_s
     assert [s.name for s in v2_span_exporter.get_finished_spans()] == ["cache.get llm_response"]
 
 
-@pytest.mark.usefixtures("preserve_litellm_set_verbose")
 def test_cache_override():
+    # test if we can override the cache, when `caching=False` but litellm.cache = Cache() is set
+    # in this case it should not return cached responses
     litellm.cache = Cache()
     print("Testing cache override")
+    litellm.set_verbose = True
 
+    # test embedding
     response1 = embedding(
         model="text-embedding-ada-002",
         input=["hello who are you"],
@@ -505,98 +510,103 @@ def test_cache_override():
         mock_response="0.6,0.7,0.8,0.9,1.0",
     )
 
+    # When caching=False, responses should have different IDs
     assert response1.data[0].embedding != response2.data[0].embedding
 
 
-@pytest.mark.usefixtures("preserve_litellm_set_verbose")
-def test_caching_v2(monkeypatch: pytest.MonkeyPatch):
+def test_caching_v2():  # test in memory cache
     try:
+        litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
             model="gpt-3.5-turbo",
-            messages=_CACHING_TEST_MESSAGES,
+            messages=messages,
             caching=True,
             mock_response="Hello world from cache test",
         )
-        response2 = completion(
-            model="gpt-3.5-turbo",
-            messages=_CACHING_TEST_MESSAGES,
-            caching=True,
-        )
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
         print(f"response1: {response1}")
         print(f"response2: {response2}")
-        litellm.cache = None
-        monkeypatch.setattr(litellm, "success_callback", [])
-        monkeypatch.setattr(litellm, "_async_success_callback", [])
-        if response2["choices"][0]["message"]["content"] != response1["choices"][0]["message"]["content"]:
+        litellm.cache = None  # disable cache
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+        if (
+            response2["choices"][0]["message"]["content"]
+            != response1["choices"][0]["message"]["content"]
+        ):
             print(f"response1: {response1}")
             print(f"response2: {response2}")
-            pytest.fail("Error occurred:")
+            pytest.fail(f"Error occurred:")
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.usefixtures("preserve_litellm_set_verbose")
-def test_caching_with_ttl(monkeypatch: pytest.MonkeyPatch):
+def test_caching_with_ttl():
     try:
+        litellm.set_verbose = True
         litellm.cache = Cache()
         response1 = completion(
             model="gpt-3.5-turbo",
-            messages=_CACHING_TEST_MESSAGES,
+            messages=messages,
             caching=True,
             ttl=0,
             mock_response="Hello world from cache test 1",
         )
         response2 = completion(
             model="gpt-3.5-turbo",
-            messages=_CACHING_TEST_MESSAGES,
+            messages=messages,
             caching=True,
             mock_response="Hello world from cache test 2",
         )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
-        litellm.cache = None
-        monkeypatch.setattr(litellm, "success_callback", [])
-        monkeypatch.setattr(litellm, "_async_success_callback", [])
-        assert response2["choices"][0]["message"]["content"] != response1["choices"][0]["message"]["content"]
+        litellm.cache = None  # disable cache
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+        assert (
+            response2["choices"][0]["message"]["content"]
+            != response1["choices"][0]["message"]["content"]
+        )
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.usefixtures("preserve_litellm_set_verbose")
-def test_caching_with_default_ttl(monkeypatch: pytest.MonkeyPatch):
+def test_caching_with_default_ttl():
     try:
+        litellm.set_verbose = True
         litellm.cache = Cache(ttl=0)
         response1 = completion(
             model="gpt-3.5-turbo",
-            messages=_CACHING_TEST_MESSAGES,
+            messages=messages,
             caching=True,
             mock_response="Hello world from cache test",
         )
         response2 = completion(
             model="gpt-3.5-turbo",
-            messages=_CACHING_TEST_MESSAGES,
+            messages=messages,
             caching=True,
             mock_response="Hello world from cache test",
         )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
-        litellm.cache = None
-        monkeypatch.setattr(litellm, "success_callback", [])
-        monkeypatch.setattr(litellm, "_async_success_callback", [])
+        litellm.cache = None  # disable cache
+        litellm.success_callback = []
+        litellm._async_success_callback = []
         assert response2["id"] != response1["id"]
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.usefixtures("preserve_litellm_set_verbose")
-def test_caching_with_models_v2(monkeypatch: pytest.MonkeyPatch):
-    messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
+def test_caching_with_models_v2():
+    messages = [
+        {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}
+    ]
     litellm.cache = Cache()
     print("test2 for caching")
+    litellm.set_verbose = True
     response1 = completion(
         model="gpt-3.5-turbo",
         messages=messages,
@@ -614,16 +624,23 @@ def test_caching_with_models_v2(monkeypatch: pytest.MonkeyPatch):
     print(f"response2: {response2}")
     print(f"response3: {response3}")
     litellm.cache = None
-    monkeypatch.setattr(litellm, "success_callback", [])
-    monkeypatch.setattr(litellm, "_async_success_callback", [])
-    if response3["choices"][0]["message"]["content"] == response2["choices"][0]["message"]["content"]:
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    if (
+        response3["choices"][0]["message"]["content"]
+        == response2["choices"][0]["message"]["content"]
+    ):
+        # if models are different, it should not return cached response
         print(f"response2: {response2}")
         print(f"response3: {response3}")
-        pytest.fail("Error occurred:")
-    if response1["choices"][0]["message"]["content"] != response2["choices"][0]["message"]["content"]:
+        pytest.fail(f"Error occurred:")
+    if (
+        response1["choices"][0]["message"]["content"]
+        != response2["choices"][0]["message"]["content"]
+    ):
         print(f"response1: {response1}")
         print(f"response2: {response2}")
-        pytest.fail("Error occurred:")
+        pytest.fail(f"Error occurred:")
 
 
 @pytest.mark.asyncio
@@ -660,7 +677,9 @@ def test_get_cache_key():
         cache_key = cache_instance.get_cache_key(
             **{
                 "model": "gpt-3.5-turbo",
-                "messages": [{"role": "user", "content": "write a one sentence poem about: 7510"}],
+                "messages": [
+                    {"role": "user", "content": "write a one sentence poem about: 7510"}
+                ],
                 "max_tokens": 40,
                 "temperature": 0.2,
                 "stream": True,
@@ -671,7 +690,9 @@ def test_get_cache_key():
         cache_key_2 = cache_instance.get_cache_key(
             **{
                 "model": "gpt-3.5-turbo",
-                "messages": [{"role": "user", "content": "write a one sentence poem about: 7510"}],
+                "messages": [
+                    {"role": "user", "content": "write a one sentence poem about: 7510"}
+                ],
                 "max_tokens": 40,
                 "temperature": 0.2,
                 "stream": True,
@@ -679,16 +700,14 @@ def test_get_cache_key():
                 "litellm_logging_obj": {},
             }
         )
-        cache_key_str = (
-            "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': "
-            "'write a one sentence poem about: 7510'}]max_tokens: 40temperature: 0.2stream: True"
-        )
+        cache_key_str = "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}]max_tokens: 40temperature: 0.2stream: True"
         hash_object = hashlib.sha256(cache_key_str.encode())
+        # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
         assert cache_key == hash_hex
-        assert cache_key_2 == hash_hex, (
-            f"{cache_key_2} != {hash_hex}. The same kwargs should have the same cache key across runs"
-        )
+        assert (
+            cache_key_2 == hash_hex
+        ), f"{cache_key} != {cache_key_2}. The same kwargs should have the same cache key across runs"
 
         embedding_cache_key = cache_instance.get_cache_key(
             **{
@@ -706,14 +725,17 @@ def test_get_cache_key():
 
         print(embedding_cache_key)
 
-        embedding_cache_key_str = "model: azure/text-embedding-ada-002input: ['hi who is ishaan']"
-        hash_object = hashlib.sha256(embedding_cache_key_str.encode())
-        hash_hex = hash_object.hexdigest()
-        assert embedding_cache_key == hash_hex, (
-            f"{embedding_cache_key} != 'model: azure/text-embedding-ada-002input: "
-            "['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
+        embedding_cache_key_str = (
+            "model: azure/text-embedding-ada-002input: ['hi who is ishaan']"
         )
+        hash_object = hashlib.sha256(embedding_cache_key_str.encode())
+        # Hexadecimal representation of the hash
+        hash_hex = hash_object.hexdigest()
+        assert (
+            embedding_cache_key == hash_hex
+        ), f"{embedding_cache_key} != 'model: azure/text-embedding-ada-002input: ['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
 
+        # Proxy - embedding cache, test if embedding key, gets model_group and not model
         embedding_cache_key_2 = cache_instance.get_cache_key(
             **{
                 "model": "azure/text-embedding-ada-002",
@@ -764,8 +786,11 @@ def test_get_cache_key():
         )
 
         print(embedding_cache_key_2)
-        embedding_cache_key_str_2 = "model: EMBEDDING_MODEL_GROUPinput: ['hi who is ishaan']"
+        embedding_cache_key_str_2 = (
+            "model: EMBEDDING_MODEL_GROUPinput: ['hi who is ishaan']"
+        )
         hash_object = hashlib.sha256(embedding_cache_key_str_2.encode())
+        # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
         assert embedding_cache_key_2 == hash_hex
         print("passed!")
@@ -786,26 +811,35 @@ def test_redis_caching_multiple_namespaces():
 
     import litellm
     from litellm import completion
+    from litellm._uuid import uuid
     from litellm.caching import Cache
 
+    # Use a fixed uuid to ensure consistent cache keys
     test_uuid = "12345678-1234-1234-1234-123456789abc"
     messages = [{"role": "user", "content": f"what is litellm? {test_uuid}"}]
 
+    # Mock the Redis client creation from the _redis module
     with (
         patch("litellm._redis.get_redis_client") as mock_get_redis_client,
-        patch("litellm._redis.get_redis_connection_pool") as mock_get_redis_connection_pool,
+        patch(
+            "litellm._redis.get_redis_connection_pool"
+        ) as mock_get_redis_connection_pool,
     ):
+        # Create a mock Redis client that simulates real Redis behavior
         mock_redis_client = MagicMock()
         mock_get_redis_client.return_value = mock_redis_client
 
+        # Mock the connection pool
         mock_connection_pool = MagicMock()
         mock_get_redis_connection_pool.return_value = mock_connection_pool
 
+        # Dictionary to simulate Redis storage with namespace support
         redis_storage = {}
 
         def mock_redis_get(key):
             print(f"Redis GET: {key}")
             value = redis_storage.get(key, None)
+            # Convert to bytes to match real Redis behavior
             if value is not None:
                 import json
 
@@ -828,11 +862,13 @@ def test_redis_caching_multiple_namespaces():
         mock_redis_client.ping = mock_redis_ping
         mock_redis_client.info = mock_redis_info
 
+        # Initialize the cache
         litellm.cache = Cache(type="redis")
 
         namespace_1 = "org-id1"
         namespace_2 = "org-id2"
 
+        # Use mock_response to ensure deterministic responses without external API calls
         response_1 = completion(
             model="gpt-3.5-turbo",
             messages=messages,
@@ -860,41 +896,60 @@ def test_redis_caching_multiple_namespaces():
             mock_response="Response without namespace",
         )
 
-        print(f"Response 1 type: {type(response_1)} - ID: {getattr(response_1, 'id', 'N/A')}")
-        print(f"Response 2 type: {type(response_2)} - ID: {getattr(response_2, 'id', 'N/A')}")
-        print(f"Response 3 type: {type(response_3)} - Cache hit: {isinstance(response_3, str)}")
-        print(f"Response 4 type: {type(response_4)} - ID: {getattr(response_4, 'id', 'N/A')}")
+        print(
+            f"Response 1 type: {type(response_1)} - ID: {getattr(response_1, 'id', 'N/A')}"
+        )
+        print(
+            f"Response 2 type: {type(response_2)} - ID: {getattr(response_2, 'id', 'N/A')}"
+        )
+        print(
+            f"Response 3 type: {type(response_3)} - Cache hit: {isinstance(response_3, str)}"
+        )
+        print(
+            f"Response 4 type: {type(response_4)} - ID: {getattr(response_4, 'id', 'N/A')}"
+        )
 
         print(f"Redis storage keys: {list(redis_storage.keys())}")
 
+        # Verify that different namespaces created different cache keys
         cache_keys = list(redis_storage.keys())
         namespace_1_keys = [k for k in cache_keys if k.startswith(f"{namespace_1}:")]
         namespace_2_keys = [k for k in cache_keys if k.startswith(f"{namespace_2}:")]
         no_namespace_keys = [
-            k for k in cache_keys if not k.startswith(f"{namespace_1}:") and not k.startswith(f"{namespace_2}:")
+            k
+            for k in cache_keys
+            if not k.startswith(f"{namespace_1}:")
+            and not k.startswith(f"{namespace_2}:")
         ]
 
         print(f"Namespace 1 keys: {namespace_1_keys}")
         print(f"Namespace 2 keys: {namespace_2_keys}")
         print(f"No namespace keys: {no_namespace_keys}")
 
+        # Should have at least one key for each namespace
         assert len(namespace_1_keys) > 0, "Should have cache keys for namespace 1"
         assert len(namespace_2_keys) > 0, "Should have cache keys for namespace 2"
         assert len(no_namespace_keys) > 0, "Should have cache keys for no namespace"
 
-        assert isinstance(response_3, str), "Response 3 should be a cache hit (string) for same namespace"
+        # The main test: response 3 should be a cache hit (string) because it uses same namespace as response 1
+        assert isinstance(
+            response_3, str
+        ), "Response 3 should be a cache hit (string) for same namespace"
 
+        # response 1 & 2 should be ModelResponse objects (cache misses)
         assert hasattr(response_1, "id"), "Response 1 should be a ModelResponse object"
         assert hasattr(response_2, "id"), "Response 2 should be a ModelResponse object"
         assert hasattr(response_4, "id"), "Response 4 should be a ModelResponse object"
 
-        assert response_1.id != response_2.id, (
-            f"Expected different response ID for different namespace. Got {response_1.id} and {response_2.id}"
-        )
+        # response 1 & 2 should have different IDs (different namespaces)
+        assert (
+            response_1.id != response_2.id
+        ), f"Expected different response ID for different namespace. Got {response_1.id} and {response_2.id}"
 
-        assert response_1.id != response_4.id, (
-            f"Expected different response ID for no namespace vs namespaced. Got {response_1.id} and {response_4.id}"
-        )
+        # response 1 & 4 should have different IDs (different namespaces)
+        assert (
+            response_1.id != response_4.id
+        ), f"Expected different response ID for no namespace vs namespaced. Got {response_1.id} and {response_4.id}"
 
 
 _TOOL_TURN_ITEM: Final = {"role": "user", "content": "hi"}

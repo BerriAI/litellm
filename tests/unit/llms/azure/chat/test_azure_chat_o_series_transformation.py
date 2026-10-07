@@ -172,14 +172,14 @@ def test_azure_o_series_routing():
 
 
 @patch("litellm.main.azure_o1_chat_completions._get_openai_client")
-def test_openai_o_series_max_retries_0(mock_get_openai_client, monkeypatch: pytest.MonkeyPatch):
+def test_openai_o_series_max_retries_0(mock_get_openai_client):
     import litellm
 
     mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.headers = {}
     mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.parse.return_value = (
         ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
     )
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
     response = litellm.completion(
         model="azure/o1-preview",
         messages=[{"role": "user", "content": "hi"}],
@@ -195,15 +195,15 @@ def test_openai_o_series_max_retries_0(mock_get_openai_client, monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_azure_o1_series_response_format_extra_params(
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_azure_o1_series_response_format_extra_params():
     """
     Tool calling should work for all azure o_series models.
     """
+    litellm.turn_on_debug()
+
     from openai import AsyncAzureOpenAI
 
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
 
     client = AsyncAzureOpenAI(
         api_key="fake-api-key",
@@ -232,7 +232,9 @@ async def test_azure_o1_series_response_format_extra_params(
     ]
     response_format = {"type": "json_object"}
     tool_choice = "auto"
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
         try:
             await litellm.acompletion(
                 client=client,

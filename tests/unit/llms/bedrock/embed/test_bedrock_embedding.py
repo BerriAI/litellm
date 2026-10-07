@@ -1348,36 +1348,38 @@ def test_marengo_3_text_image_without_media_source_is_a_bad_request():
             "bedrock/amazon.titan-embed-text-v1",
             "text",
             titan_embedding_response,
-        ),
+        ),  # V1 text model
         (
             "bedrock/amazon.titan-embed-text-v2:0",
             "text",
             titan_embedding_response,
-        ),
+        ),  # V2 text model
         (
             "bedrock/amazon.titan-embed-g1-text-02",
             "text",
             titan_embedding_response,
-        ),
+        ),  # G1 text model
         (
             "bedrock/amazon.titan-embed-image-v1",
             "image",
             titan_embedding_response,
-        ),
+        ),  # Image model
         (
             "bedrock/cohere.embed-english-v3",
             "text",
             cohere_embedding_response,
-        ),
+        ),  # Cohere English
         (
             "bedrock/cohere.embed-multilingual-v3",
             "text",
             cohere_embedding_response,
-        ),
+        ),  # Cohere Multilingual
     ],
 )
+@pytest.mark.usefixtures("fake_provider_credentials")
 def test_bedrock_embedding_models(model, input_type, embed_response):
     """Test embedding functionality for all Bedrock models with different input types"""
+    litellm.set_verbose = True
     client = HTTPHandler()
 
     with patch.object(client, "post") as mock_post:
@@ -1387,7 +1389,10 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
         mock_response.json = lambda: json.loads(mock_response.text)
         mock_post.return_value = mock_response
 
-        input_data = test_image_base64 if input_type == "image" else "Hello world from litellm"
+        # Prepare input based on type
+        input_data = (
+            img_base_64 if input_type == "image" else "Hello world from litellm"
+        )
 
         try:
             response = litellm.embedding(
@@ -1396,35 +1401,46 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
                 client=client,
                 aws_region_name="us-west-2",
                 aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-west-2.amazonaws.com",
-                aws_access_key_id="test-access-key",
-                aws_secret_access_key="test-secret-key",
             )
 
+            # Verify response structure
             assert isinstance(response, litellm.EmbeddingResponse)
             print(response.data)
             assert isinstance(response.data[0]["embedding"], list)
-            assert len(response.data[0]["embedding"]) == 3
+            assert len(response.data[0]["embedding"]) == 3  # Based on mock response
 
+            # Fetch request body
             request_data = json.loads(mock_post.call_args.kwargs["data"])
 
+            # Verify AWS params are not in request body
             aws_params = ["aws_region_name", "aws_bedrock_runtime_endpoint"]
             for param in aws_params:
-                assert param not in request_data, f"AWS param {param} should not be in request body"
+                assert (
+                    param not in request_data
+                ), f"AWS param {param} should not be in request body"
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
 
-def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo(monkeypatch):
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
     """
     Test async invoke embedding with TwelveLabs Marengo.
     Validates that async invoke responses include job ID in hidden parameters.
     """
     print("Testing async invoke embedding...")
-    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    original_region_name = os.environ.get("AWS_REGION_NAME")
+    os.environ["AWS_REGION_NAME"] = "us-east-1"
+    litellm.turn_on_debug()
 
-    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_sync_call") as mock_call:
-        mock_call.return_value = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"}
+    # Mock the HTTP call to return async invoke response
+    with patch(
+        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_sync_call"
+    ) as mock_call:
+        mock_call.return_value = {
+            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"
+        }
 
         response = litellm.embedding(
             model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
@@ -1432,37 +1448,60 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo(monkeypatch):
             aws_region_name="us-east-1",
             inputType="text",
             output_s3_uri="s3://test-bucket/async-invoke-output/",
-            aws_access_key_id="test-access-key",
-            aws_secret_access_key="test-secret-key",
         )
 
-        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
-        assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
+        # Validate response structure
+        assert isinstance(
+            response, litellm.EmbeddingResponse
+        ), "Response should be EmbeddingResponse type"
+        assert hasattr(
+            response, "_hidden_params"
+        ), "Response should have _hidden_params"
         assert response._hidden_params is not None, "Hidden params should not be None"
 
-        assert hasattr(response._hidden_params, "_invocation_arn"), "Hidden params should have _invocation_arn"
+        # Validate hidden params contain invocation ARN
+        assert hasattr(
+            response._hidden_params, "_invocation_arn"
+        ), "Hidden params should have _invocation_arn"
         assert (
             response._hidden_params._invocation_arn
             == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"
         ), "Invocation ARN should be preserved"
 
+        # Validate embedding structure
         assert len(response.data) == 1, "Should have one embedding"
-        assert response.data[0].object == "embedding", "Embedding object should be 'embedding'"
-        assert response.data[0].embedding == [], "Embedding should be empty for async jobs"
+        assert (
+            response.data[0].object == "embedding"
+        ), "Embedding object should be 'embedding'"
+        assert (
+            response.data[0].embedding == []
+        ), "Embedding should be empty for async jobs"
 
-        print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
+        print(
+            f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}"
+        )
+
+    # Restore original region name
+    if original_region_name:
+        os.environ["AWS_REGION_NAME"] = original_region_name
 
 
 @pytest.mark.asyncio
-async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo(monkeypatch):
+@pytest.mark.usefixtures("fake_provider_credentials")
+async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
     """
     Test async invoke embedding with async calls.
     Validates that async invoke responses work with aembedding.
     """
     print("Testing async invoke embedding with async calls...")
-    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    original_region_name = os.environ.get("AWS_REGION_NAME")
+    os.environ["AWS_REGION_NAME"] = "us-east-1"
+    litellm.turn_on_debug()
 
-    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_async_call") as mock_call:
+    # Mock the async HTTP call to return async invoke response
+    with patch(
+        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_async_call"
+    ) as mock_call:
         mock_call.return_value = {
             "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"
         }
@@ -1473,93 +1512,153 @@ async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo(monke
             aws_region_name="us-east-1",
             inputType="text",
             output_s3_uri="s3://test-bucket/async-invoke-output/",
-            aws_access_key_id="test-access-key",
-            aws_secret_access_key="test-secret-key",
         )
 
-        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
-        assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
+        # Validate response structure
+        assert isinstance(
+            response, litellm.EmbeddingResponse
+        ), "Response should be EmbeddingResponse type"
+        assert hasattr(
+            response, "_hidden_params"
+        ), "Response should have _hidden_params"
         assert response._hidden_params is not None, "Hidden params should not be None"
 
-        assert hasattr(response._hidden_params, "_invocation_arn"), "Hidden params should have _invocation_arn"
+        # Validate hidden params contain invocation ARN
+        assert hasattr(
+            response._hidden_params, "_invocation_arn"
+        ), "Hidden params should have _invocation_arn"
         assert (
             response._hidden_params._invocation_arn
             == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"
         ), "Invocation ARN should be preserved"
 
-        print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
+        print(
+            f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}"
+        )
+
+    # Restore original region name
+    if original_region_name:
+        os.environ["AWS_REGION_NAME"] = original_region_name
 
 
-def test_bedrock_embedding_uses_correct_region_when_specified(monkeypatch):
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_embedding_uses_correct_region_when_specified():
     """
     Test that when aws_region_name is explicitly passed, it's used correctly
     even if AWS_REGION_NAME env var is set to a different region.
 
     relevant issue: https://github.com/BerriAI/litellm/issues/16517
     """
-    monkeypatch.setenv("AWS_REGION_NAME", "ap-northeast-1")
-    client = HTTPHandler()
+    # Save original env var
+    original_region_name = os.environ.get("AWS_REGION_NAME")
 
-    with patch.object(client, "post") as mock_post:
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.text = json.dumps(titan_embedding_response)
-        mock_response.json = lambda: json.loads(mock_response.text)
-        mock_post.return_value = mock_response
+    # Set env var to a different region (this should NOT be used)
+    os.environ["AWS_REGION_NAME"] = "ap-northeast-1"
 
-        response = litellm.embedding(
-            model="bedrock/amazon.titan-embed-image-v1",
-            input=["test input"],
-            client=client,
-            aws_region_name="us-east-1",
-            aws_access_key_id="test-access-key",
-            aws_secret_access_key="test-secret-key",
-        )
+    try:
+        client = HTTPHandler()
 
-        assert mock_post.called, "HTTP post should have been called"
-        call_args = mock_post.call_args
-        url = call_args.kwargs.get("url", "")
-        assert "us-east-1" in url, f"URL should contain us-east-1, but got: {url}"
-        assert "ap-northeast-1" not in url, f"URL should NOT contain ap-northeast-1, but got: {url}"
+        with patch.object(client, "post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.text = json.dumps(titan_embedding_response)
+            mock_response.json = lambda: json.loads(mock_response.text)
+            mock_post.return_value = mock_response
 
-        print(f"✓ Test passed: URL contains correct region: {url}")
+            # Call with explicit region
+            response = litellm.embedding(
+                model="bedrock/amazon.titan-embed-image-v1",
+                input=["test input"],
+                client=client,
+                aws_region_name="us-east-1",  # Explicitly set to us-east-1
+            )
+
+            # Verify the request was made to the correct region
+            assert mock_post.called, "HTTP post should have been called"
+
+            # Get the URL from the call
+            call_args = mock_post.call_args
+            url = call_args.kwargs.get("url", "")
+
+            # The URL should contain us-east-1, NOT ap-northeast-1
+            assert "us-east-1" in url, f"URL should contain us-east-1, but got: {url}"
+            assert (
+                "ap-northeast-1" not in url
+            ), f"URL should NOT contain ap-northeast-1, but got: {url}"
+
+            print(f"✓ Test passed: URL contains correct region: {url}")
+
+    finally:
+        # Restore original env var
+        if original_region_name:
+            os.environ["AWS_REGION_NAME"] = original_region_name
+        else:
+            os.environ.pop("AWS_REGION_NAME", None)
 
 
-def test_bedrock_embedding_region_bug_reproduction(monkeypatch):
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_embedding_region_bug_reproduction():
     """
     Reproduces the bug where aws_region_name is ignored when passed explicitly.
 
     relevant issue: https://github.com/BerriAI/litellm/issues/16517
     """
-    monkeypatch.setenv("AWS_REGION_NAME", "ap-northeast-1")
-    client = HTTPHandler()
+    # Save original env var
+    original_region_name = os.environ.get("AWS_REGION_NAME")
 
-    with patch.object(client, "post") as mock_post:
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.text = json.dumps(titan_embedding_response)
-        mock_response.json = lambda: json.loads(mock_response.text)
-        mock_post.return_value = mock_response
+    # Set env var to ap-northeast-1 (this is what the bug report shows)
+    os.environ["AWS_REGION_NAME"] = "ap-northeast-1"
 
-        response = litellm.embedding(
-            model="bedrock/amazon.titan-embed-image-v1",
-            input=["test input"],
-            client=client,
-            aws_region_name="us-east-1",
-            aws_access_key_id="test-access-key",
-            aws_secret_access_key="test-secret-key",
-        )
+    try:
+        client = HTTPHandler()
 
-        assert mock_post.called, "HTTP post should have been called"
-        call_args = mock_post.call_args
-        url = call_args.kwargs.get("url", "")
-        print(f"Request URL: {url}")
-        print(f"Expected region in URL: us-east-1")
-        print(f"Environment AWS_REGION_NAME: {os.environ.get('AWS_REGION_NAME')}")
+        with patch.object(client, "post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.text = json.dumps(titan_embedding_response)
+            mock_response.json = lambda: json.loads(mock_response.text)
+            mock_post.return_value = mock_response
 
-        if "ap-northeast-1" in url:
-            print("❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter")
-            pytest.fail(f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}")
+            # Call with explicit region (as in the bug report)
+            response = litellm.embedding(
+                model="bedrock/amazon.titan-embed-image-v1",
+                input=["test input"],
+                client=client,
+                aws_region_name="us-east-1",  # Explicitly set to us-east-1
+            )
+
+            # Verify the request was made
+            assert mock_post.called, "HTTP post should have been called"
+
+            # Get the URL from the call
+            call_args = mock_post.call_args
+            url = call_args.kwargs.get("url", "")
+
+            print(f"Request URL: {url}")
+            print(f"Expected region in URL: us-east-1")
+            print(f"Environment AWS_REGION_NAME: {os.environ.get('AWS_REGION_NAME')}")
+
+            # This assertion will FAIL if the bug exists (it will use ap-northeast-1)
+            # This assertion will PASS if the bug is fixed (it will use us-east-1)
+            if "ap-northeast-1" in url:
+                print(
+                    "❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter"
+                )
+                pytest.fail(f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}")
+            else:
+                print(
+                    "✓ Bug NOT reproduced: Using correct region from explicit parameter"
+                )
+                assert (
+                    "us-east-1" in url
+                ), f"URL should contain us-east-1, but got: {url}"
+
+    finally:
+        # Restore original env var
+        if original_region_name:
+            os.environ["AWS_REGION_NAME"] = original_region_name
         else:
-            print("✓ Bug NOT reproduced: Using correct region from explicit parameter")
-            assert "us-east-1" in url, f"URL should contain us-east-1, but got: {url}"
+            os.environ.pop("AWS_REGION_NAME", None)
+
+
+img_base_64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="

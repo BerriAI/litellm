@@ -5,6 +5,7 @@ import os
 from collections.abc import Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import boto3
@@ -323,6 +324,30 @@ def async_only_image_fetch(monkeypatch: pytest.MonkeyPatch) -> AsyncOnlyImageFet
 def no_ambient_azure_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in AMBIENT_AZURE_CREDENTIAL_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+
+
+FAKE_PROVIDER_CREDENTIALS: Final = MappingProxyType(
+    {
+        "OPENAI_API_KEY": "sk-unit-test",
+        "ANTHROPIC_API_KEY": "sk-ant-unit-test",
+        "GEMINI_API_KEY": "unit-test",
+        "AZURE_API_KEY": "unit-test",
+        "AZURE_API_BASE": "https://unit-test.openai.azure.com",
+        "AZURE_API_VERSION": "2024-02-01",
+        "AWS_ACCESS_KEY_ID": "unit-test",
+        "AWS_SECRET_ACCESS_KEY": "unit-test",
+        "AWS_REGION_NAME": "us-east-1",
+        "COHERE_API_KEY": "unit-test",
+        "DD_API_KEY": "unit-test",
+        "DD_SITE": "us5.datadoghq.com",
+    }
+)
+
+
+@pytest.fixture
+def fake_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in FAKE_PROVIDER_CREDENTIALS.items():
+        monkeypatch.setenv(name, value)
 
 
 def pytest_sessionfinish() -> None:

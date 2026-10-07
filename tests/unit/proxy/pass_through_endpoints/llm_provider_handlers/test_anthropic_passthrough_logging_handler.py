@@ -2662,15 +2662,17 @@ def test_stream_was_interrupted_skips_data_lines_that_are_not_json_objects(
     assert AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks) is interrupted
 
 
-def test_anthropic_passthrough_handler(
-    mock_httpx_response: httpx.Response,
-    mock_response: dict[str, object],
-    mock_logging_obj: LiteLLMLoggingObj,
-) -> None:
-    start_time: Final = datetime(2025, 1, 1)
-    end_time: Final = datetime(2025, 1, 2)
+@pytest.mark.asyncio
+async def test_anthropic_passthrough_handler(
+    mock_httpx_response, mock_response, mock_logging_obj
+):
+    """
+    Unit test - Assert that the anthropic passthrough handler calls the litellm logging object's async_success_handler
+    """
+    start_time = datetime.now()
+    end_time = datetime.now()
 
-    result: Final = AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+    result = AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
         httpx_response=mock_httpx_response,
         response_body=mock_response,
         logging_obj=mock_logging_obj,
@@ -2688,15 +2690,15 @@ def test_anthropic_passthrough_handler(
     "metadata_params",
     [{"metadata": {"user_id": "test"}}, {"litellm_metadata": {"user": "test"}}, {}],
 )
-def test_create_anthropic_response_logging_payload(
-    mock_logging_obj: LiteLLMLoggingObj,
-    metadata_params: dict[str, object],
-) -> None:
-    model_response: Final = litellm.ModelResponse(choices=[{"message": {"content": "Test response"}}])
-    start_time: Final = datetime(2025, 1, 1)
-    end_time: Final = datetime(2025, 1, 2)
+def test_create_anthropic_response_logging_payload(mock_logging_obj, metadata_params):
+    # Test the logging payload creation
+    model_response = litellm.ModelResponse()
+    model_response.choices = [{"message": {"content": "Test response"}}]
 
-    result: Final = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    result = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
         litellm_model_response=model_response,
         model="claude-opus-4-7",
         kwargs={
@@ -2799,10 +2801,19 @@ def test_create_anthropic_response_logging_payload(
     assert "response_cost" in result
 
 
-def test_handle_logging_anthropic_collected_chunks(all_chunks: list[str]) -> None:
-    litellm_logging_obj: Final = Mock(model_call_details={})
-    pass_through_logging_obj: Final = Mock()
-    sent_args: Final = {
+def test_handle_logging_anthropic_collected_chunks(all_chunks):
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+        PassthroughStandardLoggingPayload,
+        EndpointType,
+    )
+    from litellm.types.utils import ModelResponse
+
+    litellm_logging_obj = Mock()
+    litellm_logging_obj.model_call_details = {}
+    pass_through_logging_obj = Mock()
+
+    sent_args = {
         "litellm_logging_obj": litellm_logging_obj,
         "passthrough_success_handler_obj": pass_through_logging_obj,
         "url_route": "https://api.anthropic.com/v1/messages",
@@ -2828,22 +2839,31 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks: list[str]) -> Non
         "all_chunks": all_chunks,
     }
 
-    result: Final = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(**sent_args)
+    result = (
+        AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            **sent_args
+        )
+    )
 
-    assert isinstance(result["result"], litellm.ModelResponse)
+    assert isinstance(result["result"], ModelResponse)
     print("result=", json.dumps(result, indent=4, default=str))
 
 
-def test_build_complete_streaming_response(all_chunks: list[str]) -> None:
-    litellm_logging_obj: Final = Mock()
+def test_build_complete_streaming_response(all_chunks):
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+    from litellm.types.utils import ModelResponse
 
-    result: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+    litellm_logging_obj = Mock()
+
+    result = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
         all_chunks=all_chunks,
         model="claude-sonnet-4-5-20250929",
         litellm_logging_obj=litellm_logging_obj,
     )
 
-    assert isinstance(result, litellm.ModelResponse)
+    assert isinstance(result, ModelResponse)
     assert result.usage.prompt_tokens == 17
     assert result.usage.completion_tokens == 249
     assert result.usage.total_tokens == 266

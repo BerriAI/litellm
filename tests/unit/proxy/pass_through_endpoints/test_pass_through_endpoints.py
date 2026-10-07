@@ -10,7 +10,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
-from typing import Final
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -8462,64 +8462,105 @@ def test_update_pass_through_route_updates_registry():
     asyncio.run(_async_test())
 
 
-def test_update_metadata_with_tags_in_header_no_tags() -> None:
-    request: Final = Request(
-        {
-            "type": "http",
-            "headers": [],
-            "method": "POST",
-            "path": "/",
-            "query_string": b"",
-        }
+@pytest.fixture
+def mock_request():
+    # Create a mock request with headers
+    class QueryParams:
+        def __init__(self):
+            self._dict = {}
+
+        def __iter__(self):
+            return iter(self._dict.items())
+
+        def items(self):
+            return self._dict.items()
+
+        def keys(self):
+            return self._dict.keys()
+
+        def values(self):
+            return self._dict.values()
+
+    class MockRequest:
+        def __init__(
+            self, headers=None, method="POST", request_body: Optional[dict] = None
+        ):
+            self.headers = headers or {}
+            self.query_params = QueryParams()
+            self.method = method
+            self.request_body = request_body or {}
+            # Add url attribute that the actual code expects
+            self.url = httpx.URL("http://localhost:8000/test")
+            self.scope = {"type": "http", "method": method, "path": "/test"}
+            # Add state attribute that FastAPI requests have
+            self.state = type("State", (), {})()
+
+        async def body(self) -> bytes:
+            return bytes(json.dumps(self.request_body), "utf-8")
+
+    return MockRequest
+
+
+@pytest.fixture
+def mock_user_api_key_dict():
+    return UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+        end_user_id="test-user",
     )
 
-    result: Final = _update_metadata_with_tags_in_header(
-        request=request,
-        metadata={"existing": "value"},
-    )
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_update_metadata_with_tags_in_header_no_tags(mock_request):
+    """
+    No tags should be added to metadata if they do not exist in headers
+    """
+    # Test when no tags are present in headers
+    request = mock_request(headers={})
+    metadata = {"existing": "value"}
+
+    result = _update_metadata_with_tags_in_header(request=request, metadata=metadata)
 
     assert result == {"existing": "value"}
     assert "tags" not in result
 
 
-def test_update_metadata_with_tags_in_header_with_tags() -> None:
-    request: Final = Request(
-        {
-            "type": "http",
-            "headers": [(b"tags", b"tag1,tag2,tag3")],
-            "method": "POST",
-            "path": "/",
-            "query_string": b"",
-        }
-    )
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_update_metadata_with_tags_in_header_with_tags(mock_request):
+    """
+    Tags should be added to metadata if they exist in headers
+    """
+    # Test when tags are present in headers
+    request = mock_request(headers={"tags": "tag1,tag2,tag3"})
+    metadata = {"existing": "value"}
 
-    result: Final = _update_metadata_with_tags_in_header(
-        request=request,
-        metadata={"existing": "value"},
-    )
+    result = _update_metadata_with_tags_in_header(request=request, metadata=metadata)
 
     assert result == {"existing": "value", "tags": ["tag1", "tag2", "tag3"]}
 
 
-def test_get_response_headers_filters_excluded_custom_headers() -> None:
-    upstream_headers: Final = httpx.Headers(
-        MappingProxyType(
-            {
-                "content-type": "application/json",
-                "x-amzn-requestid": "req-123",
-                "content-length": "999",
-            }
-        )
-    )
-    custom_headers: Final = MappingProxyType(
+def test_get_response_headers_filters_excluded_custom_headers():
+    """
+    Regression test:
+    Ensure excluded headers from FastAPI defaults (e.g. content-length: 0)
+    do not override passthrough response headers.
+    """
+    upstream_headers = httpx.Headers(
         {
-            "x-litellm-version": "test-version",
-            "content-length": "0",
-            "server": "test-server",
+            "content-type": "application/json",
+            "x-amzn-requestid": "req-123",
+            "content-length": "999",  # should be excluded
         }
     )
 
-    result: Final = HttpPassThroughEndpointHelpers.get_response_headers(
+    custom_headers = {
+        "x-litellm-version": "1.84.0",
+        "content-length": "0",  # should be excluded
+        "server": "uvicorn",  # should be excluded
+    }
+
+    result = HttpPassThroughEndpointHelpers.get_response_headers(
         headers=upstream_headers,
         litellm_call_id="call-123",
         custom_headers=custom_headers,
@@ -8527,48 +8568,94 @@ def test_get_response_headers_filters_excluded_custom_headers() -> None:
 
     assert result["content-type"] == "application/json"
     assert result["x-amzn-requestid"] == "req-123"
-    assert result["x-litellm-version"] == "test-version"
+    assert result["x-litellm-version"] == "1.84.0"
     assert result["x-litellm-call-id"] == "call-123"
     assert "content-length" not in result
     assert "server" not in result
 
 
-def test_pass_through_routes_support_all_methods() -> None:
-    expected_methods: Final = frozenset({"GET", "POST", "PUT", "DELETE", "PATCH"})
-
-    def check_router_methods(router: APIRouter) -> None:
-        for route in router.routes:
-            if not isinstance(route, APIRoute):
-                continue
-            path: Final = route.path
-            methods: Final = frozenset(route.methods or ())
-            allowed: Final = PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES.get(path, expected_methods)
-            assert methods == allowed, (
-                f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
-            )
-
-    check_router_methods(llm_passthrough_router)
-
-
-def test_protocol_constrained_pass_through_exemptions_are_not_stale() -> None:
-    registered_paths: Final = frozenset(
-        route.path for route in llm_passthrough_router.routes if isinstance(route, APIRoute)
+def test_pass_through_routes_support_all_methods():
+    """
+    A pass-through route fronts a whole provider API, so narrowing its method
+    set turns a request the upstream would have accepted into a 405. The
+    exceptions are the POST-only protocol routes listed above.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        router as llm_router,
     )
-    unmatched: Final = frozenset(PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES) - registered_paths
 
+    expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+
+    def check_router_methods(router):
+        for route in router.routes:
+            if isinstance(route, APIRoute):
+                path = route.path
+                methods = set(route.methods)
+                allowed = PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES.get(path, expected_methods)
+                assert (
+                    methods == allowed
+                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
+
+    check_router_methods(llm_router)
+
+
+def test_protocol_constrained_pass_through_exemptions_are_not_stale():
+    """
+    The exemption list above weakens the method contract, so it must not
+    outlive the routes it covers: a renamed or deleted route has to fail here
+    rather than sit in the list silently exempting nothing.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        router as llm_router,
+    )
+
+    registered_paths = {route.path for route in llm_router.routes if isinstance(route, APIRoute)}
+    unmatched = set(PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES) - registered_paths
     assert not unmatched, f"Exempted pass-through routes no longer exist: {sorted(unmatched)}"
 
 
-def test_is_bedrock_agent_runtime_route() -> None:
-    assert _is_bedrock_agent_runtime_route("/knowledgebases/kb-123/retrieve")
-    assert _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve")
-    assert not _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply")
-    assert not _is_bedrock_agent_runtime_route("/model/example/converse")
-    assert not _is_bedrock_agent_runtime_route("/some/random/endpoint")
+def test_is_bedrock_agent_runtime_route():
+    """
+    Test that _is_bedrock_agent_runtime_route correctly identifies bedrock agent runtime endpoints
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _is_bedrock_agent_runtime_route,
+    )
+
+    # Test agent runtime endpoints (should return True)
+    assert _is_bedrock_agent_runtime_route("/knowledgebases/kb-123/retrieve") is True
+    assert (
+        _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve")
+        is True
+    )
+
+    # Test regular bedrock runtime endpoints (should return False)
+    assert (
+        _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply") is False
+    )
+    assert (
+        _is_bedrock_agent_runtime_route("/model/cohere.command-r-v1:0/converse")
+        is False
+    )
+    assert _is_bedrock_agent_runtime_route("/some/random/endpoint") is False
 
 
-def test_custom_pricing_used_in_cost_calculation() -> None:
-    resp: Final = ModelResponse(
+def test_custom_pricing_used_in_cost_calculation():
+    """
+    Test that when custom pricing parameters are provided in litellm_params,
+    they are actually used for cost calculation.
+
+    This ensures that the custom pricing functionality works end-to-end:
+    1. Pricing params are stored in litellm_params
+    2. These params are used by completion_cost() to calculate costs
+
+    Regression test for: LIT-1221
+    """
+    from litellm import completion_cost, Choices, Message, ModelResponse
+    from litellm.utils import Usage
+
+    # Create a mock response with usage
+    resp = ModelResponse(
         id="chatcmpl-test-123",
         choices=[
             Choices(
@@ -8585,42 +8672,60 @@ def test_custom_pricing_used_in_cost_calculation() -> None:
         object="chat.completion",
         usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
     )
-    standard_cost: Final = completion_cost(
+
+    # Test 1: Standard pricing (should use default model pricing)
+    standard_cost = completion_cost(
         completion_response=resp,
         model="gpt-5.5",
     )
-    custom_input_price: Final = 0.0001
-    custom_output_price: Final = 0.0002
+    print(f"Standard cost: {standard_cost}")
 
-    custom_cost: Final = completion_cost(
+    # Test 2: Custom pricing via custom_cost_per_token parameter
+    custom_input_price = 0.00010  # $0.0001 per token
+    custom_output_price = 0.00020  # $0.0002 per token
+
+    custom_cost = completion_cost(
         completion_response=resp,
-        custom_cost_per_token=MappingProxyType(
-            {
-                "input_cost_per_token": custom_input_price,
-                "output_cost_per_token": custom_output_price,
-            }
-        ),
+        custom_cost_per_token={
+            "input_cost_per_token": custom_input_price,
+            "output_cost_per_token": custom_output_price,
+        },
     )
-    expected_custom_cost: Final = (100 * custom_input_price) + (50 * custom_output_price)
 
+    # Calculate expected cost
+    expected_custom_cost = (100 * custom_input_price) + (50 * custom_output_price)
+
+    print(f"Custom cost: {custom_cost}")
+    print(f"Expected custom cost: {expected_custom_cost}")
+
+    # Verify custom pricing is used (should match our calculation)
     assert round(custom_cost, 10) == round(expected_custom_cost, 10)
-    assert custom_cost != standard_cost
 
-    cache_cost: Final = completion_cost(
+    # Verify custom cost is different from standard cost (unless prices happen to match)
+    # This confirms custom pricing is actually being applied
+    assert (
+        custom_cost != standard_cost
+    ), "Custom pricing should produce different cost than standard pricing"
+
+    # Test 3: Custom pricing with cache_read_input_token_cost and input_cost_per_token_batches
+    # This specifically tests the parameters that were causing the original issue
+    cache_cost = completion_cost(
         completion_response=resp,
-        custom_cost_per_token=MappingProxyType(
-            {
-                "input_cost_per_token": 0.00001,
-                "output_cost_per_token": 0.00002,
-                "cache_read_input_token_cost": 0.000005,
-                "input_cost_per_token_batches": 0.000003,
-                "output_cost_per_token_batches": 0.000004,
-            }
-        ),
+        custom_cost_per_token={
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00002,
+            "cache_read_input_token_cost": 0.000005,  # Should be accepted
+            "input_cost_per_token_batches": 0.000003,  # Should be accepted
+            "output_cost_per_token_batches": 0.000004,  # Should be accepted
+        },
     )
 
+    # Basic validation that it doesn't throw an error and returns a number
     assert isinstance(cache_cost, (int, float))
     assert cache_cost >= 0
+
+    print(f"Cache-aware cost: {cache_cost}")
+    print("✅ Custom pricing parameters are correctly used in cost calculation")
 
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")

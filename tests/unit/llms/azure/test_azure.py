@@ -183,15 +183,17 @@ def test_process_azure_headers_with_dict_input():
         "extra_headers",
     ],
 )
-def test_azure_extra_headers(input, call_type, header_value, monkeypatch: pytest.MonkeyPatch):
+def test_azure_extra_headers(input, call_type, header_value):
     from litellm import embedding, image_generation
 
+    # Clear the LLM clients cache to ensure the new http_client is used
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     http_client = Client()
 
+    messages = [{"role": "user", "content": "Hello world"}]
     with patch.object(http_client, "send", new=MagicMock()) as mock_client:
-        monkeypatch.setattr(litellm, "client_session", http_client, raising=False)
+        litellm.client_session = http_client
         try:
             if call_type == "completion":
                 func = completion
@@ -221,9 +223,9 @@ def test_azure_extra_headers(input, call_type, header_value, monkeypatch: pytest
 
         print(f"mock_client.call_args: {mock_client.call_args}")
         request = mock_client.call_args[0][0]
-        print(request.method)
-        print(request.url)
-        print(request.headers)
+        print(request.method)  # This will print 'POST'
+        print(request.url)  # This will print the full URL
+        print(request.headers)  # This will print the full URL
         auth_header = request.headers.get("Authorization")
         apim_key = request.headers.get("Ocp-Apim-Subscription-Key")
         print(auth_header)
@@ -329,12 +331,15 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
     "api_version",
     [
         "2024-10-21",
+        # "2024-02-15-preview",
     ],
 )
 def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
+    from litellm import completion
     from typing import Optional
     from pydantic import BaseModel
     import litellm
+
 
     client = AzureOpenAI(
         api_key="fake-key",
@@ -394,7 +399,7 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
             temperature=0.00000001,
             tools=tools,
             tool_choice="auto",
-            response_format=InvestigationOutput,
+            response_format=InvestigationOutput,  # commenting this line will cause the output to be correct
             api_version=api_version,
             client=client,
         )
@@ -503,22 +508,25 @@ def test_map_openai_params():
     assert len(optional_params["tools"]) > 1
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 @pytest.mark.parametrize("max_retries", [0, 4])
 @pytest.mark.parametrize("stream", [True, False])
-@patch("litellm.main.azure_chat_completions.make_sync_azure_openai_chat_completion_request")
-def test_azure_max_retries_0(mock_make_sync_azure_openai_chat_completion_request, max_retries, stream):
+@patch(
+    "litellm.main.azure_chat_completions.make_sync_azure_openai_chat_completion_request"
+)
+def test_azure_max_retries_0(
+    mock_make_sync_azure_openai_chat_completion_request, max_retries, stream
+):
     import litellm
     from litellm import completion
 
+    # Clear the LLM clients cache to ensure max_retries is set correctly
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     try:
         completion(
             model="azure/gpt-4.1-mini",
             messages=[{"role": "user", "content": "Hello world"}],
-            api_key="my-azure-api-key",
-            api_base="https://fake-azure-endpoint.invalid",
-            api_version="2023-07-01-preview",
             max_retries=max_retries,
             stream=stream,
         )
@@ -527,27 +535,31 @@ def test_azure_max_retries_0(mock_make_sync_azure_openai_chat_completion_request
 
     mock_make_sync_azure_openai_chat_completion_request.assert_called_once()
     assert (
-        mock_make_sync_azure_openai_chat_completion_request.call_args.kwargs["azure_client"].max_retries == max_retries
+        mock_make_sync_azure_openai_chat_completion_request.call_args.kwargs[
+            "azure_client"
+        ].max_retries
+        == max_retries
     )
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 @pytest.mark.parametrize("max_retries", [0, 4])
 @pytest.mark.parametrize("stream", [True, False])
 @patch("litellm.main.azure_chat_completions.make_azure_openai_chat_completion_request")
 @pytest.mark.asyncio
-async def test_async_azure_max_retries_0(make_azure_openai_chat_completion_request, max_retries, stream):
+async def test_async_azure_max_retries_0(
+    make_azure_openai_chat_completion_request, max_retries, stream
+):
     import litellm
     from litellm import acompletion
 
+    # Clear the LLM clients cache to ensure max_retries is set correctly
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     try:
         await acompletion(
             model="azure/gpt-4.1-mini",
             messages=[{"role": "user", "content": "Hello world"}],
-            api_key="my-azure-api-key",
-            api_base="https://fake-azure-endpoint.invalid",
-            api_version="2023-07-01-preview",
             max_retries=max_retries,
             stream=stream,
         )
@@ -555,16 +567,23 @@ async def test_async_azure_max_retries_0(make_azure_openai_chat_completion_reque
         print(e)
 
     make_azure_openai_chat_completion_request.assert_called_once()
-    assert make_azure_openai_chat_completion_request.call_args.kwargs["azure_client"].max_retries == max_retries
+    assert (
+        make_azure_openai_chat_completion_request.call_args.kwargs[
+            "azure_client"
+        ].max_retries
+        == max_retries
+    )
 
 
 def test_azure_openai_responses_bridge():
     from litellm import completion
     import litellm
 
+    litellm.turn_on_debug()
+
     with patch.object(litellm, "responses") as mock_responses:
         try:
-            completion(
+            response = completion(
                 model="azure/responses/test-azure-computer-use-preview",
                 messages=[{"role": "user", "content": "Hello world"}],
                 api_base=os.getenv("AZURE_COMPUTER_USE_API_BASE"),
@@ -575,7 +594,10 @@ def test_azure_openai_responses_bridge():
             print(e)
 
         mock_responses.assert_called_once()
-        assert mock_responses.call_args.kwargs["model"] == "azure/test-azure-computer-use-preview"
+        assert (
+            mock_responses.call_args.kwargs["model"]
+            == "azure/test-azure-computer-use-preview"
+        )
         assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
 
 
@@ -583,6 +605,7 @@ def test_azure_with_content_safety_error():
     """
     Verify user can access innererror from the Azure OpenAI exception
     """
+    from litellm import completion
     from litellm.exceptions import ContentPolicyViolationError
     from litellm.litellm_core_utils.exception_mapping_utils import exception_type
     from unittest.mock import MagicMock
@@ -619,6 +642,19 @@ def test_azure_with_content_safety_error():
     assert e.provider_specific_fields is not None
     print("got provider_specific_fields=", e.provider_specific_fields)
     assert e.provider_specific_fields.get("innererror") is not None
-    assert e.provider_specific_fields["innererror"]["code"] == "ResponsibleAIPolicyViolation"
-    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["filtered"] is True
-    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["severity"] == "high"
+    assert (
+        e.provider_specific_fields["innererror"]["code"]
+        == "ResponsibleAIPolicyViolation"
+    )
+    assert (
+        e.provider_specific_fields["innererror"]["content_filter_result"]["violence"][
+            "filtered"
+        ]
+        is True
+    )
+    assert (
+        e.provider_specific_fields["innererror"]["content_filter_result"]["violence"][
+            "severity"
+        ]
+        == "high"
+    )

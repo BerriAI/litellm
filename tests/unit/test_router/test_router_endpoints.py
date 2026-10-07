@@ -146,6 +146,8 @@ async def test_moderation_endpoint_with_api_base():
     """
     Test that the moderation endpoint respects api_base configuration
     """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
     custom_api_base = "https://us.api.openai.com/v1"
 
     router = Router(
@@ -161,7 +163,10 @@ async def test_moderation_endpoint_with_api_base():
         ]
     )
 
-    with patch("litellm.main.openai_chat_completions.get_openai_client") as mock_get_client:
+    # Mock the OpenAI client to verify api_base is passed
+    with patch(
+        "litellm.main.openai_chat_completions.get_openai_client"
+    ) as mock_get_client:
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {
@@ -179,13 +184,16 @@ async def test_moderation_endpoint_with_api_base():
         mock_client.moderations.create = AsyncMock(return_value=mock_response)
         mock_get_client.return_value = mock_client
 
-        response = await router.amoderation(model="openai/omni-moderation-latest", input="hello this is a test")
+        response = await router.amoderation(
+            model="openai/omni-moderation-latest", input="hello this is a test"
+        )
 
+        # Verify that get_openai_client was called with the custom api_base
         mock_get_client.assert_called()
         call_kwargs = mock_get_client.call_args.kwargs
-        assert call_kwargs.get("api_base") == custom_api_base, (
-            f"Expected api_base to be {custom_api_base}, but got {call_kwargs.get('api_base')}"
-        )
+        assert (
+            call_kwargs.get("api_base") == custom_api_base
+        ), f"Expected api_base to be {custom_api_base}, but got {call_kwargs.get('api_base')}"
 
         print(f"✓ Moderation endpoint correctly uses api_base: {custom_api_base}")
 
@@ -248,14 +256,17 @@ def test_generic_api_call_with_fallbacks_basic(sync_mode):
     """
     Test both the sync and async versions of generic_api_call_with_fallbacks with a basic successful call
     """
-
+    # Create a mock function that will be passed to generic_api_call_with_fallbacks
     if sync_mode:
+        from unittest.mock import Mock
+
         mock_function = Mock()
         mock_function.__name__ = "test_function"
     else:
         mock_function = AsyncMock()
         mock_function.__name__ = "test_function"
 
+    # Create a mock response
     mock_response = {
         "id": "resp_123456",
         "role": "assistant",
@@ -265,6 +276,7 @@ def test_generic_api_call_with_fallbacks_basic(sync_mode):
     }
     mock_function.return_value = mock_response
 
+    # Create a router with a test model
     router = Router(
         model_list=[
             {
@@ -277,6 +289,7 @@ def test_generic_api_call_with_fallbacks_basic(sync_mode):
         ]
     )
 
+    # Call the appropriate generic_api_call_with_fallbacks method
     if sync_mode:
         response = router._generic_api_call_with_fallbacks(
             model="test-model-alias",
@@ -294,8 +307,10 @@ def test_generic_api_call_with_fallbacks_basic(sync_mode):
             )
         )
 
+    # Verify the mock function was called
     mock_function.assert_called_once()
 
+    # Verify the response
     assert response == mock_response
 
 
@@ -467,11 +482,13 @@ def test_initialize_router_endpoints():
 
 
 @pytest.mark.asyncio
-async def test_init_responses_api_endpoints(monkeypatch: pytest.MonkeyPatch):
+async def test_init_responses_api_endpoints():
     """
     A simpler test for _init_responses_api_endpoints that focuses on the basic functionality
     """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
 
+    # Create a router with a basic model
     router = Router(
         model_list=[
             {
@@ -484,30 +501,38 @@ async def test_init_responses_api_endpoints(monkeypatch: pytest.MonkeyPatch):
         ]
     )
 
+    # Just mock the _ageneric_api_call_with_fallbacks method
     router._ageneric_api_call_with_fallbacks = AsyncMock()
 
-    monkeypatch.setattr(
-        ResponsesAPIRequestUtils,
-        "get_model_id_from_response_id",
-        MagicMock(return_value=None),
+    # Add a mock implementation of _get_model_id_from_response_id to the Router instance
+    ResponsesAPIRequestUtils.get_model_id_from_response_id = MagicMock(
+        return_value=None
     )
 
-    await router._init_responses_api_endpoints(original_function=AsyncMock(), thread_id="thread_xyz")
+    # Call without a response_id (no model extraction should happen)
+    await router._init_responses_api_endpoints(
+        original_function=AsyncMock(), thread_id="thread_xyz"
+    )
 
+    # Verify _ageneric_api_call_with_fallbacks was called but model wasn't changed
     first_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
     assert "model" not in first_call_kwargs
     assert first_call_kwargs["thread_id"] == "thread_xyz"
 
+    # Reset the mock
     router._ageneric_api_call_with_fallbacks.reset_mock()
 
-    monkeypatch.setattr(
-        ResponsesAPIRequestUtils,
-        "get_model_id_from_response_id",
-        MagicMock(return_value="claude-3-sonnet"),
+    # Change the return value for the second call
+    ResponsesAPIRequestUtils.get_model_id_from_response_id.return_value = (
+        "claude-3-sonnet"
     )
 
-    await router._init_responses_api_endpoints(original_function=AsyncMock(), response_id="resp_claude_123")
+    # Call with a response_id
+    await router._init_responses_api_endpoints(
+        original_function=AsyncMock(), response_id="resp_claude_123"
+    )
 
+    # Verify model was updated in the kwargs
     second_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
     assert second_call_kwargs["model"] == "claude-3-sonnet"
     assert second_call_kwargs["response_id"] == "resp_claude_123"
@@ -950,6 +975,8 @@ async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallb
     Managed ``cntr_`` IDs embed ``model_id``; router should decode and use
     ``_ageneric_api_call_with_fallbacks`` so deployment credentials apply.
     """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
     router = Router(
         model_list=[
             {
@@ -993,6 +1020,8 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_unwraps
     managed ID before calling the upstream provider — otherwise the raw
     ``cntr_...`` token leaks downstream and the provider rejects it.
     """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
     router = Router(model_list=[])
     mock_original_function = AsyncMock(return_value={"ok": True})
 
@@ -1024,6 +1053,8 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_applies
     The router must still apply the decoded provider so the request routes to
     the correct upstream — not stay on the default ``openai``.
     """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
     router = Router(model_list=[])
     mock_original_function = AsyncMock(return_value={"ok": True})
 
@@ -1140,6 +1171,13 @@ async def test_init_containers_api_endpoints_create_with_unknown_model_passes_th
 
 
 def test_router_model_group_encrypted_content_affinity_callback_registration():
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
     model_group = "openai.gpt-5.1-codex"
     model_group_affinity_config = {
         model_group: ["encrypted_content_affinity"],
@@ -1160,17 +1198,28 @@ def test_router_model_group_encrypted_content_affinity_callback_registration():
 
     try:
         callbacks = router.optional_callbacks or []
-        encrypted_content_callbacks = [cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)]
-        deployment_callback = next(cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck))
+        encrypted_content_callbacks = [
+            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
+        ]
+        deployment_callback = next(
+            cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck)
+        )
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is False
-        assert encrypted_content_callbacks[0].model_group_affinity_config == model_group_affinity_config
-        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(deployment_callback)
+        assert (
+            encrypted_content_callbacks[0].model_group_affinity_config
+            == model_group_affinity_config
+        )
+        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(
+            deployment_callback
+        )
 
         router._add_encrypted_content_affinity_check(enable_global_affinity=True)
 
         callbacks = router.optional_callbacks or []
-        encrypted_content_callbacks = [cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)]
+        encrypted_content_callbacks = [
+            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
+        ]
         assert len(encrypted_content_callbacks) == 1
         assert encrypted_content_callbacks[0].enable_global_affinity is True
         assert encrypted_content_callbacks[0].router is router

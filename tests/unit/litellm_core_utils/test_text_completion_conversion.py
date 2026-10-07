@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
+from litellm import text_completion
 from litellm.types.utils import ModelResponse, TextCompletionResponse, Usage
 from litellm.utils import LiteLLMResponseObjectHandler
 
@@ -47,9 +48,7 @@ def test_async_text_completion_together_ai():
     client = AsyncOpenAI(api_key="my-fake-key")
 
     async def run_call():
-        with patch.object(
-            client.completions.with_raw_response, "create", side_effect=_mock_text_completion_post
-        ) as mock_call:
+        with patch.object(client.completions.with_raw_response, "create", side_effect=mock_post) as mock_call:
             response = await litellm.atext_completion(
                 model="together_ai/Qwen/Qwen2-1.5B-Instruct",
                 prompt="good morning",
@@ -68,14 +67,17 @@ def test_async_text_completion_together_ai():
 
 @pytest.mark.parametrize("provider", ["openai", "hosted_vllm"])
 def test_completion_vllm(provider):
+    """
+    Asserts a text completion call for vllm actually goes to the text completion endpoint
+    """
     from openai import OpenAI
 
     client = OpenAI(api_key="my-fake-key")
 
     with patch.object(
-        client.completions.with_raw_response, "create", side_effect=_mock_text_completion_post
+        client.completions.with_raw_response, "create", side_effect=mock_post
     ) as mock_call:
-        response = litellm.text_completion(
+        response = text_completion(
             model="{provider}/gemini-2.5-flash-lite".format(provider=provider),
             prompt="ping",
             client=client,
@@ -183,7 +185,7 @@ def test_convert_chat_to_text_completion_multiple_choices():
     )
 
 
-def test_unit_test_text_completion_object() -> None:
+def test_unit_test_text_completion_object():
     openai_object = {
         "id": "cmpl-99y7B2svVoRWe1xd7UFRmeGjZrFSh",
         "choices": [
@@ -1223,13 +1225,18 @@ def test_unit_test_text_completion_object() -> None:
 
     text_completion_obj = TextCompletionResponse(**openai_object)
 
+    ## WRITE UNIT TESTS FOR TEXT_COMPLETION_OBJECT
     assert text_completion_obj.id == "cmpl-99y7B2svVoRWe1xd7UFRmeGjZrFSh"
     assert text_completion_obj.object == "text_completion"
     assert text_completion_obj.created == 1712163061
-    assert text_completion_obj.model == "ft:babbage-002:ai-r-d-zapai:v3-fields-used:84jb9rtr"
-    assert text_completion_obj.system_fingerprint is None
+    assert (
+        text_completion_obj.model
+        == "ft:babbage-002:ai-r-d-zapai:v3-fields-used:84jb9rtr"
+    )
+    assert text_completion_obj.system_fingerprint == None
     assert len(text_completion_obj.choices) == len(openai_object["choices"])
 
+    # TEST FIRST CHOICE #
     first_text_completion_obj = text_completion_obj.choices[0]
     assert first_text_completion_obj.index == 0
     assert first_text_completion_obj.logprobs.text_offset == [101]
@@ -1241,6 +1248,7 @@ def test_unit_test_text_completion_object() -> None:
     assert first_text_completion_obj.text == "0"
     assert first_text_completion_obj.finish_reason == "length"
 
+    # TEST SECOND CHOICE #
     second_text_completion_obj = text_completion_obj.choices[1]
     assert second_text_completion_obj.index == 1
     assert second_text_completion_obj.logprobs.text_offset == [116]
@@ -1252,6 +1260,7 @@ def test_unit_test_text_completion_object() -> None:
     assert second_text_completion_obj.text == "0"
     assert second_text_completion_obj.finish_reason == "length"
 
+    # TEST LAST CHOICE #
     last_text_completion_obj = text_completion_obj.choices[-1]
     assert last_text_completion_obj.index == 53
     assert last_text_completion_obj.logprobs.text_offset == [143]
@@ -1266,3 +1275,26 @@ def test_unit_test_text_completion_object() -> None:
     assert text_completion_obj.usage.completion_tokens == 54
     assert text_completion_obj.usage.prompt_tokens == 1877
     assert text_completion_obj.usage.total_tokens == 1931
+
+
+def mock_post(*args, **kwargs):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.parse.return_value.model_dump.return_value = {
+        "id": "cmpl-7a59383dd4234092b9e5d652a7ab8143",
+        "object": "text_completion",
+        "created": 1718824735,
+        "model": "Sao10K/L3-70B-Euryale-v2.1",
+        "choices": [
+            {
+                "index": 0,
+                "text": ") might be faster than then answering, and the added time it takes for the",
+                "logprobs": None,
+                "finish_reason": "length",
+                "stop_reason": None,
+            }
+        ],
+        "usage": {"prompt_tokens": 2, "total_tokens": 18, "completion_tokens": 16},
+    }
+    return mock_response

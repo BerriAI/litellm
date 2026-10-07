@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import time
+import traceback
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
@@ -58,6 +59,9 @@ from litellm.types.utils import (
     Usage,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+import inspect
+from typing import List, Optional
+from litellm.types.utils import LiteLLMCommonStrings
 
 @pytest.fixture
 def logging_obj():
@@ -9201,16 +9205,16 @@ async def test_async_failure_handler_delivers_failure_payload_to_custom_logger()
     assert events.empty()
 
 
-def test_standard_logging_retries(monkeypatch: pytest.MonkeyPatch) -> None:
-    callback: Final = CustomLogger()
-    failure_event: Final = MagicMock()
-    monkeypatch.setattr(callback, "log_failure_event", failure_event)
-    monkeypatch.setattr(litellm, "callbacks", [callback])
-    monkeypatch.setattr(litellm, "success_callback", [])
-    monkeypatch.setattr(litellm, "failure_callback", [])
-    monkeypatch.setattr(litellm, "_async_success_callback", [])
-    monkeypatch.setattr(litellm, "_async_failure_callback", [])
-    router: Final = Router(
+def test_standard_logging_retries():
+    """
+    know if a request was retried.
+    """
+    from litellm.router import Router
+
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+
+    router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
@@ -9222,21 +9226,34 @@ def test_standard_logging_retries(monkeypatch: pytest.MonkeyPatch) -> None:
         ]
     )
 
-    with pytest.raises(litellm.RateLimitError):
-        router.completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-            num_retries=1,
-            mock_response="litellm.RateLimitError",
-        )
+    with patch.object(
+        customHandler, "log_failure_event", new=MagicMock()
+    ) as mock_client:
+        try:
+            router.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                num_retries=1,
+                mock_response="litellm.RateLimitError",
+            )
+        except litellm.RateLimitError:
+            pass
 
-    assert failure_event.call_count == 2
-    first_payload: Final = failure_event.call_args_list[0].kwargs["kwargs"]["standard_logging_object"]
-    second_payload: Final = failure_event.call_args_list[1].kwargs["kwargs"]["standard_logging_object"]
-    first_trace_id: Final = first_payload["trace_id"]
-    second_trace_id: Final = second_payload["trace_id"]
-    assert first_trace_id is not None
-    assert first_trace_id == second_trace_id
+        assert mock_client.call_count == 2
+        assert (
+            mock_client.call_args_list[0].kwargs["kwargs"]["standard_logging_object"][
+                "trace_id"
+            ]
+            is not None
+        )
+        assert (
+            mock_client.call_args_list[0].kwargs["kwargs"]["standard_logging_object"][
+                "trace_id"
+            ]
+            == mock_client.call_args_list[1].kwargs["kwargs"][
+                "standard_logging_object"
+            ]["trace_id"]
+        )
 
 
 def test_responses_completed_event_bills_the_served_service_tier():
@@ -10996,28 +11013,39 @@ def setup_logging():
     )
 
 
+@pytest.fixture
+def datetime_class_as_module_global(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "datetime", datetime_standard_logging)
+
+
+@pytest.mark.usefixtures("datetime_class_as_module_global")
 @pytest.mark.parametrize("disable_no_log_param", [True, False])
-def test_litellm_logging_no_log_param(monkeypatch: pytest.MonkeyPatch, disable_no_log_param: bool) -> None:
+def test_litellm_logging_no_log_param(monkeypatch, disable_no_log_param):
     monkeypatch.setattr(litellm, "global_disable_no_log_param", disable_no_log_param)
-    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
-    litellm_call_id: Final = "my-unique-call-id"
-    logging_obj: Final = Logging(
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    litellm.success_callback = ["langfuse"]
+    litellm_call_id = "my-unique-call-id"
+    litellm_logging_obj = Logging(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="acompletion",
         litellm_call_id=litellm_call_id,
-        start_time=datetime_standard_logging(2025, 1, 1),
+        start_time=datetime.now(),
         function_id="1234",
     )
 
-    should_run: Final = logging_obj.should_run_callback(
+    should_run = litellm_logging_obj.should_run_callback(
         callback="langfuse",
         litellm_params={"no-log": True},
         event_hook="success_handler",
     )
 
-    assert should_run is disable_no_log_param
+    if disable_no_log_param:
+        assert should_run is True
+    else:
+        assert should_run is False
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
@@ -11166,3 +11194,324 @@ async def test_background_interaction_completion_logs_while_in_progress_handler_
     await completion
 
     assert counting_logger.logged_results == [completed, in_progress], counting_logger.logged_results
+
+
+class CompletionCustomHandler(
+    CustomLogger
+):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+    """
+    The set of expected inputs to a custom handler for a
+    """
+
+    # Class variables or attributes
+    def __init__(self):
+        self.errors = []
+        self.states: List[
+            Literal[
+                "sync_pre_api_call",
+                "async_pre_api_call",
+                "post_api_call",
+                "sync_stream",
+                "async_stream",
+                "sync_success",
+                "async_success",
+                "sync_failure",
+                "async_failure",
+            ]
+        ] = []
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        try:
+            self.states.append("sync_pre_api_call")
+            ## MODEL
+            assert isinstance(model, str)
+            ## MESSAGES
+            assert isinstance(messages, list)
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list)
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            ### METADATA
+            metadata_value = kwargs["litellm_params"].get("metadata")
+            assert metadata_value is None or isinstance(metadata_value, dict)
+            if metadata_value is not None:
+                if litellm.turn_off_message_logging is True:
+                    assert (
+                        metadata_value["raw_request"]
+                        is LiteLLMCommonStrings.redacted_by_litellm.value
+                    )
+                else:
+                    assert "raw_request" not in metadata_value or isinstance(
+                        metadata_value["raw_request"], str
+                    )
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+        try:
+            self.states.append("post_api_call")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert end_time == None
+            ## RESPONSE OBJECT
+            assert response_obj == None
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list)
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert isinstance(kwargs["input"], (list, dict, str))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert (
+                isinstance(
+                    kwargs["original_response"],
+                    (str, litellm.CustomStreamWrapper, BaseModel),
+                )
+                or inspect.iscoroutine(kwargs["original_response"])
+                or inspect.isasyncgen(kwargs["original_response"])
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            self.states.append("async_stream")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert isinstance(end_time, datetime)
+            ## RESPONSE OBJECT
+            assert isinstance(response_obj, litellm.ModelResponseStream)
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list) and isinstance(
+                kwargs["messages"][0], dict
+            )
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert (
+                isinstance(kwargs["input"], list)
+                and isinstance(kwargs["input"][0], dict)
+            ) or isinstance(kwargs["input"], (dict, str))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert (
+                isinstance(
+                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                )
+                or inspect.isasyncgen(kwargs["original_response"])
+                or inspect.iscoroutine(kwargs["original_response"])
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            print(f"\n\nkwargs={kwargs}\n\n")
+            print(
+                json.dumps(kwargs, default=str)
+            )  # this is a test to confirm no circular references are in the logging object
+
+            self.states.append("sync_success")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert isinstance(end_time, datetime)
+            ## RESPONSE OBJECT
+            assert isinstance(
+                response_obj,
+                (
+                    litellm.ModelResponse,
+                    litellm.EmbeddingResponse,
+                    litellm.ImageResponse,
+                ),
+            )
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list) and isinstance(
+                kwargs["messages"][0], dict
+            )
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["litellm_params"]["api_base"], str)
+            assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert (
+                isinstance(kwargs["input"], list)
+                and (
+                    isinstance(kwargs["input"][0], dict)
+                    or isinstance(kwargs["input"][0], str)
+                )
+            ) or isinstance(kwargs["input"], (dict, str))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert isinstance(
+                kwargs["original_response"],
+                (str, litellm.CustomStreamWrapper, BaseModel),
+            ), "Original Response={}. Allowed types=[str, litellm.CustomStreamWrapper, BaseModel]".format(
+                kwargs["original_response"]
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+            assert isinstance(kwargs["response_cost"], (float, type(None)))
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            print(f"kwargs: {kwargs}")
+            self.states.append("sync_failure")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert isinstance(end_time, datetime)
+            ## RESPONSE OBJECT
+            assert response_obj == None
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list) and isinstance(
+                kwargs["messages"][0], dict
+            )
+
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["litellm_params"]["metadata"], Optional[dict])
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert (
+                isinstance(kwargs["input"], list)
+                and isinstance(kwargs["input"][0], dict)
+            ) or isinstance(kwargs["input"], (dict, str))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert (
+                isinstance(
+                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                )
+                or kwargs["original_response"] == None
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    async def async_log_pre_api_call(self, model, messages, kwargs):
+        try:
+            self.states.append("async_pre_api_call")
+            ## MODEL
+            assert isinstance(model, str)
+            ## MESSAGES
+            assert isinstance(messages, list) and isinstance(messages[0], dict)
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list) and isinstance(
+                kwargs["messages"][0], dict
+            )
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+        except Exception as e:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            print(
+                "in async_log_success_event", kwargs, response_obj, start_time, end_time
+            )
+            self.states.append("async_success")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert isinstance(end_time, datetime)
+            ## RESPONSE OBJECT
+            assert isinstance(
+                response_obj,
+                (
+                    litellm.ModelResponse,
+                    litellm.EmbeddingResponse,
+                    litellm.TextCompletionResponse,
+                ),
+            )
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list)
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["litellm_params"]["api_base"], str)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["completion_start_time"], datetime)
+            assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert isinstance(kwargs["input"], (list, dict, str))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert (
+                isinstance(
+                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                )
+                or inspect.isasyncgen(kwargs["original_response"])
+                or inspect.iscoroutine(kwargs["original_response"])
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+            assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
+            assert isinstance(kwargs["response_cost"], (float, type(None)))
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            self.states.append("async_failure")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert isinstance(end_time, datetime)
+            ## RESPONSE OBJECT
+            assert response_obj == None
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list)
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert isinstance(kwargs["input"], (list, str, dict))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert (
+                isinstance(
+                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                )
+                or inspect.isasyncgen(kwargs["original_response"])
+                or inspect.iscoroutine(kwargs["original_response"])
+                or kwargs["original_response"] == None
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())

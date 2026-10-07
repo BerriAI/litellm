@@ -523,8 +523,8 @@ class TestVertexAILivePassthroughLoggingHandler:
             websocket_messages=[head, grounding, turn, grounding, turn],
             logging_obj=logging_obj,
             url_route="/vertex_ai/live",
-            start_time=datetime(2025, 1, 1),
-            end_time=datetime(2025, 1, 1),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
             request_body={},
             model=self.NATIVE_AUDIO_MODEL,
             custom_llm_provider="vertex_ai",
@@ -671,11 +671,13 @@ class TestVertexAILivePassthroughLoggingHandler:
         if any(m != "TEXT" for m, _ in prompt_details + candidate_details) and audio_in != text_in:
             assert cost > text_only, f"{label}: non-text modalities must add cost"
 
-    def test_vertex_ai_live_passthrough_handler_integration(self, handler, mock_logging_obj, sample_websocket_messages):
+    def test_vertex_ai_live_passthrough_handler_integration(
+        self, handler, mock_logging_obj, sample_websocket_messages
+    ):
         """Test the main passthrough handler method"""
         url_route = "/vertex_ai/live"
-        start_time = datetime(2025, 1, 1)
-        end_time = datetime(2025, 1, 1)
+        start_time = datetime.now()
+        end_time = datetime.now()
         request_body = {"messages": [{"role": "user", "content": "Hello"}]}
 
         result = handler.vertex_ai_live_passthrough_handler(
@@ -690,17 +692,21 @@ class TestVertexAILivePassthroughLoggingHandler:
         assert "result" in result
         assert "kwargs" in result
 
+        # Check that the result contains expected fields
         result_data = result["result"]
         assert "model" in result_data
         assert "usage" in result_data
         assert "choices" in result_data
 
+        # Check usage data
         usage = result_data["usage"]
         assert "prompt_tokens" in usage
         assert "completion_tokens" in usage
         assert "total_tokens" in usage
 
-    def test_vertex_ai_live_passthrough_handler_no_usage(self, handler, mock_logging_obj):
+    def test_vertex_ai_live_passthrough_handler_no_usage(
+        self, handler, mock_logging_obj
+    ):
         """Test handler with messages that don't contain usage metadata"""
         messages = [
             {"type": "session.created", "session": {"id": "test"}},
@@ -708,8 +714,8 @@ class TestVertexAILivePassthroughLoggingHandler:
         ]
 
         url_route = "/vertex_ai/live"
-        start_time = datetime(2025, 1, 1)
-        end_time = datetime(2025, 1, 1)
+        start_time = datetime.now()
+        end_time = datetime.now()
         request_body = {"messages": [{"role": "user", "content": "Hello"}]}
 
         result = handler.vertex_ai_live_passthrough_handler(
@@ -724,8 +730,9 @@ class TestVertexAILivePassthroughLoggingHandler:
         assert "result" in result
         assert "kwargs" in result
 
+        # Should still return a valid result even without usage data
         result_data = result["result"]
-
+        # When no usage metadata is found, result_data will be None
         assert result_data is None
 
 
@@ -757,9 +764,12 @@ class TestVertexAILivePassthroughIntegration:
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.VertexAILivePassthroughLoggingHandler"
     )
     @pytest.mark.asyncio
-    async def test_success_handler_vertex_ai_live_integration(self, mock_handler_class, mock_logging_obj):
+    async def test_success_handler_vertex_ai_live_integration(
+        self, mock_handler_class, mock_logging_obj
+    ):
         """Test the success handler integration with Vertex AI Live"""
 
+        # Mock the handler
         mock_handler = MagicMock()
         mock_handler.vertex_ai_live_passthrough_handler.return_value = {
             "result": {"model": "gemini-1.5-pro", "usage": {"total_tokens": 100}},
@@ -767,16 +777,20 @@ class TestVertexAILivePassthroughIntegration:
         }
         mock_handler_class.return_value = mock_handler
 
+        # Create success handler
         success_handler = PassThroughEndpointLogging()
 
+        # Mock the route check
         success_handler.is_vertex_ai_live_route = MagicMock(return_value=True)
 
+        # Test data
         response_body = [{"type": "response.create", "response": {"text": "Hello"}}]
         url_route = "/vertex_ai/live"
-        start_time = datetime(2025, 1, 1)
-        end_time = datetime(2025, 1, 1)
+        start_time = datetime.now()
+        end_time = datetime.now()
         request_body = {"messages": [{"role": "user", "content": "Hello"}]}
 
+        # Call the method
         result = await success_handler.pass_through_async_success_handler(
             httpx_response=MagicMock(),
             response_body=response_body,
@@ -790,8 +804,10 @@ class TestVertexAILivePassthroughIntegration:
             passthrough_logging_payload=MagicMock(),
         )
 
+        # Verify the handler was called
         mock_handler.vertex_ai_live_passthrough_handler.assert_called_once()
 
+        # The method returns None (it doesn't return anything), so just verify it completed without error
         assert result is None
 
 
@@ -855,10 +871,11 @@ class TestVertexAILivePassthroughErrorHandling:
         handler = VertexAILivePassthroughLoggingHandler()
 
         url_route = "/vertex_ai/live"
-        start_time = datetime(2025, 1, 1)
-        end_time = datetime(2025, 1, 1)
+        start_time = datetime.now()
+        end_time = datetime.now()
         request_body = {"messages": [{"role": "user", "content": "Hello"}]}
 
+        # Should handle None gracefully
         result = handler.vertex_ai_live_passthrough_handler(
             websocket_messages=None,
             logging_obj=mock_logging_obj,

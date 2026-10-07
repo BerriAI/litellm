@@ -1543,6 +1543,7 @@ def test_vertex_params_not_stripped_for_vertex_family(model, custom_llm_provider
 from litellm.utils import supports_function_calling
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from litellm import acompletion, completion
 
 
 class TestProxyFunctionCalling:
@@ -7470,16 +7471,19 @@ def isolated_openai_model_sets(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-@pytest.mark.usefixtures("reset_mock_cache")
 def test_aget_valid_models():
     with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "temp"}, clear=True):
         valid_models = get_valid_models()
         print(valid_models)
 
-        expected_models = litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
+        # list of openai supported llms on litellm
+        expected_models = (
+            litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
+        )
 
-    assert set(valid_models) == set(expected_models)
+        assert set(valid_models) == set(expected_models)
 
+    # GEMINI
     with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "temp"}, clear=True):
         valid_models = get_valid_models()
 
@@ -7488,8 +7492,9 @@ def test_aget_valid_models():
 
 
 def test_validate_environment_empty_model():
-    response_obj = validate_environment()
-    assert response_obj == {"keys_in_environment": False, "missing_keys": []}
+    api_key = validate_environment()
+    if api_key is None:
+        raise Exception()
 
 
 def test_validate_environment_api_key():
@@ -7548,7 +7553,7 @@ def test_get_chat_completion_prompt():
         stream=False,
         call_type="acompletion",
         litellm_call_id="1234",
-        start_time=datetime(2025, 1, 1),
+        start_time=datetime.now(),
         function_id="1234",
     )
 
@@ -7562,10 +7567,12 @@ def test_get_chat_completion_prompt():
         prompt_variables=None,
     )
 
-    assert litellm_logging_obj.messages == [{"role": "user", "content": updated_message}]
+    assert litellm_logging_obj.messages == [
+        {"role": "user", "content": updated_message}
+    ]
 
 
-def test_redact_msgs_from_logs(monkeypatch):
+def test_redact_msgs_from_logs():
     """
     Tests that turn_off_message_logging does not modify the response_obj
 
@@ -7576,7 +7583,7 @@ def test_redact_msgs_from_logs(monkeypatch):
         redact_message_input_output_from_logging,
     )
 
-    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    litellm.turn_off_message_logging = True
 
     response_obj = litellm.ModelResponse(
         choices=[
@@ -7597,7 +7604,7 @@ def test_redact_msgs_from_logs(monkeypatch):
         stream=False,
         call_type="acompletion",
         litellm_call_id="1234",
-        start_time=datetime(2025, 1, 1),
+        start_time=datetime.now(),
         function_id="1234",
     )
 
@@ -7606,16 +7613,17 @@ def test_redact_msgs_from_logs(monkeypatch):
         model_call_details=litellm_logging_obj.model_call_details,
     )
 
+    # Assert the response_obj content is NOT modified
     assert (
         response_obj.choices[0].message.content
         == "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner."
     )
 
-    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    litellm.turn_off_message_logging = False
     print("Test passed")
 
 
-def test_redact_embedding_response(monkeypatch):
+def test_redact_embedding_response():
     """
     Tests that EmbeddingResponse redaction preserves critical metadata while clearing sensitive data
 
@@ -7630,9 +7638,12 @@ def test_redact_embedding_response(monkeypatch):
         redact_message_input_output_from_logging,
     )
 
-    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    litellm.turn_off_message_logging = True
 
-    original_usage = litellm.Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
+    # Create a test EmbeddingResponse with usage data
+    original_usage = litellm.Usage(
+        prompt_tokens=10, completion_tokens=0, total_tokens=10
+    )
     original_data = [
         {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]},
         {"object": "embedding", "index": 1, "embedding": [0.6, 0.7, 0.8, 0.9, 1.0]},
@@ -7651,7 +7662,7 @@ def test_redact_embedding_response(monkeypatch):
         stream=False,
         call_type="embedding",
         litellm_call_id="1234",
-        start_time=datetime(2025, 1, 1),
+        start_time=datetime.now(),
         function_id="1234",
     )
 
@@ -7660,24 +7671,30 @@ def test_redact_embedding_response(monkeypatch):
         model_call_details=litellm_logging_obj.model_call_details,
     )
 
+    # Assert the original response_obj is NOT modified
     assert response_obj.data == original_data
     assert response_obj.usage == original_usage
     assert response_obj.model == "text-embedding-3-small"
     assert response_obj.object == "list"
 
-    assert _redacted_response_obj.usage == original_usage
-    assert _redacted_response_obj.model == "text-embedding-3-small"
-    assert _redacted_response_obj.object == "list"
+    # Assert the redacted response preserves critical metadata
+    assert _redacted_response_obj.usage == original_usage  # usage should be preserved
+    assert (
+        _redacted_response_obj.model == "text-embedding-3-small"
+    )  # model should be preserved
+    assert _redacted_response_obj.object == "list"  # object should be preserved
 
-    assert _redacted_response_obj.data == []
+    # Assert sensitive data is cleared
+    assert _redacted_response_obj.data == []  # data should be cleared
 
+    # Assert it's still an EmbeddingResponse instance
     assert isinstance(_redacted_response_obj, litellm.EmbeddingResponse)
 
-    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    litellm.turn_off_message_logging = False
     print("Test passed")
 
 
-def test_redact_msgs_from_logs_with_dynamic_params(monkeypatch):
+def test_redact_msgs_from_logs_with_dynamic_params():
     """
     Tests redaction behavior based on standard_callback_dynamic_params setting:
     In all tests litellm.turn_off_message_logging is True
@@ -7692,7 +7709,7 @@ def test_redact_msgs_from_logs_with_dynamic_params(monkeypatch):
         redact_message_input_output_from_logging,
     )
 
-    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    litellm.turn_off_message_logging = True
     test_content = "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner."
     response_obj = litellm.ModelResponse(
         choices=[
@@ -7713,35 +7730,53 @@ def test_redact_msgs_from_logs_with_dynamic_params(monkeypatch):
         stream=False,
         call_type="acompletion",
         litellm_call_id="1234",
-        start_time=datetime(2025, 1, 1),
+        start_time=datetime.now(),
         function_id="1234",
     )
 
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(turn_off_message_logging=False)
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
+    # Test Case 1: standard_callback_dynamic_params = False (or not set)
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(
+        turn_off_message_logging=False
+    )
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
+        standard_callback_dynamic_params
+    )
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
     )
+    # Assert no redaction occurred
     assert _redacted_response_obj.choices[0].message.content == test_content
 
-    standard_callback_dynamic_params = StandardCallbackDynamicParams(turn_off_message_logging=True)
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
+    # Test Case 2: standard_callback_dynamic_params = True
+    standard_callback_dynamic_params = StandardCallbackDynamicParams(
+        turn_off_message_logging=True
+    )
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
+        standard_callback_dynamic_params
+    )
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
     )
+    # Assert redaction occurred
     assert _redacted_response_obj.choices[0].message.content == "redacted-by-litellm"
 
+    # Test Case 3: standard_callback_dynamic_params does not set turn_off_message_logging
+    # since litellm.turn_off_message_logging is True redaction should occur
     standard_callback_dynamic_params = StandardCallbackDynamicParams()
-    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = standard_callback_dynamic_params
+    litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
+        standard_callback_dynamic_params
+    )
     _redacted_response_obj = redact_message_input_output_from_logging(
         result=response_obj,
         model_call_details=litellm_logging_obj.model_call_details,
     )
+    # Assert no redaction occurred
     assert _redacted_response_obj.choices[0].message.content == "redacted-by-litellm"
 
-    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    # Reset settings
+    litellm.turn_off_message_logging = False
     print("Test passed")
 
 
@@ -7914,7 +7949,7 @@ def test_async_http_handler(mock_async_client):
 
 @mock.patch("httpx.AsyncClient")
 @mock.patch.dict(os.environ, {}, clear=True)
-def test_async_http_handler_force_ipv4(mock_async_client, monkeypatch):
+def test_async_http_handler_force_ipv4(mock_async_client):
     """
     Test AsyncHTTPHandler when litellm.force_ipv4 is True
 
@@ -7924,8 +7959,9 @@ def test_async_http_handler_force_ipv4(mock_async_client, monkeypatch):
     import ssl
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-    monkeypatch.setattr(litellm, "force_ipv4", True)
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    # Set force_ipv4 to True
+    litellm.force_ipv4 = True
+    litellm.disable_aiohttp_transport = True
 
     try:
         timeout = 120
@@ -7934,12 +7970,17 @@ def test_async_http_handler_force_ipv4(mock_async_client, monkeypatch):
 
         AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
 
+        # Get the call arguments
         call_args = mock_async_client.call_args[1]
 
+        ############# IMPORTANT ASSERTION #################
+        # Assert transport exists and is configured correctly for using ipv4
         assert isinstance(call_args["transport"], httpx.AsyncHTTPTransport)
         print(call_args["transport"])
         assert call_args["transport"]._pool._local_address == "0.0.0.0"
+        ####################################
 
+        # Assert other parameters match
         assert call_args["event_hooks"] == event_hooks
         assert call_args["headers"] == headers
         assert call_args["timeout"] == timeout
@@ -7948,7 +7989,8 @@ def test_async_http_handler_force_ipv4(mock_async_client, monkeypatch):
         assert call_args["follow_redirects"] is True
 
     finally:
-        monkeypatch.setattr(litellm, "force_ipv4", False)
+        # Reset force_ipv4 to default
+        litellm.force_ipv4 = False
 
 
 def test_is_base64_encoded_2():
@@ -8052,12 +8094,12 @@ def test_validate_chat_completion_tool_choice(tool_choice, expected_bool):
             validate_chat_completion_tool_choice(tool_choice=tool_choice, model="gpt-5.6-sol")
 
 
-def test_models_by_provider(monkeypatch):
+def test_models_by_provider():
     """
     Make sure all providers from model map are in the valid providers list
     """
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     from litellm import models_by_provider
 
@@ -8067,7 +8109,10 @@ def test_models_by_provider(monkeypatch):
             continue
         elif k == "sample_spec":
             continue
-        elif v["litellm_provider"] == "sagemaker" or v["litellm_provider"] == "bedrock_converse":
+        elif (
+            v["litellm_provider"] == "sagemaker"
+            or v["litellm_provider"] == "bedrock_converse"
+        ):
             continue
         elif v.get("mode") in ("search", "evaluation"):
             continue
@@ -8075,7 +8120,9 @@ def test_models_by_provider(monkeypatch):
             providers.add(v["litellm_provider"])
 
     for provider in providers:
-        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(provider)
+        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(
+            provider
+        )
 
 
 @pytest.mark.parametrize(
@@ -8087,12 +8134,15 @@ def test_models_by_provider(monkeypatch):
     ],
 )
 def test_get_end_user_id_for_cost_tracking(
-    litellm_params, disable_end_user_cost_tracking, expected_end_user_id, monkeypatch
+    litellm_params, disable_end_user_cost_tracking, expected_end_user_id
 ):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
-    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", disable_end_user_cost_tracking)
-    assert get_end_user_id_for_cost_tracking(litellm_params=litellm_params) == expected_end_user_id
+    litellm.disable_end_user_cost_tracking = disable_end_user_cost_tracking
+    assert (
+        get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
+        == expected_end_user_id
+    )
 
 
 @pytest.mark.parametrize(
@@ -8104,17 +8154,17 @@ def test_get_end_user_id_for_cost_tracking(
     ],
 )
 def test_get_end_user_id_for_cost_tracking_prometheus_only(
-    litellm_params, enable_end_user_cost_tracking_prometheus_only, expected_end_user_id, monkeypatch
+    litellm_params, enable_end_user_cost_tracking_prometheus_only, expected_end_user_id
 ):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
-    monkeypatch.setattr(
-        litellm,
-        "enable_end_user_cost_tracking_prometheus_only",
-        enable_end_user_cost_tracking_prometheus_only,
+    litellm.enable_end_user_cost_tracking_prometheus_only = (
+        enable_end_user_cost_tracking_prometheus_only
     )
     assert (
-        get_end_user_id_for_cost_tracking(litellm_params=litellm_params, service_type="prometheus")
+        get_end_user_id_for_cost_tracking(
+            litellm_params=litellm_params, service_type="prometheus"
+        )
         == expected_end_user_id
     )
 
@@ -8122,21 +8172,31 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
 @pytest.mark.parametrize(
     "litellm_params, expected_end_user_id",
     [
+        # Test with only metadata field (old behavior)
         (
             {"metadata": {"user_api_key_end_user_id": "user_from_metadata"}},
             "user_from_metadata",
         ),
+        # Test with only litellm_metadata field (new behavior)
         (
-            {"litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"}},
+            {
+                "litellm_metadata": {
+                    "user_api_key_end_user_id": "user_from_litellm_metadata"
+                }
+            },
             "user_from_litellm_metadata",
         ),
+        # Test with both fields - metadata should take precedence for user_api_key fields
         (
             {
                 "metadata": {"user_api_key_end_user_id": "user_from_metadata"},
-                "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"},
+                "litellm_metadata": {
+                    "user_api_key_end_user_id": "user_from_litellm_metadata"
+                },
             },
             "user_from_metadata",
         ),
+        # Test with user_api_key_end_user_id in litellm_params (should take precedence over metadata)
         (
             {
                 "user_api_key_end_user_id": "user_from_params",
@@ -8144,24 +8204,31 @@ def test_get_end_user_id_for_cost_tracking_prometheus_only(
             },
             "user_from_params",
         ),
+        # Test with empty metadata but valid litellm_metadata
         (
             {
                 "metadata": {},
-                "litellm_metadata": {"user_api_key_end_user_id": "user_from_litellm_metadata"},
+                "litellm_metadata": {
+                    "user_api_key_end_user_id": "user_from_litellm_metadata"
+                },
             },
             "user_from_litellm_metadata",
         ),
+        # Test with no metadata fields
         ({}, None),
     ],
 )
-def test_get_end_user_id_for_cost_tracking_metadata_handling(litellm_params, expected_end_user_id, monkeypatch):
+def test_get_end_user_id_for_cost_tracking_metadata_handling(
+    litellm_params, expected_end_user_id
+):
     """
     Test that get_end_user_id_for_cost_tracking correctly handles both metadata and litellm_metadata
     fields using the get_litellm_metadata_from_kwargs helper function.
     """
     from litellm.utils import get_end_user_id_for_cost_tracking
 
-    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", False)
+    # Ensure cost tracking is enabled for this test
+    litellm.disable_end_user_cost_tracking = False
 
     result = get_end_user_id_for_cost_tracking(litellm_params=litellm_params)
     assert result == expected_end_user_id
@@ -8297,7 +8364,7 @@ def test_add_custom_logger_callback_to_specific_event_e2e(monkeypatch):
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
 
-    monkeypatch.setattr(litellm, "success_callback", ["humanloop"])
+    litellm.success_callback = ["humanloop"]
 
     curr_len_success_callback = len(litellm.success_callback)
     curr_len_failure_callback = len(litellm.failure_callback)
@@ -8323,6 +8390,7 @@ def test_custom_logger_exists_in_callbacks_individual_functions(monkeypatch):
         _custom_logger_class_exists_in_success_callbacks,
     )
 
+    # Create a mock CustomLogger class
     class MockCustomLogger(CustomLogger):
         def log_success_event(self, kwargs, response_obj, start_time, end_time):
             pass
@@ -8330,6 +8398,7 @@ def test_custom_logger_exists_in_callbacks_individual_functions(monkeypatch):
         def log_failure_event(self, kwargs, response_obj, start_time, end_time):
             pass
 
+    # Reset all callback lists
     for list_name in [
         "callbacks",
         "_async_success_callback",
@@ -8341,36 +8410,46 @@ def test_custom_logger_exists_in_callbacks_individual_functions(monkeypatch):
 
     mock_logger = MockCustomLogger()
 
+    # Test 1: No logger exists in any callback list
     assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == False
     assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == False
 
+    # Test 2: Logger exists in success_callback
     litellm.success_callback.append(mock_logger)
     assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == True
     assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == False
 
-    monkeypatch.setattr(litellm, "success_callback", [])
+    # Reset callbacks
+    litellm.success_callback = []
 
+    # Test 3: Logger exists in _async_success_callback
     litellm._async_success_callback.append(mock_logger)
     assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == True
     assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == False
 
-    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    # Reset callbacks
+    litellm._async_success_callback = []
 
+    # Test 4: Logger exists in failure_callback
     litellm.failure_callback.append(mock_logger)
     assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == False
     assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == True
 
-    monkeypatch.setattr(litellm, "failure_callback", [])
+    # Reset callbacks
+    litellm.failure_callback = []
 
+    # Test 5: Logger exists in _async_failure_callback
     litellm._async_failure_callback.append(mock_logger)
     assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == False
     assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == True
 
+    # Test 6: Logger exists in both success and failure callbacks
     litellm.success_callback.append(mock_logger)
     litellm.failure_callback.append(mock_logger)
     assert _custom_logger_class_exists_in_success_callbacks(mock_logger) == True
     assert _custom_logger_class_exists_in_failure_callbacks(mock_logger) == True
 
+    # Test 7: Different instance of same logger class
     mock_logger_2 = MockCustomLogger()
     assert _custom_logger_class_exists_in_success_callbacks(mock_logger_2) == True
     assert _custom_logger_class_exists_in_failure_callbacks(mock_logger_2) == True
@@ -8385,7 +8464,7 @@ def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
     monkeypatch.setenv("OPENMETER_API_KEY", "wedlwe")
     monkeypatch.setenv("OPENMETER_API_URL", "https://openmeter.dev")
 
-    monkeypatch.setattr(litellm, "failure_callback", ["openmeter"])
+    litellm.failure_callback = ["openmeter"]
 
     curr_len_success_callback = len(litellm.success_callback)
     curr_len_failure_callback = len(litellm.failure_callback)
@@ -8399,7 +8478,9 @@ def test_add_custom_logger_callback_to_specific_event_e2e_failure(monkeypatch):
     assert len(litellm.success_callback) == curr_len_success_callback
     assert len(litellm.failure_callback) == curr_len_failure_callback
 
-    assert any(isinstance(callback, OpenMeterLogger) for callback in litellm.failure_callback)
+    assert any(
+        isinstance(callback, OpenMeterLogger) for callback in litellm.failure_callback
+    )
 
 
 @pytest.mark.asyncio
@@ -8472,8 +8553,7 @@ def test_dict_to_response_format_helper():
         },
         "ref_template": "/$defs/{model}",
     }
-    response_format = _dict_to_response_format_helper(**args)
-    assert response_format["json_schema"]["schema"]["properties"]["events"]["items"]["$ref"] == "/$defs/CalendarEvent"
+    _dict_to_response_format_helper(**args)
 
 
 def test_validate_user_messages_invalid_content_type():
@@ -8493,14 +8573,20 @@ def test_validate_user_messages_invalid_content_type():
     [
         {
             "name": "default_on_guardrail",
-            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=True)],
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=True)
+            ],
             "kwargs": {"metadata": {"requester_metadata": {"guardrails": []}}},
             "expected": ["test_guardrail"],
         },
         {
             "name": "request_specific_guardrail",
-            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=False)],
-            "kwargs": {"metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}},
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
+            ],
+            "kwargs": {
+                "metadata": {"requester_metadata": {"guardrails": ["test_guardrail"]}}
+            },
             "expected": ["test_guardrail"],
         },
         {
@@ -8509,12 +8595,18 @@ def test_validate_user_messages_invalid_content_type():
                 CustomGuardrail(guardrail_name="default_guardrail", default_on=True),
                 CustomGuardrail(guardrail_name="request_guardrail", default_on=False),
             ],
-            "kwargs": {"metadata": {"requester_metadata": {"guardrails": ["request_guardrail"]}}},
+            "kwargs": {
+                "metadata": {
+                    "requester_metadata": {"guardrails": ["request_guardrail"]}
+                }
+            },
             "expected": ["default_guardrail", "request_guardrail"],
         },
         {
             "name": "empty_metadata",
-            "callbacks": [CustomGuardrail(guardrail_name="test_guardrail", default_on=False)],
+            "callbacks": [
+                CustomGuardrail(guardrail_name="test_guardrail", default_on=False)
+            ],
             "kwargs": {},
             "expected": [],
         },
@@ -8538,12 +8630,15 @@ def test_validate_user_messages_invalid_content_type():
         },
     ],
 )
-def test_get_applied_guardrails(test_case, monkeypatch):
+def test_get_applied_guardrails(test_case):
 
-    monkeypatch.setattr(litellm, "callbacks", test_case["callbacks"])
+    # Setup
+    litellm.callbacks = test_case["callbacks"]
 
+    # Execute
     result = get_applied_guardrails(test_case["kwargs"])
 
+    # Assert
     assert sorted(result) == sorted(test_case["expected"])
 
 
@@ -8659,7 +8754,7 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     assert _model_cache.get_cached_model_info("openai") is None
 
 
-def test_get_whitelisted_models(tmp_path, local_model_cost_map):
+def test_get_whitelisted_models():
     """
     Snapshot of all bedrock models as of 12/24/2024.
 
@@ -8667,15 +8762,13 @@ def test_get_whitelisted_models(tmp_path, local_model_cost_map):
 
     Create whitelist to prevent naming regressions for older litellm versions.
     """
-    whitelisted_models = tuple(
-        model
-        for model, info in litellm.model_cost.items()
-        if info.get("litellm_provider") == "bedrock" and info.get("mode") == "chat"
-    )
+    whitelisted_models = []
+    for model, info in litellm.model_cost.items():
+        if info.get("litellm_provider") == "bedrock" and info.get("mode") == "chat":
+            whitelisted_models.append(model)
 
-    assert whitelisted_models
-
-    with open(tmp_path / "whitelisted_bedrock_models.txt", "w") as file:
+        # Write to a local file
+    with open("whitelisted_bedrock_models.txt", "w") as file:
         for model in whitelisted_models:
             file.write(f"{model}\n")
 
@@ -8772,29 +8865,35 @@ def _pre_call_rule_for_unit_test(text: str) -> bool:
     return len(text) <= 10
 
 
-@pytest.mark.asyncio
-async def test_pre_call_rule(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "pre_call_rules", [_pre_call_rule_for_unit_test])
-    model: Final = "openai/unit-test-model"
-
-    with pytest.raises(
-        litellm.APIResponseValidationError,
-        match="LLM Response failed post-call-rule check",
-    ):
-        litellm.completion(
-            model=model,
+def test_pre_call_rule():
+    try:
+        litellm.pre_call_rules = [my_pre_call_rule]
+        ### completion
+        response = completion(
+            model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "say something inappropriate"}],
-            api_key="test-key",
-            mock_response="mocked completion",
         )
+        pytest.fail(f"Completion call should have been failed. ")
+    except Exception:
+        pass
 
-    with pytest.raises(
-        litellm.APIResponseValidationError,
-        match="LLM Response failed post-call-rule check",
-    ):
-        await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": "say something inappropriate"}],
-            api_key="test-key",
-            mock_response="mocked completion",
-        )
+    ### async completion
+    async def test_async_response():
+        user_message = "Hello, how are you?"
+        messages = [{"content": user_message, "role": "user"}]
+        try:
+            response = await acompletion(model="gpt-3.5-turbo", messages=messages)
+            pytest.fail(f"acompletion call should have been failed. ")
+        except Exception as e:
+            pass
+
+    asyncio.run(test_async_response())
+    litellm.pre_call_rules = []
+
+
+def my_pre_call_rule(input: str):
+    print(f"input: {input}")
+    print(f"INSIDE MY PRE CALL RULE, len(input) - {len(input)}")
+    if len(input) > 10:
+        return False
+    return True

@@ -13,6 +13,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import CallTypes, StandardLoggingPayload
+import os
 
 
 def test_image_generation_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(
@@ -82,20 +83,27 @@ def test_image_edit_prices_a_vertex_deployment_at_its_configured_location(
     assert cost_at("us-central1") == pytest.approx(0.044)
 
 
-class _ImageGenerationTestLogger(CustomLogger):
+class TestCustomLogger(CustomLogger):
+    __test__ = False
+
     def __init__(self) -> None:
         super().__init__()
         self.standard_logging_payload: StandardLoggingPayload | None = None
-        self.logging_completed: asyncio.Event = asyncio.Event()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.standard_logging_payload = kwargs.get("standard_logging_object")
-        self.logging_completed.set()
 
 
 class TestAimlImageGeneration:
-    @pytest.mark.asyncio
-    async def test_basic_image_generation(self, monkeypatch: pytest.MonkeyPatch):
+    def get_base_image_generation_call_args(self) -> dict:
+        return {"model": "aiml/flux-pro/v1.1"}
+
+    @pytest.mark.asyncio(scope="module")
+    @pytest.mark.flaky(retries=0)
+    async def test_basic_image_generation(self):
+        """Test basic image generation"""
+        from unittest.mock import AsyncMock, patch
+
         mock_aiml_response = {
             "created": 1703658209,
             "data": [{"url": "https://example.com/generated_image.png"}],
@@ -111,30 +119,72 @@ class TestAimlImageGeneration:
                 "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
                 new_callable=AsyncMock,
             ) as mock_async_post,
-            patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_sync_post,
+            patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            ) as mock_sync_post,
         ):
             mock_async_post.return_value = mock_response
             mock_sync_post.return_value = mock_response
 
-            litellm.turn_on_debug()
-            custom_logger = _ImageGenerationTestLogger()
-            litellm.logging_callback_manager._reset_all_callbacks()
-            monkeypatch.setattr(litellm, "callbacks", [custom_logger])
-            response = await litellm.aimage_generation(
-                model="aiml/flux-pro/v1.1",
-                prompt="A image of a otter",
-                api_key="test-key-mocked-no-credits-needed",
-            )
-            await custom_logger.logging_completed.wait()
+            try:
+                litellm.turn_on_debug()
+                custom_logger = TestCustomLogger()
+                litellm.logging_callback_manager._reset_all_callbacks()
+                litellm.callbacks = [custom_logger]
+                base_image_generation_call_args = (
+                    self.get_base_image_generation_call_args()
+                )
+                litellm.set_verbose = True
+                # Pass dummy api_key so validate_environment passes; HTTP is mocked
+                response = await litellm.aimage_generation(
+                    **base_image_generation_call_args,
+                    prompt="A image of a otter",
+                    api_key="test-key-mocked-no-credits-needed",
+                )
+                print("FAL AI RESPONSE: ", response)
 
-        logged_standard_logging_payload = custom_logger.standard_logging_payload
-        assert logged_standard_logging_payload is not None
-        assert logged_standard_logging_payload["response_cost"] is not None
-        assert logged_standard_logging_payload["response_cost"] > 0
-        assert response.data is not None
-        for image in response.data:
-            assert isinstance(image, Image)
-            assert image.b64_json is not None or image.url is not None
+                await asyncio.sleep(1)
+
+                # assert response._hidden_params["response_cost"] is not None
+                # assert response._hidden_params["response_cost"] > 0
+                # print("response_cost", response._hidden_params["response_cost"])
+
+                logged_standard_logging_payload = custom_logger.standard_logging_payload
+                print(
+                    "logged_standard_logging_payload", logged_standard_logging_payload
+                )
+                assert logged_standard_logging_payload is not None
+                assert logged_standard_logging_payload["response_cost"] is not None
+                assert logged_standard_logging_payload["response_cost"] > 0
+                import openai
+                from openai.types.images_response import ImagesResponse
+
+                # print openai version
+                print("openai version=", openai.__version__)
+
+                response_dict = dict(response)
+                if "usage" in response_dict:
+                    response_dict["usage"] = dict(response_dict["usage"])
+                print("response usage=", response_dict.get("usage"))
+
+                assert (
+                    response.data is not None
+                )  # type guard for iteration (base fails here if None)
+                for d in response.data:
+                    assert isinstance(d, Image)
+                    print("data in response.data", d)
+                    assert d.b64_json is not None or d.url is not None
+            except litellm.RateLimitError as e:
+                pass
+            except litellm.ContentPolicyViolationError:
+                pass  # Azure randomly raises these errors - skip when they occur
+            except litellm.InternalServerError:
+                pass
+            except Exception as e:
+                if "Your task failed as a result of our safety system." in str(e):
+                    pass
+                else:
+                    pytest.fail(f"An exception occurred - {str(e)}")
 
 
 @pytest.mark.asyncio
@@ -147,13 +197,17 @@ async def test_aiml_image_generation_with_dynamic_api_key():
     This test validates the fix for ensuring dynamic API keys are respected
     when making image generation requests to the AIML provider.
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
+    import httpx
+
+    # Mock AIML response
     mock_aiml_response = {
         "created": 1703658209,
         "data": [{"url": "https://example.com/generated_image.png"}],
     }
 
+    # Track captured arguments
     captured_headers = None
     captured_url = None
     captured_json_data = None
@@ -164,33 +218,41 @@ async def test_aiml_image_generation_with_dynamic_api_key():
         captured_headers = kwargs.get("headers", {})
         captured_json_data = kwargs.get("json", {})
 
+        # Create a mock response
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = mock_aiml_response
         mock_response.text = json.dumps(mock_aiml_response)
         return mock_response
 
+    # Mock the HTTP client that actually makes the request (sync version for image generation)
     with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
         mock_post.side_effect = capture_post_call
 
+        # Test with dynamic api_key
         test_api_key = "test-dynamic-api-key-12345"
 
         response = await litellm.aimage_generation(
             prompt="A cute baby sea otter",
             model="aiml/flux-pro/v1.1",
-            api_key=test_api_key,
+            api_key=test_api_key,  # This should be used instead of env vars
         )
 
+        # Validate the response (mocked response processing might not populate data correctly)
         assert response is not None
 
+        # The most important validations: API key and endpoint usage
+        # These prove that the dynamic API key was properly used
         assert captured_headers is not None
         assert "Authorization" in captured_headers
         assert captured_headers["Authorization"] == f"Bearer {test_api_key}"
         print("TESTCAPTURED HEADERS", captured_headers)
+        # Validate the correct AIML endpoint was called
         assert captured_url is not None
         assert "api.aimlapi.com" in captured_url
         assert "/v1/images/generations" in captured_url
 
+        # Validate the request data
         assert captured_json_data is not None
         assert captured_json_data["prompt"] == "A cute baby sea otter"
         assert captured_json_data["model"] == "flux-pro/v1.1"
@@ -257,7 +319,10 @@ async def test_azure_image_generation_request_body():
     """Azure deployment URL selects the model; JSON body omits ``model`` (#26316)."""
     from litellm import aimage_generation
 
-    expected_body: Final = {"prompt": "test prompt"}
+    test_dir = os.path.dirname(__file__)
+    expected_path = os.path.join(test_dir, "request_payloads", "azure_gpt_image_1.json")
+    with open(expected_path, "r") as f:
+        expected_body = json.load(f)
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",

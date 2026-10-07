@@ -8,14 +8,21 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 
 
-def test_get_llm_provider_lambda_ai() -> None:
+def test_get_llm_provider_lambda_ai():
     """Test that get_llm_provider correctly identifies Lambda AI"""
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-    model, provider, api_key, api_base = get_llm_provider("lambda_ai/llama3.1-8b-instruct")
+    # Test with lambda_ai/model-name format
+    model, provider, api_key, api_base = get_llm_provider(
+        "lambda_ai/llama3.1-8b-instruct"
+    )
     assert model == "llama3.1-8b-instruct"
     assert provider == "lambda_ai"
 
-    model, provider, api_key, api_base = get_llm_provider("llama3.1-8b-instruct", api_base="https://api.lambda.ai/v1")
+    # Test with api_base containing Lambda AI endpoint
+    model, provider, api_key, api_base = get_llm_provider(
+        "llama3.1-8b-instruct", api_base="https://api.lambda.ai/v1"
+    )
     assert model == "llama3.1-8b-instruct"
     assert provider == "lambda_ai"
     assert api_base == "https://api.lambda.ai/v1"

@@ -4324,14 +4324,15 @@ def test_validate_environment_missing_http(base_url):
 
 
 @pytest.mark.asyncio
-async def test_output_parsing(monkeypatch: pytest.MonkeyPatch):
+async def test_output_parsing():
     """
     - have presidio pii masking - mask an input message
     - make llm completion call
     - have presidio pii masking - output parse message
     - assert that no masked tokens are in the input message
     """
-    monkeypatch.setattr(litellm, "output_parse_pii", True)
+    litellm.set_verbose = True
+    litellm.output_parse_pii = True
     pii_masking = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
 
     initial_message = [

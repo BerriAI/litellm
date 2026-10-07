@@ -490,7 +490,8 @@ async def test_nova_invoke_stream_reports_bedrock_usage_and_finish_reason():
 
 
 def test_nova_invoke_remove_empty_system_messages():
-    input_request: Final = BedrockInvokeNovaRequest(
+    """Test that _remove_empty_system_messages removes empty system list."""
+    input_request = BedrockInvokeNovaRequest(
         messages=[{"content": [{"text": "Hello"}], "role": "user"}],
         system=[],
         inferenceConfig={"temperature": 0.7},
@@ -504,7 +505,13 @@ def test_nova_invoke_remove_empty_system_messages():
 
 
 def test_nova_invoke_filter_allowed_fields():
-    request_data: Final = {
+    """
+    Test that _filter_allowed_fields only keeps fields defined in BedrockInvokeNovaRequest.
+
+    Nova Invoke does not allow `additionalModelRequestFields` and `additionalModelResponseFieldPaths` in the request body.
+    This test ensures that these fields are not included in the request body.
+    """
+    _input_request = {
         "messages": [{"content": [{"text": "Hello"}], "role": "user"}],
         "system": [{"text": "System prompt"}],
         "inferenceConfig": {"temperature": 0.7},
@@ -512,9 +519,9 @@ def test_nova_invoke_filter_allowed_fields():
         "additionalModelResponseFieldPaths": ["this", "should", "be", "removed"],
     }
 
-    input_request: Final = BedrockInvokeNovaRequest(**request_data)
+    input_request = BedrockInvokeNovaRequest(**_input_request)
 
-    result: Final = litellm.AmazonInvokeNovaConfig()._filter_allowed_fields(input_request)
+    result = litellm.AmazonInvokeNovaConfig()._filter_allowed_fields(input_request)
 
     assert "additionalModelRequestFields" not in result
     assert "additionalModelResponseFieldPaths" not in result
@@ -524,51 +531,65 @@ def test_nova_invoke_filter_allowed_fields():
 
 
 def test_nova_invoke_streaming_chunk_parsing():
-    decoder: Final = AWSEventStreamDecoder(model="bedrock/invoke/us.amazon.nova-micro-v1:0")
+    """
+    Test that the AWSEventStreamDecoder correctly handles Nova's /bedrock/invoke/ streaming format
+    where content is nested under 'contentBlockDelta'.
+    """
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
-    text_result: Final = decoder.chunk_parser(
-        {
-            "contentBlockDelta": {
-                "delta": {"text": "Hello, how can I help?"},
-                "contentBlockIndex": 0,
-            }
+    # Initialize the decoder with a Nova model
+    decoder = AWSEventStreamDecoder(model="bedrock/invoke/us.amazon.nova-micro-v1:0")
+
+    # Test case 1: Text content in contentBlockDelta
+    nova_text_chunk = {
+        "contentBlockDelta": {
+            "delta": {"text": "Hello, how can I help?"},
+            "contentBlockIndex": 0,
         }
-    )
-    assert text_result.choices[0].delta.content == "Hello, how can I help?"
-    assert text_result.choices[0].index == 0
-    assert not text_result.choices[0].finish_reason
-    assert text_result.choices[0].delta.tool_calls is None
+    }
+    result = decoder.chunk_parser(nova_text_chunk)
+    assert result.choices[0].delta.content == "Hello, how can I help?"
+    assert result.choices[0].index == 0
+    assert not result.choices[0].finish_reason
+    assert result.choices[0].delta.tool_calls is None
 
-    tool_start_result: Final = decoder.chunk_parser(
-        {
-            "contentBlockDelta": {
-                "start": {"toolUse": {"name": "get_weather", "toolUseId": "tool_1"}},
-                "contentBlockIndex": 1,
-            }
+    # Test case 2: Tool use start in contentBlockDelta
+    nova_tool_start_chunk = {
+        "contentBlockDelta": {
+            "start": {"toolUse": {"name": "get_weather", "toolUseId": "tool_1"}},
+            "contentBlockIndex": 1,
         }
-    )
-    assert tool_start_result.choices[0].delta.content == ""
-    assert tool_start_result.choices[0].index == 0
-    assert tool_start_result.choices[0].delta.tool_calls is not None
-    assert tool_start_result.choices[0].delta.tool_calls[0].type == "function"
-    assert tool_start_result.choices[0].delta.tool_calls[0].function.name == "get_weather"
-    assert tool_start_result.choices[0].delta.tool_calls[0].id == "tool_1"
+    }
+    result = decoder.chunk_parser(nova_tool_start_chunk)
+    assert result.choices[0].delta.content == ""
+    assert result.choices[0].index == 0
+    assert result.choices[0].delta.tool_calls is not None
+    assert result.choices[0].delta.tool_calls[0].type == "function"
+    assert result.choices[0].delta.tool_calls[0].function.name == "get_weather"
+    assert result.choices[0].delta.tool_calls[0].id == "tool_1"
 
-    tool_args_result: Final = decoder.chunk_parser(
-        {
-            "contentBlockDelta": {
-                "delta": {"toolUse": {"input": '{"location": "New York"}'}},
-                "contentBlockIndex": 2,
-            }
+    # Test case 3: Tool use arguments in contentBlockDelta
+    nova_tool_args_chunk = {
+        "contentBlockDelta": {
+            "delta": {"toolUse": {"input": '{"location": "New York"}'}},
+            "contentBlockIndex": 2,
         }
-    )
-    assert tool_args_result.choices[0].delta.content == ""
-    assert tool_args_result.choices[0].index == 0
-    assert tool_args_result.choices[0].delta.tool_calls is not None
-    assert tool_args_result.choices[0].delta.tool_calls[0].function.arguments == '{"location": "New York"}'
+    }
+    result = decoder.chunk_parser(nova_tool_args_chunk)
+    assert result.choices[0].delta.content == ""
+    assert result.choices[0].index == 0
+    assert result.choices[0].delta.tool_calls is not None
+    assert result.choices[0].delta.tool_calls[0].function.arguments == '{"location": "New York"}'
 
-    stop_result: Final = decoder.chunk_parser({"contentBlockDelta": {"stopReason": "tool_use"}})
-    assert stop_result.choices[0].finish_reason == "tool_calls"
+    # Test case 4: Stop reason in contentBlockDelta
+    nova_stop_chunk = {
+        "contentBlockDelta": {
+            "stopReason": "tool_use",
+        }
+    }
+    result = decoder.chunk_parser(nova_stop_chunk)
+    print(result)
+    assert result.choices[0].finish_reason == "tool_calls"
 
 
 @pytest.mark.asyncio

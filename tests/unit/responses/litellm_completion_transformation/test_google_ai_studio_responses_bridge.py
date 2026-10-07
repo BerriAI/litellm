@@ -7,15 +7,13 @@ import litellm
 
 
 @pytest.mark.asyncio
-async def test_mock_basic_google_ai_studio_responses_api_with_tools(
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_mock_basic_google_ai_studio_responses_api_with_tools():
     """
     - Ensure that this is the request that litellm.completion gets when we pass web search options
 
     litellm.acompletion(messages=[{'role': 'user', 'content': 'what is the latest version of supabase python package and when was it released?'}], model='gemini-2.5-flash', tools=[], web_search_options={'search_context_size': 'low', 'user_location': None})
     """
-    monkeypatch.setattr(litellm, "set_verbose", litellm.set_verbose)
+    # Mock the acompletion function
     litellm.turn_on_debug()
     mock_response = litellm.ModelResponse(
         id="test-id",
@@ -25,7 +23,9 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools(
         choices=[
             litellm.utils.Choices(
                 index=0,
-                message=litellm.utils.Message(role="assistant", content="Test response"),
+                message=litellm.utils.Message(
+                    role="assistant", content="Test response"
+                ),
                 finish_reason="stop",
             )
         ],
@@ -41,9 +41,13 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools(
             tools=[{"type": "web_search_preview", "search_context_size": "low"}],
         )
 
+        # Verify that acompletion was called
         assert mock_acompletion.called
-        _, call_kwargs = mock_acompletion.call_args
 
+        # Get the call arguments
+        call_args, call_kwargs = mock_acompletion.call_args
+
+        # Verify the expected parameters were passed
         print(
             "call kwargs to litellm.completion=",
             json.dumps(call_kwargs, indent=4, default=str),
@@ -53,6 +57,7 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools(
         assert call_kwargs["web_search_options"]["search_context_size"] == "low"
         assert call_kwargs["web_search_options"]["user_location"] is None
 
+        # Verify other expected parameters
         assert call_kwargs["model"] == "gemini-2.5-flash"
         assert len(call_kwargs["messages"]) == 1
         assert call_kwargs["messages"][0]["role"] == "user"

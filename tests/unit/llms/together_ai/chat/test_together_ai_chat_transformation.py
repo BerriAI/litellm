@@ -15,6 +15,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
 )
 from litellm.llms.together_ai.chat.transformation import TogetherAIChatConfig
 from litellm.types.utils import LlmProviders, ModelResponse
+import os
 
 TOOL_CALLING_MODEL = "openai/gpt-oss-20b"
 REASONING_MODEL = "deepseek-ai/DeepSeek-V3.1"
@@ -1160,12 +1161,18 @@ def test_custom_role_wrappers_never_reach_the_request():
 
 
 @pytest.mark.parametrize(
-    "model", ["meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF"]
+    "model",
+    [
+        "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
+    ],
 )
-def test_get_supported_response_format_together_ai(model: str, monkeypatch) -> None:
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    optional_params = litellm.get_supported_openai_params(model, custom_llm_provider="together_ai")
+def test_get_supported_response_format_together_ai(model: str) -> None:
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    optional_params = litellm.get_supported_openai_params(
+        model, custom_llm_provider="together_ai"
+    )
     assert isinstance(optional_params, list)
     assert "response_format" in optional_params
     assert "tools" in optional_params

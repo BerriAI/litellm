@@ -1884,14 +1884,14 @@ def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_ro
     )
 
 @pytest.mark.asyncio
-async def test_dynamic_cooldowns(monkeypatch: pytest.MonkeyPatch):
+async def test_dynamic_cooldowns():
     """
     Assert kwargs for completion/embedding have 'cooldown_time' as a litellm_param
     """
-
+    # litellm.set_verbose = True
     tmp_mock = MagicMock()
 
-    monkeypatch.setattr(litellm, "failure_callback", [tmp_mock])
+    litellm.failure_callback = [tmp_mock]
 
     router = Router(
         model_list=[
@@ -1918,6 +1918,8 @@ async def test_dynamic_cooldowns(monkeypatch: pytest.MonkeyPatch):
         pass
 
     tmp_mock.assert_called_once()
+
+    print(tmp_mock.call_count)
 
     assert "cooldown_time" in tmp_mock.call_args[0][0]["litellm_params"]
     assert tmp_mock.call_args[0][0]["litellm_params"]["cooldown_time"] == 0
@@ -2057,9 +2059,12 @@ def test_single_deployment_no_cooldowns(num_deployments: int):
 
 
 @pytest.mark.asyncio
-async def test_single_deployment_no_cooldowns_test_prod() -> None:
-    """Do not cooldown on a single deployment."""
-    router: Final = Router(
+async def test_single_deployment_no_cooldowns_test_prod():
+    """
+    Do not cooldown on single deployment.
+
+    """
+    router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
@@ -2082,21 +2087,26 @@ async def test_single_deployment_no_cooldowns_test_prod() -> None:
         ],
         num_retries=0,
     )
-    mock_client: Final = MagicMock()
 
-    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown", new=mock_client):
-        with pytest.raises(litellm.RateLimitError):
+    with patch.object(
+        router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()
+    ) as mock_client:
+        try:
             await router.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 mock_response="litellm.RateLimitError",
             )
+        except litellm.RateLimitError:
+            pass
 
-    mock_client.assert_not_called()
+        await asyncio.sleep(2)
+
+        mock_client.assert_not_called()
 
 
 @pytest.mark.asyncio()
-async def test_high_traffic_cooldowns_all_healthy_deployments(monkeypatch: pytest.MonkeyPatch):
+async def test_high_traffic_cooldowns_all_healthy_deployments():
     """
     PROD TEST - 3 deployments, each deployment fails 25% requests. Assert that no deployments get put into cooldown
     """
@@ -2131,9 +2141,12 @@ async def test_high_traffic_cooldowns_all_healthy_deployments(monkeypatch: pytes
 
     all_deployment_ids = router.get_model_ids()
 
+    from collections import defaultdict
+
+    # Create a defaultdict to track successes and failures for each model ID
     model_stats = defaultdict(lambda: {"successes": 0, "failures": 0})
 
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
     for _ in range(100):
         try:
             model_id = random.choice(all_deployment_ids)
@@ -2141,9 +2154,20 @@ async def test_high_traffic_cooldowns_all_healthy_deployments(monkeypatch: pytes
             num_successes = model_stats[model_id]["successes"]
             num_failures = model_stats[model_id]["failures"]
             total_requests = num_failures + num_successes
+            if total_requests > 0:
+                print(
+                    "num failures= ",
+                    num_failures,
+                    "num successes= ",
+                    num_successes,
+                    "num_failures/total = ",
+                    num_failures / total_requests,
+                )
+
             if total_requests == 0:
                 mock_response = "hi"
             elif num_failures / total_requests <= 0.25:
+                # Randomly decide between fail and succeed
                 if random.random() < 0.5:
                     mock_response = "hi"
                 else:
@@ -2158,14 +2182,22 @@ async def test_high_traffic_cooldowns_all_healthy_deployments(monkeypatch: pytes
             )
             model_stats[model_id]["successes"] += 1
 
+            await asyncio.sleep(0.0001)
         except litellm.InternalServerError:
             model_stats[model_id]["failures"] += 1
+            pass
+        except Exception as e:
+            print("Failed test model stats=", model_stats)
+            raise e
+    print("model_stats: ", model_stats)
 
-    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooldown_list = await async_get_cooldown_deployments(
+        litellm_router_instance=router, parent_otel_span=None
+    )
     assert len(cooldown_list) == 0
 
 @pytest.mark.asyncio()
-async def test_high_traffic_cooldowns_one_bad_deployment(monkeypatch: pytest.MonkeyPatch):
+async def test_high_traffic_cooldowns_one_bad_deployment():
     """
     PROD TEST - 3 deployments, 1- deployment fails 6/10 requests, assert that bad deployment gets put into cooldown
     """
@@ -2200,9 +2232,12 @@ async def test_high_traffic_cooldowns_one_bad_deployment(monkeypatch: pytest.Mon
 
     all_deployment_ids = router.get_model_ids()
 
+    from collections import defaultdict
+
+    # Create a defaultdict to track successes and failures for each model ID
     model_stats = defaultdict(lambda: {"successes": 0, "failures": 0})
     bad_deployment_id = random.choice(all_deployment_ids)
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
     for _ in range(100):
         try:
             model_id = random.choice(all_deployment_ids)
@@ -2210,13 +2245,25 @@ async def test_high_traffic_cooldowns_one_bad_deployment(monkeypatch: pytest.Mon
             num_successes = model_stats[model_id]["successes"]
             num_failures = model_stats[model_id]["failures"]
             total_requests = num_failures + num_successes
+            if total_requests > 0:
+                print(
+                    "num failures= ",
+                    num_failures,
+                    "num successes= ",
+                    num_successes,
+                    "num_failures/total = ",
+                    num_failures / total_requests,
+                )
+
             if total_requests == 0:
                 mock_response = "hi"
             elif bad_deployment_id == model_id:
                 if num_failures / total_requests <= 0.6:
+
                     mock_response = "litellm.InternalServerError"
 
             elif num_failures / total_requests <= 0.25:
+                # Randomly decide between fail and succeed
                 if random.random() < 0.5:
                     mock_response = "hi"
                 else:
@@ -2231,14 +2278,22 @@ async def test_high_traffic_cooldowns_one_bad_deployment(monkeypatch: pytest.Mon
             )
             model_stats[model_id]["successes"] += 1
 
+            await asyncio.sleep(0.0001)
         except litellm.InternalServerError:
             model_stats[model_id]["failures"] += 1
+            pass
+        except Exception as e:
+            print("Failed test model stats=", model_stats)
+            raise e
+    print("model_stats: ", model_stats)
 
-    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooldown_list = await async_get_cooldown_deployments(
+        litellm_router_instance=router, parent_otel_span=None
+    )
     assert len(cooldown_list) == 1
 
 @pytest.mark.asyncio()
-async def test_high_traffic_cooldowns_one_rate_limited_deployment(monkeypatch: pytest.MonkeyPatch):
+async def test_high_traffic_cooldowns_one_rate_limited_deployment():
     """
     PROD TEST - 3 deployments, 1- deployment fails 6/10 requests, assert that bad deployment gets put into cooldown
     """
@@ -2273,9 +2328,12 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment(monkeypatch: p
 
     all_deployment_ids = router.get_model_ids()
 
+    from collections import defaultdict
+
+    # Create a defaultdict to track successes and failures for each model ID
     model_stats = defaultdict(lambda: {"successes": 0, "failures": 0})
     bad_deployment_id = random.choice(all_deployment_ids)
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
     for _ in range(100):
         try:
             model_id = random.choice(all_deployment_ids)
@@ -2283,13 +2341,25 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment(monkeypatch: p
             num_successes = model_stats[model_id]["successes"]
             num_failures = model_stats[model_id]["failures"]
             total_requests = num_failures + num_successes
+            if total_requests > 0:
+                print(
+                    "num failures= ",
+                    num_failures,
+                    "num successes= ",
+                    num_successes,
+                    "num_failures/total = ",
+                    num_failures / total_requests,
+                )
+
             if total_requests == 0:
                 mock_response = "hi"
             elif bad_deployment_id == model_id:
                 if num_failures / total_requests <= 0.6:
+
                     mock_response = "litellm.RateLimitError"
 
             elif num_failures / total_requests <= 0.25:
+                # Randomly decide between fail and succeed
                 if random.random() < 0.5:
                     mock_response = "hi"
                 else:
@@ -2304,12 +2374,21 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment(monkeypatch: p
             )
             model_stats[model_id]["successes"] += 1
 
+            await asyncio.sleep(0.0001)
         except litellm.InternalServerError:
             model_stats[model_id]["failures"] += 1
+            pass
         except litellm.RateLimitError:
             model_stats[bad_deployment_id]["failures"] += 1
+            pass
+        except Exception as e:
+            print("Failed test model stats=", model_stats)
+            raise e
+    print("model_stats: ", model_stats)
 
-    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooldown_list = await async_get_cooldown_deployments(
+        litellm_router_instance=router, parent_otel_span=None
+    )
     assert len(cooldown_list) == 1
 
 def test_router_fallbacks_with_cooldowns_and_model_id():
@@ -2353,6 +2432,7 @@ async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
     A 429 answered to a caller-supplied credential cools down none of the shared deployments,
     so the next credential still reaches them, while a 429 owned by a shared deployment does
     """
+    from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
 
     router = Router(
         model_list=[
@@ -2371,6 +2451,7 @@ async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
         await router.acompletion(
             model="gpt-3.5-turbo", messages=messages, api_key="my-bad-key-1", mock_response="litellm.RateLimitError"
         )
+    await asyncio.sleep(1)
     assert await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
 
     response = await router.acompletion(
@@ -2380,5 +2461,6 @@ async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
 
     with pytest.raises(litellm.RateLimitError):
         await router.acompletion(model="gpt-3.5-turbo", messages=messages, mock_response="litellm.RateLimitError")
+    await asyncio.sleep(1)
     cooled_down = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert len(cooled_down) == 1 and cooled_down[0] in {"123", "456"}

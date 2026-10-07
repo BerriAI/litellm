@@ -12,6 +12,9 @@ import litellm
 from litellm import acompletion, completion
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.cloudflare.chat.transformation import CloudflareChatConfig
+from unittest.mock import AsyncMock, patch
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from typing import Any, Dict
 
 FAKE_API_BASE = "https://fake-cloudflare.example.com/client/v4/accounts/fake-acct/ai/v1"
 FAKE_API_KEY = "fake-cf-api-key"
@@ -269,23 +272,25 @@ def _mock_post_response(mock_post: MagicMock, response: httpx.Response) -> Calla
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
-def test_completion_cloudflare(sync_mode: bool, _cloudflare_httpx_transport: None) -> None:
-    messages: Final = [{"role": "user", "content": "what llm are you"}]
-    with respx.mock(assert_all_called=True) as api:
-        mock_post: Final = MagicMock()
-        api.post(f"{FAKE_API_BASE}/chat/completions").mock(
-            side_effect=_mock_post_response(mock_post, httpx.Response(200, json=_chat_response()))
-        )
-        if sync_mode:
-            response: Final = completion(
+def test_completion_cloudflare(sync_mode):
+    messages = [{"role": "user", "content": "what llm are you"}]
+    mock_resp = _make_mock_response(_chat_response())
+
+    if sync_mode:
+        with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+            response = completion(
                 model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
                 messages=messages,
                 max_tokens=15,
                 api_base=FAKE_API_BASE,
                 api_key=FAKE_API_KEY,
             )
-        else:
-            response: Final = asyncio.run(
+            mock_post.assert_called_once()
+    else:
+        with patch.object(
+            AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
+        ) as mock_post:
+            response = asyncio.run(
                 acompletion(
                     model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
                     messages=messages,
@@ -294,32 +299,36 @@ def test_completion_cloudflare(sync_mode: bool, _cloudflare_httpx_transport: Non
                     api_key=FAKE_API_KEY,
                 )
             )
-        mock_post.assert_called_once()
+            mock_post.assert_called_once()
+
     assert response is not None
     assert response.choices[0].message.content is not None
     assert "language model" in response.choices[0].message.content.lower()
-    called_url: Final = str(mock_post.call_args.args[0].url)
+
+    called_url = mock_post.call_args.kwargs.get("url") or mock_post.call_args.args[0]
     assert called_url.endswith("/ai/v1/chat/completions")
     assert "/ai/run/" not in called_url
 
 
-def test_completion_cloudflare_tool_calls_sent_to_openai_endpoint(_cloudflare_httpx_transport: None) -> None:
-    messages: Final = [{"role": "user", "content": "weather in New York?"}]
-    tools: Final = [
+def test_completion_cloudflare_tool_calls_sent_to_openai_endpoint():
+    messages = [{"role": "user", "content": "weather in New York?"}]
+    tools = [
         {
             "type": "function",
             "function": {
                 "name": "get_weather",
-                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
             },
         }
     ]
-    with respx.mock(assert_all_called=True) as api:
-        mock_post: Final = MagicMock()
-        api.post(f"{FAKE_API_BASE}/chat/completions").mock(
-            side_effect=_mock_post_response(mock_post, httpx.Response(200, json=_tool_call_response()))
-        )
-        response: Final = completion(
+    mock_resp = _make_mock_response(_tool_call_response())
+
+    with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+        response = completion(
             model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
             messages=messages,
             tools=tools,
@@ -328,11 +337,13 @@ def test_completion_cloudflare_tool_calls_sent_to_openai_endpoint(_cloudflare_ht
             api_key=FAKE_API_KEY,
         )
         mock_post.assert_called_once()
-    sent_body: Final = json.loads(mock_post.call_args.args[0].content)
+
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
     assert sent_body["tools"] == tools
     assert sent_body["tool_choice"] == "auto"
+
     assert response.choices[0].finish_reason == "tool_calls"
-    tool_calls: Final = response.choices[0].message.tool_calls
+    tool_calls = response.choices[0].message.tool_calls
     assert tool_calls is not None and len(tool_calls) == 1
     assert tool_calls[0].function.name == "get_weather"
 
@@ -367,3 +378,12 @@ def test_completion_cloudflare_stream(sync_mode: bool, _cloudflare_httpx_transpo
     assert len(chunks_received) > 0
     content: Final = "".join((c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content))
     assert "language" in content.lower()
+
+
+def _make_mock_response(json_data: Dict[str, Any]) -> MagicMock:
+    mock = MagicMock(spec=httpx.Response)
+    mock.status_code = 200
+    mock.headers = {"content-type": "application/json"}
+    mock.json.return_value = json_data
+    mock.text = json.dumps(json_data)
+    return mock

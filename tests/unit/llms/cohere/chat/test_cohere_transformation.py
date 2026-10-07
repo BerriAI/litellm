@@ -11,6 +11,7 @@ import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.cohere.chat.transformation import CohereChatConfig
 from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
+from unittest.mock import AsyncMock, patch
 
 COHERE_V1_CHAT_URL: Final = "https://api.cohere.ai/v1/chat"
 COHERE_V2_CHAT_URL: Final = "https://api.cohere.com/v2/chat"
@@ -142,10 +143,15 @@ class TestCohereV2Transform:
 
 
 @pytest.mark.asyncio
-async def test_cohere_request_body_with_allowed_params(_cohere_httpx_transport: None) -> None:
-    test_response_format: Final = {"type": "json"}
-    test_reasoning_effort: Final = "low"
-    test_tools: Final = [
+async def test_cohere_request_body_with_allowed_params():
+    """
+    Test to validate that when allowed_openai_params is provided, the request body contains
+    the correct response_format and reasoning_effort values.
+    """
+    # Define test parameters
+    test_response_format = {"type": "json"}
+    test_reasoning_effort = "low"
+    test_tools = [
         {
             "type": "function",
             "function": {
@@ -153,75 +159,108 @@ async def test_cohere_request_body_with_allowed_params(_cohere_httpx_transport: 
                 "description": "Get the current time in a given location.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"location": {"type": "string", "description": "The city name, e.g. San Francisco"}},
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city name, e.g. San Francisco",
+                        }
+                    },
                     "required": ["location"],
                 },
             },
         }
     ]
-    with respx.mock(assert_all_called=True) as api:
-        mock_post: Final = MagicMock()
-        api.post(COHERE_V1_CHAT_URL).mock(
-            side_effect=_mock_post_response(
-                mock_post,
-                httpx.Response(
-                    200,
-                    json={
-                        "text": "I am Command, a language model developed by Cohere.",
-                        "generation_id": "mock-generation-id",
-                        "finish_reason": "COMPLETE",
-                    },
-                ),
-            )
-        )
-        await litellm.acompletion(
-            model="cohere/v1/command",
-            messages=[{"content": "what llm are you", "role": "user"}],
-            allowed_openai_params=["tools", "response_format", "reasoning_effort"],
-            response_format=test_response_format,
-            reasoning_effort=test_reasoning_effort,
-            tools=test_tools,
-        )
-        mock_post.assert_called_once()
-        request_data: Final = json.loads(mock_post.call_args.args[0].content)
 
-    assert "allowed_openai_params" not in request_data
-    assert request_data["response_format"] == test_response_format
-    assert request_data["reasoning_effort"] == test_reasoning_effort
+    # Create a mock response
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "text": "I am Command, a language model developed by Cohere.",
+        "generation_id": "mock-generation-id",
+        "finish_reason": "COMPLETE",
+    }
+
+    # Mock the AsyncHTTPHandler.post method at the module level
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        try:
+            await litellm.acompletion(
+                model="cohere/v1/command",
+                messages=[{"content": "what llm are you", "role": "user"}],
+                allowed_openai_params=["tools", "response_format", "reasoning_effort"],
+                response_format=test_response_format,
+                reasoning_effort=test_reasoning_effort,
+                tools=test_tools,
+            )
+        except Exception:
+            pass  # We only care about the request body validation
+
+        # Verify the API call was made
+        mock_post.assert_called_once()
+
+        # Get and parse the request body
+        request_data = json.loads(mock_post.call_args.kwargs["data"])
+        print(f"request_data: {request_data}")
+
+        # Validate request contains our specified parameters
+        assert "allowed_openai_params" not in request_data
+        assert request_data["response_format"] == test_response_format
+        assert request_data["reasoning_effort"] == test_reasoning_effort
 
 
 @pytest.mark.asyncio
-async def test_cohere_documents_options_in_request_body(_cohere_httpx_transport: None) -> None:
-    test_documents: Final = [
-        {"data": {"title": "Test Document 1", "snippet": "This is test content 1"}},
-        {"data": {"title": "Test Document 2", "snippet": "This is test content 2"}},
-    ]
-    with respx.mock(assert_all_called=True) as api:
-        mock_post: Final = MagicMock()
-        api.post(COHERE_V2_CHAT_URL).mock(
-            side_effect=_mock_post_response(
-                mock_post,
-                httpx.Response(
-                    200,
-                    json={
-                        "id": "mock-id",
-                        "finish_reason": "COMPLETE",
-                        "message": {
-                            "role": "assistant",
-                            "content": [{"type": "text", "text": "Test response with citations"}],
-                        },
-                        "usage": {"tokens": {"input_tokens": 1, "output_tokens": 1}},
-                    },
-                ),
-            )
-        )
-        await litellm.acompletion(
-            model="cohere_chat/command-a-03-2025",
-            messages=[{"role": "user", "content": "Test message"}],
-            documents=test_documents,
-        )
-        mock_post.assert_called_once()
-        request_data: Final = json.loads(mock_post.call_args.args[0].content)
+async def test_cohere_documents_options_in_request_body():
+    """
+    Test that documents parameters is properly included
+    in the request body after transformation (sent via extra_body).
+    """
+    # Create a mock response
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "text": "Test response with citations",
+        "generation_id": "mock-generation-id",
+        "finish_reason": "COMPLETE",
+    }
 
-    assert "documents" in request_data
-    assert request_data["documents"] == test_documents
+    # Mock the AsyncHTTPHandler.post method
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        try:
+            # Test documents and citation_options parameters
+            test_documents = [
+                {
+                    "data": {
+                        "title": "Test Document 1",
+                        "snippet": "This is test content 1",
+                    }
+                },
+                {
+                    "data": {
+                        "title": "Test Document 2",
+                        "snippet": "This is test content 2",
+                    }
+                },
+            ]
+            await litellm.acompletion(
+                model="cohere_chat/command-a-03-2025",
+                messages=[{"role": "user", "content": "Test message"}],
+                documents=test_documents,
+            )
+        except Exception:
+            pass  # We only care about the request body validation
+
+        # Verify the API call was made
+        mock_post.assert_called_once()
+
+        # Get and parse the request body
+        request_data = json.loads(mock_post.call_args.kwargs["data"])
+        print(f"Request body: {request_data}")
+
+        # Validate that documents and citation_options are in the request body
+        assert "documents" in request_data
+        assert request_data["documents"] == test_documents

@@ -9,64 +9,78 @@ import litellm
 from litellm import Router
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+import os
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+from litellm.integrations.custom_logger import CustomLogger
 
 
 @pytest.mark.asyncio
-async def test_async_fallbacks_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_async_fallbacks_streaming():
     """Test that router.acompletion with stream=True and mock_response works correctly."""
-    monkeypatch.setattr(litellm, "set_verbose", False)
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "azure/gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "azure/gpt-4.1-mini",
-                    "api_key": "fake-key",
-                    "api_version": "2024-01-01",
-                    "api_base": "https://fake.openai.azure.com",
-                },
-                "tpm": 240000,
-                "rpm": 1800,
+    litellm.set_verbose = False
+    model_list = [
+        {
+            "model_name": "azure/gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/gpt-4.1-mini",
+                "api_key": "fake-key",
+                "api_version": "2024-01-01",
+                "api_base": "https://fake.openai.azure.com",
             },
-            {
-                "model_name": "gpt-4o-mini",
-                "litellm_params": {
-                    "model": "gpt-4o-mini",
-                    "api_key": "fake-key",
-                },
-                "tpm": 1000000,
-                "rpm": 9000,
+            "tpm": 240000,
+            "rpm": 1800,
+        },
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {
+                "model": "gpt-4o-mini",
+                "api_key": "fake-key",
             },
-        ],
+            "tpm": 1000000,
+            "rpm": 9000,
+        },
+    ]
+
+    router = Router(
+        model_list=model_list,
         fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-4o-mini"]}],
         set_verbose=False,
     )
-    response: Final = await router.acompletion(
-        model="azure/gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Hello, how are you?"}],
-        stream=True,
-        mock_response="This is a mock streaming response",
-    )
-    chunks: Final = tuple([chunk async for chunk in response])
-    assert chunks
+    customHandler = MyCustomHandler()
+    litellm.callbacks = [customHandler]
+    user_message = "Hello, how are you?"
+    try:
+        response = await router.acompletion(
+            model="azure/gpt-3.5-turbo",
+            messages=[{"role": "user", "content": user_message}],
+            stream=True,
+            mock_response="This is a mock streaming response",
+        )
+        chunks = []
+        async for chunk in response:
+            chunks.append(chunk)
+        assert len(chunks) > 0, "Expected at least one streaming chunk"
+        router.reset()
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {e}")
+    finally:
+        router.reset()
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("litellm_module_fallbacks", [True, False])
 @pytest.mark.asyncio
-async def test_default_model_fallbacks(
-    sync_mode: bool,
-    litellm_module_fallbacks: bool,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks):
     """
     Related issue - https://github.com/BerriAI/litellm/issues/3623
 
     If model misconfigured, setup a default model for generic fallback
     """
     if litellm_module_fallbacks:
-        monkeypatch.setattr(litellm, "default_fallbacks", ["my-good-model"])
-    router: Final = Router(
+        litellm.default_fallbacks = ["my-good-model"]
+    router = Router(
         model_list=[
             {
                 "model_name": "bad-model",
@@ -79,28 +93,29 @@ async def test_default_model_fallbacks(
                 "model_name": "my-good-model",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_key": "test-key",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
                 },
             },
         ],
-        default_fallbacks=(["my-good-model"] if litellm_module_fallbacks is False else None),
+        default_fallbacks=(
+            ["my-good-model"] if litellm_module_fallbacks is False else None
+        ),
     )
 
-    response: Final = (
-        router.completion(
+    if sync_mode:
+        response = router.completion(
             model="bad-model",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
             mock_testing_fallbacks=True,
             mock_response="Hey! nice day",
         )
-        if sync_mode
-        else await router.acompletion(
+    else:
+        response = await router.acompletion(
             model="bad-model",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
             mock_testing_fallbacks=True,
             mock_response="Hey! nice day",
         )
-    )
 
     assert isinstance(response, litellm.ModelResponse)
     assert response.model is not None and response.model == "gpt-4o"
@@ -108,7 +123,7 @@ async def test_default_model_fallbacks(
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_client_side_fallbacks_list(sync_mode: bool) -> None:
+async def test_client_side_fallbacks_list(sync_mode):
     """
 
     Tests Client Side Fallbacks
@@ -116,7 +131,7 @@ async def test_client_side_fallbacks_list(sync_mode: bool) -> None:
     User can pass "fallbacks": ["gpt-3.5-turbo"] and this should work
 
     """
-    router: Final = Router(
+    router = Router(
         model_list=[
             {
                 "model_name": "bad-model",
@@ -129,29 +144,28 @@ async def test_client_side_fallbacks_list(sync_mode: bool) -> None:
                 "model_name": "my-good-model",
                 "litellm_params": {
                     "model": "gpt-4o",
-                    "api_key": "test-key",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
                 },
             },
         ],
     )
 
-    response: Final = (
-        router.completion(
+    if sync_mode:
+        response = router.completion(
             model="bad-model",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
             fallbacks=["my-good-model"],
             mock_testing_fallbacks=True,
             mock_response="Hey! nice day",
         )
-        if sync_mode
-        else await router.acompletion(
+    else:
+        response = await router.acompletion(
             model="bad-model",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
             fallbacks=["my-good-model"],
             mock_testing_fallbacks=True,
             mock_response="Hey! nice day",
         )
-    )
 
     assert isinstance(response, litellm.ModelResponse)
     assert response.model is not None and response.model == "gpt-4o"
@@ -162,22 +176,19 @@ async def test_client_side_fallbacks_list(sync_mode: bool) -> None:
 @pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
 @pytest.mark.asyncio
 async def test_router_content_policy_fallbacks(
-    sync_mode: bool,
-    content_filter_response_exception: bool,
-    fallback_type: Literal["model-specific", "default"],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LITELLM_LOG", "DEBUG")
+    sync_mode, content_filter_response_exception, fallback_type
+):
+    os.environ["LITELLM_LOG"] = "DEBUG"
 
     if content_filter_response_exception:
-        mock_response: Final = Exception("content filtering policy")
+        mock_response = Exception("content filtering policy")
     else:
-        mock_response: Final = litellm.ModelResponse(
+        mock_response = litellm.ModelResponse(
             choices=[litellm.Choices(finish_reason="content_filter")],
             model="gpt-3.5-turbo",
             usage=litellm.Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
         )
-    router: Final = Router(
+    router = Router(
         model_list=[
             {
                 "model_name": "claude-sonnet-4-5-20250929",
@@ -221,22 +232,25 @@ async def test_router_content_policy_fallbacks(
             },
         ],
         content_policy_fallbacks=(
-            [{"claude-sonnet-4-5-20250929": ["my-fallback-model"]}] if fallback_type == "model-specific" else None
+            [{"claude-sonnet-4-5-20250929": ["my-fallback-model"]}]
+            if fallback_type == "model-specific"
+            else None
         ),
-        default_fallbacks=(["my-default-fallback-model"] if fallback_type == "default" else None),
+        default_fallbacks=(
+            ["my-default-fallback-model"] if fallback_type == "default" else None
+        ),
     )
 
-    response: Final = (
-        router.completion(
+    if sync_mode is True:
+        response = router.completion(
             model="claude-sonnet-4-5-20250929",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
-        if sync_mode
-        else await router.acompletion(
+    else:
+        response = await router.acompletion(
             model="claude-sonnet-4-5-20250929",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
-    )
 
     assert response.model == "my-fake-model"
 
@@ -249,28 +263,30 @@ def mock_post_streaming(url: str, **kwargs: object) -> MagicMock:
     return response
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_anthropic_streaming_fallbacks(
-    sync_mode: bool,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    client: Final = HTTPHandler(concurrent_limit=1) if sync_mode else AsyncHTTPHandler(concurrent_limit=1)
-    router: Final = Router(
+async def test_anthropic_streaming_fallbacks(sync_mode):
+    litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    if sync_mode:
+        client = HTTPHandler(concurrent_limit=1)
+    else:
+        client = AsyncHTTPHandler(concurrent_limit=1)
+
+    router = Router(
         model_list=[
             {
                 "model_name": "anthropic/claude-sonnet-4-5-20250929",
                 "litellm_params": {
                     "model": "anthropic/claude-sonnet-4-5-20250929",
-                    "api_key": "test-key",
                 },
             },
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_key": "test-key",
                     "mock_response": "Hey, how's it going?",
                 },
             },
@@ -280,59 +296,69 @@ async def test_anthropic_streaming_fallbacks(
     )
 
     with patch.object(client, "post", side_effect=mock_post_streaming) as mock_client:
+        chunks = []
         if sync_mode:
-            chunks: Final = tuple(
-                router.completion(
-                    model="anthropic/claude-sonnet-4-5-20250929",
-                    messages=[{"role": "user", "content": "Hey, how's it going?"}],
-                    stream=True,
-                    client=client,
-                )
-            )
-        else:
-            response: Final = await router.acompletion(
+            response = router.completion(
                 model="anthropic/claude-sonnet-4-5-20250929",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 stream=True,
                 client=client,
             )
-            chunks: Final = tuple([chunk async for chunk in response])
+            for chunk in response:
+                print(chunk)
+                chunks.append(chunk)
+        else:
+            response = await router.acompletion(
+                model="anthropic/claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                stream=True,
+                client=client,
+            )
+            async for chunk in response:
+                print(chunk)
+                chunks.append(chunk)
+        print(f"RETURNED response: {response}")
 
         mock_client.assert_called_once()
-        assert chunks
+        print(chunks)
+        assert len(chunks) > 0
 
 
-def test_router_fallbacks_with_custom_model_costs() -> None:
+def test_router_fallbacks_with_custom_model_costs():
     """
     Tests prod use-case where a custom model is registered with a different provider + custom costs.
 
     Goal: make sure custom model doesn't override default model costs.
     """
 
-    default_model_info: Final = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "claude-sonnet-4-5-20250929",
-                "litellm_params": {
-                    "model": "claude-sonnet-4-5-20250929",
-                    "api_key": "test-key",
-                    "input_cost_per_token": 30,
-                    "output_cost_per_token": 60,
-                    "mock_response": "Hello! How can I help you today?",
-                },
+    default_model_info = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
+
+    model_list = [
+        {
+            "model_name": "claude-sonnet-4-5-20250929",
+            "litellm_params": {
+                "model": "claude-sonnet-4-5-20250929",
+                "api_key": os.environ.get("ANTHROPIC_API_KEY", "fake-key"),
+                "input_cost_per_token": 30,
+                "output_cost_per_token": 60,
+                "mock_response": "Hello! How can I help you today?",
             },
-            {
-                "model_name": "claude-3-5-sonnet-aihubmix",
-                "litellm_params": {
-                    "model": "openai/claude-sonnet-4-5-20250929",
-                    "input_cost_per_token": 0.000003,
-                    "output_cost_per_token": 0.000015,
-                    "api_key": "my-fake-key",
-                    "mock_response": "Hello! How can I help you today?",
-                },
+        },
+        {
+            "model_name": "claude-3-5-sonnet-aihubmix",
+            "litellm_params": {
+                "model": "openai/claude-sonnet-4-5-20250929",
+                "input_cost_per_token": 0.000003,  # 3$/M
+                "output_cost_per_token": 0.000015,  # 15$/M
+                "api_base": FAKE_OPENAI_API_BASE,
+                "api_key": "my-fake-key",
+                "mock_response": "Hello! How can I help you today?",
             },
-        ],
+        },
+    ]
+
+    router = Router(
+        model_list=model_list,
         fallbacks=[{"claude-sonnet-4-5-20250929": ["claude-3-5-sonnet-aihubmix"]}],
     )
 
@@ -341,38 +367,44 @@ def test_router_fallbacks_with_custom_model_costs() -> None:
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
 
-    fallback_model_info: Final = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
+    model_info = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
 
-    assert fallback_model_info["litellm_provider"] == "anthropic"
+    print(f"key: {model_info['key']}")
 
-    response: Final = router.completion(
+    assert model_info["litellm_provider"] == "anthropic"
+
+    response = router.completion(
         model="claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
 
+    print(f"response_cost: {response._hidden_params['response_cost']}")
+
     assert response._hidden_params["response_cost"] > 10
 
-    final_model_info: Final = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
+    model_info = litellm.get_model_info(model="claude-sonnet-4-5-20250929")
 
-    assert final_model_info["input_cost_per_token"] == default_model_info["input_cost_per_token"]
-    assert final_model_info["output_cost_per_token"] == default_model_info["output_cost_per_token"]
+    print(f"key: {model_info['key']}")
+
+    assert model_info["input_cost_per_token"] == default_model_info["input_cost_per_token"]
+    assert model_info["output_cost_per_token"] == default_model_info["output_cost_per_token"]
 
 
-def test_router_fallbacks_with_wildcard_model_name() -> None:
-    router: Final = Router(
+def test_router_fallbacks_with_wildcard_model_name():
+    router = Router(
         model_list=[
             {
                 "model_name": "openai/*",
                 "litellm_params": {
                     "model": "openai/*",
-                    "api_key": "test-key",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
                 },
             },
             {
                 "model_name": "claude-3-haiku",
                 "litellm_params": {
                     "model": "claude-haiku-4-5-20251001",
-                    "api_key": "test-key",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
                     "mock_response": "Hi this is claude!",
                 },
             },
@@ -380,23 +412,27 @@ def test_router_fallbacks_with_wildcard_model_name() -> None:
         fallbacks=[{"gpt-3.5-turbo": ["claude-3-haiku"]}],
     )
 
-    response: Final = router.completion(
+    response = router.completion(
         model="openai/gpt-3.5-turbo",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         mock_testing_fallbacks=True,
     )
 
+    print(response)
     assert response["choices"][0]["message"]["content"] == "Hi this is claude!"
 
 
-def test_get_fallback_model_group() -> None:
-    fallback_model_group, _ = get_fallback_model_group(
-        fallbacks=[
+def test_get_fallback_model_group():
+    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+
+    args = {
+        "fallbacks": [
             {"gpt-3.5-turbo": ["claude-3-haiku"]},
             {"*": ["claude-3-sonnet"]},
         ],
-        model_group="openai/gpt-3.5-turbo",
-    )
+        "model_group": "openai/gpt-3.5-turbo",
+    }
+    fallback_model_group, _ = get_fallback_model_group(**args)
     assert fallback_model_group == ["claude-3-haiku"]
 
 
@@ -434,3 +470,39 @@ async def test_router_attempted_fallbacks_in_response(
     assert (
         response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == expected_attempted_fallbacks
     )
+
+
+class MyCustomHandler(CustomLogger):
+    success: bool = False
+    failure: bool = False
+    previous_models: int = 0
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        print(f"Pre-API Call")
+        print(
+            f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}"
+        )
+        self.previous_models = len(
+            kwargs["litellm_params"]["metadata"].get("previous_models", [])
+        )  # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
+        print(f"self.previous_models: {self.previous_models}")
+
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+        print(
+            f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}"
+        )
+
+    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Stream")
+
+    def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Stream")
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Success")
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Success")
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Failure")

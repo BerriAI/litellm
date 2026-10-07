@@ -37,6 +37,8 @@ from litellm.router_utils.fallback_event_handlers import (
     run_async_fallback,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from typing import Dict
+import os
 
 
 class StreamingWrapper:
@@ -2104,123 +2106,211 @@ def _create_fallback_event_router() -> Router:
     )
 
 
-@pytest.mark.parametrize("function_name", ["_acompletion", "_atext_completion", "_aembedding"])
+@pytest.mark.parametrize(
+    "function_name",
+    ["_acompletion", "_atext_completion", "_aembedding"],
+)
 @pytest.mark.asyncio
-async def test_run_async_fallback(
-    function_name: Literal["_acompletion", "_atext_completion", "_aembedding"],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    router: Final = _create_fallback_event_router()
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    original_function: Final = {
-        "_acompletion": router._acompletion,
-        "_atext_completion": router._atext_completion,
-        "_aembedding": router._aembedding,
-    }[function_name]
-    original_exception: Final = litellm.exceptions.InternalServerError(
+async def test_run_async_fallback(function_name):
+    """
+    Basic test - given a list of fallback models, run the original function with the fallback models
+    """
+    router = create_test_router()
+    original_function = getattr(router, function_name)
+
+    litellm.set_verbose = True
+    fallback_model_group = ["gpt-4"]
+    original_model_group = "gpt-3.5-turbo"
+    original_exception = litellm.exceptions.InternalServerError(
         message="Simulated error",
         llm_provider="openai",
         model="gpt-3.5-turbo",
     )
-    request_kwargs: Final = {
+
+    request_kwargs = {
         "mock_response": "hello this is a test for run_async_fallback",
         "metadata": {"previous_models": ["gpt-3.5-turbo"]},
-        **{
-            "_acompletion": {"messages": [{"role": "user", "content": "Hello, world!"}]},
-            "_atext_completion": {"prompt": "hello this is a test for run_async_fallback"},
-            "_aembedding": {"input": "hello this is a test for run_async_fallback"},
-        }[function_name],
     }
 
-    result: Final = await run_async_fallback(
+    if function_name == "_aembedding":
+        request_kwargs["input"] = "hello this is a test for run_async_fallback"
+    elif function_name == "_atext_completion":
+        request_kwargs["prompt"] = "hello this is a test for run_async_fallback"
+    elif function_name == "_acompletion":
+        request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
+
+    result = await run_async_fallback(
         litellm_router=router,
         original_function=original_function,
         num_retries=1,
-        fallback_model_group=["gpt-4"],
-        original_model_group="gpt-3.5-turbo",
+        fallback_model_group=fallback_model_group,
+        original_model_group=original_model_group,
         original_exception=original_exception,
         max_fallbacks=5,
         fallback_depth=0,
         **request_kwargs,
     )
 
+    assert result is not None
+
     if function_name == "_acompletion":
         assert isinstance(result, litellm.ModelResponse)
     elif function_name == "_atext_completion":
         assert isinstance(result, litellm.TextCompletionResponse)
-    else:
+    elif function_name == "_aembedding":
         assert isinstance(result, litellm.EmbeddingResponse)
 
 
 @pytest.mark.asyncio
-async def test_log_success_fallback_event(monkeypatch: pytest.MonkeyPatch) -> None:
-    original_model_group: Final = "gpt-3.5-turbo"
-    kwargs: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "Hello, world!"}]}
-    original_exception: Final = litellm.exceptions.InternalServerError(
+async def test_log_success_fallback_event():
+    """
+    Tests that successful fallback events are logged correctly
+    """
+    original_model_group = "gpt-3.5-turbo"
+    kwargs = {"messages": [{"role": "user", "content": "Hello, world!"}]}
+    original_exception = litellm.exceptions.InternalServerError(
         message="Simulated error",
         llm_provider="openai",
         model="gpt-3.5-turbo",
     )
-    logger: Final = FallbackEventLogger()
-    monkeypatch.setattr(litellm, "callbacks", [logger])
 
+    logger = CustomTestLogger()
+    litellm.callbacks = [logger]
+
+    # This test mainly checks if the function runs without errors
     await log_success_fallback_event(original_model_group, kwargs, original_exception)
 
-    assert logger.success_fallback_events == [(original_model_group, kwargs, original_exception)]
-    assert logger.failure_fallback_events == []
+    await asyncio.sleep(0.5)
+    assert len(logger.success_fallback_events) == 1
+    assert len(logger.failure_fallback_events) == 0
+    assert logger.success_fallback_events[0] == (
+        original_model_group,
+        kwargs,
+        original_exception,
+    )
 
 
 @pytest.mark.asyncio
-async def test_log_failure_fallback_event(monkeypatch: pytest.MonkeyPatch) -> None:
-    original_model_group: Final = "gpt-3.5-turbo"
-    kwargs: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "Hello, world!"}]}
-    original_exception: Final = litellm.exceptions.InternalServerError(
+async def test_log_failure_fallback_event():
+    """
+    Tests that failed fallback events are logged correctly
+    """
+    original_model_group = "gpt-3.5-turbo"
+    kwargs = {"messages": [{"role": "user", "content": "Hello, world!"}]}
+    original_exception = litellm.exceptions.InternalServerError(
         message="Simulated error",
         llm_provider="openai",
         model="gpt-3.5-turbo",
     )
-    logger: Final = FallbackEventLogger()
-    monkeypatch.setattr(litellm, "callbacks", [logger])
 
+    logger = CustomTestLogger()
+    litellm.callbacks = [logger]
+
+    # This test mainly checks if the function runs without errors
     await log_failure_fallback_event(original_model_group, kwargs, original_exception)
 
-    assert logger.failure_fallback_events == [(original_model_group, kwargs, original_exception)]
-    assert logger.success_fallback_events == []
+    await asyncio.sleep(0.5)
+
+    assert len(logger.failure_fallback_events) == 1
+    assert len(logger.success_fallback_events) == 0
+    assert logger.failure_fallback_events[0] == (
+        original_model_group,
+        kwargs,
+        original_exception,
+    )
 
 
-@pytest.mark.parametrize("function_name", ["_acompletion", "_atext_completion"])
 @pytest.mark.asyncio
-async def test_failed_fallbacks_raise_most_recent_exception(
-    function_name: Literal["_acompletion", "_atext_completion"],
-) -> None:
-    router: Final = _create_fallback_event_router()
-    original_function: Final = {
-        "_acompletion": router._acompletion,
-        "_atext_completion": router._atext_completion,
-    }[function_name]
-    original_exception: Final = litellm.exceptions.InternalServerError(
+@pytest.mark.parametrize("function_name", ["_acompletion", "_atext_completion"])
+async def test_failed_fallbacks_raise_most_recent_exception(function_name):
+    """
+    Tests that if all fallbacks fail, the most recent occuring exception is raised
+
+    meaning the exception from the last fallback model is raised
+    """
+    router = create_test_router()
+    original_function = getattr(router, function_name)
+
+    fallback_model_group = ["gpt-4"]
+    original_model_group = "gpt-3.5-turbo"
+    original_exception = litellm.exceptions.InternalServerError(
         message="Simulated error",
         llm_provider="openai",
         model="gpt-3.5-turbo",
     )
-    request_kwargs: Final = {
-        "metadata": {"previous_models": ["gpt-3.5-turbo"]},
-        **{
-            "_acompletion": {"messages": [{"role": "user", "content": "Hello, world!"}]},
-            "_atext_completion": {"prompt": "hello this is a test for run_async_fallback"},
-        }[function_name],
+
+    request_kwargs: Dict[str, Any] = {
+        "metadata": {"previous_models": ["gpt-3.5-turbo"]}
     }
+
+    if function_name == "_aembedding":
+        request_kwargs["input"] = "hello this is a test for run_async_fallback"
+    elif function_name == "_atext_completion":
+        request_kwargs["prompt"] = "hello this is a test for run_async_fallback"
+    elif function_name == "_acompletion":
+        request_kwargs["messages"] = [{"role": "user", "content": "Hello, world!"}]
 
     with pytest.raises(litellm.exceptions.RateLimitError):
         await run_async_fallback(
             litellm_router=router,
             original_function=original_function,
             num_retries=1,
-            fallback_model_group=["gpt-4"],
-            original_model_group="gpt-3.5-turbo",
+            fallback_model_group=fallback_model_group,
+            original_model_group=original_model_group,
             original_exception=original_exception,
             mock_response="litellm.RateLimitError",
             max_fallbacks=5,
             fallback_depth=0,
             **request_kwargs,
+        )
+
+
+def create_test_router():
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+        fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}],
+    )
+
+
+class CustomTestLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.success_fallback_events = []
+        self.failure_fallback_events = []
+
+    async def log_success_fallback_event(
+        self, original_model_group, kwargs, original_exception
+    ):
+        print(
+            "in log_success_fallback_event for original_model_group: ",
+            original_model_group,
+        )
+        self.success_fallback_events.append(
+            (original_model_group, kwargs, original_exception)
+        )
+
+    async def log_failure_fallback_event(
+        self, original_model_group, kwargs, original_exception
+    ):
+        print(
+            "in log_failure_fallback_event for original_model_group: ",
+            original_model_group,
+        )
+        self.failure_fallback_events.append(
+            (original_model_group, kwargs, original_exception)
         )

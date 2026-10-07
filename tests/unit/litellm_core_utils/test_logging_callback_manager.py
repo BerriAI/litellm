@@ -282,9 +282,7 @@ def test_generic_api_compatible_callbacks_json_unknown_callback():
 
 
 @pytest.mark.asyncio
-async def test_generic_api_callback_settings_retry_config(
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_generic_api_callback_settings_retry_config():
     """
     Test that generic_api callback_settings are passed to GenericAPILogger.
     """
@@ -295,24 +293,19 @@ async def test_generic_api_callback_settings_retry_config(
 
     callback_name = "test_generic_api_retry_config"
     _generic_api_logger_cache.pop(callback_name, None)
-    monkeypatch.setattr(
-        litellm,
-        "callback_settings",
-        {
-            **litellm.callback_settings,
-            callback_name: {
-                "callback_type": "generic_api",
-                "endpoint": "https://example.com/api/logs",
-                "headers": {"Content-Type": "application/json"},
-                "max_retries": 2,
-                "retry_delay": 0.5,
-                "timeout": 3,
-            },
-        },
-    )
+    litellm.callback_settings[callback_name] = {
+        "callback_type": "generic_api",
+        "endpoint": "https://example.com/api/logs",
+        "headers": {"Content-Type": "application/json"},
+        "max_retries": 2,
+        "retry_delay": 0.5,
+        "timeout": 3,
+    }
 
     try:
-        result = LoggingCallbackManager.add_custom_callback_generic_api_str(callback_name)
+        result = LoggingCallbackManager.add_custom_callback_generic_api_str(
+            callback_name
+        )
 
         assert isinstance(result, GenericAPILogger)
         assert result.endpoint == "https://example.com/api/logs"
@@ -321,4 +314,5 @@ async def test_generic_api_callback_settings_retry_config(
         assert result.retry_delay == 0.5
         assert result.timeout == 3
     finally:
+        litellm.callback_settings.pop(callback_name, None)
         _generic_api_logger_cache.pop(callback_name, None)

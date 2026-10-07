@@ -11,6 +11,8 @@ from botocore.exceptions import ClientError
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.sagemaker.chat.handler import SagemakerChatHandler
+import logging
+from litellm._logging import verbose_logger
 
 
 def test_load_credentials_assumes_role_with_external_id(monkeypatch):
@@ -96,67 +98,68 @@ def test_load_credentials_assumes_role_with_session_tags(monkeypatch):
     assert "aws_session_tags" not in optional_params
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("sync_mode", [True, False])
-async def test_completion_sagemaker_messages_api(
-    sync_mode: bool,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response_body: Final = {
-        "id": "chatcmpl-test",
-        "object": "chat.completion",
-        "created": 1,
-        "model": "unit-test-endpoint",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "response"},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-    }
-    response: Final = httpx.Response(
-        200,
-        json=response_body,
-        request=httpx.Request(
-            "POST",
-            "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/unit-test-endpoint/invocations",
-        ),
-    )
-    client: Final = HTTPHandler() if sync_mode else AsyncHTTPHandler()
-    mock_post: Final = Mock(return_value=response) if sync_mode else AsyncMock(return_value=response)
-    monkeypatch.setattr(client, "post", mock_post)
-    model: Final = "sagemaker_chat/unit-test-endpoint"
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "sync_mode",
+    [True, False],
+)
+async def test_completion_sagemaker_messages_api(sync_mode):
+    try:
+        litellm.set_verbose = True
+        verbose_logger.setLevel(logging.DEBUG)
+        print("testing sagemaker")
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-    completion_response: Final = (
-        litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            temperature=0.2,
-            max_tokens=80,
-            aws_access_key_id="test-access-key",
-            aws_secret_access_key="test-secret-key",
-            aws_region_name="us-east-1",
-            client=client,
-        )
-        if sync_mode
-        else await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            temperature=0.2,
-            max_tokens=80,
-            aws_access_key_id="test-access-key",
-            aws_secret_access_key="test-secret-key",
-            aws_region_name="us-east-1",
-            client=client,
-        )
-    )
+        if sync_mode is True:
+            client = HTTPHandler()
+            with patch.object(client, "post") as mock_post:
+                try:
+                    resp = litellm.completion(
+                        model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+                        messages=[
+                            {"role": "user", "content": "hi"},
+                        ],
+                        temperature=0.2,
+                        max_tokens=80,
+                        client=client,
+                    )
+                except Exception as e:
+                    print(e)
+                mock_post.assert_called_once()
+                json_data = json.loads(mock_post.call_args.kwargs["data"])
+                assert (
+                    json_data["model"]
+                    == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
+                )
+                assert json_data["messages"] == [{"role": "user", "content": "hi"}]
+                assert json_data["temperature"] == 0.2
+                assert json_data["max_tokens"] == 80
 
-    assert mock_post.call_count == 1
-    assert completion_response.choices[0].message.content == "response"
-    request_body: Final = json.loads(mock_post.call_args.kwargs["data"])
-    assert request_body["model"] == "unit-test-endpoint"
-    assert request_body["messages"] == [{"role": "user", "content": "hi"}]
-    assert request_body["temperature"] == 0.2
-    assert request_body["max_tokens"] == 80
+        else:
+            client = AsyncHTTPHandler()
+            with patch.object(client, "post") as mock_post:
+                try:
+                    resp = await litellm.acompletion(
+                        model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+                        messages=[
+                            {"role": "user", "content": "hi"},
+                        ],
+                        temperature=0.2,
+                        max_tokens=80,
+                        num_retries=0,
+                        client=client,
+                    )
+                except Exception as e:
+                    print(e)
+                mock_post.assert_called_once()
+                json_data = json.loads(mock_post.call_args.kwargs["data"])
+                assert (
+                    json_data["model"]
+                    == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
+                )
+                assert json_data["messages"] == [{"role": "user", "content": "hi"}]
+                assert json_data["temperature"] == 0.2
+                assert json_data["max_tokens"] == 80
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")

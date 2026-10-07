@@ -85,7 +85,8 @@ async def test_azure_ava_tts_fable_voice_mapping():
 
 
 @pytest.mark.asyncio
-async def test_aws_polly_tts_with_native_voice(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.usefixtures("fake_provider_credentials")
+async def test_aws_polly_tts_with_native_voice():
     """
     Test AWS Polly TTS with a native Polly voice (Joanna).
     Verifies the request is formatted correctly for the Polly API.
@@ -95,16 +96,16 @@ async def test_aws_polly_tts_with_native_voice(monkeypatch: pytest.MonkeyPatch):
 
     import httpx
 
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
-
+    # Mock response - Polly returns audio bytes directly
     mock_response_content = b"fake_audio_data"
     mock_httpx_response = MagicMock(spec=httpx.Response)
     mock_httpx_response.content = mock_response_content
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -114,14 +115,18 @@ async def test_aws_polly_tts_with_native_voice(monkeypatch: pytest.MonkeyPatch):
             aws_region_name="us-east-1",
         )
 
+        # Verify the mock was called
         assert mock_post.called
 
+        # Get the call arguments - AWS Polly uses data= with JSON string (for SigV4 signing)
         call_args = mock_post.call_args
         request_data = call_args.kwargs.get("data")
 
+        # Parse the JSON body
         assert request_data is not None
         request_body = json.loads(request_data)
 
+        # Verify the request body is formatted correctly for Polly
         assert request_body["VoiceId"] == "Joanna"
         assert request_body["Text"] == "Hello, this is a test of AWS Polly"
         assert request_body["OutputFormat"] == "mp3"
@@ -130,7 +135,8 @@ async def test_aws_polly_tts_with_native_voice(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_aws_polly_tts_with_openai_voice_mapping(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.usefixtures("fake_provider_credentials")
+async def test_aws_polly_tts_with_openai_voice_mapping():
     """
     Test AWS Polly TTS with OpenAI voice mapping (alloy -> Joanna).
     Verifies that OpenAI voices are correctly mapped to Polly voices.
@@ -140,16 +146,15 @@ async def test_aws_polly_tts_with_openai_voice_mapping(monkeypatch: pytest.Monke
 
     import httpx
 
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
-
     mock_response_content = b"fake_audio_data"
     mock_httpx_response = MagicMock(spec=httpx.Response)
     mock_httpx_response.content = mock_response_content
     mock_httpx_response.status_code = 200
     mock_httpx_response.headers = {"content-type": "audio/mpeg"}
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -164,15 +169,18 @@ async def test_aws_polly_tts_with_openai_voice_mapping(monkeypatch: pytest.Monke
         call_args = mock_post.call_args
         request_data = call_args.kwargs.get("data")
 
+        # Parse the JSON body
         assert request_data is not None
         request_body = json.loads(request_data)
 
+        # Verify alloy was mapped to Joanna
         assert request_body["VoiceId"] == "Joanna"
         assert request_body["Text"] == "Testing OpenAI voice mapping"
 
 
 @pytest.mark.asyncio
-async def test_aws_polly_tts_with_ssml(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.usefixtures("fake_provider_credentials")
+async def test_aws_polly_tts_with_ssml():
     """
     Test AWS Polly TTS with SSML input.
     Verifies that SSML is detected and TextType is set correctly.
@@ -182,9 +190,6 @@ async def test_aws_polly_tts_with_ssml(monkeypatch: pytest.MonkeyPatch):
 
     import httpx
 
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
-
     mock_response_content = b"fake_audio_data"
     mock_httpx_response = MagicMock(spec=httpx.Response)
     mock_httpx_response.content = mock_response_content
@@ -193,7 +198,9 @@ async def test_aws_polly_tts_with_ssml(monkeypatch: pytest.MonkeyPatch):
 
     ssml_input = '<speak>Hello, <break time="500ms"/> this is SSML.</speak>'
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    ) as mock_post:
         mock_post.return_value = mock_httpx_response
 
         response = await litellm.aspeech(
@@ -208,9 +215,11 @@ async def test_aws_polly_tts_with_ssml(monkeypatch: pytest.MonkeyPatch):
         call_args = mock_post.call_args
         request_data = call_args.kwargs.get("data")
 
+        # Parse the JSON body
         assert request_data is not None
         request_body = json.loads(request_data)
 
+        # Verify SSML is detected and TextType is set to ssml
         assert request_body["Text"] == ssml_input
         assert request_body["TextType"] == "ssml"
         assert request_body["VoiceId"] == "Joanna"

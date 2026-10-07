@@ -14,7 +14,8 @@ def test_extract_cacheable_prefix_with_string_content_and_message_level_cache_co
 
     Regression test for issue #19228.
     """
-    messages_string_content: Final = [
+    # Test case 1: Single message with string content and message-level cache_control
+    messages_string_content = [
         {"role": "system", "content": "You are a helpful assistant"},
         {
             "role": "user",
@@ -23,8 +24,9 @@ def test_extract_cacheable_prefix_with_string_content_and_message_level_cache_co
         },
     ]
 
-    result: Final = PromptCachingCache.extract_cacheable_prefix(messages_string_content)
+    result = PromptCachingCache.extract_cacheable_prefix(messages_string_content)
 
+    # Should return both messages (system + user with cache_control)
     assert len(result) == 2, f"Expected 2 messages, got {len(result)}"
     assert result[0]["role"] == "system"
     assert result[1]["role"] == "user"
@@ -38,13 +40,14 @@ def test_extract_cacheable_prefix_with_string_content_no_cache_control():
     - content is a string
     - no cache_control is present
     """
-    messages_no_cache: Final = [
+    messages_no_cache = [
         {"role": "system", "content": "You are a helpful assistant"},
         {"role": "user", "content": "Hello"},
     ]
 
-    result: Final = PromptCachingCache.extract_cacheable_prefix(messages_no_cache)
+    result = PromptCachingCache.extract_cacheable_prefix(messages_no_cache)
 
+    # Should return empty list (no cacheable content)
     assert len(result) == 0, f"Expected 0 messages, got {len(result)}"
 
 
@@ -56,7 +59,8 @@ def test_extract_cacheable_prefix_mixed_string_and_list_content():
 
     The last cache_control (regardless of format) should determine the cacheable prefix.
     """
-    messages_mixed: Final = [
+    # Message with string content + cache_control, followed by message with list content + cache_control
+    messages_mixed = [
         {"role": "system", "content": "You are a helpful assistant"},
         {
             "role": "user",
@@ -76,8 +80,9 @@ def test_extract_cacheable_prefix_mixed_string_and_list_content():
         {"role": "user", "content": "This should not be in the prefix"},
     ]
 
-    result: Final = PromptCachingCache.extract_cacheable_prefix(messages_mixed)
+    result = PromptCachingCache.extract_cacheable_prefix(messages_mixed)
 
+    # Should include first 3 messages (up to and including the last cache_control)
     assert len(result) == 3, f"Expected 3 messages, got {len(result)}"
     assert result[0]["role"] == "system"
     assert result[1]["content"] == "First cached message"

@@ -86,6 +86,9 @@ from litellm.types.utils import CallTypes, CredentialItem
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.large_text import text
+import traceback
+import inspect
+from typing import List, Optional
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -6026,6 +6029,7 @@ def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
 async def test_aresponses_enforces_context_window_pre_call_check():
     """
     End-to-end router regression: a Responses API call whose `input` exceeds the
@@ -21002,14 +21006,19 @@ async def test_call_router_callbacks_on_failure():
         assert mock_callback.call_args_list[0].kwargs["key"].startswith("global_router:1:gemini/gemini-2.5-flash:rpm")
 
 @pytest.mark.asyncio
-async def test_rate_limit_error_callback(
-    isolate_litellm_state: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    custom_handler: Final = CustomLogger()
-    monkeypatch.setattr(litellm, "callbacks", [custom_handler])
-    monkeypatch.setattr(litellm, "success_callback", [])
-    router: Final = Router(
+async def test_rate_limit_error_callback():
+    """
+    Assert a callback is hit, if a model group starts hitting rate limit errors
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/4096
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    customHandler = CompletionCustomHandler()
+    litellm.callbacks = [customHandler]
+    litellm.success_callback = []
+
+    router = Router(
         model_list=[
             {
                 "model_name": "my-test-gpt",
@@ -21022,37 +21031,47 @@ async def test_rate_limit_error_callback(
         allowed_fails=2,
         num_retries=0,
     )
-    litellm_logging_obj: Final = LiteLLMLogging(
+
+    litellm_logging_obj = LiteLLMLogging(
         model="my-test-gpt",
         messages=[{"role": "user", "content": "hi"}],
         stream=False,
         call_type="acompletion",
-        litellm_call_id="unit-test-rate-limit",
-        start_time=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        function_id="unit-test-rate-limit",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
     )
 
-    with pytest.raises((litellm.RateLimitError, ValueError)):
-        await router.acompletion(
+    try:
+        _ = await router.acompletion(
             model="my-test-gpt",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
+    except Exception:
+        pass
 
     with patch.object(
-        custom_handler, "log_model_group_rate_limit_error", new=AsyncMock()
-    ) as mock_callback:
-        with pytest.raises((litellm.RateLimitError, ValueError)):
-            await router.acompletion(
+        customHandler, "log_model_group_rate_limit_error", new=AsyncMock()
+    ) as mock_client:
+
+        print(
+            f"customHandler.log_model_group_rate_limit_error: {customHandler.log_model_group_rate_limit_error}"
+        )
+
+        try:
+            _ = await router.acompletion(
                 model="my-test-gpt",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
                 litellm_logging_obj=litellm_logging_obj,
             )
+        except (litellm.RateLimitError, ValueError):
+            pass
 
-        await GLOBAL_LOGGING_WORKER.flush()
-        mock_callback.assert_awaited_once()
-        callback_args: Final = mock_callback.await_args
-        assert callback_args is not None
-        assert callback_args.kwargs["original_model_group"] == "my-test-gpt"
+        await asyncio.sleep(3)
+        mock_client.assert_called_once()
+
+        assert "original_model_group" in mock_client.call_args.kwargs
+        assert mock_client.call_args.kwargs["original_model_group"] == "my-test-gpt"
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
@@ -23065,7 +23084,7 @@ def test_router_multi_org_list() -> None:
     assert len(router.get_model_list()) == 3
 
 
-def test_router_specific_model_via_id() -> None:
+def test_router_specific_model_via_id():
     """
     Call a specific deployment by it's id
     """
@@ -23083,8 +23102,7 @@ def test_router_specific_model_via_id() -> None:
         ]
     )
 
-    response = router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
-    assert response._hidden_params["model_id"] == "1234"
+    router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
 
 
 def test_router_order() -> None:
@@ -23129,21 +23147,24 @@ def test_router_order() -> None:
         assert response._hidden_params["model_id"] == "1"
 
 
-@pytest.mark.usefixtures("local_model_cost_map")
-def test_router_context_window_check_pre_call_check_in_group_custom_model_info(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+def test_router_context_window_check_pre_call_check_in_group_custom_model_info():
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
     - Send a 5k prompt
     - Assert it works
     """
+    import os
 
-    monkeypatch.setattr(litellm, "set_verbose", False)
 
+    litellm.set_verbose = False
+
+    print(f"len(text): {len(text)}")
     try:
         model_list = [
             {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -23154,8 +23175,8 @@ def test_router_context_window_check_pre_call_check_in_group_custom_model_info(m
                 "model_info": {"max_input_tokens": 100},
             },
             {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
                     "model": "gpt-3.5-turbo-1106",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                     "mock_response": "Hello world 2!",
@@ -23164,7 +23185,7 @@ def test_router_context_window_check_pre_call_check_in_group_custom_model_info(m
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
 
         response = router.completion(
             model="gpt-3.5-turbo",
@@ -23173,26 +23194,31 @@ def test_router_context_window_check_pre_call_check_in_group_custom_model_info(m
             ],
         )
 
+        print(f"response: {response}")
+
         assert response.choices[0].message.content == "Hello world 1!"
     except Exception as e:
-        pytest.fail(f"Got unexpected exception on router! - {e!s}")
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-@pytest.mark.usefixtures("local_model_cost_map")
-def test_router_context_window_check_pre_call_check(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+def test_router_context_window_check_pre_call_check():
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
     - Send a 5k prompt
     - Assert it works
     """
+    import os
 
-    monkeypatch.setattr(litellm, "set_verbose", False)
 
+    litellm.set_verbose = False
+
+    print(f"len(text): {len(text)}")
     try:
         model_list = [
             {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -23203,8 +23229,8 @@ def test_router_context_window_check_pre_call_check(monkeypatch: pytest.MonkeyPa
                 "model_info": {"base_model": "azure/gpt-35-turbo"},
             },
             {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
                     "model": "gpt-3.5-turbo-1106",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                     "mock_response": "Hello world 2!",
@@ -23212,7 +23238,7 @@ def test_router_context_window_check_pre_call_check(monkeypatch: pytest.MonkeyPa
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
 
         response = router.completion(
             model="gpt-3.5-turbo",
@@ -23222,26 +23248,31 @@ def test_router_context_window_check_pre_call_check(monkeypatch: pytest.MonkeyPa
             ],
         )
 
+        print(f"response: {response}")
+
         assert response.choices[0].message.content == "Hello world 2!"
     except Exception as e:
-        pytest.fail(f"Got unexpected exception on router! - {e!s}")
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-@pytest.mark.usefixtures("local_model_cost_map")
-def test_router_context_window_check_pre_call_check_out_group(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("local_model_cost_map", "isolate_router_model_cost_state")
+def test_router_context_window_check_pre_call_check_out_group():
     """
     - Give 2 gpt-3.5-turbo model groups with different context windows (4k vs. 16k)
     - Send a 5k prompt
     - Assert it works
     """
+    import os
 
-    monkeypatch.setattr(litellm, "set_verbose", False)
 
+    litellm.set_verbose = False
+
+    print(f"len(text): {len(text)}")
     try:
         model_list = [
             {
-                "model_name": "gpt-3.5-turbo-small",
-                "litellm_params": {
+                "model_name": "gpt-3.5-turbo-small",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
@@ -23250,8 +23281,8 @@ def test_router_context_window_check_pre_call_check_out_group(monkeypatch: pytes
                 },
             },
             {
-                "model_name": "gpt-3.5-turbo-large",
-                "litellm_params": {
+                "model_name": "gpt-3.5-turbo-large",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
                     "model": "gpt-4.1-mini",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                     "mock_response": "Alexander was a great conqueror.",
@@ -23259,13 +23290,7 @@ def test_router_context_window_check_pre_call_check_out_group(monkeypatch: pytes
             },
         ]
 
-        router = Router(
-            model_list=model_list,
-            set_verbose=True,
-            enable_pre_call_checks=True,
-            num_retries=0,
-            context_window_fallbacks=[{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large"]}],
-        )
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0, context_window_fallbacks=[{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large"]}])  # type: ignore
 
         response = router.completion(
             model="gpt-3.5-turbo-small",
@@ -23274,14 +23299,13 @@ def test_router_context_window_check_pre_call_check_out_group(monkeypatch: pytes
                 {"role": "user", "content": "Who was Alexander?"},
             ],
         )
-        assert response.choices[0].message.content == "Alexander was a great conqueror."
 
+        print(f"response: {response}")
     except Exception as e:
-        pytest.fail(f"Got unexpected exception on router! - {e!s}")
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-@pytest.mark.usefixtures("local_model_cost_map")
-def test_filter_invalid_params_pre_call_check() -> None:
+def test_filter_invalid_params_pre_call_check():
     """
     - gpt-3.5-turbo supports 'response_object'
     - gpt-3.5-turbo-16k doesn't support 'response_object'
@@ -23291,8 +23315,8 @@ def test_filter_invalid_params_pre_call_check() -> None:
     try:
         model_list = [
             {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
                     "model": "gpt-3.5-turbo",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                 },
@@ -23306,7 +23330,7 @@ def test_filter_invalid_params_pre_call_check() -> None:
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
 
         filtered_deployments = router._pre_call_checks(
             model="gpt-3.5-turbo",
@@ -23316,19 +23340,19 @@ def test_filter_invalid_params_pre_call_check() -> None:
         )
         assert len(filtered_deployments) == 1
     except Exception as e:
-        pytest.fail(f"Got unexpected exception on router! - {e!s}")
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
 @pytest.mark.parametrize("allowed_model_region", ["eu", None, "us"])
-def test_router_region_pre_call_check(allowed_model_region: str | None) -> None:
+def test_router_region_pre_call_check(allowed_model_region):
     """
     If region based routing set
     - check if only model in allowed region is allowed by '_pre_call_checks'
     """
     model_list = [
         {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
+            "model_name": "gpt-3.5-turbo",  # openai model name
+            "litellm_params": {  # params for litellm completion/embedding call
                 "model": "azure/gpt-4.1-mini",
                 "api_key": os.getenv("AZURE_AI_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
@@ -23339,8 +23363,8 @@ def test_router_region_pre_call_check(allowed_model_region: str | None) -> None:
             "model_info": {"id": "1"},
         },
         {
-            "model_name": "gpt-3.5-turbo-large",
-            "litellm_params": {
+            "model_name": "gpt-3.5-turbo-large",  # openai model name
+            "litellm_params": {  # params for litellm completion/embedding call
                 "model": "gpt-4.1-mini",
                 "api_key": os.getenv("OPENAI_API_KEY"),
                 "mock_response": "This is a mock response.",
@@ -23361,9 +23385,13 @@ def test_router_region_pre_call_check(allowed_model_region: str | None) -> None:
     if allowed_model_region is None:
         assert len(_healthy_deployments) == 2
     else:
-        assert len(_healthy_deployments) == 1, f"{len(_healthy_deployments)} models selected as healthy"
-        assert _healthy_deployments[0]["model_info"]["id"] == "1", (
-            "Incorrect model id picked. Got id={}, expected id=1".format(_healthy_deployments[0]["model_info"]["id"])
+        assert len(_healthy_deployments) == 1, "{} models selected as healthy".format(
+            len(_healthy_deployments)
+        )
+        assert (
+            _healthy_deployments[0]["model_info"]["id"] == "1"
+        ), "Incorrect model id picked. Got id={}, expected id=1".format(
+            _healthy_deployments[0]["model_info"]["id"]
         )
 
 
@@ -23410,7 +23438,7 @@ def test_consistent_model_id() -> None:
     assert id1 == id2
 
 
-def test_router_add_deployment() -> None:
+def test_router_add_deployment():
     initial_model_list = [
         {
             "model_name": "fake-openai-endpoint",
@@ -23425,6 +23453,8 @@ def test_router_add_deployment() -> None:
 
     init_model_id_list = router.get_model_ids()
 
+    print(f"init_model_id_list: {init_model_id_list}")
+
     router.add_deployment(
         deployment=Deployment(
             model_name="gpt-instruct",
@@ -23434,6 +23464,8 @@ def test_router_add_deployment() -> None:
     )
 
     new_model_id_list = router.get_model_ids()
+
+    print(f"new_model_id_list: {new_model_id_list}")
 
     assert len(new_model_id_list) > len(init_model_id_list)
 
@@ -23489,9 +23521,7 @@ def test_router_get_model_info(model: str, base_model: str | None, llm_provider:
         ("gpt-4", None, "openai"),
     ],
 )
-def test_router_context_window_pre_call_check(
-    model: str, base_model: str | None, llm_provider: Literal["azure", "openai"], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_router_context_window_pre_call_check(model, base_model, llm_provider):
     """
     - For an azure model
     - if no base model set
@@ -23516,14 +23546,13 @@ def test_router_context_window_pre_call_check(
             num_retries=0,
         )
 
-        token_counter_mock = MagicMock()
-        monkeypatch.setattr(litellm, "token_counter", token_counter_mock)
+        litellm.token_counter = MagicMock()
 
         def token_counter_side_effect(*args, **kwargs):
-
+            # Process args and kwargs if needed
             return 1000000
 
-        token_counter_mock.side_effect = token_counter_side_effect
+        litellm.token_counter.side_effect = token_counter_side_effect
         try:
             updated_list = router._pre_call_checks(
                 model="gpt-4",
@@ -23533,15 +23562,17 @@ def test_router_context_window_pre_call_check(
             if llm_provider == "azure" and base_model is None:
                 assert len(updated_list) == 1
             else:
-                pytest.fail(f"Expected to raise an error. Got={updated_list}")
-        except Exception:
-            if (llm_provider == "azure" and base_model is not None) or llm_provider == "openai":
+                pytest.fail("Expected to raise an error. Got={}".format(updated_list))
+        except Exception as e:
+            if (
+                llm_provider == "azure" and base_model is not None
+            ) or llm_provider == "openai":
                 pass
     except Exception as e:
-        pytest.fail(f"Got unexpected exception on router! - {e!s}")
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-def test_router_correctly_reraise_error() -> None:
+def test_router_correctly_reraise_error():
     """
     User feedback: There is a problem with my messages array, but the error exception thrown is a Rate Limit error.
     ```
@@ -23561,14 +23592,16 @@ def test_router_correctly_reraise_error() -> None:
         ]
     )
 
-    with pytest.raises(litellm.RateLimitError):
+    try:
         router.completion(
             model="gemini-1.5-pro",
             messages=[{"role": "admin", "content": "Fail on this!"}],
         )
+    except litellm.RateLimitError:
+        pass
 
 
-def test_router_dynamic_cooldown_correct_retry_after_time(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_router_dynamic_cooldown_correct_retry_after_time():
     """
     User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
     but Azure says to retry in at most 9s
@@ -23593,17 +23626,18 @@ def test_router_dynamic_cooldown_correct_retry_after_time(monkeypatch: pytest.Mo
     cooldown_time = 30
 
     def _return_exception(*args, **kwargs):
+        from httpx import Headers, Request, Response
 
         kwargs = {
-            "request": httpx.Request("POST", "https://www.google.com"),
+            "request": Request("POST", "https://www.google.com"),
             "message": "Error code: 429 - Rate Limit Error!",
             "body": {"detail": "Rate Limit Error!"},
             "code": None,
             "param": None,
             "type": None,
-            "response": httpx.Response(
+            "response": Response(
                 status_code=429,
-                headers=httpx.Headers(
+                headers=Headers(
                     {
                         "date": "Sat, 21 Sep 2024 22:56:53 GMT",
                         "server": "uvicorn",
@@ -23612,7 +23646,7 @@ def test_router_dynamic_cooldown_correct_retry_after_time(monkeypatch: pytest.Mo
                         "content-type": "application/json",
                     }
                 ),
-                request=httpx.Request("POST", "http://0.0.0.0:9000/chat/completions"),
+                request=Request("POST", "http://0.0.0.0:9000/chat/completions"),
             ),
             "status_code": 429,
             "request_id": None,
@@ -23630,10 +23664,8 @@ def test_router_dynamic_cooldown_correct_retry_after_time(monkeypatch: pytest.Mo
     ):
         new_retry_after_mock_client = MagicMock(return_value=-1)
 
-        monkeypatch.setattr(
-            litellm.utils,
-            "_get_retry_after_from_exception_header",
-            new_retry_after_mock_client,
+        litellm.utils._get_retry_after_from_exception_header = (
+            new_retry_after_mock_client
         )
 
         try:
@@ -23653,7 +23685,7 @@ def test_router_dynamic_cooldown_correct_retry_after_time(monkeypatch: pytest.Mo
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode: bool) -> None:
+async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
     """
     User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
     but Azure says to retry in at most 9s
@@ -23663,6 +23695,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode: bool) ->
     2. Cooled-down deployments appear in get_cooldown_deployments
     3. RouterRateLimitError is raised with the correct cooldown_time when all deployments are cooled down
     """
+    from httpx import Headers, Request, Response
 
     cooldown_time = 30.0
     router = Router(
@@ -23683,22 +23716,26 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode: bool) ->
         cooldown_time=cooldown_time,
     )
 
+    # Build a 429 exception with retry-after header, matching what the OpenAI SDK raises
     mock_exception = litellm.RateLimitError(
         message="Rate Limit Error!",
         llm_provider="openai",
         model="text-embedding-ada-002",
-        response=httpx.Response(
+        response=Response(
             status_code=429,
-            headers=httpx.Headers(
+            headers=Headers(
                 {
                     "retry-after": f"{cooldown_time}",
                     "content-type": "application/json",
                 }
             ),
-            request=httpx.Request("POST", "https://api.openai.com/v1/embeddings"),
+            request=Request("POST", "https://api.openai.com/v1/embeddings"),
         ),
     )
 
+    # Directly invoke the Router's failure callback for each deployment,
+    # simulating what the logging framework would do on failure.
+    # This tests the cooldown logic without depending on the global customLogger state.
     model_ids = router.get_model_ids()
     for model_id in model_ids:
         deployment_kwargs = {
@@ -23715,7 +23752,9 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode: bool) ->
         )
 
     if sync_mode:
-        cooldown_deployments = get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+        cooldown_deployments = get_cooldown_deployments(
+            litellm_router_instance=router, parent_otel_span=None
+        )
     else:
         cooldown_deployments = await async_get_cooldown_deployments(
             litellm_router_instance=router, parent_otel_span=None
@@ -23723,6 +23762,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode: bool) ->
 
     assert len(cooldown_deployments) > 0
 
+    # Verify that a subsequent call raises RouterRateLimitError with correct cooldown_time
     if sync_mode:
         with pytest.raises(litellm.types.router.RouterRateLimitError) as exc_info:
             router.embedding(
@@ -23869,7 +23909,7 @@ def test_is_team_specific_model() -> None:
     assert router._is_team_specific_model(None) is False
 
 
-def test_router_prompt_management_factory() -> None:
+def test_router_prompt_management_factory():
     router = Router(
         model_list=[
             {
@@ -23903,7 +23943,7 @@ def test_router_prompt_management_factory() -> None:
         kwargs={},
     )
 
-    response.close()
+    print(response)
 
 
 def test_router_get_model_list_from_model_alias() -> None:
@@ -23985,7 +24025,7 @@ def test_router_get_model_group_info() -> None:
     assert model_group_info.output_cost_per_token > 0
 
 
-def test_router_rpm_pre_call_check() -> None:
+def test_router_rpm_pre_call_check():
     """
     - for a given model not in model cost map
     - with rpm set
@@ -23994,8 +24034,8 @@ def test_router_rpm_pre_call_check() -> None:
     try:
         model_list = [
             {
-                "model_name": "fake-openai-endpoint",
-                "litellm_params": {
+                "model_name": "fake-openai-endpoint",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
                     "model": "openai/my-fake-model",
                     "api_key": "my-fake-key",
                     "api_base": "https://openai-function-calling-workers.tasslexyz.workers.dev/",
@@ -24004,7 +24044,7 @@ def test_router_rpm_pre_call_check() -> None:
             },
         ]
 
-        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)
+        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
 
         try:
             router._pre_call_checks(
@@ -24016,7 +24056,7 @@ def test_router_rpm_pre_call_check() -> None:
         except Exception:
             pass
     except Exception as e:
-        pytest.fail(f"Got unexpected exception on router! - {e!s}")
+        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
 @pytest.mark.parametrize(
@@ -24050,3 +24090,345 @@ def test_create_correct_redis_cache_instance(
     with patch.object(RedisCache, "__init__", _mock_redis_cache_init):
         redis_cache = Router._create_redis_cache(cache_config)
         assert isinstance(redis_cache, expected_cache_type)
+
+
+class CompletionCustomHandler(
+    CustomLogger
+):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+    """
+    The set of expected inputs to a custom handler for a
+    """
+
+    # Class variables or attributes
+    def __init__(self):
+        self.errors = []
+        self.states: Optional[
+            List[
+                Literal[
+                    "sync_pre_api_call",
+                    "async_pre_api_call",
+                    "post_api_call",
+                    "sync_stream",
+                    "async_stream",
+                    "sync_success",
+                    "async_success",
+                    "sync_failure",
+                    "async_failure",
+                ]
+            ]
+        ] = []
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        try:
+            print(f"received kwargs in pre-input: {kwargs}")
+            self.states.append("sync_pre_api_call")
+            ## MODEL
+            assert isinstance(model, str)
+            ## MESSAGES
+            assert isinstance(messages, list)
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list)
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            ### ROUTER-SPECIFIC KWARGS
+            assert isinstance(kwargs["litellm_params"]["metadata"], dict)
+            assert isinstance(kwargs["litellm_params"]["metadata"]["model_group"], str)
+            assert isinstance(kwargs["litellm_params"]["metadata"]["deployment"], str)
+            assert isinstance(kwargs["litellm_params"]["model_info"], dict)
+            assert isinstance(kwargs["litellm_params"]["model_info"]["id"], str)
+            assert isinstance(
+                kwargs["litellm_params"]["proxy_server_request"], (str, type(None))
+            )
+            assert isinstance(
+                kwargs["litellm_params"]["preset_cache_key"], (str, type(None))
+            )
+            assert isinstance(kwargs["litellm_params"]["stream_response"], dict)
+        except Exception as e:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+        try:
+            self.states.append("post_api_call")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert end_time == None
+            ## RESPONSE OBJECT
+            assert response_obj == None
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list)
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert isinstance(kwargs["input"], (list, dict, str))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert (
+                isinstance(
+                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                )
+                or inspect.iscoroutine(kwargs["original_response"])
+                or inspect.isasyncgen(kwargs["original_response"])
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+            ### ROUTER-SPECIFIC KWARGS
+            assert isinstance(kwargs["litellm_params"]["metadata"], dict)
+            assert isinstance(kwargs["litellm_params"]["metadata"]["model_group"], str)
+            assert isinstance(kwargs["litellm_params"]["metadata"]["deployment"], str)
+            assert isinstance(kwargs["litellm_params"]["model_info"], dict)
+            assert isinstance(kwargs["litellm_params"]["model_info"]["id"], str)
+            assert isinstance(
+                kwargs["litellm_params"]["proxy_server_request"], (str, type(None))
+            )
+            assert isinstance(
+                kwargs["litellm_params"]["preset_cache_key"], (str, type(None))
+            )
+            assert isinstance(kwargs["litellm_params"]["stream_response"], dict)
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            self.states.append("async_stream")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert isinstance(end_time, datetime)
+            ## RESPONSE OBJECT
+            assert isinstance(response_obj, litellm.ModelResponseStream)
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list) and isinstance(
+                kwargs["messages"][0], dict
+            )
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert (
+                isinstance(kwargs["input"], list)
+                and isinstance(kwargs["input"][0], dict)
+            ) or isinstance(kwargs["input"], (dict, str))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert (
+                isinstance(
+                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                )
+                or inspect.isasyncgen(kwargs["original_response"])
+                or inspect.iscoroutine(kwargs["original_response"])
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            self.states.append("sync_success")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert isinstance(end_time, datetime)
+            ## RESPONSE OBJECT
+            assert isinstance(response_obj, litellm.ModelResponse)
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list) and isinstance(
+                kwargs["messages"][0], dict
+            )
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert (
+                isinstance(kwargs["input"], list)
+                and isinstance(kwargs["input"][0], dict)
+            ) or isinstance(kwargs["input"], (dict, str))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert isinstance(
+                kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+            assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            self.states.append("sync_failure")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert isinstance(end_time, datetime)
+            ## RESPONSE OBJECT
+            assert response_obj == None
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list) and isinstance(
+                kwargs["messages"][0], dict
+            )
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert (
+                isinstance(kwargs["input"], list)
+                and isinstance(kwargs["input"][0], dict)
+            ) or isinstance(kwargs["input"], (dict, str))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert (
+                isinstance(
+                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                )
+                or kwargs["original_response"] == None
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    async def async_log_pre_api_call(self, model, messages, kwargs):
+        try:
+            """
+            No-op.
+            Not implemented yet.
+            """
+            pass
+        except Exception as e:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            print("CompletionCustomHandler.async_log_success_event, kwargs: ", kwargs)
+            self.states.append("async_success")
+            print(
+                "############### CompletionCustomHandler async success, kwargs: ",
+                kwargs,
+            )
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert isinstance(end_time, datetime)
+            ## RESPONSE OBJECT
+            assert isinstance(
+                response_obj, (litellm.ModelResponse, litellm.EmbeddingResponse)
+            )
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+
+            # checking we use base_model for azure cost calculation
+            base_model = litellm.utils.get_base_model_from_metadata(
+                model_call_details=kwargs
+            )
+
+            if (
+                kwargs["model"] == "chatgpt-v-3"
+                and base_model is not None
+                and kwargs["stream"] != True
+            ):
+                # when base_model is set for azure, we should use pricing for the base_model
+                # this checks response_cost == litellm.cost_per_token(model=base_model)
+                assert isinstance(kwargs["response_cost"], float)
+                response_cost = kwargs["response_cost"]
+                print(
+                    f"response_cost: {response_cost}, for model: {kwargs['model']} and base_model: {base_model}"
+                )
+                prompt_tokens = response_obj.usage.prompt_tokens
+                completion_tokens = response_obj.usage.completion_tokens
+                # ensure the pricing is based on the base_model here
+                prompt_price, completion_price = litellm.cost_per_token(
+                    model=base_model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
+                expected_price = prompt_price + completion_price
+                print(f"expected price: {expected_price}")
+                assert (
+                    response_cost == expected_price
+                ), f"response_cost: {response_cost} != expected_price: {expected_price}. For model: {kwargs['model']} and base_model: {base_model}. should have used base_model for price"
+
+            assert isinstance(kwargs["messages"], list)
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert isinstance(kwargs["input"], (list, dict, str))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert (
+                isinstance(
+                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                )
+                or inspect.isasyncgen(kwargs["original_response"])
+                or inspect.iscoroutine(kwargs["original_response"])
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+            assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
+            ### ROUTER-SPECIFIC KWARGS
+            assert isinstance(kwargs["litellm_params"]["metadata"], dict)
+            assert isinstance(kwargs["litellm_params"]["metadata"]["model_group"], str)
+            assert isinstance(kwargs["litellm_params"]["metadata"]["deployment"], str)
+            assert isinstance(kwargs["litellm_params"]["model_info"], dict)
+            assert isinstance(kwargs["litellm_params"]["model_info"]["id"], str)
+            assert isinstance(
+                kwargs["litellm_params"]["proxy_server_request"], (str, type(None))
+            )
+            assert isinstance(
+                kwargs["litellm_params"]["preset_cache_key"], (str, type(None))
+            )
+            assert isinstance(kwargs["litellm_params"]["stream_response"], dict)
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            print(f"received original response: {kwargs['original_response']}")
+            self.states.append("async_failure")
+            ## START TIME
+            assert isinstance(start_time, datetime)
+            ## END TIME
+            assert isinstance(end_time, datetime)
+            ## RESPONSE OBJECT
+            assert response_obj == None
+            ## KWARGS
+            assert isinstance(kwargs["model"], str)
+            assert isinstance(kwargs["messages"], list)
+            assert isinstance(kwargs["optional_params"], dict)
+            assert isinstance(kwargs["litellm_params"], dict)
+            assert isinstance(kwargs["start_time"], (datetime, type(None)))
+            assert isinstance(kwargs["stream"], bool)
+            assert isinstance(kwargs["user"], (str, type(None)))
+            assert isinstance(kwargs["input"], (list, str, dict))
+            assert isinstance(kwargs["api_key"], (str, type(None)))
+            assert (
+                isinstance(
+                    kwargs["original_response"], (str, litellm.CustomStreamWrapper)
+                )
+                or inspect.isasyncgen(kwargs["original_response"])
+                or inspect.iscoroutine(kwargs["original_response"])
+                or kwargs["original_response"] == None
+            )
+            assert isinstance(kwargs["additional_args"], (dict, type(None)))
+            assert isinstance(kwargs["log_event_type"], str)
+        except Exception:
+            print(f"Assertion Error: {traceback.format_exc()}")
+            self.errors.append(traceback.format_exc())

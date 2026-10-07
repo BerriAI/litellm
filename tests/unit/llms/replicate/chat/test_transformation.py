@@ -114,35 +114,45 @@ async def test_async_completion_handles_starting_status(mock_get_client, mock_sl
     assert mock_client.get.call_count == 3
 
 
-def test_transform_response_list_output(monkeypatch):
-    """Test standard list output format"""
-    from litellm.llms.replicate.chat.transformation import ReplicateConfig
+class TestReplicateOutputFormats:
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    def test_transform_response_list_output(self):
+        """Test standard list output format"""
+        from litellm.llms.replicate.chat.transformation import ReplicateConfig
 
-    monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", True)
-    config = ReplicateConfig()
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"status": "succeeded", "output": ["Hello", " ", "world"]}
-    mock_response.text = json.dumps(mock_response.json.return_value)
-    mock_response.headers = {}
-    model_response = litellm.ModelResponse()
-    model_response.choices = [litellm.Choices()]
-    model_response.choices[0].message = litellm.Message(content="")
-    mock_logging = Mock()
-    mock_logging.post_call = Mock()
-    result = config.transform_response(
-        model="meta/llama-2-70b-chat",
-        raw_response=mock_response,
-        model_response=model_response,
-        logging_obj=mock_logging,
-        request_data={"input": {"prompt": "test"}},
-        messages=[{"role": "user", "content": "Hi"}],
-        optional_params={},
-        litellm_params={},
-        encoding=None,
-        api_key="test-key",
-    )
-    assert result.choices[0].message.content == "Hello world"
+        config = ReplicateConfig()
+
+        # Mock response with list output
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "status": "succeeded",
+            "output": ["Hello", " ", "world"],
+        }
+        mock_response.text = json.dumps(mock_response.json.return_value)
+        mock_response.headers = {}
+
+        model_response = litellm.ModelResponse()
+        model_response.choices = [litellm.Choices()]
+        model_response.choices[0].message = litellm.Message(content="")
+
+        mock_logging = Mock()
+        mock_logging.post_call = Mock()
+
+        result = config.transform_response(
+            model="meta/llama-2-70b-chat",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            request_data={"input": {"prompt": "test"}},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            api_key="test-key",
+        )
+
+        assert result.choices[0].message.content == "Hello world"
 
 
 def test_transform_response_string_output():

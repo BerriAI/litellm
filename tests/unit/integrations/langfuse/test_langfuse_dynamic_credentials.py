@@ -57,32 +57,50 @@ def test_resolve_langfuse_credentials_keeps_env_for_global_config(
     assert host == "https://admin-configured.example"
 
 
-def test_langfuse_handler_accepts_secret_key_alias(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LANGFUSE_MOCK", "true")
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "global-public")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "global-secret")
-    monkeypatch.delenv("UPSTREAM_LANGFUSE_SECRET_KEY", raising=False)
-    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    monkeypatch.setattr(langfuse_sdk, "_TRACING", {})
-    params: StandardCallbackDynamicParams = {
-        "langfuse_secret_key": "dynamic-secret",
-        "langfuse_host": "https://langfuse.example",
-        "langfuse_environment": "dynamic-environment",
-    }
-    cache: DynamicLoggingCache = DynamicLoggingCache()
+def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
+    captured = {}
 
-    logger: LangFuseLogger = LangFuseHandler.get_langfuse_logger_for_request(
-        standard_callback_dynamic_params=params,
-        in_memory_dynamic_logger_cache=cache,
-    )
-    cached_logger: LangFuseLogger = LangFuseHandler.get_langfuse_logger_for_request(
-        standard_callback_dynamic_params=params,
-        in_memory_dynamic_logger_cache=cache,
+    class FakeLangFuseLogger:
+        def __init__(
+            self,
+            *,
+            langfuse_public_key=None,
+            langfuse_secret=None,
+            langfuse_host=None,
+            langfuse_environment=None,
+            allow_env_credentials=True,
+        ):
+            captured["langfuse_public_key"] = langfuse_public_key
+            captured["langfuse_secret"] = langfuse_secret
+            captured["langfuse_host"] = langfuse_host
+            captured["langfuse_environment"] = langfuse_environment
+            captured["allow_env_credentials"] = allow_env_credentials
+
+    class FakeDynamicLoggingCache:
+        def set_cache(self, *, credentials, service_name, logging_obj):
+            captured["cached_credentials"] = credentials
+            captured["cached_service_name"] = service_name
+            captured["cached_logging_obj"] = logging_obj
+
+    monkeypatch.setattr(
+        "litellm.integrations.langfuse.langfuse_handler.LangFuseLogger",
+        FakeLangFuseLogger,
     )
 
-    assert logger.public_key is None
-    assert logger.secret_key == "dynamic-secret"
-    assert logger.langfuse_host == "https://langfuse.example"
-    assert logger.langfuse_environment == "dynamic-environment"
-    assert cached_logger is logger
-    logger.stop()
+    logger = LangFuseHandler._create_langfuse_logger_from_credentials(
+        credentials={
+            "langfuse_public_key": "dynamic-public",
+            "langfuse_secret_key": "dynamic-secret",
+            "langfuse_host": "https://langfuse.example",
+            "langfuse_environment": "dynamic-environment",
+        },
+        in_memory_dynamic_logger_cache=FakeDynamicLoggingCache(),
+    )
+
+    assert captured["langfuse_public_key"] == "dynamic-public"
+    assert captured["langfuse_secret"] == "dynamic-secret"
+    assert captured["langfuse_host"] == "https://langfuse.example"
+    assert captured["langfuse_environment"] == "dynamic-environment"
+    assert captured["allow_env_credentials"] is False
+    assert captured["cached_service_name"] == "langfuse"
+    assert captured["cached_logging_obj"] is logger

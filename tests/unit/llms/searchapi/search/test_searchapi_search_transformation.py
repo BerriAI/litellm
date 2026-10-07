@@ -11,125 +11,118 @@ from litellm.llms.searchapi.search.transformation import SearchAPIConfig
 class TestSearchAPIConfig:
     """Test SearchAPI.io configuration and transformations."""
 
-    def test_ui_friendly_name(self) -> None:
+    def test_ui_friendly_name(self):
         """Test that UI friendly name is returned correctly."""
-        config: Final = SearchAPIConfig()
+        config = SearchAPIConfig()
         assert config.ui_friendly_name() == "SearchAPI.io (Google Search)"
 
-    def test_get_http_method(self) -> None:
+    def test_get_http_method(self):
         """Test that HTTP method is GET."""
-        config: Final = SearchAPIConfig()
+        config = SearchAPIConfig()
         assert config.get_http_method() == "GET"
 
-    def test_validate_environment_with_api_key(self) -> None:
+    @patch("litellm.llms.searchapi.search.transformation.get_secret_str")
+    def test_validate_environment_with_api_key(self, mock_get_secret):
         """Test environment validation with API key."""
-        config: Final = SearchAPIConfig()
+        mock_get_secret.return_value = "test_api_key"
+        config = SearchAPIConfig()
+        headers = {}
 
-        with patch(
-            "litellm.llms.searchapi.search.transformation.get_secret_str",
-            return_value="test_api_key",
-        ):
-            result: Final = config.validate_environment({}, api_key="test_api_key")
+        result = config.validate_environment(headers, api_key="test_api_key")
 
         assert result["Content-Type"] == "application/json"
 
-    def test_validate_environment_without_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_validate_environment_without_api_key(self, monkeypatch):
         """Test environment validation without API key raises error."""
         monkeypatch.delenv("SEARCHAPI_API_KEY", raising=False)
-        config: Final = SearchAPIConfig()
+        config = SearchAPIConfig()
+        headers = {}
 
         with pytest.raises(ValueError, match="SEARCHAPI_API_KEY is not set"):
-            config.validate_environment({})
+            config.validate_environment(headers)
 
-    def test_transform_search_request_basic(self) -> None:
+    @patch("litellm.llms.searchapi.search.transformation.get_secret_str")
+    def test_transform_search_request_basic(self, mock_get_secret):
         """Test basic search request transformation."""
-        config: Final = SearchAPIConfig()
+        mock_get_secret.return_value = "test_api_key"
+        config = SearchAPIConfig()
 
-        with patch(
-            "litellm.llms.searchapi.search.transformation.get_secret_str",
-            return_value="test_api_key",
-        ):
-            result: Final = config.transform_search_request(
-                query="test query", optional_params={}, api_key="test_api_key"
-            )
+        result = config.transform_search_request(
+            query="test query", optional_params={}, api_key="test_api_key"
+        )
 
         assert "_searchapi_params" in result
-        params: Final = result["_searchapi_params"]
+        params = result["_searchapi_params"]
         assert params["engine"] == "google"
         assert params["q"] == "test query"
         assert params["api_key"] == "test_api_key"
 
-    def test_transform_search_request_with_max_results(self) -> None:
+    @patch("litellm.llms.searchapi.search.transformation.get_secret_str")
+    def test_transform_search_request_with_max_results(self, mock_get_secret):
         """Test search request transformation with max_results parameter."""
-        config: Final = SearchAPIConfig()
+        mock_get_secret.return_value = "test_api_key"
+        config = SearchAPIConfig()
 
-        with patch(
-            "litellm.llms.searchapi.search.transformation.get_secret_str",
-            return_value="test_api_key",
-        ):
-            result: Final = config.transform_search_request(
-                query="test query",
-                optional_params={"max_results": 5},
-                api_key="test_api_key",
-            )
+        result = config.transform_search_request(
+            query="test query",
+            optional_params={"max_results": 5},
+            api_key="test_api_key",
+        )
 
-        params: Final = result["_searchapi_params"]
+        params = result["_searchapi_params"]
         assert params["num"] == 5
 
-    def test_transform_search_request_with_country(self) -> None:
+    @patch("litellm.llms.searchapi.search.transformation.get_secret_str")
+    def test_transform_search_request_with_country(self, mock_get_secret):
         """Test search request transformation with country parameter."""
-        config: Final = SearchAPIConfig()
+        mock_get_secret.return_value = "test_api_key"
+        config = SearchAPIConfig()
 
-        with patch(
-            "litellm.llms.searchapi.search.transformation.get_secret_str",
-            return_value="test_api_key",
-        ):
-            result: Final = config.transform_search_request(
-                query="test query",
-                optional_params={"country": "US"},
-                api_key="test_api_key",
-            )
+        result = config.transform_search_request(
+            query="test query",
+            optional_params={"country": "US"},
+            api_key="test_api_key",
+        )
 
-        params: Final = result["_searchapi_params"]
+        params = result["_searchapi_params"]
         assert params["gl"] == "us"
 
-    def test_transform_search_request_with_domain_filter(self) -> None:
+    @patch("litellm.llms.searchapi.search.transformation.get_secret_str")
+    def test_transform_search_request_with_domain_filter(self, mock_get_secret):
         """Test search request transformation with domain filter."""
-        config: Final = SearchAPIConfig()
+        mock_get_secret.return_value = "test_api_key"
+        config = SearchAPIConfig()
 
-        with patch(
-            "litellm.llms.searchapi.search.transformation.get_secret_str",
-            return_value="test_api_key",
-        ):
-            result: Final = config.transform_search_request(
-                query="test query",
-                optional_params={"search_domain_filter": ["example.com", "test.com"]},
-                api_key="test_api_key",
-            )
+        result = config.transform_search_request(
+            query="test query",
+            optional_params={"search_domain_filter": ["example.com", "test.com"]},
+            api_key="test_api_key",
+        )
 
-        params: Final = result["_searchapi_params"]
+        params = result["_searchapi_params"]
         assert "site:example.com" in params["q"]
         assert "site:test.com" in params["q"]
 
-    def test_transform_search_request_with_list_query(self) -> None:
+    @patch("litellm.llms.searchapi.search.transformation.get_secret_str")
+    def test_transform_search_request_with_list_query(self, mock_get_secret):
         """Test search request transformation with list query."""
-        config: Final = SearchAPIConfig()
+        mock_get_secret.return_value = "test_api_key"
+        config = SearchAPIConfig()
 
-        with patch(
-            "litellm.llms.searchapi.search.transformation.get_secret_str",
-            return_value="test_api_key",
-        ):
-            result: Final = config.transform_search_request(
-                query=["test", "query"], optional_params={}, api_key="test_api_key"
-            )
+        result = config.transform_search_request(
+            query=["test", "query"], optional_params={}, api_key="test_api_key"
+        )
 
-        params: Final = result["_searchapi_params"]
+        params = result["_searchapi_params"]
         assert params["q"] == "test query"
 
-    def test_get_complete_url(self) -> None:
+    @patch("litellm.llms.searchapi.search.transformation.get_secret_str")
+    def test_get_complete_url(self, mock_get_secret):
         """Test URL construction with query parameters."""
-        config: Final = SearchAPIConfig()
-        data: Final = {
+        mock_get_secret.return_value = None
+        config = SearchAPIConfig()
+
+        data = {
             "_searchapi_params": {
                 "engine": "google",
                 "q": "test query",
@@ -137,79 +130,78 @@ class TestSearchAPIConfig:
             }
         }
 
-        with patch(
-            "litellm.llms.searchapi.search.transformation.get_secret_str",
-            return_value=None,
-        ):
-            url: Final = config.get_complete_url(api_base=None, optional_params={}, data=data)
+        url = config.get_complete_url(api_base=None, optional_params={}, data=data)
 
         assert "https://www.searchapi.io/api/v1/search?" in url
         assert "engine=google" in url
         assert "q=test+query" in url
         assert "api_key=test_key" in url
 
-    def test_transform_search_response(self) -> None:
+    def test_transform_search_response(self):
         """Test search response transformation."""
-        config: Final = SearchAPIConfig()
-        mock_response: Final = Mock(
-            spec=httpx.Response,
-            json=Mock(
-                return_value={
-                    "organic_results": [
-                        {
-                            "title": "Test Result 1",
-                            "link": "https://example.com/1",
-                            "snippet": "This is a test snippet 1",
-                            "date": "2024-01-01",
-                        },
-                        {
-                            "title": "Test Result 2",
-                            "link": "https://example.com/2",
-                            "snippet": "This is a test snippet 2",
-                        },
-                    ]
-                }
-            ),
-        )
+        config = SearchAPIConfig()
 
-        result: Final = config.transform_search_response(raw_response=mock_response, logging_obj=None)
+        # Mock response
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "organic_results": [
+                {
+                    "title": "Test Result 1",
+                    "link": "https://example.com/1",
+                    "snippet": "This is a test snippet 1",
+                    "date": "2024-01-01",
+                },
+                {
+                    "title": "Test Result 2",
+                    "link": "https://example.com/2",
+                    "snippet": "This is a test snippet 2",
+                },
+            ]
+        }
+
+        result = config.transform_search_response(
+            raw_response=mock_response, logging_obj=None
+        )
 
         assert isinstance(result, SearchResponse)
         assert result.object == "search"
         assert len(result.results) == 2
 
-        first_result: Final = result.results[0]
-        assert first_result.title == "Test Result 1"
-        assert first_result.url == "https://example.com/1"
-        assert first_result.snippet == "This is a test snippet 1"
-        assert first_result.date == "2024-01-01"
-        assert first_result.last_updated is None
+        # Check first result
+        assert result.results[0].title == "Test Result 1"
+        assert result.results[0].url == "https://example.com/1"
+        assert result.results[0].snippet == "This is a test snippet 1"
+        assert result.results[0].date == "2024-01-01"
+        assert result.results[0].last_updated is None
 
-        second_result: Final = result.results[1]
-        assert second_result.title == "Test Result 2"
-        assert second_result.url == "https://example.com/2"
-        assert second_result.snippet == "This is a test snippet 2"
-        assert second_result.date is None
+        # Check second result
+        assert result.results[1].title == "Test Result 2"
+        assert result.results[1].url == "https://example.com/2"
+        assert result.results[1].snippet == "This is a test snippet 2"
+        assert result.results[1].date is None
 
-    def test_transform_search_response_empty(self) -> None:
+    def test_transform_search_response_empty(self):
         """Test search response transformation with no results."""
-        config: Final = SearchAPIConfig()
-        mock_response: Final = Mock(
-            spec=httpx.Response,
-            json=Mock(return_value={"organic_results": []}),
-        )
+        config = SearchAPIConfig()
 
-        result: Final = config.transform_search_response(raw_response=mock_response, logging_obj=None)
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {"organic_results": []}
+
+        result = config.transform_search_response(
+            raw_response=mock_response, logging_obj=None
+        )
 
         assert isinstance(result, SearchResponse)
         assert len(result.results) == 0
 
-    def test_append_domain_filters(self) -> None:
+    def test_append_domain_filters(self):
         """Test domain filter appending logic."""
-        config: Final = SearchAPIConfig()
-        query: Final = "test query"
+        config = SearchAPIConfig()
 
-        result: Final = config._append_domain_filters(query, ["example.com", "test.com"])
+        query = "test query"
+        domains = ["example.com", "test.com"]
+
+        result = config._append_domain_filters(query, domains)
 
         assert "(test query)" in result
         assert "site:example.com" in result

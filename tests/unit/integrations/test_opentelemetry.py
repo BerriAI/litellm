@@ -57,6 +57,14 @@ from litellm.types.utils import ModelResponse
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.logging_callback_tests.base_test import BaseLoggingCallbackTest
 
+exporter = InMemorySpanExporter()
+
+
+@pytest.fixture
+def unset_global_tracer_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER", None)
+    monkeypatch.setattr(trace._TRACER_PROVIDER_SET_ONCE, "_done", False)
+
 
 class TestOpenTelemetryGuardrails(unittest.TestCase):
     @patch("litellm.integrations.opentelemetry.datetime")
@@ -7000,101 +7008,135 @@ def validate_redacted_message_span_attributes(span: ReadableSpan) -> None:
     )
 
 
-@pytest.mark.usefixtures("drain_logging_worker")
+@pytest.mark.usefixtures("unset_global_tracer_provider")
+@pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("global_redact", [True, False])
-async def test_awesome_otel_with_message_logging_off(
-    streaming: bool,
-    global_redact: bool,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    exporter: Final = InMemorySpanExporter()
-    provider: Final = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
-    if global_redact:
-        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
-        logger: Final = OpenTelemetry(
-            config=OpenTelemetryConfig(exporter="console"),
-            tracer_provider=provider,
+async def test_awesome_otel_with_message_logging_off(streaming, global_redact):
+    """
+    No content should be logged when message logging is off
+
+    tests when litellm.turn_off_message_logging is set to True
+    tests when OpenTelemetry(message_logging=False) is set
+    """
+    litellm.set_verbose = True
+
+    # Clear exporter at the start to ensure clean state
+    exporter.clear()
+
+    litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
+    if global_redact is False:
+        otel_logger = OpenTelemetry(
+            message_logging=False, config=OpenTelemetryConfig(exporter="console")
         )
     else:
-        logger = OpenTelemetry(
-            message_logging=False,
-            config=OpenTelemetryConfig(exporter="console"),
-            tracer_provider=provider,
-        )
-    manager: Final = litellm.logging_callback_manager
+        # use global redaction
+        litellm.turn_off_message_logging = True
+        otel_logger = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
 
-    manager._reset_all_callbacks()
-    monkeypatch.setattr(litellm, "callbacks", [logger])
-    monkeypatch.setattr(litellm, "success_callback", [])
-    monkeypatch.setattr(litellm, "failure_callback", [])
-    try:
-        response: Final = await litellm.acompletion(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="hi",
-            stream=streaming,
-        )
-        if streaming:
-            async for _chunk in response:
-                pass
+    litellm.callbacks = [otel_logger]
+    litellm.success_callback = []
+    litellm.failure_callback = []
 
-        await asyncio.sleep(0)
-        await GLOBAL_LOGGING_WORKER.flush()
-        spans: Final = exporter.get_finished_spans()
-        assert len(spans) == 1
-        validate_redacted_message_span_attributes(spans[0])
-    finally:
-        manager._reset_all_callbacks()
-        exporter.clear()
+    response = await litellm.acompletion(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hi",
+        stream=streaming,
+    )
+    print("response", response)
+
+    if streaming is True:
+        async for chunk in response:
+            print("chunk", chunk)
+
+    await asyncio.sleep(1)
+    spans = exporter.get_finished_spans()
+    print("spans", spans)
+    assert len(spans) == 1
+
+    _span = spans[0]
+    print("span attributes", _span.attributes)
+
+    validate_redacted_message_span_attributes(_span)
+
+    # clear in memory exporter
+    exporter.clear()
+
+    if global_redact is True:
+        litellm.turn_off_message_logging = False
 
 
-@pytest.mark.usefixtures("drain_logging_worker")
-async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    exporter: Final = InMemorySpanExporter()
-    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
-    logger: Final = ArizePhoenixLogger(
-        config=OpenTelemetryConfig(exporter=exporter),
+@pytest.mark.usefixtures("unset_global_tracer_provider")
+@pytest.mark.asyncio
+async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
+    """
+    ArizePhoenixLogger creates its own dedicated TracerProvider so it can
+    coexist with the generic ``otel`` callback.  In proxy mode it creates a
+    ``litellm_proxy_request`` parent span and a ``litellm_request`` child span
+    on its *own* provider — completely independent of the global provider.
+
+    This test verifies:
+    1. Phoenix creates both parent and child spans on its dedicated exporter.
+    2. The spans form a proper parent-child hierarchy (same trace ID).
+    3. A raw_gen_ai_request sub-span is also produced.
+    """
+    from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    phoenix_exporter = InMemorySpanExporter()
+
+    litellm.logging_callback_manager._reset_all_callbacks()
+
+    # ArizePhoenixLogger builds its own TracerProvider internally.
+    # We pass our in-memory exporter so we can inspect spans.
+    phoenix_logger = ArizePhoenixLogger(
+        config=OpenTelemetryConfig(exporter=phoenix_exporter),
         callback_name="arize_phoenix",
     )
-    manager: Final = litellm.logging_callback_manager
-    expected_span_names: Final = {
-        "litellm_proxy_request",
-        LITELLM_REQUEST_SPAN_NAME,
-        RAW_REQUEST_SPAN_NAME,
-    }
 
-    manager._reset_all_callbacks()
-    monkeypatch.setattr(litellm, "callbacks", [logger])
-    monkeypatch.setattr(litellm, "success_callback", [])
-    monkeypatch.setattr(litellm, "failure_callback", [])
-    try:
-        await litellm.acompletion(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": "ping"}],
-            mock_response="pong",
-            proxy_server_request={
-                "url": "/chat/completions",
-                "method": "POST",
-                "headers": {},
-            },
-        )
+    litellm.callbacks = [phoenix_logger]
+    litellm.success_callback = []
+    litellm.failure_callback = []
 
-        await asyncio.sleep(0)
-        await GLOBAL_LOGGING_WORKER.flush()
-        spans: Final = exporter.get_finished_spans()
-        span_names: Final = {span.name for span in spans}
-        trace_ids: Final = {span.context.trace_id for span in spans}
+    # Simulate a proxy request by injecting proxy_server_request as a top-level kwarg.
+    # This triggers ArizePhoenixLogger._get_phoenix_context to create its own parent span.
+    await litellm.acompletion(
+        model="gpt-4.1-mini",
+        messages=[{"role": "user", "content": "ping"}],
+        mock_response="pong",
+        proxy_server_request={
+            "url": "/chat/completions",
+            "method": "POST",
+            "headers": {},
+        },
+    )
 
-        assert expected_span_names <= span_names
-        assert len(trace_ids) == 1
-    finally:
-        manager._reset_all_callbacks()
-        exporter.clear()
+    # Flush async span processing
+    await asyncio.sleep(1)
+
+    spans = phoenix_exporter.get_finished_spans()
+    span_names = [s.name for s in spans]
+
+    # Phoenix creates its own span names on its dedicated TracerProvider:
+    # - "litellm_proxy_request" (parent) — created by _get_phoenix_context
+    # - "litellm_request" (child)       — the LLM call span
+    # - "raw_gen_ai_request"            — raw request sub-span
+    assert (
+        "litellm_proxy_request" in span_names
+    ), f"Expected proxy parent span, got: {span_names}"
+    assert (
+        LITELLM_REQUEST_SPAN_NAME in span_names
+    ), f"Expected request child span, got: {span_names}"
+    assert (
+        RAW_REQUEST_SPAN_NAME in span_names
+    ), f"Expected raw request span, got: {span_names}"
+
+    # All spans should share the same trace ID (proper hierarchy)
+    trace_ids = {s.context.trace_id for s in spans}
+    assert len(trace_ids) == 1, f"Expected single trace, got {len(trace_ids)} traces"
+
+    phoenix_exporter.clear()
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")

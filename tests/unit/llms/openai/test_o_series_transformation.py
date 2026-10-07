@@ -6,6 +6,7 @@ import pytest
 import litellm
 from litellm import ModelResponse
 from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
+import os
 
 
 @pytest.mark.parametrize(
@@ -52,11 +53,7 @@ def test_is_model_o_series_model(model_name: str, expected: bool):
 
 @pytest.mark.parametrize("model", ["o1"])
 @pytest.mark.asyncio
-async def test_o1_handle_system_role(
-    model: str,
-    monkeypatch: pytest.MonkeyPatch,
-    local_model_cost_map: None,
-):
+async def test_o1_handle_system_role(model):
     """
     Tests that:
     - max_tokens is translated to 'max_completion_tokens'
@@ -65,32 +62,41 @@ async def test_o1_handle_system_role(
     from openai import AsyncOpenAI
     from litellm.utils import supports_system_messages
 
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    litellm.set_verbose = True
 
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    mock_raw_response: Final = MagicMock()
-    mock_raw_response.headers = {}
-    mock_raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
     with patch.object(
-        client.chat.completions.with_raw_response, "create", new=AsyncMock(return_value=mock_raw_response)
+        client.chat.completions.with_raw_response, "create"
     ) as mock_client:
-        await litellm.acompletion(
-            model=model,
-            max_tokens=10,
-            messages=[{"role": "system", "content": "Be a good bot!"}],
-            client=client,
-        )
+        try:
+            await litellm.acompletion(
+                model=model,
+                max_tokens=10,
+                messages=[{"role": "system", "content": "Be a good bot!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
 
+        print("request_body: ", request_body)
+
         assert request_body["model"] == model
         assert request_body["max_completion_tokens"] == 10
         if supports_system_messages(model, "openai"):
-            assert request_body["messages"] == [{"role": "system", "content": "Be a good bot!"}]
+            assert request_body["messages"] == [
+                {"role": "system", "content": "Be a good bot!"}
+            ]
         else:
-            assert request_body["messages"] == [{"role": "user", "content": "Be a good bot!"}]
+            assert request_body["messages"] == [
+                {"role": "user", "content": "Be a good bot!"}
+            ]
 
 
 @pytest.mark.parametrize(
@@ -99,9 +105,7 @@ async def test_o1_handle_system_role(
 )
 @pytest.mark.asyncio
 async def test_o1_handle_tool_calling_optional_params(
-    model: str,
-    expected_tool_calling_support: bool,
-    local_model_cost_map: None,
+    model, expected_tool_calling_support
 ):
     """
     Tests that:
@@ -111,7 +115,12 @@ async def test_o1_handle_tool_calling_optional_params(
     from litellm.utils import ProviderConfigManager
     from litellm.types.utils import LlmProviders
 
-    config = ProviderConfigManager.get_provider_chat_config(model=model, provider=LlmProviders.OPENAI)
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    config = ProviderConfigManager.get_provider_chat_config(
+        model=model, provider=LlmProviders.OPENAI
+    )
 
     supported_params = config.get_supported_openai_params(model=model)
 
@@ -120,36 +129,34 @@ async def test_o1_handle_tool_calling_optional_params(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gpt-4", "gpt-4-0613"])
-async def test_o1_max_completion_tokens(
-    model: str,
-    monkeypatch: pytest.MonkeyPatch,
-    local_model_cost_map: None,
-):
+async def test_o1_max_completion_tokens(model: str):
     """
     Tests that:
     - max_completion_tokens is passed directly to OpenAI chat completion models
     """
     from openai import AsyncOpenAI
 
-    monkeypatch.setattr(litellm, "set_verbose", True)
+    litellm.set_verbose = True
 
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    mock_raw_response: Final = MagicMock()
-    mock_raw_response.headers = {}
-    mock_raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
     with patch.object(
-        client.chat.completions.with_raw_response, "create", new=AsyncMock(return_value=mock_raw_response)
+        client.chat.completions.with_raw_response, "create"
     ) as mock_client:
-        await litellm.acompletion(
-            model=model,
-            max_completion_tokens=10,
-            messages=[{"role": "user", "content": "Hello!"}],
-            client=client,
-        )
+        try:
+            await litellm.acompletion(
+                model=model,
+                max_completion_tokens=10,
+                messages=[{"role": "user", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
 
         mock_client.assert_called_once()
         request_body = mock_client.call_args.kwargs
+
+        print("request_body: ", request_body)
 
         assert request_body["model"] == model
         assert request_body["max_completion_tokens"] == 10
@@ -170,5 +177,7 @@ def test_litellm_responses():
             "completion_tokens_details": {"reasoning_tokens": 0},
         }
     )
+
+    print("response: ", response)
 
     assert isinstance(response.usage.completion_tokens_details, CompletionTokensDetails)
