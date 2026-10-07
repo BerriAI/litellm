@@ -51,7 +51,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         super().__init__()
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        return [  # mutable-ok: get_optional_params extends the returned list with allowed_openai_params
+        return [
             param
             for param in super().get_supported_openai_params(model=model)
             if param not in VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
@@ -143,7 +143,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def _unwrap_predictions_response(
         self,
         response_json: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Unwrap the Vertex Gemma predictions format to OpenAI format.
 

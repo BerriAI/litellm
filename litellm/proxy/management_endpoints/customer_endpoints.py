@@ -11,8 +11,10 @@ All /customer management endpoints
 
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Final, Protocol, TypeVar, overload
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeVar, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -41,6 +43,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -54,6 +57,18 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 
 _RowT_co: Final = TypeVar("_RowT_co", covariant=True)
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
+_CLEARABLE_LIST_FIELDS: Final = frozenset({"models"})
+
+
+def _should_update_field(field: str, value: object, sent_fields: AbstractSet[str]) -> bool:
+    if value is None:
+        return False
+    if field in sent_fields and (isinstance(value, bool) or field in _CLEARABLE_LIST_FIELDS):
+        return True
+    if isinstance(value, (list, dict)) and not value:
+        return False
+    return value != 0
+
 
 if TYPE_CHECKING:
 
@@ -155,7 +170,7 @@ async def block_user(data: BlockUsers):
 
         ```
         curl -X POST "http://0.0.0.0:8000/user/block"
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
         -d '{
         "user_ids": [<user_id>, ...]
         }'
@@ -207,7 +222,7 @@ async def unblock_user(data: BlockUsers):
     Example
     ```
     curl -X POST "http://0.0.0.0:8000/user/unblock"
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     -d '{
     "user_ids": [<user_id>, ...]
     }'
@@ -215,7 +230,7 @@ async def unblock_user(data: BlockUsers):
     """
     try:
         from enterprise.enterprise_hooks.blocked_user_list import (
-            _ENTERPRISE_BlockedUserList,
+            ENTERPRISE_BlockedUserList,
         )
     except ImportError:
         raise HTTPException(
@@ -227,7 +242,7 @@ async def unblock_user(data: BlockUsers):
         )
 
     if (
-        not any(isinstance(x, _ENTERPRISE_BlockedUserList) for x in litellm.callbacks)
+        not any(isinstance(x, ENTERPRISE_BlockedUserList) for x in litellm.callbacks)
         or litellm.blocked_user_list is None
     ):
         raise HTTPException(
@@ -331,6 +346,7 @@ async def new_end_user(
     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+    - models: Optional[list[str]] - Restrict this customer's access to the listed models.
     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
@@ -359,18 +375,19 @@ async def new_end_user(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/new' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "user_id" : "ishaan-jaff-3",
             "allowed_region": "eu",
             "budget_id": "free_tier",
+            "models": ["gpt-4o-mini"],
             "default_model": "azure/gpt-3.5-turbo-eu"
         }'
 
     # With object permissions
     curl -L -X POST 'http://localhost:4000/customer/new' \
-        -H 'Authorization: Bearer sk-1234' \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H 'Content-Type: application/json' \
         -d '{
             "user_id": "user_1",
@@ -490,6 +507,33 @@ async def new_end_user(
         raise handle_exception_on_proxy(e)
 
 
+class _CustomerDailyActivityScope(NamedTuple):
+    end_user_ids: tuple[str, ...] | None
+    end_user_metadata: Mapping[str, dict[str, object]]
+
+
+async def resolve_customer_daily_activity_scope(
+    *,
+    end_user_ids: tuple[str, ...] | None,
+    prisma_client: "PrismaClient",
+) -> _CustomerDailyActivityScope:
+    end_user_table: Final = _typed_table(EndUserRepository(prisma_client))
+    end_user_aliases: Final = (
+        await find_many_in(end_user_table, "user_id", end_user_ids)
+        if end_user_ids is not None
+        else await end_user_table.find_many(where={})
+    )
+    metadata: Final = MappingProxyType({end_user.user_id: {"alias": end_user.alias} for end_user in end_user_aliases})
+    return _CustomerDailyActivityScope(end_user_ids, metadata)
+
+
+def customer_daily_activity_is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+
+
 @router.get(
     "/customer/info",
     tags=["Customer Management"],
@@ -514,7 +558,7 @@ async def end_user_info(
     Example curl:
     ```
     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     try:
@@ -579,6 +623,7 @@ async def update_end_user(
     - default_model: Optional[str] = (
         None  # if no equivalent model in allowed region - default all requests to this model
     )
+    - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
         Supported fields:
         * mcp_servers: List[str] - List of allowed MCP server IDs
@@ -593,16 +638,17 @@ async def update_end_user(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "test-litellm-user-4",
-        "budget_id": "paid_tier"
+        "budget_id": "paid_tier",
+        "models": ["gpt-4o-mini"]
     }'
 
     # Updating object permissions
     curl -L -X POST 'http://localhost:4000/customer/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "user_1",
@@ -624,11 +670,10 @@ async def update_end_user(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        # get non default values for key
-        non_default_values: Final = dict[str, object]()
-        for k, v in data_json.items():
-            if v is not None and ((isinstance(v, bool) and k in data.fields_set()) or v not in ([], {}, 0)):
-                non_default_values[k] = v
+        sent_fields: Final = data.fields_set()
+        non_default_values: Final[dict[str, object]] = {
+            k: v for k, v in data_json.items() if _should_update_field(k, v, sent_fields)
+        }
 
         ## Get end user table data ##
         end_user_table_data: Final = await _typed_table(EndUserRepository(prisma_client)).find_first(
@@ -752,7 +797,7 @@ async def delete_end_user(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/customer/delete' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "user_ids" :["ishaan-jaff-5"]
@@ -827,7 +872,7 @@ async def list_end_user(
     Example curl:
     ```
     curl --location --request GET 'http://0.0.0.0:4000/customer/list' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     """
@@ -888,10 +933,7 @@ async def get_customer_daily_activity(
     """
     Get daily activity for specific organizations or all accessible organizations.
     """
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-    ):
+    if not customer_daily_activity_is_admin(user_api_key_dict):
         raise HTTPException(
             status_code=401,
             detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
@@ -906,24 +948,22 @@ async def get_customer_daily_activity(
         )
 
     # Parse comma-separated ids
-    end_user_ids_list: Final = end_user_ids.split(",") if end_user_ids else None
+    end_user_ids_list: Final = tuple(end_user_ids.split(",")) if end_user_ids else None
     exclude_end_user_ids_list: list[str] | None = None
     if exclude_end_user_ids:
         exclude_end_user_ids_list = exclude_end_user_ids.split(",") if exclude_end_user_ids else None
 
-    # Fetch organization aliases for metadata
-    where_condition: Final = dict[str, object]()
-    if end_user_ids_list:
-        where_condition["user_id"] = {"in": list(end_user_ids_list)}
-    end_user_aliases: Final = await _typed_table(EndUserRepository(prisma_client)).find_many(where=where_condition)
+    customer_scope: Final = await resolve_customer_daily_activity_scope(
+        end_user_ids=end_user_ids_list,
+        prisma_client=prisma_client,
+    )
 
-    # Query daily activity for organizations
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyenduserspend",
         entity_id_field="end_user_id",
-        entity_id=end_user_ids_list,
-        entity_metadata_field={e.user_id: {"alias": e.alias} for e in end_user_aliases},
+        entity_id=None if customer_scope.end_user_ids is None else list(customer_scope.end_user_ids),
+        entity_metadata_field=customer_scope.end_user_metadata,
         exclude_entity_ids=exclude_end_user_ids_list,
         start_date=start_date,
         end_date=end_date,

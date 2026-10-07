@@ -1,3 +1,4 @@
+import os
 import pytest
 import requests
 import time
@@ -77,7 +78,7 @@ class TeamAPI:
 def api_client():
     """Fixture for TeamAPI client"""
     base_url = "http://localhost:4000"
-    auth_token = "sk-1234"  # Replace with your token
+    auth_token = os.environ["LITELLM_MASTER_KEY"]  # Replace with your token
     return TeamAPI(base_url, auth_token)
 
 
@@ -137,7 +138,7 @@ def test_add_single_member(api_client, new_team):
 
 
 @pytest.mark.skip(
-    reason="Flaky in CI: /team/info?team_id=... intermittently returns 404/400 mid-loop after add_team_member calls. Single-member coverage in test_add_single_member is sufficient; team-member CRUD is also covered by tests/test_litellm/proxy/management_endpoints/."
+    reason="Flaky in CI: /team/info?team_id=... intermittently returns 404/400 mid-loop after add_team_member calls. Single-member coverage in test_add_single_member is sufficient; team-member CRUD is also covered by tests/unit/proxy/management_endpoints/."
 )
 def test_add_multiple_members(api_client, new_team):
     """Test adding multiple members to a new team"""
@@ -207,7 +208,7 @@ def test_error_handling(api_client):
 
 
 @pytest.mark.skip(
-    reason="Flaky in CI: /team/info?team_id=... intermittently returns 404 after add_team_member calls, same race documented for test_add_multiple_members. Duplicate-prevention is covered by test_update_team_members_list_duplicate_prevention in tests/test_litellm/proxy/management_endpoints/test_team_endpoints.py."
+    reason="Flaky in CI: /team/info?team_id=... intermittently returns 404 after add_team_member calls, same race documented for test_add_multiple_members. Duplicate-prevention is covered by test_update_team_members_list_duplicate_prevention in tests/unit/proxy/management_endpoints/test_team_endpoints.py."
 )
 def test_duplicate_user_addition(api_client, new_team):
     """Test that adding the same user twice is handled appropriately"""

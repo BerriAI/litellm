@@ -43,7 +43,7 @@ def reset_mock_cache():
 
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     messages = [
         {
             "role": "user",
@@ -873,7 +873,7 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     )
 
     time.sleep(3)
-    assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
+    assert litellm_logging_obj.get_trace_id(service_name="langfuse") is not None
 
     # langfuse addresses a trace by a 32-hex id, so the id litellm reports back is the
     # resolved form of whichever source won; that is what the alerting deep link needs
@@ -884,7 +884,7 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     else:
         expected_source = litellm_logging_obj.litellm_trace_id
 
-    assert litellm_logging_obj._get_trace_id(service_name="langfuse") == resolve_trace_id(
+    assert litellm_logging_obj.get_trace_id(service_name="langfuse") == resolve_trace_id(
         expected_source
     )
 
@@ -1343,12 +1343,16 @@ def test_is_prompt_caching_enabled_error_handling():
 
 def test_is_prompt_caching_enabled_return_default_image_dimensions():
     """
-    Assert that `is_prompt_caching_valid_prompt` calls token_counter with use_default_image_token_count=True
+    Assert that `is_prompt_caching_valid_prompt` counts tokens with use_default_image_token_count=True
     when processing messages containing images
 
     IMPORTANT: Ensures Get token counter does not make a GET request to the image url
     """
-    with patch("litellm.utils.token_counter") as mock_token_counter:
+    mock_token_counter = MagicMock(return_value=False)
+    with patch(
+        "litellm.utils.get_messages_reach_token_count",
+        return_value=mock_token_counter,
+    ):
         litellm.utils.is_prompt_caching_valid_prompt(
             messages=[
                 {
@@ -1430,9 +1434,9 @@ def test_get_valid_models_openai_proxy(monkeypatch):
     from litellm.utils import get_valid_models
     import litellm
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
-    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-9876")
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://litellm-api.up.railway.app/")
     monkeypatch.delenv("FIREWORKS_AI_ACCOUNT_ID", None)
     monkeypatch.delenv("FIREWORKS_AI_API_KEY", None)
@@ -1465,9 +1469,9 @@ def test_get_valid_models_fireworks_ai(monkeypatch):
     from litellm.utils import get_valid_models
     import litellm
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
-    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-9876")
     monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", "1234")
     monkeypatch.setattr(litellm, "provider_list", ["fireworks_ai"])
 
@@ -1553,7 +1557,7 @@ def test_get_valid_models_default(monkeypatch):
     """
     from litellm.utils import get_valid_models
 
-    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-1234")
+    monkeypatch.setenv("FIREWORKS_API_KEY", "sk-9876")
     valid_models = get_valid_models()
     assert len(valid_models) > 0
 
@@ -1583,12 +1587,12 @@ def test_get_num_retries(num_retries):
 
 
 def test_add_custom_logger_callback_to_specific_event(monkeypatch):
-    from litellm.utils import _add_custom_logger_callback_to_specific_event
+    from litellm.utils import add_custom_logger_callback_to_specific_event
 
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
 
-    _add_custom_logger_callback_to_specific_event("langfuse", "success")
+    add_custom_logger_callback_to_specific_event("langfuse", "success")
 
     assert len(litellm.success_callback) == 1
     assert len(litellm.failure_callback) == 0
@@ -2266,13 +2270,13 @@ def test_get_base_model_from_metadata():
 
     Related issue: https://github.com/BerriAI/litellm/issues/16772
     """
-    from litellm.utils import _get_base_model_from_metadata
+    from litellm.utils import get_base_model_from_metadata
 
     # Test 1: base_model in metadata (Chat Completions API pattern)
     model_call_details_with_metadata = {
         "litellm_params": {"metadata": {"model_info": {"base_model": "azure/gpt-5.5"}}}
     }
-    result = _get_base_model_from_metadata(model_call_details_with_metadata)
+    result = get_base_model_from_metadata(model_call_details_with_metadata)
     assert result == "azure/gpt-5.5", f"Expected 'azure/gpt-5.5', got {result}"
 
     # Test 2: base_model in litellm_metadata (Responses API and generic API calls pattern)
@@ -2281,14 +2285,14 @@ def test_get_base_model_from_metadata():
             "litellm_metadata": {"model_info": {"base_model": "azure/gpt-5-mini"}}
         }
     }
-    result = _get_base_model_from_metadata(model_call_details_with_litellm_metadata)
+    result = get_base_model_from_metadata(model_call_details_with_litellm_metadata)
     assert result == "azure/gpt-5-mini", f"Expected 'azure/gpt-5-mini', got {result}"
 
     # Test 3: base_model in litellm_params (direct base_model)
     model_call_details_with_direct_base_model = {
         "litellm_params": {"base_model": "azure/gpt-5-mini"}
     }
-    result = _get_base_model_from_metadata(model_call_details_with_direct_base_model)
+    result = get_base_model_from_metadata(model_call_details_with_direct_base_model)
     assert (
         result == "azure/gpt-5-mini"
     ), f"Expected 'azure/gpt-5-mini', got {result}"
@@ -2302,16 +2306,16 @@ def test_get_base_model_from_metadata():
             },
         }
     }
-    result = _get_base_model_from_metadata(model_call_details_with_both)
+    result = get_base_model_from_metadata(model_call_details_with_both)
     assert (
         result == "azure/gpt-4-from-metadata"
     ), f"Expected metadata to take precedence, got {result}"
 
     # Test 5: No base_model present
     model_call_details_without_base_model = {"litellm_params": {"metadata": {}}}
-    result = _get_base_model_from_metadata(model_call_details_without_base_model)
+    result = get_base_model_from_metadata(model_call_details_without_base_model)
     assert result is None, f"Expected None when no base_model present, got {result}"
 
     # Test 6: None input
-    result = _get_base_model_from_metadata(None)
+    result = get_base_model_from_metadata(None)
     assert result is None, f"Expected None for None input, got {result}"

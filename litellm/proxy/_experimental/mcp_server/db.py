@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
 
 from fastapi import HTTPException
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
@@ -19,7 +20,9 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     credential_binding_matches,
     enforce_oauth_identity_binding,
 )
-from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    build_upstream_oauth2_token_request,
+)
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPApprovalStatus,
@@ -39,6 +42,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -52,8 +56,8 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPCredentials
-from litellm.types.mcp_server.mcp_server_manager import PinnedMCPTool
+from litellm.types.mcp import MCPCredentials, MCPTransportType, MCPUpstreamProtocol, validate_mcp_protocol_transport
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool
 
 if TYPE_CHECKING:
     from prisma import models as prisma_db_models
@@ -104,7 +108,31 @@ _AUTH_FLOW_SCOPED_FIELDS: Final["frozenset[str]"] = frozenset(
 )
 
 
-def _blank_to_none(value: str | None) -> str | None:
+_OAUTH_CLIENT_CREDENTIAL_FIELDS: Final = frozenset(
+    {
+        "client_id",
+        "client_secret",
+        "token_endpoint_auth_method",
+        "redirect_uris",
+        "dcr_issuer",
+        "dcr_server_url",
+        "access_token",
+        "refresh_token",
+        "expires_in",
+        "scope",
+    }
+)
+
+
+def stale_mcp_auth_fields(submitted: Mapping[str, object], previous_value: Callable[[str], object]) -> dict[str, None]:
+    return {
+        field: None
+        for field in _AUTH_FLOW_SCOPED_FIELDS
+        if field not in submitted or submitted[field] == previous_value(field)
+    }
+
+
+def _blank_to_none(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
@@ -134,6 +162,58 @@ _CLIENT_FORWARDED_AUTH_TYPES: Final["frozenset[str]"] = frozenset({"true_passthr
 
 # Minted token material that must never survive a client rotation on a persisted row.
 _MINTED_TOKEN_CREDENTIAL_FIELDS: Final["frozenset[str]"] = frozenset({"access_token", "refresh_token", "expires_in"})
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _bind_submitted_oauth_client(
+    credentials: Mapping[str, object], issuer: str | None, url: str | None
+) -> dict[str, object]:
+    if not credentials.get("client_id") or credentials.get("dcr_issuer") or credentials.get("dcr_server_url"):
+        return dict(credentials)
+    return {**credentials, "dcr_issuer": issuer, "dcr_server_url": url}
+
+
+def is_resubmitted_oauth_client(supplied: dict[str, object], existing: dict[str, object]) -> bool:
+    """Recognize the saved client without conflating same-ID clients from different issuers."""
+    return bool(
+        supplied.get("client_id")
+        and _decrypted_credential_field(supplied, "client_id") == _decrypted_credential_field(existing, "client_id")
+        and all(
+            _decrypted_credential_field(supplied, field) == _decrypted_credential_field(existing, field)
+            for field in ("client_secret", "token_endpoint_auth_method", "dcr_issuer", "dcr_server_url")
+            if field in supplied
+        )
+    )
+
+
+def oauth_credentials_for_upstream_edit(
+    credentials: Mapping[str, object],
+    previous_issuer: str | None,
+    previous_url: str | None,
+    *,
+    issuer_changed: bool,
+) -> dict[str, object]:
+    """Bind an existing client on an explicit edit, so discovery can verify reuse at the new URL.
+
+    No first-use backfill: unchanged legacy rows never enter this path. Without a known previous
+    issuer, or after a known issuer change, the old client cannot be carried to the new resource.
+    """
+    registered_issuer: Final = _blank_to_none(credentials.get("dcr_issuer")) or previous_issuer
+    keep_client: Final = bool(registered_issuer and credentials.get("client_id") and not issuer_changed)
+    removed: Final = (
+        _MINTED_TOKEN_CREDENTIAL_FIELDS | {"auth_value"}
+        if keep_client
+        else _OAUTH_CLIENT_CREDENTIAL_FIELDS | {"auth_value"}
+    )
+    retained: Final = {key: value for key, value in credentials.items() if key not in removed}
+    if keep_client:
+        return {
+            **retained,
+            "dcr_issuer": registered_issuer,
+            "dcr_server_url": credentials.get("dcr_server_url") or previous_url,
+        }
+    return retained
 
 
 class _OAuthCredentialAccessToken(TypedDict):
@@ -385,7 +465,11 @@ def _prepare_mcp_server_data(
             if blob_value is not None and te_field not in data_dict:
                 data_dict[te_field] = blob_value
         data_dict["credentials"] = encrypt_credentials(credentials=credentials, encryption_key=_get_salt_key())
-        data_dict["credentials"] = safe_dumps(data_dict["credentials"])
+        data_dict["credentials"] = safe_dumps(
+            _bind_submitted_oauth_client(data_dict["credentials"], data.issuer, data.url)
+            if not exclude_unset and data.auth_type == "oauth2"
+            else data_dict["credentials"]
+        )
 
     # Serialize JSON fields from ``data_dict`` (not ``data``) so the
     # exclude_unset filter is respected. Reading back from ``data`` would
@@ -514,22 +598,16 @@ def _db_transaction_manager(prisma_client: PrismaClient) -> _UserEnvVarsTransact
 
 
 def _identifier_where(value: str, exclude_server_id: str | None) -> "prisma_db_types.LiteLLM_MCPServerTableWhereInput":
-    own_row_guard: Final = (
-        ({"NOT": [{"server_id": exclude_server_id}]},)  # mutable-ok: prisma where-inputs must be plain dicts
-        if exclude_server_id is not None
-        else ()
-    )
+    own_row_guard: Final = ({"NOT": [{"server_id": exclude_server_id}]},) if exclude_server_id is not None else ()
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
-        "AND": [  # mutable-ok: prisma where-inputs must be plain dicts
+        "AND": [
             {
-                "OR": [  # mutable-ok: prisma where-inputs must be plain dicts
+                "OR": [
                     {"server_name": {"equals": value, "mode": "insensitive"}},
                     {"alias": {"equals": value, "mode": "insensitive"}},
                 ]
             },
-            {
-                "OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]
-            },  # mutable-ok: prisma where-inputs must be plain dicts
+            {"OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]},
             *own_row_guard,
         ]
     }
@@ -606,6 +684,7 @@ async def _mcp_server_write_if_identifier_free(
     alias: str | None,
     exclude_server_id: str | None,
     write: "Callable[[TableActions[prisma_db_models.LiteLLM_MCPServerTable]], Awaitable[prisma_db_models.LiteLLM_MCPServerTable | None]]",
+    lock_server_id: str | None = None,
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
     """Run ``write`` only when no other live row owns ``server_name``/``alias``.
 
@@ -625,6 +704,10 @@ async def _mcp_server_write_if_identifier_free(
         )
         if conflict is not None:
             return conflict
+        if lock_server_id is not None:
+            await tx.execute_raw(
+                'SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE server_id=$1 FOR UPDATE', lock_server_id
+            )
         return await write(tx.litellm_mcpservertable)
 
 
@@ -639,6 +722,20 @@ async def _db_find_mcp_server_row(
     prisma_client: PrismaClient, server_id: str
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
     return await _mcp_server_table_actions(prisma_client).find_unique(where={"server_id": server_id})
+
+
+MCP_CATALOG_REVISION_PARAM_NAME: Final = "mcp_catalog"
+
+
+async def get_mcp_catalog_revision(prisma_client: PrismaClient) -> int | None:
+    """The ``LiteLLM_Config`` revision the MCP server table trigger last published, or None when
+    no write has ever bumped it (or the trigger is not installed), meaning always reload."""
+    row: Final = await ConfigRepository(prisma_client, use_writer=True).table.find_unique(
+        where={"param_name": MCP_CATALOG_REVISION_PARAM_NAME}
+    )
+    if row is None:
+        return None
+    return int(row.reload_revision or 0)
 
 
 async def _db_update_mcp_server_row(
@@ -769,6 +866,15 @@ async def get_all_mcp_servers(
     mcp_servers: Final = await _db_find_mcp_server_rows(prisma_client, where)
 
     return list(_readable_mcp_servers(mcp_servers))
+
+
+async def get_runtime_mcp_server_rows(
+    prisma_client: PrismaClient,
+) -> Sequence["prisma_db_models.LiteLLM_MCPServerTable"]:
+    where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
+        "OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]
+    }
+    return await MCPServerRepository(prisma_client, use_writer=True).table.find_many(where=where)
 
 
 async def get_mcp_server(prisma_client: PrismaClient, server_id: str) -> LiteLLM_MCPServerTable | None:
@@ -1106,36 +1212,70 @@ async def get_draft_mcp_server(
     return table
 
 
+def _validate_mcp_protocol_write(
+    stored: "prisma_db_models.LiteLLM_MCPServerTable", data_dict: Mapping[str, object]
+) -> None:
+    raw_info: Final = data_dict.get("mcp_info", stored.mcp_info)
+    adapter: Final = TypeAdapter[MCPInfo | None](MCPInfo | None)
+    try:
+        info: Final = (
+            adapter.validate_json(raw_info) if isinstance(raw_info, str) else adapter.validate_python(raw_info)
+        )
+        validate_mcp_protocol_transport(
+            TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                (info or {}).get("protocol_version", "auto")
+            ),
+            TypeAdapter[MCPTransportType](MCPTransportType).validate_python(
+                data_dict.get("transport", stored.transport)
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 async def _update_mcp_server_row(
     prisma_client: PrismaClient,
     *,
     server_id: str,
     data_dict: Mapping[str, object],
+    expected_updated_at: datetime | None = None,
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
     identifier_write: Final = any(field in data_dict for field in ("server_name", "alias"))
+    protocol_write: Final = bool({"transport", "mcp_info"}.intersection(data_dict))
 
     async def _update(
         table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
     ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
+        if protocol_write:
+            stored: Final = await table.find_unique(where={"server_id": server_id})
+            if stored is None:
+                return None
+            _validate_mcp_protocol_write(stored, data_dict)
+        if expected_updated_at is not None:
+            changed: Final = await table.update_many(
+                where={"server_id": server_id, "updated_at": expected_updated_at}, data=data_dict
+            )
+            return await table.find_unique(where={"server_id": server_id}) if changed else None
         return await table.update(
-            where={"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
+            where={"server_id": server_id},
             data=data_dict,
         )
 
-    if not identifier_write:
+    if not identifier_write and not protocol_write:
         return await _update(_mcp_server_table_actions(prisma_client))
     if "alias" in data_dict and not data_dict["alias"] and "server_name" not in data_dict:
         # Clearing the alias drops the prefix to the stored server_name, which
         # may already belong to another row, so that name needs the check too.
         existing: Final = await _db_find_mcp_server_row(prisma_client, server_id)
         if existing is None:
-            return await _update(_mcp_server_table_actions(prisma_client))
+            return None
         return await _mcp_server_write_if_identifier_free(
             prisma_client,
             server_name=existing.server_name,
             alias=None,
             exclude_server_id=server_id,
             write=_update,
+            lock_server_id=server_id if protocol_write else None,
         )
     return await _mcp_server_write_if_identifier_free(
         prisma_client,
@@ -1143,6 +1283,7 @@ async def _update_mcp_server_row(
         alias=_identifier_field(data_dict, "alias"),
         exclude_server_id=server_id,
         write=_update,
+        lock_server_id=server_id if protocol_write else None,
     )
 
 
@@ -1151,6 +1292,7 @@ async def update_mcp_server(
     data: UpdateMCPServerRequest,
     touched_by: str,
     fields_set: set[str] | None = None,
+    expected_updated_at: datetime | None = None,
 ) -> LiteLLM_MCPServerTable | McpIdentifierConflict | None:
     """
     Update a new mcp server record in the db
@@ -1164,16 +1306,16 @@ async def update_mcp_server(
     # exclude_unset=True makes this a true partial update: fields the caller did
     # not provide are not written, so they keep their existing DB value instead
     # of being reset to a schema default (transport=sse, allow_all_keys=False...).
-    data_dict: Final = _prepare_mcp_server_data(data, exclude_unset=True, fields_set=fields_set)
+    prepared_data: Final = _prepare_mcp_server_data(data, exclude_unset=True, fields_set=fields_set)
 
     # Pre-fetch existing record once if we need it for auth_type, url, or credential logic
     existing = None
-    has_credentials: Final = "credentials" in data_dict and data_dict["credentials"] is not None
+    has_credentials: Final = "credentials" in prepared_data and prepared_data["credentials"] is not None
     # An explicit token-exchange column write (set or clear) also migrates the
     # legacy blob copies below, so the existing row is needed for those updates.
-    explicit_te_write: Final = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & data_dict.keys())
-    url_provided: Final = "url" in data_dict and data_dict["url"] is not None
-    issuer_provided: Final = "issuer" in data_dict
+    explicit_te_write: Final = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & prepared_data.keys())
+    url_provided: Final = "url" in prepared_data and prepared_data["url"] is not None
+    issuer_provided: Final = "issuer" in prepared_data
     if data.auth_type or has_credentials or explicit_te_write or url_provided or issuer_provided:
         existing = await _db_find_mcp_server_row(prisma_client, data.server_id)
 
@@ -1184,28 +1326,59 @@ async def update_mcp_server(
     )
     # A url change re-points the server at a potentially different upstream, so any discovered or
     # trust-on-first-use OAuth endpoints/issuer belong to the old upstream and must re-discover.
-    url_changed: Final = bool(url_provided and existing and existing.url != data_dict["url"])
+    url_changed: Final = bool(url_provided and existing and existing.url != prepared_data["url"])
     old_issuer: Final = _blank_to_none(getattr(existing, "issuer", None)) if existing else None
     issuer_changed: Final = bool(
-        issuer_provided and old_issuer is not None and _blank_to_none(data_dict.get("issuer")) != old_issuer
+        issuer_provided and existing is not None and _blank_to_none(prepared_data.get("issuer")) != old_issuer
     )
+
+    oauth_upstream_edited: Final = bool(existing and existing.auth_type == "oauth2" and (url_changed or issuer_changed))
+    existing_credentials: Final = _credentials_blob_to_mutable_dict((existing.credentials or {}) if existing else {})
+    retained_credentials: Final = (
+        oauth_credentials_for_upstream_edit(
+            existing_credentials,
+            old_issuer,
+            existing.url if existing else None,
+            issuer_changed=issuer_changed or auth_type_changed,
+        )
+        if oauth_upstream_edited
+        else existing_credentials
+    )
+    edited_credentials: Final = {"credentials": safe_dumps(retained_credentials)} if oauth_upstream_edited else {}
+    cleared_auth_fields: Final = (
+        stale_mcp_auth_fields(prepared_data, lambda field: getattr(existing, field, None))
+        if auth_type_changed or url_changed or issuer_changed
+        else {}
+    )
+    supplied: Final = _credentials_blob_to_mutable_dict(prepared_data.get("credentials") or {})
+    safe_submitted: Final = (
+        oauth_credentials_for_upstream_edit(
+            supplied,
+            old_issuer,
+            existing.url if existing else None,
+            issuer_changed=issuer_changed or auth_type_changed,
+        )
+        if oauth_upstream_edited and is_resubmitted_oauth_client(supplied, existing_credentials)
+        else supplied
+    )
+    submitted_credentials: Final = (
+        {
+            "credentials": safe_dumps(
+                _bind_submitted_oauth_client(
+                    safe_submitted,
+                    _blank_to_none(cleared_auth_fields.get("issuer", prepared_data.get("issuer", old_issuer))),
+                    _blank_to_none(prepared_data.get("url", existing.url if existing else None)),
+                )
+            )
+        }
+        if has_credentials and (data.auth_type or (existing.auth_type if existing else None)) == "oauth2"
+        else {}
+    )
+    data_dict: Final = {**edited_credentials, **prepared_data, **submitted_credentials, **cleared_auth_fields}
 
     # Clear stale credentials when auth_type changes but no new credentials provided
     if auth_type_changed and "credentials" not in data_dict:
         data_dict["credentials"] = None
-
-    if auth_type_changed or url_changed or issuer_changed:
-        # Clear each auth-flow-scoped field that the caller either omitted (partial update) or
-        # resubmitted unchanged. The edit form re-sends every field, so a stale issuer/endpoint
-        # belonging to the old upstream would otherwise survive a url/auth_type change and win in the
-        # resolution merge; only a genuinely new submitted value is kept.
-        data_dict.update(
-            {
-                field: None
-                for field in _AUTH_FLOW_SCOPED_FIELDS
-                if field not in data_dict or data_dict[field] == getattr(existing, field, None)
-            }
-        )
 
     # An explicit column write that does not touch credentials must still migrate
     # the row's legacy blob copies: lift values for columns the caller left
@@ -1234,11 +1407,10 @@ async def update_mcp_server(
             # within the client-forwarded class (true_passthrough ↔ oauth_delegate) keeps
             # the same declared app and so must merge, not replace.
             if not auth_type_changed:
-                existing_creds = _credentials_blob_to_mutable_dict(existing.credentials)
                 new_creds: Final = _credentials_blob_to_mutable_dict(data_dict["credentials"])
                 # New values override existing; existing keys not in update are preserved. A client
                 # rotation additionally drops the previous app's stale minted token keys.
-                merged: Final = _drop_stale_minted_on_client_rotation({**existing_creds, **new_creds}, new_creds)
+                merged: Final = _drop_stale_minted_on_client_rotation({**retained_credentials, **new_creds}, new_creds)
                 # Migrate-on-write for legacy rows: token-exchange settings the
                 # old blob shape carried move to their dedicated columns (unless
                 # the caller set the column this update, or the row already has
@@ -1269,6 +1441,7 @@ async def update_mcp_server(
         prisma_client,
         server_id=data.server_id,
         data_dict=data_dict,
+        expected_updated_at=expected_updated_at,
     )
 
     if isinstance(updated_mcp_server, McpIdentifierConflict):
@@ -1715,7 +1888,7 @@ async def list_server_user_credentials(
     """Every user's stored credential for one server, typed but without the secret, for admins."""
     rows: Final = await _db_find_user_credential_rows(
         prisma_client,
-        {"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
+        {"server_id": server_id},
     )
     return tuple(_server_user_credential_item(row) for row in rows)
 
@@ -1769,7 +1942,7 @@ def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
     creds: Final = getattr(server, "credentials", None)
     if isinstance(creds, str):
         try:
-            parsed: dict[str, object] | None = json.loads(creds)
+            parsed: Mapping[str, object] | None = _JSON_OBJECT.validate_python(json.loads(creds))
         except ValueError:
             parsed = None
     else:
@@ -2235,12 +2408,9 @@ def _decode_user_env_vars(stored: str) -> dict[str, str]:
                 "re-enter them rather than silently forwarding ciphertext"
             )
         return {}
-    parsed: dict[str, object] | None
     try:
-        parsed = json.loads(decrypted)
+        parsed: Final = _JSON_OBJECT.validate_python(json.loads(decrypted))
     except (ValueError, TypeError):
-        return {}
-    if not isinstance(parsed, dict):
         return {}
     return {str(k): str(v) for k, v in parsed.items()}
 

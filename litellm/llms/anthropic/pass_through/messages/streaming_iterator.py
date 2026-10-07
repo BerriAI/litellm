@@ -40,22 +40,31 @@ def _is_message_stop_chunk(chunk: object) -> bool:
 
 def is_anthropic_ping_chunk(chunk: object) -> bool:
     """
-    Whether a chunk is a pure ``ping`` keepalive frame. It carries no content
-    and can recur indefinitely on a slow-starting or idle connection, so a
-    mid-stream fallback wrapper drops it outright while still deciding
-    whether to commit to the primary stream, rather than buffering it.
+    Whether a chunk is made only of whole ``ping`` keepalive frames. A ping
+    carries no content or lifecycle, so a mid-stream fallback wrapper can
+    forward it live while still deciding whether to commit to the primary
+    stream, without risking two overlapping message lifecycles on the wire.
 
     A physical transport chunk that coalesces a ping with any other SSE
     event (``message_start``, ``content_block_delta``, ``event: error``, ...)
-    is NOT a pure ping - dropping it whole would discard those events - so
-    only a chunk whose every ``event:`` line is ``event: ping`` qualifies.
+    is NOT a pure ping, and neither is a fragment of a ping frame split
+    across two reads, or a chunk that opens with the tail of an earlier
+    frame: forwarding either live would interleave it with frames still
+    held back for a fallback. Only a chunk that begins with ``event: ping``,
+    ends on a frame boundary, and whose every ``event:`` line is
+    ``event: ping`` qualifies.
     """
     if isinstance(chunk, dict):
         return chunk.get("type") == "ping"
-    if isinstance(chunk, (bytes, bytearray)):
-        event_lines: Final = tuple(line for line in chunk.splitlines() if line.startswith(b"event:"))
-        return bool(event_lines) and all(line == b"event: ping" for line in event_lines)
-    return False
+    if not isinstance(chunk, (bytes, bytearray)):
+        return False
+    event_lines: Final = tuple(line for line in chunk.splitlines() if line.startswith(b"event:"))
+    return (
+        bool(event_lines)
+        and all(line == b"event: ping" for line in event_lines)
+        and chunk.startswith(b"event: ping")
+        and chunk.endswith((b"\n\n", b"\r\n\r\n"))
+    )
 
 
 def is_anthropic_content_delta_chunk(chunk: object) -> bool:
@@ -203,15 +212,15 @@ def _anthropic_content_block_start_and_deltas(
     match block.get("type"):
         case "tool_use":
             return (
-                {  # mutable-ok: one-shot payload
+                {
                     "id": block.get("id"),
                     "name": block.get("name"),
-                    "input": {},  # mutable-ok: one-shot payload
+                    "input": {},
                     "type": "tool_use",
                 },
                 (
-                    {  # mutable-ok: one-shot payload
-                        "partial_json": json.dumps(block.get("input") or {}),  # mutable-ok: one-shot payload
+                    {
+                        "partial_json": json.dumps(block.get("input") or {}),
                         "type": "input_json_delta",
                     },
                 ),
@@ -219,23 +228,23 @@ def _anthropic_content_block_start_and_deltas(
         case "thinking":
             signature: Final = block.get("signature")
             signature_deltas: Final = (
-                ({"signature": signature, "type": "signature_delta"},)  # mutable-ok: one-shot payload
+                ({"signature": signature, "type": "signature_delta"},)
                 if isinstance(signature, str) and signature
                 else ()
             )
             return (
-                {"thinking": "", "signature": "", "type": "thinking"},  # mutable-ok: one-shot payload
+                {"thinking": "", "signature": "", "type": "thinking"},
                 (
-                    {"thinking": block.get("thinking") or "", "type": "thinking_delta"},  # mutable-ok: one-shot payload
+                    {"thinking": block.get("thinking") or "", "type": "thinking_delta"},
                     *signature_deltas,
                 ),
             )
         case "redacted_thinking":
-            return ({"type": "redacted_thinking", "data": block.get("data")}, ())  # mutable-ok: one-shot JSON payload
+            return ({"type": "redacted_thinking", "data": block.get("data")}, ())
         case _:
             return (
-                {"type": "text", "text": ""},  # mutable-ok: one-shot JSON payload
-                ({"type": "text_delta", "text": block.get("text") or ""},),  # mutable-ok: one-shot JSON payload
+                {"type": "text", "text": ""},
+                ({"type": "text_delta", "text": block.get("text") or ""},),
             )
 
 
@@ -259,51 +268,51 @@ def anthropic_messages_response_as_sse_events(response: AnthropicMessagesRespons
     # a zero output_tokens - those are only known once generation finishes, so
     # copying the completed response's final values here would let a client
     # treat the message as already finished, or double-count output tokens.
-    message_start_usage: Final = {  # mutable-ok: one-shot JSON payload
+    message_start_usage: Final = {
         **(response.get("usage") or {}),
         "output_tokens": 0,
     }
-    message_start_payload: Final = {  # mutable-ok: one-shot JSON payload, never mutated after construction
+    message_start_payload: Final = {
         "type": "message_start",
-        "message": {  # mutable-ok: one-shot JSON payload
+        "message": {
             **response,
-            "content": [],  # mutable-ok: one-shot JSON payload
+            "content": [],
             "stop_reason": None,
             "stop_sequence": None,
             "usage": message_start_usage,
         },
     }
-    message_delta_payload: Final = {  # mutable-ok: one-shot JSON payload, never mutated after construction
+    message_delta_payload: Final = {
         "type": "message_delta",
-        "delta": {  # mutable-ok: one-shot JSON payload
+        "delta": {
             "stop_reason": response.get("stop_reason"),
             "stop_sequence": response.get("stop_sequence"),
         },
-        "usage": response.get("usage") or {},  # mutable-ok: one-shot JSON payload
+        "usage": response.get("usage") or {},
     }
     return (
         _sse_event("message_start", message_start_payload),
         *content_events,
         _sse_event("message_delta", message_delta_payload),
-        _sse_event("message_stop", {"type": "message_stop"}),  # mutable-ok: one-shot JSON payload
+        _sse_event("message_stop", {"type": "message_stop"}),
     )
 
 
 def _anthropic_content_block_events(index: int, block: Mapping[str, object]) -> tuple[bytes, ...]:
     start_block, deltas = _anthropic_content_block_start_and_deltas(block)
-    start_payload: Final = {  # mutable-ok: one-shot payload
+    start_payload: Final = {
         "type": "content_block_start",
         "index": index,
         "content_block": start_block,
     }
-    stop_payload: Final = {  # mutable-ok: one-shot payload
+    stop_payload: Final = {
         "type": "content_block_stop",
         "index": index,
     }
     delta_events: Final = tuple(
         _sse_event(
             "content_block_delta",
-            {"type": "content_block_delta", "index": index, "delta": delta},  # mutable-ok: one-shot payload
+            {"type": "content_block_delta", "index": index, "delta": delta},
         )
         for delta in deltas
     )
@@ -354,6 +363,14 @@ class AnthropicMessagesStreamingResponse:
         hidden_params: AnthropicMessagesStreamHiddenParams,
     ) -> None:
         self.completion_stream = completion_stream
+        self._hidden_params = hidden_params
+
+    @property
+    def hidden_params(self) -> AnthropicMessagesStreamHiddenParams:
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: AnthropicMessagesStreamHiddenParams) -> None:
         self._hidden_params = hidden_params
 
     @property
@@ -690,7 +707,7 @@ class BaseAnthropicMessagesStreamingIterator:
     async def _fire_detached_failure_hook(self, exc: Exception) -> None:
         from litellm._logging import verbose_proxy_logger
 
-        on_detached_failure: Final = getattr(self.litellm_logging_obj, "_on_detached_stream_failure", None)
+        on_detached_failure: Final = getattr(self.litellm_logging_obj, "on_detached_stream_failure", None)
         if on_detached_failure is None:
             return
         try:

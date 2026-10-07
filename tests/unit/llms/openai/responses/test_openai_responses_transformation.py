@@ -10,6 +10,7 @@ import litellm
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.llms.openai import (
     ImageGenerationPartialImageEvent,
     OutputTextDeltaEvent,
@@ -18,6 +19,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import Choices, Message, ModelResponse
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
@@ -940,6 +942,106 @@ class TestOpenAIResponsesAPIConfig:
         assert norm["input"][0].get("namespace") == "my_tools"
         assert norm["input"][1]["type"] == "custom_tool_call"
         assert "namespace" not in norm["input"][1]
+
+    @staticmethod
+    def _claude_turn_bridged_to_responses_output() -> list:
+        claude_turn = ModelResponse(
+            id="chatcmpl-claude",
+            model="claude-sonnet-4-5",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content="Paris is 22C and sunny.",
+                        reasoning_content="Check Paris first.",
+                        thinking_blocks=[
+                            {"type": "thinking", "thinking": "Check Paris first.", "signature": "sig-paris"}
+                        ],
+                    ),
+                )
+            ],
+        )
+        bridged = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Weather in Paris?", responses_api_request={}, chat_completion_response=claude_turn
+        )
+        return list(bridged.output)
+
+    @pytest.mark.parametrize("config", [OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig()])
+    def test_claude_reasoning_minted_by_the_bridge_is_dropped_before_the_history_reaches_openai(self, config):
+        saved_claude_turn = json.loads(
+            json.dumps([item.model_dump() for item in self._claude_turn_bridged_to_responses_output()])
+        )
+        bridge_reasoning = [item for item in saved_claude_turn if item["type"] == "reasoning"]
+        assert len(bridge_reasoning) == 1
+        openai_reasoning = {
+            "id": "rs_08d3a89dbb92277a006abf04f4266087d0b4eedacd7848f306",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "gAAAAABo-opaque-openai-blob",
+        }
+        history = [
+            {"role": "user", "content": "Weather in Paris?"},
+            *saved_claude_turn,
+            openai_reasoning,
+            {"role": "user", "content": "And Berlin?"},
+        ]
+
+        request = config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=history,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        outbound = request["input"]
+        assert len(outbound) == len(history) - 1
+        assert [item["id"] for item in outbound if item.get("type") == "reasoning"] == [openai_reasoning["id"]]
+        assert LiteLLMCompletionResponsesConfig._decode_thinking_blocks_from_input_item(bridge_reasoning[0]) == (
+            {"type": "thinking", "thinking": "Check Paris first.", "signature": "sig-paris"},
+        )
+
+    def test_bridge_minted_reasoning_is_dropped_when_handed_back_as_pydantic_output_items(self):
+        history = [*self._claude_turn_bridged_to_responses_output(), {"role": "user", "content": "And Berlin?"}]
+
+        request = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=history,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert len(request["input"]) == len(history) - 1
+        assert all(item.get("type") != "reasoning" for item in request["input"])
+
+    @pytest.mark.parametrize(
+        ("reasoning_item", "expected"),
+        [
+            (
+                {"id": "rs_1", "type": "reasoning", "summary": [], "status": None, "note": None},
+                {"id": "rs_1", "type": "reasoning", "summary": []},
+            ),
+            (
+                {"id": "rs_1", "type": "reasoning", "summary": "not a list", "status": None, "note": None},
+                {"id": "rs_1", "type": "reasoning", "summary": "not a list", "note": None},
+            ),
+        ],
+    )
+    def test_a_reasoning_input_item_loses_its_null_status_whether_or_not_it_fits_the_openai_model(
+        self, reasoning_item: dict[str, object], expected: dict[str, object]
+    ):
+        request: Final = self.config.transform_responses_api_request(
+            model="gpt-5.6",
+            input=[reasoning_item, {"role": "user", "content": "And Berlin?"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [expected, {"role": "user", "content": "And Berlin?"}]
 
 
 class TestAzureResponsesAPIConfig:

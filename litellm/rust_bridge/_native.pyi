@@ -11,6 +11,7 @@ from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
+from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName, TraceScope
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
@@ -19,6 +20,41 @@ class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
+
+def trace_encode_error(message: str) -> bytes: ...
+def trace_span_rows(
+    body: bytes, content_type: str | None, tenant: Mapping[str, str], max_attribute_value_bytes: int
+) -> list[dict[str, JsonValue]]: ...
+
+@final
+class NativeTraceConfig:
+    def __new__(
+        cls,
+        database: str,
+        url: str,
+        retention_days: int,
+        max_attribute_value_bytes: int,
+    ) -> NativeTraceConfig: ...
+
+@final
+class NativeTraceStorage:
+    def __new__(cls, config: NativeTraceConfig) -> NativeTraceStorage: ...
+    def ensure_schema(self) -> Future[None]: ...
+    def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
+    def ingest(self, payload: bytes, content_type: str | None, tenant: Mapping[str, str], logs: bool = False) -> Future[int]: ...
+    def list_traces(
+        self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
+    ) -> Future[JsonValue]: ...
+    def get_trace(
+        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
+    ) -> Future[JsonValue]: ...
+    def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> Future[JsonValue]: ...
+    def get_span_error(
+        self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str, cursor: str | None
+    ) -> Future[JsonValue]: ...
+    def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Future[str]: ...
+    def query_help(self, scope: QueryScope, secret: str) -> Future[JsonValue]: ...
+    def query(self, query: ReadQueryName, parameters: Mapping[str, str | int | float | Sequence[str]]) -> Future[str]: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -144,65 +180,6 @@ class ResponsesWebSocketConnection:
     def close(self) -> Future[None]: ...
 
 @final
-class _ResponseCacheRuntime:
-    @staticmethod
-    def from_cache(cache: object) -> _ResponseCacheRuntime: ...
-    @staticmethod
-    def from_selected(cache: object) -> _ResponseCacheRuntime: ...
-    @property
-    def kind(self) -> str: ...
-    def lookup(
-        self,
-        request: object,
-        *,
-        callback_kwargs: Mapping[str, object] | Sequence[object] | None = None,
-    ) -> object: ...
-    def lookup_semantic(self, request: object) -> tuple[object, float | None]: ...
-    def store(
-        self,
-        request: object,
-        response: object,
-        *,
-        callback_kwargs: Mapping[str, object] | None = None,
-    ) -> None: ...
-    def lookup_batch(
-        self,
-        requests: Sequence[object],
-        *,
-        callback_kwargs: Sequence[object] | None = None,
-    ) -> object: ...
-    def async_lookup(
-        self,
-        request: object,
-        *,
-        callback_kwargs: Mapping[str, object] | None = None,
-    ) -> Future[object]: ...
-    def async_lookup_semantic(self, request: object) -> Future[tuple[object, float | None]]: ...
-    def async_store(
-        self,
-        request: object,
-        response: object,
-        *,
-        callback_kwargs: Mapping[str, object] | None = None,
-    ) -> Future[None]: ...
-    def async_lookup_batch(
-        self,
-        requests: Sequence[object],
-        *,
-        callback_kwargs: Sequence[object] | None = None,
-    ) -> Future[object]: ...
-    def async_store_batch(
-        self,
-        requests: Sequence[object],
-        responses: Sequence[object],
-        *,
-        callback_result: object = None,
-        callback_kwargs: Mapping[str, object] | None = None,
-    ) -> Future[object]: ...
-    def async_flush(self) -> Future[None]: ...
-    def ping(self) -> Future[object]: ...
-
-@final
 class TokenCounter:
     @staticmethod
     def from_tokenizer(tokenizer: Tokenizer, fast: bool = False) -> TokenCounter: ...
@@ -314,6 +291,8 @@ __all__ = [
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
     "NativeDiagnosticProcessor",
+    "NativeTraceConfig",
+    "NativeTraceStorage",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
@@ -338,6 +317,8 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
+    "trace_encode_error",
+    "trace_span_rows",
     "transcription",
 ]
 

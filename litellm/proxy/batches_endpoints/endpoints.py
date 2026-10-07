@@ -17,6 +17,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
@@ -77,6 +78,11 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _hidden_param_string(hidden_params: Mapping[str, object], key: str) -> str:
+    value: Final = hidden_params.get(key)
+    return value if isinstance(value, str) else ""
 
 
 def _request_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
@@ -211,7 +217,7 @@ async def _create_provider_batch_for_managed_file(
     }
     response: Final = await llm_router.acreate_batch(**request)
     response.input_file_id = input_file_id
-    response._hidden_params["unified_file_id"] = unified_file_id
+    set_hidden_param(response, "unified_file_id", unified_file_id)
     return response
 
 
@@ -244,7 +250,7 @@ async def create_batch(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "input_file_id": "file-abc123",
@@ -283,7 +289,7 @@ async def create_batch(
         )
         data["metadata"] = sanitize_openai_provider_metadata(data.get("metadata"))
 
-        raise_if_required_body_param_missing(route_type="acreate_batch", data=data)
+        raise_if_required_body_param_missing(route_type="acreate_batch", data=data, llm_router=llm_router)
 
         ## check if model is a loadbalanced model
         router_model: str | None = None
@@ -484,7 +490,7 @@ async def create_batch(
                     **_create_batch_data,
                 )
 
-        response._hidden_params[BATCH_CREATE_HIDDEN_PARAM] = True
+        set_hidden_param(response, BATCH_CREATE_HIDDEN_PARAM, True)
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -497,10 +503,10 @@ async def create_batch(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
-        model_id: Final = hidden_params.get("model_id", None) or ""
-        cache_key: Final = hidden_params.get("cache_key", None) or ""
-        api_base: Final = hidden_params.get("api_base", None) or ""
+        hidden_params: Final = get_hidden_params(response) or {}
+        model_id: Final = _hidden_param_string(hidden_params, "model_id")
+        cache_key: Final = _hidden_param_string(hidden_params, "cache_key")
+        api_base: Final = _hidden_param_string(hidden_params, "api_base")
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -554,7 +560,7 @@ async def retrieve_batch(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches/batch_abc123 \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H "Content-Type: application/json" \
 
     ```
@@ -655,10 +661,10 @@ async def retrieve_batch(
                 )
             )
 
-            hidden_params = getattr(response, "_hidden_params", {}) or {}
-            model_id = hidden_params.get("model_id", None) or ""
-            cache_key = hidden_params.get("cache_key", None) or ""
-            api_base = hidden_params.get("api_base", None) or ""
+            hidden_params = get_hidden_params(response) or {}
+            model_id = _hidden_param_string(hidden_params, "model_id")
+            cache_key = _hidden_param_string(hidden_params, "cache_key")
+            api_base = _hidden_param_string(hidden_params, "api_base")
 
             fastapi_response.headers.update(
                 ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -736,11 +742,11 @@ async def retrieve_batch(
                 )
 
             response = await llm_router.aretrieve_batch(**data)
-            response._hidden_params["unified_batch_id"] = unified_batch_id
+            set_hidden_param(response, "unified_batch_id", unified_batch_id)
             if unified_batch_id:
                 model_id_from_batch: Final = get_model_id_from_unified_batch_id(unified_batch_id)
                 if model_id_from_batch:
-                    response._hidden_params["model_id"] = model_id_from_batch
+                    set_hidden_param(response, "model_id", model_id_from_batch)
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
@@ -802,10 +808,10 @@ async def retrieve_batch(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
+        hidden_params = get_hidden_params(response) or {}
+        model_id = _hidden_param_string(hidden_params, "model_id")
+        cache_key = _hidden_param_string(hidden_params, "cache_key")
+        api_base = _hidden_param_string(hidden_params, "api_base")
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -861,7 +867,7 @@ async def list_batches(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches?limit=2 \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H "Content-Type: application/json" \
 
     ```
@@ -986,10 +992,10 @@ async def list_batches(
             response = _response
 
         ### RESPONSE HEADERS ###
-        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
-        model_id: Final = hidden_params.get("model_id", None) or ""
-        cache_key: Final = hidden_params.get("cache_key", None) or ""
-        api_base: Final = hidden_params.get("api_base", None) or ""
+        hidden_params: Final = get_hidden_params(response) or {}
+        model_id: Final = _hidden_param_string(hidden_params, "model_id")
+        cache_key: Final = _hidden_param_string(hidden_params, "cache_key")
+        api_base: Final = _hidden_param_string(hidden_params, "api_base")
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -1045,7 +1051,7 @@ async def cancel_batch(
     Example Curl
     ```
     curl http://localhost:4000/v1/batches/batch_abc123/cancel \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -X POST
 
@@ -1168,10 +1174,10 @@ async def cancel_batch(
             data["model"] = model_id_from_batch
             data["batch_id"] = get_batch_id_from_unified_batch_id(unified_batch_id)
             response = await llm_router.acancel_batch(**data)
-            response._hidden_params["unified_batch_id"] = unified_batch_id
+            set_hidden_param(response, "unified_batch_id", unified_batch_id)
 
-            if not response._hidden_params.get("model_id") and data.get("model"):
-                response._hidden_params["model_id"] = data["model"]
+            if not (get_hidden_params(response) or {}).get("model_id") and data.get("model"):
+                set_hidden_param(response, "model_id", data["model"])
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
@@ -1229,10 +1235,10 @@ async def cancel_batch(
         )
 
         ### RESPONSE HEADERS ###
-        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
-        model_id: Final = hidden_params.get("model_id", None) or ""
-        cache_key: Final = hidden_params.get("cache_key", None) or ""
-        api_base: Final = hidden_params.get("api_base", None) or ""
+        hidden_params: Final = get_hidden_params(response) or {}
+        model_id: Final = _hidden_param_string(hidden_params, "model_id")
+        cache_key: Final = _hidden_param_string(hidden_params, "cache_key")
+        api_base: Final = _hidden_param_string(hidden_params, "api_base")
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
