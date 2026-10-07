@@ -20,6 +20,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -165,7 +166,7 @@ class _CombinedChunkSplitter:
             chunk.usage = None
         hidden_params: Final = getattr(chunk, "_hidden_params", None)
         if isinstance(hidden_params, dict) and "usage" in hidden_params:
-            chunk._hidden_params = {key: value for key, value in hidden_params.items() if key != "usage"}
+            set_hidden_params(chunk, {key: value for key, value in hidden_params.items() if key != "usage"})
 
     @staticmethod
     def _split_by_payload_kind(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":

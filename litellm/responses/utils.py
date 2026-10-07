@@ -325,7 +325,7 @@ class ResponsesAPIRequestUtils:
         responses_api_response: dict[str, object],
         custom_llm_provider: str | None,
         litellm_metadata: dict[str, object] | None = None,
-    ) -> dict[str, object]: 
+    ) -> dict[str, object]:
         ...
 
     # fmt: on
