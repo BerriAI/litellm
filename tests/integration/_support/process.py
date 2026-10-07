@@ -119,7 +119,7 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
 
 
 _PORT_ATTEMPTS: Final = 3
-_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE)
+_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE).lower()
 
 
 def _free_port() -> int:
@@ -151,7 +151,7 @@ def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str]
 
 
 def _lost_port_race(exit_code: int | None, log: Path) -> bool:
-    return exit_code is not None and _BIND_COLLISION in log.read_text()
+    return exit_code is not None and _BIND_COLLISION in log.read_text().lower()
 
 
 def _wait_until_ready(launch: _Launch) -> None:
