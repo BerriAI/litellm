@@ -265,6 +265,7 @@ async fn typed_queries_read_normalized_spans_and_keep_trace_identities_separate(
         cursor_ms: 0,
         cursor_trace_id: String::new(),
         limit: 10,
+        agent: String::new(),
     });
     let traces = fetch::<ListTraces>(&fixture.database.client, &reader, &params).await?;
     assert_eq!(
@@ -334,6 +335,7 @@ async fn typed_trace_cursor_returns_the_next_fixture_trace(
         cursor_ms: 0,
         cursor_trace_id: String::new(),
         limit: 1,
+        agent: String::new(),
     });
     let first = fetch::<ListTraces>(&fixture.database.client, &reader, &params).await?;
     assert_eq!(first.len(), 1);
@@ -380,6 +382,7 @@ async fn captured_sdk_exports_round_trip_through_clickhouse(
         cursor_ms: 0,
         cursor_trace_id: String::new(),
         limit: 10,
+        agent: String::new(),
     });
     let traces = fetch::<ListTraces>(&fixture.database.client, &reader, &list_params).await?;
     assert_eq!(traces.len(), 1);
