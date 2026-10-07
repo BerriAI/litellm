@@ -29,6 +29,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 """
 
 import copy
+import json
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -259,6 +260,24 @@ def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
 
 
 def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
+    if item.get("type") == "custom_tool_call" and isinstance(rewritten, Mapping):
+        tool_calls: Final = rewritten.get("tool_calls")
+        if not isinstance(tool_calls, list) or len(tool_calls) != 1 or not isinstance(tool_calls[0], Mapping):
+            return None
+        function: Final = tool_calls[0].get("function")
+        if not isinstance(function, Mapping) or not isinstance(function.get("arguments"), str):
+            return None
+        try:
+            arguments: Final = json.loads(function["arguments"])
+        except json.JSONDecodeError:
+            return None
+        if (
+            not isinstance(arguments, dict)
+            or set(arguments) != {"content"}
+            or not isinstance(arguments["content"], str)
+        ):
+            return None
+        return {**item, "input": arguments["content"]}
     field: Final = _item_rewrite_field(item)
     if field is None or not isinstance(rewritten, Mapping):
         return None
@@ -573,7 +592,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         extracted: Final = self._extract_guardrail_inputs(
             data, input_data, flattened_tool_groups, skip_system=skip_system
         )
-        if not extracted.inputs.get("texts"):
+        if not extracted.inputs.get("texts") and not scoped_structured_messages:
             return data
         if scoped_structured_messages:
             extracted.inputs["structured_messages"] = scoped_structured_messages

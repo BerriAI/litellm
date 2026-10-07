@@ -2459,6 +2459,33 @@ class ToolOutputRewriteGuardrail(CustomGuardrail):
         return {**inputs, "structured_messages": rewritten}
 
 
+class CustomToolCallRewriteGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = list(inputs.get("structured_messages") or [])
+        message = messages[0]
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            return inputs
+        tool_call = tool_calls[0]
+        function = tool_call.get("function")
+        if not isinstance(function, dict):
+            return inputs
+        rewritten_tool_call = {
+            **tool_call,
+            "function": {
+                **function,
+                "arguments": json.dumps({"content": "echo [REDACTED]"}),
+            },
+        }
+        return {**inputs, "structured_messages": [{**message, "tool_calls": [rewritten_tool_call]}]}
+
+
 class DroppingRewriteGuardrail(CustomGuardrail):
     """Guardrail that rewrites the first user row and drops the last row, so the
     rewrite can only land through the full-conversion fallback."""
@@ -2631,6 +2658,23 @@ class TestStructuredMessagesWriteBack:
         assert result["input"][4]["call_id"] == "call_exec"
         assert COMPRESSED_MARKER in str(result["input"][4]["output"])
         assert len(result["input"]) == 5
+
+    @pytest.mark.asyncio
+    async def test_custom_tool_only_input_is_guardrailed_in_place(self):
+        handler = OpenAIResponsesHandler()
+        custom_tool_call_item = {
+            "id": "ctc_456",
+            "type": "custom_tool_call",
+            "call_id": "call_exec",
+            "name": "exec",
+            "input": "echo sensitive-value",
+            "status": "completed",
+        }
+        data = {"model": "gpt-5.6", "input": [custom_tool_call_item]}
+
+        result = await handler.process_input_messages(data, CustomToolCallRewriteGuardrail())
+
+        assert result["input"] == [{**custom_tool_call_item, "input": "echo [REDACTED]"}]
 
     @pytest.mark.asyncio
     async def test_web_search_call_item_preserved_verbatim(self):
