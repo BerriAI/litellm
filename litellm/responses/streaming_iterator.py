@@ -658,7 +658,7 @@ class BaseResponsesAPIStreamingIterator:
         error_obj: Final[object] = (
             getattr(getattr(result, "response", None), "error", None)
             if chunk_type == "response.failed"
-            else getattr(result, "error", None)
+            else (nested_error if (nested_error := getattr(result, "error", None)) is not None else result)
         )
 
         mapped_exception: Final = self._map_error_event_exception(error_obj)

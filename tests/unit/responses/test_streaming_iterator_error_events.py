@@ -21,10 +21,10 @@ Pydantic ValidationError (previously typed as Optional[str]).
 
 import json
 from importlib import import_module
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
-
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
@@ -96,6 +96,23 @@ def test_maybe_raise_for_error_event_maps_invalid_request_type_to_400():
         iterator._maybe_raise_for_error_event(chunk)
     assert exc_info.value.status_code == 400
     assert not isinstance(exc_info.value, MidStreamFallbackError)
+
+
+def test_maybe_raise_for_error_event_maps_top_level_invalid_prompt_to_400() -> None:
+    iterator: Final = _make_iterator()
+    provider_message: Final = "Invalid prompt: your prompt was flagged."
+    chunk: Final = ErrorEvent.model_construct(
+        type=ResponsesAPIStreamEvents.ERROR,
+        sequence_number=1,
+        code="invalid_prompt",
+        message=provider_message,
+        param=None,
+    )
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    assert exc_info.value.status_code == 400
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+    assert provider_message in str(exc_info.value)
 
 
 def test_maybe_raise_for_error_event_maps_context_length_code_to_400():
@@ -376,6 +393,8 @@ def test_maybe_raise_for_error_event_null_error_obj():
     chunk = Mock()
     chunk.type = "error"
     chunk.error = None
+    chunk.message = None
+    chunk.code = None
     with pytest.raises(MidStreamFallbackError) as exc_info:
         iterator._maybe_raise_for_error_event(chunk)
     assert exc_info.value.status_code == 500
