@@ -2,6 +2,7 @@ use crate::{Error, evidence::Workspace, wire};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
+    future::Future,
     path::{Path, PathBuf},
     process::Stdio,
     sync::OnceLock,
@@ -86,13 +87,12 @@ fn command(directory: &Path, runtime_dir: &Path) -> Result<Command, Error> {
     Ok(command)
 }
 
-async fn output(mut pipe: impl AsyncRead + Unpin) -> Result<Vec<u8>, Error> {
-    let mut output = Vec::new();
+async fn output(mut pipe: impl AsyncRead + Unpin, output: &mut Vec<u8>) -> Result<(), Error> {
     let mut buffer = [0; 65536];
     loop {
         let count = pipe.read(&mut buffer).await?;
         if count == 0 {
-            return Ok(output);
+            return Ok(());
         }
         if output.len() + count > 4 * 1024 * 1024 {
             return Err(Error::PythonOutputTooLarge);
@@ -102,7 +102,7 @@ async fn output(mut pipe: impl AsyncRead + Unpin) -> Result<Vec<u8>, Error> {
 }
 
 #[cfg(target_os = "linux")]
-fn scratch_usage(directory: &Path, pid: u32) -> Result<(), Error> {
+fn scratch_usage(directory: &Path, pid: Option<u32>) -> Result<(), Error> {
     use std::{
         collections::BTreeSet,
         os::{
@@ -156,6 +156,9 @@ fn scratch_usage(directory: &Path, pid: u32) -> Result<(), Error> {
             }
         }
     }
+    let Some(pid) = pid else {
+        return Ok(());
+    };
     match std::fs::read_dir(format!("/proc/{pid}/fd")) {
         Ok(descriptors) => {
             for descriptor in descriptors {
@@ -205,17 +208,38 @@ fn scratch_usage(directory: &Path, pid: u32) -> Result<(), Error> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn scratch_usage(_directory: &Path, _pid: u32) -> Result<(), Error> {
+fn scratch_usage(_directory: &Path, _pid: Option<u32>) -> Result<(), Error> {
     Err(Error::PythonUnsupportedPlatform)
 }
 
 async fn monitor(directory: PathBuf, pid: u32) -> Result<(), Error> {
     loop {
         let path = directory.clone();
-        tokio::task::spawn_blocking(move || scratch_usage(&path, pid))
+        tokio::task::spawn_blocking(move || scratch_usage(&path, Some(pid)))
             .await
             .map_err(|_| Error::Unavailable)??;
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn watch_computation<T>(
+    computation: impl Future<Output = Result<T, Error>>,
+    monitoring: impl Future<Output = Result<(), Error>>,
+) -> Result<T, Error> {
+    tokio::pin!(computation);
+    tokio::select! {
+        biased;
+        result = &mut computation => result,
+        result = monitoring => match result {
+            Err(Error::Io(error)) => {
+                match tokio::time::timeout(Duration::from_millis(100), &mut computation).await {
+                    Ok(result) => result,
+                    Err(_) => Err(Error::PythonMonitorIo(error)),
+                }
+            }
+            Err(error) => Err(error),
+            Ok(()) => Err(Error::Unavailable),
+        },
     }
 }
 
@@ -260,6 +284,8 @@ async fn supervise(
     let mut stdin = child.stdin.take().ok_or(Error::Unavailable)?;
     let stdout = child.stdout.take().ok_or(Error::Unavailable)?;
     let stderr = child.stderr.take().ok_or(Error::Unavailable)?;
+    let mut captured_stdout = Vec::new();
+    let mut captured_stderr = Vec::new();
     let computation = async {
         let feed = async {
             let mut file = tokio::fs::File::open(input.path()).await?;
@@ -272,25 +298,29 @@ async fn supervise(
             Ok::<_, Error>(())
         };
         let wait = async { child.wait().await.map_err(Error::from) };
-        tokio::try_join!(feed, output(stdout), output(stderr), wait)
+        tokio::try_join!(
+            feed,
+            output(stdout, &mut captured_stdout),
+            output(stderr, &mut captured_stderr),
+            wait
+        )
     };
     let result = tokio::select! {
-        result = tokio::time::timeout(Duration::from_secs(60), computation) => result.map_err(|_| Error::PythonTimedOut).and_then(|r| r),
-        result = monitor(directory_path.clone(), pid) => Err(result.err().unwrap_or(Error::Unavailable)),
+        result = tokio::time::timeout(Duration::from_secs(60), watch_computation(computation, monitor(directory_path.clone(), pid))) => result.map_err(|_| Error::PythonTimedOut).and_then(|r| r),
         _ = &mut cancelled => Err(Error::PythonCancelled),
     };
     let result = result.and_then(|output| {
-        scratch_usage(&directory_path, pid)?;
+        scratch_usage(&directory_path, None)?;
         Ok(output)
     });
-    let (stdout, stderr, exit_code, error) = match result {
-        Ok(((), stdout, stderr, status)) => {
-            let ready = stderr.starts_with(READY);
-            let stderr = if ready {
-                stderr[READY.len()..].to_vec()
-            } else {
-                stderr
-            };
+    let ready = captured_stderr.starts_with(READY);
+    let stderr = if ready {
+        &captured_stderr[READY.len()..]
+    } else {
+        &captured_stderr
+    };
+    let (exit_code, error) = match result {
+        Ok(((), (), (), status)) => {
             let error = if !ready {
                 "Python confinement failed before execution. Check worker image and kernel support."
             } else if !status.success() {
@@ -298,15 +328,85 @@ async fn supervise(
             } else {
                 ""
             };
-            (stdout, stderr, status.code(), error.to_owned())
+            (status.code(), error.to_owned())
         }
         Err(error) => {
             let _ = child.kill().await;
-            let _ = child.wait().await;
-            (Vec::new(), Vec::new(), None, error.to_string())
+            let exit_code = child.wait().await.ok().and_then(|status| status.code());
+            (exit_code, error.to_string())
         }
     };
     Ok(
-        json!({"stdout": String::from_utf8_lossy(&stdout), "stderr": String::from_utf8_lossy(&stderr), "exit_code": exit_code, "elapsed_seconds": started.elapsed().as_secs_f64(), "output_complete": error.is_empty(), "error": error}),
+        json!({"stdout": String::from_utf8_lossy(&captured_stdout), "stderr": String::from_utf8_lossy(stderr), "exit_code": exit_code, "elapsed_seconds": started.elapsed().as_secs_f64(), "output_complete": error.is_empty(), "error": error}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::successful_exit(0)]
+    #[case::failed_exit(1)]
+    #[tokio::test]
+    async fn completed_process_output_survives_a_monitor_io_race(#[case] exit_code: i32) {
+        let finished = Command::new("/bin/sh")
+            .args(["-c", &format!("printf diagnostic >&2; exit {exit_code}")])
+            .output()
+            .await
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let error = std::fs::read(directory.path().join("exited-process")).unwrap_err();
+        let output = watch_computation(
+            async {
+                tokio::task::yield_now().await;
+                Ok(finished)
+            },
+            async { Err(Error::Io(error)) },
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.status.code(), Some(exit_code));
+        assert_eq!(output.stderr, b"diagnostic");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn persistent_monitor_failure_remains_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let error = std::fs::read(directory.path().join("unreadable-process")).unwrap_err();
+        let result =
+            watch_computation::<()>(std::future::pending(), async { Err(Error::Io(error)) }).await;
+        assert!(
+            matches!(result, Err(Error::PythonMonitorIo(source)) if source.kind() == std::io::ErrorKind::NotFound)
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn scratch_limit_failure_cannot_be_overridden_by_process_completion() {
+        let result = watch_computation(
+            async {
+                tokio::task::yield_now().await;
+                Ok(())
+            },
+            async { Err(Error::PythonScratchTooLarge) },
+        )
+        .await;
+        assert!(matches!(result, Err(Error::PythonScratchTooLarge)));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn output_limit_preserves_the_bounded_prefix() {
+        let mut captured = Vec::new();
+        let mut source = b"diagnostic".as_slice().chain(tokio::io::repeat(b'x'));
+        assert!(matches!(
+            output(&mut source, &mut captured).await,
+            Err(Error::PythonOutputTooLarge)
+        ));
+        assert!(captured.starts_with(b"diagnostic"));
+        assert!(captured.len() <= 4 * 1024 * 1024);
+    }
 }

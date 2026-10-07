@@ -49,6 +49,8 @@ pub enum Error {
     PythonOutputTooLarge,
     #[error("Python syscall policy is missing from the worker image")]
     PythonPolicyMissing,
+    #[error("Python resource monitoring failed: {0}")]
+    PythonMonitorIo(#[source] std::io::Error),
     #[error(
         "The Lens task alone exceeds the model context window. Use a model with more context or shorten the investigation instructions."
     )]

@@ -130,8 +130,8 @@ print('confined')
     "scratch storage"
 )]
 #[case::hidden(
-    "import ctypes,time\nassert ctypes.CDLL(None).prctl(4,0,0,0,0) == 0\ntime.sleep(2)",
-    "service I/O failed"
+    "import ctypes,sys,time\nprint('before hiding', file=sys.stderr)\nassert ctypes.CDLL(None).prctl(4,0,0,0,0) == 0\ntime.sleep(2)",
+    "resource monitoring failed"
 )]
 #[tokio::test]
 #[ignore = "requires the native Lens Linux image"]
@@ -143,6 +143,13 @@ async fn resource_limits_fail_the_tool_and_clean_up(
     let reply = sandbox::execute(&workspace, &request(code)).await.unwrap();
     assert_eq!(reply["output_complete"], false, "{reply}");
     assert!(reply.to_string().contains(error), "{reply}");
+    if error == "resource monitoring failed" {
+        assert!(
+            reply["stderr"].as_str().unwrap().contains("before hiding"),
+            "{reply}"
+        );
+        assert!(reply["elapsed_seconds"].as_f64().unwrap() < 2.0, "{reply}");
+    }
     assert!(!std::fs::read_dir("/tmp").unwrap().any(|entry| {
         entry
             .unwrap()
@@ -150,6 +157,35 @@ async fn resource_limits_fail_the_tool_and_clean_up(
             .to_string_lossy()
             .starts_with("lens-python-")
     }));
+}
+
+#[rstest]
+#[case::success("print('completed')", 0, "")]
+#[case::memory("x = bytearray(1024 * 1024 * 1024)", 1, "MemoryError")]
+#[tokio::test]
+#[ignore = "requires the native Lens Linux image"]
+async fn rapid_process_exits_preserve_their_output(
+    workspace: Workspace,
+    #[case] code: &str,
+    #[case] exit_code: i32,
+    #[case] stderr: &str,
+) {
+    for attempt in 0..32 {
+        let reply = sandbox::execute(&workspace, &request(code)).await.unwrap();
+        assert_eq!(reply["exit_code"], exit_code, "attempt {attempt}: {reply}");
+        assert_eq!(
+            reply["output_complete"],
+            exit_code == 0,
+            "attempt {attempt}: {reply}"
+        );
+        assert!(
+            reply["stderr"].as_str().unwrap().contains(stderr),
+            "attempt {attempt}: {reply}"
+        );
+        if exit_code == 0 {
+            assert_eq!(reply["stdout"], "completed\n", "attempt {attempt}: {reply}");
+        }
+    }
 }
 
 #[rstest]
