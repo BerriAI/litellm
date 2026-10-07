@@ -381,7 +381,7 @@ Each dimension contributes its weight once when any matcher hits the current ask
 
 The API and YAML store exactly the weights written. A `dimension_weights` map and inline custom weights are read literally, missing recognized built-in names score zero, and nothing renormalizes the vector, so a total other than 1 is legal and scores accordingly. The dashboard's heuristic scoring editor is the one place that rebalances: editing one weight there holds it and redistributes the remainder across the other active dimensions in the draft, then Save sends the resulting explicit values, which the backend stores and scores as written. Opening a router, applying a preset, editing matchers, changing `scoring_mode`, or saving unrelated fields never normalizes existing weights
 
-Only `heuristic`, `heuristic_first` and `hybrid` accept custom dimensions. Each name must be a unique ASCII identifier starting with a letter, at most 64 characters, and cannot reuse a built-in dimension name or a key in `dimension_weights`. Set its weight inline, greater than zero and at most one
+Only `heuristic`, `heuristic_first` and `hybrid` using heuristic v1 accept custom dimensions. Each name must be a unique ASCII identifier starting with a letter, at most 64 characters, and cannot reuse a built-in dimension name or a key in `dimension_weights`. Set its weight inline, greater than zero and at most one
 
 Patterns are checked at configuration time against a grammar whose worst case stays a few milliseconds on 2048 characters. Every quantifier needs an explicit upper bound of at most 64 and must repeat a single character or character class, so `\s{1,4}` is accepted while `\s+`, `(a|aa){0,12}` and `(?:ab){0,64}` are refused. Backreferences, lookarounds, atomic groups and possessive quantifiers are refused as well. Each pattern is then costed: alternation branches and repeat lengths multiply the ways the engine can retry, and every later piece of the pattern is charged once per path that can reach it, so `a?a?a?a?a?a?a?a?` followed by a long fixed tail is refused even though each quantifier is small. The budget is 2048 work units per pattern and 8192 across the router. An invalid or over-budget pattern fails the write with a message naming the pattern and the rule it broke
 
@@ -555,7 +555,7 @@ on by default; set `classifier_llm_config.circuit_breaker_enabled: false` to dis
 fallback is the local heuristic scorer, so a classifier outage does not repeat its timeout across
 every turn or session handled by the router process.
 
-A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
+With the default heuristic v1, a request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least
 one signal. Everything else goes to the classifier, which then decides as it normally would.
 
@@ -575,6 +575,13 @@ except that the heuristic outcome is the one already computed rather than a seco
 
 Spend logs record `routing_decision.cause` as `heuristic_first_short_circuit` when the classifier
 was skipped, and `llm_classifier` when it ran, so the two are told apart per request.
+
+Set `local_heuristic: heuristic_v2` to chain the trained predictor instead. Its selected tier must
+meet `heuristic_v2_success_threshold` and remain at or below `heuristic_first_max_tier` to skip the judge
+
+Omitting `local_heuristic` keeps v1. Both choices preserve the configured classifier failure fallback;
+the heuristic fallback uses the selected local scorer. V2 short-circuits and fallbacks also record
+`heuristic_v2_forecast` with the probabilities and success threshold used for the decision
 
 ### Hybrid
 
@@ -601,7 +608,7 @@ model_list:
           REASONING: o1-preview
 ```
 
-A request routes on the scorer's own tier when its score is further than `hybrid_boundary_margin`
+With the default heuristic v1, a request routes on the scorer's own tier when its score is further than `hybrid_boundary_margin`
 from every active boundary. Everything else goes to the classifier: a score inside the band, where a
 hair's difference would have named the adjacent tier and its model pool, and a prompt where no
 dimension fired at all, which has no opinion to be confident about. `hybrid_boundary_margin` is
@@ -618,6 +625,10 @@ was skipped and `llm_classifier` when it ran.
 Operator-defined tier sets (`tier_definitions`) are not supported here, for the same reason they are
 not supported under heuristic-first: the scorer only produces the built-in tiers. Classifier failure
 behaves exactly as it does under `classifier_type: llm`.
+
+For `local_heuristic: heuristic_v2`, the selected tier must meet `heuristic_v2_success_threshold`.
+The judge decides when any probability at or below the selected tier is within `hybrid_boundary_margin`
+of that threshold, or when no tier meets the threshold. A zero margin still defers exact-threshold predictions
 
 ### Reasoning Override
 

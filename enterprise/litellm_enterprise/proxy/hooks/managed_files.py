@@ -23,6 +23,7 @@ from uuid import NAMESPACE_URL, uuid5
 import httpx
 from fastapi import HTTPException
 from pydantic import ValidationError
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import Router, verbose_logger
@@ -30,11 +31,13 @@ from litellm._internal_context import with_service_target
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.constants import MAX_FILE_LIST_LIMIT
+from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
+from openai import AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
 
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
@@ -191,6 +194,19 @@ class _ManagedObjectTableActions(Protocol):
     async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
 
 
+class _ManagedResourceDatabase(Protocol):
+    @property
+    def litellm_managedfiletable(self) -> _ManagedFileTableActions: ...
+
+    @property
+    def litellm_managedobjecttable(self) -> _ManagedObjectTableActions: ...
+
+
+class _ManagedResourcePrismaClient(Protocol):
+    @property
+    def db(self) -> _ManagedResourceDatabase: ...
+
+
 class _SchedulerWithJobLookup(Protocol):
     def get_job(self, job_id: str) -> object: ...
 
@@ -200,7 +216,12 @@ class _CursorPageArgs(TypedDict, total=False):
     skip: int
 
 
-def _managed_file_table(prisma_client: PrismaClient) -> _ManagedFileTableActions:
+class _RouterFileCallKwargs(TypedDict, total=False):
+    client: ReadOnly[AsyncOpenAI | None]
+    custom_llm_provider: ReadOnly[str | None]
+
+
+def _managed_file_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedFileTableActions:
     return prisma_client.db.litellm_managedfiletable
 
 
@@ -214,7 +235,7 @@ def _iter_provider_file_id_pairs(
                 yield provider_file_id, row.unified_file_id
 
 
-def _managed_object_table(prisma_client: PrismaClient) -> _ManagedObjectTableActions:
+def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _ManagedObjectTableActions:
     return prisma_client.db.litellm_managedobjecttable
 
 
@@ -234,7 +255,7 @@ def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, s
 _MANAGED_FILES_TARGET: Final = "managed_files"
 
 
-class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
+class PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache, prisma_client: PrismaClient):
         self.internal_usage_cache = internal_usage_cache
@@ -1283,7 +1304,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             target_model_names_list=target_model_names_list,
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
-        response = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
+        response = await PROXY_LiteLLMManagedFiles.return_unified_file_id(
             file_objects=responses,
             create_file_request=create_file_request,
             internal_usage_cache=self.internal_usage_cache,
@@ -1465,13 +1486,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 _creds = _llm_router.get_deployment_credentials_with_provider(model_id) or {}
                                 file_object = await litellm.afile_retrieve(
                                     file_id=provider_file_id,
-                                    **_creds,
+                                    **cast(FileRetrieveCallOptions, _creds),
                                 )
                             else:
                                 file_object = await litellm.afile_retrieve(
-                                    custom_llm_provider=model_name.split("/")[0]
-                                    if model_name and "/" in model_name
-                                    else "openai",  # type: ignore[arg-type]
+                                    custom_llm_provider=cast(
+                                        FileRetrieveProvider,
+                                        model_name.split("/")[0] if model_name and "/" in model_name else "openai",
+                                    ),
                                     file_id=provider_file_id,
                                 )
                             verbose_logger.debug(
@@ -1537,7 +1559,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             unified_file_id = finetuning_response_hidden_params.get("unified_file_id")
             unified_finetuning_job_id = finetuning_response_hidden_params.get("unified_finetuning_job_id")
             model_id = cast(Optional[str], finetuning_response_hidden_params.get("model_id"))
-            model_name = cast(Optional[str], finetuning_response_hidden_params.get("model_name"))
             original_response_id = response.id
             if (unified_file_id or unified_finetuning_job_id) and model_id:
                 response.id = self.get_unified_generic_response_id(model_id=model_id, generic_response_id=response.id)
@@ -1615,8 +1636,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         try:
             model_id, model_file_id = next(iter(stored_file_object.model_mappings.items()))
-            credentials = llm_router.get_deployment_credentials_with_provider(model_id) or {}
-            response = await litellm.afile_retrieve(file_id=model_file_id, **credentials)
+            credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id) or {}
+            response = await litellm.afile_retrieve(
+                file_id=model_file_id,
+                **cast(FileRetrieveCallOptions, credentials),
+            )
             response.id = file_id  # Replace with unified ID
             return response
         except Exception as e:
@@ -1911,7 +1935,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     else {}
                 ),
             }
-            await llm_router.afile_delete(model=model_id, file_id=model_file_id, **delete_data)
+            await llm_router.afile_delete(
+                model=model_id,
+                file_id=model_file_id,
+                **cast(_RouterFileCallKwargs, delete_data),
+            )
 
     async def afile_content(
         self,
@@ -1947,7 +1975,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         data["_litellm_internal_model_credentials"] = cast(Dict, MappingProxyType(dict(credentials)))
                     else:
                         data.pop("_litellm_internal_model_credentials", None)
-                    return await llm_router.afile_content(model=model_id, file_id=provider_file_id, **data)  # type: ignore
+                    return cast(
+                        HttpxBinaryResponseContent,
+                        await llm_router.afile_content(
+                            model=model_id,
+                            file_id=provider_file_id,
+                            **cast(_RouterFileCallKwargs, data),
+                        ),
+                    )
                 except Exception as e:
                     exception_dict[model_id] = str(e)
             raise Exception(
@@ -2075,3 +2110,4 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 verbose_logger.debug(
                                     f"Converted file {file_id} from storage backend to base64 with format {content_type}"
                                 )
+_PROXY_LiteLLMManagedFiles = PROXY_LiteLLMManagedFiles

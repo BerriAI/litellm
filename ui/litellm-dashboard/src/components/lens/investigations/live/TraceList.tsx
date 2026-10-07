@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 
 import { agoLabel } from "../../model/format";
 import { useNow } from "@/hooks/useNow";
@@ -95,7 +95,13 @@ function DoneRow({
   );
 }
 
-export function TraceList({ reviews, group }: { reviews: readonly Review[]; group: string | null }) {
+export const TraceList = memo(function TraceList({
+  reviews,
+  group,
+}: {
+  reviews: readonly Review[];
+  group: string | null;
+}) {
   const now = useNow(5000);
   const [expanded, setExpanded] = useState<string | null>(null);
   const rows = newestFirst(reviews, LIMIT).filter((review) => inGroup(review, group));
@@ -117,4 +123,4 @@ export function TraceList({ reviews, group }: { reviews: readonly Review[]; grou
       ))}
     </ol>
   );
-}
+});

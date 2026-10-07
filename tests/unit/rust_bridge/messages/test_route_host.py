@@ -161,4 +161,4 @@ def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handl
     assert isinstance(additional, dict)
     assert additional["llm_provider-request-id"] == "req_upstream_123"
     assert additional["x-ratelimit-remaining-requests"] == "41"
-    assert "request-id" not in additional
+    assert additional["request-id"] == additional["llm_provider-request-id"]

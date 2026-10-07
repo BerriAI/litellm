@@ -2,18 +2,20 @@ import builtins
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import PrivateAttr
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 
-class ExpiresAfter(BaseModel):
+
+class ExpiresAfter(LiteLLMBaseModel):
     """Container expiration settings."""
 
     anchor: Literal["last_active_at"]
     minutes: int
 
 
-class ContainerObject(BaseModel):
+class ContainerObject(LiteLLMBaseModel):
     """Represents a container object."""
 
     id: str
@@ -23,7 +25,7 @@ class ContainerObject(BaseModel):
     expires_after: ExpiresAfter | None = None
     last_active_at: int | None = None
     name: str | None = None
-    _hidden_params: dict[str, Any] = {}
+    _hidden_params: dict[str, Any] = PrivateAttr(default={})
 
     @property
     def hidden_params(self) -> dict[str, Any]:  # mutable-ok: API requires mutation
@@ -53,7 +55,7 @@ class ContainerObject(BaseModel):
             return self.dict()
 
 
-class DeleteContainerResult(BaseModel):
+class DeleteContainerResult(LiteLLMBaseModel):
     """Result of a delete container request."""
 
     id: str
@@ -76,7 +78,7 @@ class DeleteContainerResult(BaseModel):
             return self.dict()
 
 
-class ContainerListResponse(BaseModel):
+class ContainerListResponse(LiteLLMBaseModel):
     """Response object for list containers request."""
 
     object: Literal["list"]
@@ -138,7 +140,7 @@ class ContainerListOptionalRequestParams(TypedDict, total=False):
     extra_query: dict[str, str] | None
 
 
-class ContainerFileObject(BaseModel):
+class ContainerFileObject(LiteLLMBaseModel):
     """Represents a container file object."""
 
     id: str
@@ -148,7 +150,7 @@ class ContainerFileObject(BaseModel):
     created_at: int
     path: str
     source: str
-    _hidden_params: dict[str, builtins.object] = {}
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -174,7 +176,7 @@ class ContainerFileObject(BaseModel):
             return self.dict()
 
 
-class ContainerFileListResponse(BaseModel):
+class ContainerFileListResponse(LiteLLMBaseModel):
     """Response object for list container files request."""
 
     object: Literal["list"]
@@ -199,7 +201,7 @@ class ContainerFileListResponse(BaseModel):
             return self.dict()
 
 
-class DeleteContainerFileResponse(BaseModel):
+class DeleteContainerFileResponse(LiteLLMBaseModel):
     """Response object for delete container file request."""
 
     id: str

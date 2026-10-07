@@ -51,11 +51,6 @@ class PythonReply(BaseModel):
     output: PythonOutput
 
 
-class ToolError(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    error: str
-
-
 async def investigate(damaged_peer: bool) -> None:
     now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
     settings: Final = LensSettings(
@@ -137,23 +132,6 @@ async def investigate(damaged_peer: bool) -> None:
                         ),
                     )
                 ).model_dump_json()
-            if damaged_peer and len(body.messages) == 4:
-                failure: Final = ToolError.model_validate_json(
-                    ToolReply.model_validate_json(body.messages[-1].content).tool_results[0]
-                )
-                assert "r1" in failure.error and "damaged-trace" in failure.error, failure
-                assert "narrower" in failure.error and "other evidence" in failure.error, failure
-                assert not tuple(Path("/tmp").glob("lens-python-*")), "input failure leaked scratch"
-                assert not Path(f"/proc/self/task/{os.getpid()}/children").read_text().strip()
-                return PythonAgentTurn[Extraction](
-                    tools=(
-                        PythonRequest(
-                            action="python",
-                            execution_ids=("r0",),
-                            code='print(sum(p["kind"] == "tool" for s in data["sessions"] for p in s["parts"]))',
-                        ),
-                    )
-                ).model_dump_json()
             output: Final = PythonReply.model_validate_json(
                 ToolReply.model_validate_json(body.messages[-1].content).tool_results[0]
             ).output
@@ -182,6 +160,8 @@ async def investigate(damaged_peer: bool) -> None:
                     executions=(execution, damaged) if damaged_peer else (execution,), eligible=2 if damaged_peer else 1
                 ).model_dump(),
             )
+        if path.endswith("/reviews"):
+            return httpx.Response(200, json=[])
         if path.endswith("/content"):
             if request.url.params["execution_id"] == damaged.id:
                 return httpx.Response(
@@ -205,11 +185,11 @@ async def investigate(damaged_peer: bool) -> None:
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
         assert await LensWorker(client).run_once()
     result: Final = saved.get_nowait()
-    assert result.coverage.unassessable == 0, result
+    assert result.coverage.unassessable == int(damaged_peer), result
     assert bool(result.error) is damaged_peer, result.error
     assert not damaged_peer or "damaged-trace" in result.error, result.error
     assert result.coverage.screened == (2 if damaged_peer else 1) and result.coverage.investigated == 1
-    assert result.coverage.partial == int(damaged_peer) and result.coverage.unassessable == 0
+    assert result.coverage.partial == int(damaged_peer) and result.coverage.failed_tasks == int(damaged_peer)
     expected: Final = finding.model_copy(
         update={"evidence": (evidence.model_copy(update={"execution_id": execution.id}),)}
     )
@@ -218,9 +198,31 @@ async def investigate(damaged_peer: bool) -> None:
     reviews: Final = tuple(event.review for event in progress if event.review is not None)
     assert len(reviews) == (2 if damaged_peer else 1)
     original_review: Final = next(review for review in reviews if review.execution_id == execution.id)
-    assert original_review.tool_calls == (ToolCount(name="python", calls=2 if damaged_peer else 1),)
+    assert original_review.tool_calls == (ToolCount(name="python", calls=1),)
+    assert tuple(version.execution_id for version in result.review_versions) == (execution.id,)
+    assert original_review.extraction is not None and original_review.content_version
+    assert not tuple(Path("/tmp").glob("lens-python-*")), "Investigation leaked scratch"
+    assert not Path(f"/proc/self/task/{os.getpid()}/children").read_text().strip()
     assert any(event.activity is not None and "python" in event.activity.operations for event in progress)
     assert all(quote not in event.activity.model_dump_json() for event in progress if event.activity is not None)
+
+    def reuse_handle(request: httpx.Request) -> httpx.Response:
+        assert not request.url.path.endswith("/model"), "Unchanged trace called the model again"
+        if request.url.path.endswith("/reviews"):
+            return httpx.Response(
+                200, json=[original_review.model_copy(update={"consolidated": True}).model_dump(mode="json")]
+            )
+        return handle(request)
+
+    if not damaged_peer:
+        async with httpx.AsyncClient(
+            base_url="https://proxy.test", transport=httpx.MockTransport(reuse_handle)
+        ) as client:
+            assert await LensWorker(client).run_once()
+        reused: Final = saved.get_nowait()
+        assert reused.coverage.reused == 1 and reused.coverage.screened == 1
+        assert reused.findings == () and reused.error == ""
+        assert reused.review_versions == result.review_versions
     logging.warning(
         "Default worker: confined Python, live activity, nested evidence and unchanged final finding verified"
     )

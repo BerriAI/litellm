@@ -876,6 +876,7 @@ def image_edit(
                 **image_edit_request_params,
                 "litellm_call_id": litellm_call_id,
                 "model_info": model_info,
+                "vertex_location": litellm_params.vertex_location,
             },
             custom_llm_provider=custom_llm_provider,
         )

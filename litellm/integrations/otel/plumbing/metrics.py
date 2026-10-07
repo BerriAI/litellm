@@ -21,8 +21,8 @@ from litellm._logging import verbose_logger
 from litellm.integrations.opentelemetry import (
     METRIC_METADATA_KEYS,
     TOKEN_TYPE_ATTRIBUTE,
-    _build_metric_attribute_filter,
-    _resolve_metric_attribute_filter,
+    build_metric_attribute_filter,
+    resolve_metric_attribute_filter,
 )
 from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds
 from litellm.integrations.otel.model.semconv import (
@@ -324,13 +324,13 @@ class GenAIMetricRecorder:
             otel_settings: Final = (litellm.callback_settings or {}).get("otel") or {}
             raw: Final[object] = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
             if raw is not None:
-                attributes = _build_metric_attribute_filter(raw)
+                attributes = build_metric_attribute_filter(raw)
         # A bad filter (include_list + exclude_list both set, an unfilterable name)
         # raises here; the caller (logger._record_metrics) surfaces it once at ERROR
         # so the operator-fixable config error is visible. Not cached on the raise
         # path -- _filter_resolved stays False -- so a corrected config takes effect
         # without reconstructing the recorder.
-        self._include, self._exclude = _resolve_metric_attribute_filter(attributes)
+        self._include, self._exclude = resolve_metric_attribute_filter(attributes)
         self._filter_resolved = True
         self._warn_about_metric_ineligible_names()
 

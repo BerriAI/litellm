@@ -63,7 +63,7 @@ def _index_of_output_item_type(items: Sequence[object], item_type: str) -> int |
     )
 
 
-def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str | None) -> tuple[Any, ...]:
+def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str | None) -> tuple[object, ...]:
     if item_id is None:
         return items
 
@@ -488,7 +488,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return buffered
 
     def _with_encoded_response_id(self, response: ResponsesAPIResponse) -> ResponsesAPIResponse:
-        return ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+        return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
             responses_api_response=response,
             custom_llm_provider=self.custom_llm_provider,
             litellm_metadata=self.litellm_metadata,
@@ -520,7 +520,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if "text" in self.responses_api_request:
             response_created_event_data["text"] = self.responses_api_request["text"]
         response_created_event_data["tool_choice"] = (
-            LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+            LiteLLMCompletionResponsesConfig.transform_tool_choice_for_responses_api_response(
                 self.responses_api_request.get("tool_choice")
             )
         )
@@ -760,7 +760,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         annotations: Final = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
         response_annotations: Final = (
-            LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                 annotations=annotations
             )
         )
@@ -787,7 +787,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)
 
         response_annotations: Final = (
-            LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                 annotations=annotations
             )
         )
@@ -1164,7 +1164,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self.sent_annotation_events = True
                 # Store annotation events to emit them one by one
                 if not hasattr(self, "_pending_annotation_events"):
-                    response_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+                    response_annotations = LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                         annotations=annotations
                     )
                     self._pending_annotation_events = []

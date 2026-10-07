@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final, cast
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.caching.caching_handler import create_cache_write_task
+from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
 from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
@@ -13,14 +13,13 @@ from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     _is_provider_error_chunk,
     aclose_if_supported,
 )
+from litellm.types.caching import CACHED_STREAM_EVENTS_KEY
 
 if TYPE_CHECKING:
     from litellm.caching.caching_handler import LLMCachingHandler
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import ModelResponseStream
-
-CACHED_STREAM_EVENTS_KEY: Final = "litellm_cached_anthropic_sse_events"
 
 _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -95,7 +94,7 @@ class AnthropicMessagesStreamCacheWriter:
             return
         self.persisted = True
 
-        if not self.caching_handler._should_store_result_in_cache(
+        if not self.caching_handler.should_store_result_in_cache(
             original_function=self.caching_handler.original_function,
             kwargs=self.caching_handler.request_kwargs,
         ):
@@ -114,6 +113,9 @@ class AnthropicMessagesStreamCacheWriter:
             verbose_logger.exception("Anthropic Messages stream cache write failed: %s", e)
             return
         cached_payload: Final = {CACHED_STREAM_EVENTS_KEY: events}
+        if is_response_without_output(cached_payload):
+            verbose_logger.debug("LiteLLM Cache: not caching a stream with no content blocks")
+            return
         dual_cache: Final = self.caching_handler.dual_cache
 
         async def _write() -> None:
