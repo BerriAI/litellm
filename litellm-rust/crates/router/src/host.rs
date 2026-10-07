@@ -5,12 +5,14 @@ use std::future::Future;
 
 use crate::failure::{Classified, Raised};
 
-/// The `mock_testing_*` request flags, which fail the first hop before any attempt.
+/// The `mock_testing_*` request flags. The fallback ones fail the first hop before any
+/// attempt; `RateLimit` replaces the first hop's first attempt, so its retries still run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MockFailure {
     Fallbacks,
     ContextWindowFallbacks,
     ContentPolicyFallbacks,
+    RateLimit,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

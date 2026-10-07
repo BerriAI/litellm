@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
 from typing import Final, TypeAlias, cast
 
 from typing_extensions import assert_never
@@ -20,12 +21,31 @@ class RustRouterUnsupportedError(ValueError):
     pass
 
 
+class _DecisionOverride:
+    def __init__(self) -> None:
+        self.decision: Decision | None = None
+
+
+_OVERRIDE: Final = _DecisionOverride()
+
+
+@contextmanager
+def pinned_backend(decision: Decision) -> Generator[None]:
+    """Pins the decision every `Router(...)` in this block makes, so one test can run on each backend."""
+    previous: Final = _OVERRIDE.decision
+    _OVERRIDE.decision = decision
+    try:
+        yield
+    finally:
+        _OVERRIDE.decision = previous
+
+
 def select_backend(
     args: tuple[object, ...],
     kwargs: Mapping[str, object],
     rules: Rules | None = None,
 ) -> PythonRouter | RustRouter:
-    selected: Final = decision(RouteContext(Route.ROUTER), rules)
+    selected: Final = _OVERRIDE.decision or decision(RouteContext(Route.ROUTER), rules)
     match selected:
         case Decision.PYTHON:
             return _PYTHON_ROUTER(*args, **kwargs)

@@ -41,6 +41,9 @@ import pytest
 
 import litellm
 from litellm import Router
+from tests.unit.router_backends.backends import router_backend  # noqa: F401  # fixture import
+
+pytestmark = pytest.mark.usefixtures("router_backend")
 
 _RECEIVED_MODEL_GROUP_PHRASE = "failed with the error above"
 _AVAILABLE_FALLBACKS_PHRASE = "No fallback was attempted"

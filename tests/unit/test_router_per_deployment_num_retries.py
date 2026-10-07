@@ -12,6 +12,9 @@ import litellm
 from litellm import Router
 from litellm.types.router import RetryPolicy
 from litellm.integrations.custom_logger import CustomLogger
+from tests.unit.router_backends.backends import router_backend  # noqa: F401  # fixture import
+
+pytestmark = pytest.mark.usefixtures("router_backend")
 
 
 class TestPerDeploymentNumRetries:

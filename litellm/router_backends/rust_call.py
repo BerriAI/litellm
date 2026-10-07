@@ -58,6 +58,8 @@ class AttemptRouter(Protocol):
 
     def get_model_info(self, id: str) -> Kwargs | None: ...
 
+    def get_model_list(self, model_name: str | None = None) -> Sequence[Kwargs] | None: ...
+
     def log_retry(self, kwargs: Kwargs, e: Exception) -> object: ...
 
     async def set_response_headers(
@@ -102,6 +104,7 @@ _ROUTER_ONLY_KWARGS: Final = (
     "mock_testing_fallbacks",
     "mock_testing_context_fallbacks",
     "mock_testing_content_policy_fallbacks",
+    "mock_testing_rate_limit_error",
 )
 
 _EXCEPTION_CLASSES: Final[tuple[tuple[type[BaseException], str], ...]] = (
@@ -124,7 +127,7 @@ class Attempt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     deployment_id: str | None = None
-    mock: Literal["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"] | None = None
+    mock: Literal["fallbacks", "context_window_fallbacks", "content_policy_fallbacks", "rate_limit"] | None = None
     model_group: str
     bucket: int
     fallback_depth: int
@@ -285,8 +288,9 @@ class RoutedCall:
             bucket["model_group_size"] = attempt.model_group_size
         bucket["attempted_retries"] = attempt.attempted_retries
         bucket["max_retries"] = attempt.max_retries
+        first_hop_only: Final = () if attempt.bucket == 0 else ("mock_timeout",)
         return {
-            **{key: value for key, value in self._kwargs.items() if key not in ("model", "messages")},
+            **{key: value for key, value in self._kwargs.items() if key not in ("model", "messages", *first_hop_only)},
             **self._hop_kwargs[attempt.bucket],
             self._metadata_key: bucket,
         }
@@ -294,7 +298,14 @@ class RoutedCall:
     def _mock(self, attempt: Attempt, kwargs: Mapping[str, object]) -> Invoked:
         group: Final = attempt.model_group
         error: Final[BaseException] = (
-            litellm.InternalServerError(
+            litellm.RateLimitError(
+                model=group,
+                llm_provider="",
+                message=f"This is a mock exception for model={group}, to trigger a rate limit error.",
+                num_retries=self._single_deployment_num_retries(group),
+            )
+            if attempt.mock == "rate_limit"
+            else litellm.InternalServerError(
                 model=group,
                 llm_provider="",
                 message=f"This is a mock exception for model={group}, to trigger a fallback. "
@@ -316,6 +327,14 @@ class RoutedCall:
             )
         )
         return ("error", error, classify(error, kwargs, callbacks_ran=False))
+
+    def _single_deployment_num_retries(self, group: str) -> int | None:
+        """`_handle_mock_testing_rate_limit_error` reads `num_retries` off a one-deployment group."""
+        deployments: Final = self._normalizer.get_model_list(model_name=group)
+        if deployments is None or len(deployments) != 1:
+            return None
+        num_retries: Final = as_mapping(deployments[0].get("litellm_params")).get("num_retries")
+        return num_retries if isinstance(num_retries, int) else None
 
     def _deployment(self, attempt: Attempt) -> Kwargs:
         deployment: Final = self._normalizer.get_model_info(id=attempt.deployment_id or "")

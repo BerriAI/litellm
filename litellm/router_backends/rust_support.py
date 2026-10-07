@@ -116,33 +116,41 @@ def _argument_reason(arguments: Mapping[str, object]) -> str | None:
 
 
 def _fallbacks_reason(arguments: Mapping[str, object]) -> str | None:
-    """Fallback chains the Rust router reads: group names only, keyed by names without a provider prefix,
-    which Python matches through the cost map."""
+    """Fallback chains the Rust router reads: group names only, and no key Python would match to a group
+    by prefixing the group's provider, which it infers from the cost map."""
+    groups: Final = _group_names(arguments.get("model_list"))
     configured: Final = tuple(
         (name, arguments.get(name) or cast(object, getattr(litellm, name, None)))  # cast-ok: untyped global
         for name in _FALLBACK_ARGUMENTS
     )
     return next(
-        (f"{name} entries other than group names" for name, value in configured if not _plain_chain(value)),
+        (f"{name} entries other than group names" for name, value in configured if not _plain_chain(value, groups)),
         None,
     )
 
 
-def _plain_chain(value: object) -> bool:
+def _group_names(model_list: object) -> frozenset[str]:
+    try:
+        return frozenset(deployment.model_name for deployment in _MODEL_LIST.validate_python(model_list or ()))
+    except ValidationError:
+        return frozenset()
+
+
+def _plain_chain(value: object, groups: frozenset[str]) -> bool:
     entries: Final = _CALLBACKS.validate_python(value) if isinstance(value, (list, tuple)) else ()
-    return all(_plain_entry(entry) for entry in entries)
+    return all(_plain_entry(entry, groups) for entry in entries)
 
 
-def _plain_entry(entry: object) -> bool:
+def _plain_entry(entry: object, groups: frozenset[str]) -> bool:
     if isinstance(entry, str):
         return True
     chains: Final[Mapping[str, object]] = _MAPPING.validate_python(entry) if isinstance(entry, Mapping) else {}
-    return bool(chains) and all(_plain_chain_of(key, targets) for key, targets in chains.items())
+    return bool(chains) and all(_plain_chain_of(key, targets, groups) for key, targets in chains.items())
 
 
-def _plain_chain_of(key: str, targets: object) -> bool:
+def _plain_chain_of(key: str, targets: object, groups: frozenset[str]) -> bool:
     return (
-        "/" not in key
+        key.rpartition("/")[2] not in groups - {key}
         and isinstance(targets, (list, tuple))
         and all(isinstance(target, str) for target in _CALLBACKS.validate_python(targets))
     )

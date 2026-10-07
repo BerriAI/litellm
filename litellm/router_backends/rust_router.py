@@ -46,13 +46,12 @@ _UNSUPPORTED_REQUEST_KWARGS: Final = (
     "model_group_retry_policy",
     "include_fallback_errors",
     "_router_weights",
-    "mock_timeout",
-    "mock_testing_rate_limit_error",
 )
 _MOCK_FAILURES: Final = (
     ("mock_testing_fallbacks", "fallbacks"),
     ("mock_testing_context_fallbacks", "context_window_fallbacks"),
     ("mock_testing_content_policy_fallbacks", "content_policy_fallbacks"),
+    ("mock_testing_rate_limit_error", "rate_limit"),
 )
 _WEB_SEARCH_TOOLS: Final = frozenset({"web_search", "web_search_preview"})
 
@@ -223,6 +222,18 @@ class RustRouter:
     @property
     def model_names(self) -> set[str]:  # mutable-ok: PythonRouter's read surface
         return self._normalizer.model_names
+
+    @property
+    def total_calls(self) -> Mapping[str, int]:
+        return self._normalizer.total_calls
+
+    @property
+    def success_calls(self) -> Mapping[str, int]:
+        return self._normalizer.success_calls
+
+    @property
+    def fail_calls(self) -> Mapping[str, int]:
+        return self._normalizer.fail_calls
 
     def get_model_names(self) -> list[str]:  # mutable-ok: PythonRouter's read surface
         return self._normalizer.get_model_names()

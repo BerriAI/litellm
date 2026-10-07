@@ -36,6 +36,7 @@ pub(super) fn router_call(arguments: &Bound<'_, PyDict>) -> PyResult<RouterCall>
             "fallbacks" => Ok(MockFailure::Fallbacks),
             "context_window_fallbacks" => Ok(MockFailure::ContextWindowFallbacks),
             "content_policy_fallbacks" => Ok(MockFailure::ContentPolicyFallbacks),
+            "rate_limit" => Ok(MockFailure::RateLimit),
             _ => Err(PyValueError::new_err(format!(
                 "unknown mock failure {name:?}"
             ))),
@@ -99,6 +100,7 @@ pub(super) fn attempt<'py>(py: Python<'py>, attempt: &Attempt<PyObj>) -> PyResul
                 MockFailure::Fallbacks => "fallbacks",
                 MockFailure::ContextWindowFallbacks => "context_window_fallbacks",
                 MockFailure::ContentPolicyFallbacks => "content_policy_fallbacks",
+                MockFailure::RateLimit => "rate_limit",
             },
         )?,
     }

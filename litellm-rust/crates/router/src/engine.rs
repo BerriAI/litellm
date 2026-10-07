@@ -58,6 +58,12 @@ pub struct RouterCall {
 }
 
 impl RouterCall {
+    fn fallback_mock(&self) -> Option<MockFailure> {
+        self.mock.filter(|mock| *mock != MockFailure::RateLimit)
+    }
+}
+
+impl RouterCall {
     pub fn new(operation: Operation, model: impl Into<String>) -> Self {
         Self {
             operation,
@@ -231,7 +237,7 @@ impl<'a, H: RouterHost> Run<'a, H> {
                 bucket,
                 original_group,
             };
-            let first = match self.call.mock.filter(|_| depth == 0) {
+            let first = match self.call.fallback_mock().filter(|_| depth == 0) {
                 Some(mock) => self.mock(&hop, mock).await,
                 None => self.retries(&hop).await,
             };
@@ -293,7 +299,12 @@ impl<'a, H: RouterHost> Run<'a, H> {
             attempted_retries: 0,
             max_retries: num_retries,
         };
-        let failure = match self.attempt(hop, stamp, &skipped).await {
+        let first = if hop.depth == 0 && self.call.mock == Some(MockFailure::RateLimit) {
+            self.mock(hop, MockFailure::RateLimit).await
+        } else {
+            self.attempt(hop, stamp, &skipped).await
+        };
+        let failure = match first {
             Ok(success) => return Ok(success),
             Err(stop) => self.failed(stop).map_err(Stop::Host)?,
         };
