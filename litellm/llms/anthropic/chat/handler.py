@@ -573,6 +573,7 @@ class ModelResponseIterator:
         self.is_response_format_tool: bool = False
         # Track if we've converted any response_format tools (affects finish_reason)
         self.converted_response_format_tool: bool = False
+        self.streamed_user_tool_call: bool = False
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
@@ -1071,6 +1072,7 @@ class ModelResponseIterator:
             # (per Anthropic's fine-grained streaming pattern)
             tool_name: Final = tool_use.get("function", {}).get("name", "")
             self.is_response_format_tool = tool_name == RESPONSE_FORMAT_TOOL_NAME
+            self.streamed_user_tool_call = self.streamed_user_tool_call or not self.is_response_format_tool
 
         # Convert tool to content if we're tracking a response_format tool
         if self.is_response_format_tool:
@@ -1095,9 +1097,9 @@ class ModelResponseIterator:
         """
         message_delta: Final = MessageBlockDelta(**chunk)
         finish_reason = map_finish_reason(finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop")
-        # Override finish_reason to "stop" if we converted response_format tools
+        # Override finish_reason to "stop" if we converted response_format tools and no user tool was called
         # (matches OpenAI behavior and non-streaming Anthropic implementation)
-        if self.converted_response_format_tool:
+        if self.converted_response_format_tool and not self.streamed_user_tool_call:
             finish_reason = "stop"
         usage: Final = (
             self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
