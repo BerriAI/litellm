@@ -1470,7 +1470,14 @@ jobs:
   installing_litellm_on_python:
     docker:
       - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
     working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
 
     steps:
       - checkout
@@ -1483,6 +1490,9 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - setup_litellm_enterprise_pip
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Run tests
           command: |
@@ -1494,7 +1504,17 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
     working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
     resource_class: medium
 
     steps:
@@ -1507,6 +1527,9 @@ jobs:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.13
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Run tests
           command: |
