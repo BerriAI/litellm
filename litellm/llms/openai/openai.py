@@ -512,6 +512,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         start_time: Final = time.time()
         try:
+            from litellm.litellm_core_utils.payload_shapes import record_sdk_request
+
+            record_sdk_request(data, logging_obj.litellm_call_id)
             raw_response = await openai_aclient.chat.completions.with_raw_response.create(**data, timeout=timeout)
             end_time = time.time()
 
@@ -553,6 +556,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         raw_response = None
         try:
+            from litellm.litellm_core_utils.payload_shapes import record_sdk_request
+
+            record_sdk_request(data, logging_obj.litellm_call_id)
             raw_response = openai_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
 
             if hasattr(raw_response, "headers"):

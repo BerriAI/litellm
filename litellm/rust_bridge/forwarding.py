@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import lru_cache
 from typing import Final, Protocol, cast
 
@@ -26,6 +26,11 @@ class DiagnosticEmitter(Protocol):
 
 class NativeDiagnosticLogger(DiagnosticEmitter, Protocol):
     def active(self) -> bool: ...
+    def payload_shapes_enabled(self) -> bool: ...
+    def emit_payload_shape(self, event: str) -> None: ...
+    def extract_payload_shape(
+        self, value: object, *, nodes: int = 4096, depth: int = 16, paths: int = 256, bytes: int = 16384
+    ) -> tuple[Sequence[str], bool]: ...
     def configure(self, configuration: str) -> None: ...
     def force_flush(self) -> None: ...
     def shutdown(self) -> None: ...
@@ -52,6 +57,10 @@ def _construct(factory: NativeDiagnosticFactory) -> NativeDiagnosticLogger:
 def _load() -> NativeDiagnosticLogger | None:
     factory: Final = LOGGER.load()
     return None if factory is None else _construct(factory)
+
+
+def payload_logger() -> NativeDiagnosticLogger | None:
+    return _load()
 
 
 def _active() -> bool:
@@ -84,7 +93,7 @@ class ForwardingHandler(logging.Handler):
 
             message, fields = diagnostic_snapshot(record)
             native.emit(record.levelno, message, fields)
-        except Exception:
+        except Exception:  # noqa: BLE001  # an exporter failure must not interrupt Python logging
             self.failures += 1
         finally:
             _STATE.active = False

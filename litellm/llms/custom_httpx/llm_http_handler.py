@@ -517,11 +517,19 @@ class BaseLLMHTTPHandler:
         signed_json_body: bytes | None = None,
     ) -> httpx.Response:
         """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
+        from litellm.litellm_core_utils.payload_shapes import record_shape
+
         max_retry_on_unprocessable_entity_error: Final = provider_config.max_retry_on_unprocessable_entity_error
 
         response: httpx.Response | None = None
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
+                record_shape(
+                    "provider.request.sent",
+                    signed_json_body if signed_json_body is not None else data,
+                    logging_obj.litellm_call_id,
+                    raw_json=signed_json_body is not None,
+                )
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -566,12 +574,20 @@ class BaseLLMHTTPHandler:
         stream: bool = False,
         signed_json_body: bytes | None = None,
     ) -> httpx.Response:
+        from litellm.litellm_core_utils.payload_shapes import record_shape
+
         max_retry_on_unprocessable_entity_error: Final = provider_config.max_retry_on_unprocessable_entity_error
 
         response: httpx.Response | None = None
 
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
+                record_shape(
+                    "provider.request.sent",
+                    signed_json_body if signed_json_body is not None else data,
+                    logging_obj.litellm_call_id,
+                    raw_json=signed_json_body is not None,
+                )
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,

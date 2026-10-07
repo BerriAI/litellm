@@ -1,5 +1,6 @@
 {
   "enabled": true,
+  "payload_shapes": false,
   "service_name": "diagnostic-contract",
   "policy": {
     "minimum_level": "WARN",

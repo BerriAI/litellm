@@ -59,6 +59,8 @@ fn environment_replaces_yaml_and_resolves_destination_secrets() {
 }
 
 #[rstest]
+#[case::shape_boolean_string(json!({"payload_shapes": "true"}))]
+#[case::shape_boolean_number(json!({"payload_shapes": 1}))]
 #[case::boolean_string(json!({"enabled": "false"}))]
 #[case::unknown_level(json!({"policy": {"minimum_level": "quiet"}}))]
 #[case::lowercase_level(json!({"policy": {"minimum_level": "info"}}))]

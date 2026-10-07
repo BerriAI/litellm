@@ -64,7 +64,15 @@ impl Sink for PostHogSink {
         let Ok(fields) = scrub(&self.processor, None, &Value::Object(record.fields.clone())) else {
             return;
         };
-        let mut event = Event::new("litellm diagnostic".to_owned(), self.service_name.clone());
+        let mut event = Event::new(
+            if record.metadata.target() == crate::payload::TARGET {
+                "llm.payload.shape"
+            } else {
+                "litellm diagnostic"
+            }
+            .to_owned(),
+            self.service_name.clone(),
+        );
         let timestamp = source_timestamp(record)
             .and_then(|timestamp| timestamp.duration_since(std::time::UNIX_EPOCH).ok())
             .and_then(|duration| {
