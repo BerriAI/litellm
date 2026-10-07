@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, Field, PrivateAttr, model_validator, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -121,3 +121,169 @@ class DecisionsResponse(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="allow", frozen=True)
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
+
+
+class OpenAIDecisionInputText(LiteLLMPydanticObjectBase):
+    type: Literal["input_text"]
+    text: str
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIDecisionInputMessage(LiteLLMPydanticObjectBase):
+    role: Literal["user"] = "user"
+    type: Literal["message"] = "message"
+    content: str | Sequence[OpenAIDecisionInputText]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIPredicateQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["predicate"]
+    name: str | None = None
+    instructions: str
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIChoiceOption(LiteLLMPydanticObjectBase):
+    value: str | bool
+    description: str | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+def systemone_choice_key(value: str | bool) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return value
+
+
+class OpenAIChoiceQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["choice"]
+    name: str | None = None
+    instructions: str
+    choices: Annotated[Sequence[OpenAIChoiceOption], Field(min_length=2, max_length=255)]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_validator(mode="after")
+    def require_unique_systemone_keys(self) -> "OpenAIChoiceQuestion":
+        keys: Final = frozenset(systemone_choice_key(option.value) for option in self.choices)
+        if len(keys) != len(self.choices):
+            raise ValueError("Choice values must be unique, and a boolean cannot share its text with a string choice")
+        return self
+
+
+class OpenAIScoreLevel(LiteLLMPydanticObjectBase):
+    label: str
+    description: str | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class OpenAIScoreQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["score"]
+    name: str | None = None
+    instructions: str
+    levels: Annotated[Sequence[OpenAIScoreLevel], Field(min_length=2, max_length=10)]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+OpenAIDecisionQuestion: TypeAlias = Annotated[
+    OpenAIPredicateQuestion | OpenAIChoiceQuestion | OpenAIScoreQuestion,
+    Field(discriminator="type"),
+]
+
+
+class OpenAIDecisionRequestBody(LiteLLMPydanticObjectBase):
+    input: str | Sequence[OpenAIDecisionInputMessage]
+    questions: Annotated[Sequence[OpenAIDecisionQuestion], Field(min_length=1, max_length=200)]
+    safety_identifier: str | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIPredicateAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["predicate"] = "predicate"
+    name: str | None
+    probability: float
+
+    model_config = ConfigDict(frozen=True)
+
+
+class OpenAIChoiceProbability(LiteLLMPydanticObjectBase):
+    value: str | bool
+    probability: float
+
+    model_config = ConfigDict(frozen=True)
+
+
+class OpenAIChoiceAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["choice"] = "choice"
+    name: str | None
+    choice: str | bool
+    probabilities: tuple[OpenAIChoiceProbability, ...]
+    confidence: float
+
+    model_config = ConfigDict(frozen=True)
+
+
+class OpenAIScoreProbability(LiteLLMPydanticObjectBase):
+    value: int
+    label: str
+    probability: float
+
+    model_config = ConfigDict(frozen=True)
+
+
+class OpenAIScoreAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["score"] = "score"
+    name: str | None
+    score: float
+    probabilities: tuple[OpenAIScoreProbability, ...]
+    confidence: float
+
+    model_config = ConfigDict(frozen=True)
+
+
+class OpenAIRefusalAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["refusal"] = "refusal"
+    name: str | None
+
+    model_config = ConfigDict(frozen=True)
+
+
+OpenAIDecisionAnswer: TypeAlias = OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIRefusalAnswer
+
+
+class OpenAIDecisionInputTokensDetails(LiteLLMPydanticObjectBase):
+    cached_tokens: int = 0
+    cache_write_tokens: int = 0
+
+    model_config = ConfigDict(frozen=True)
+
+
+class OpenAIDecisionOutputTokensDetails(LiteLLMPydanticObjectBase):
+    reasoning_tokens: int = 0
+
+    model_config = ConfigDict(frozen=True)
+
+
+class OpenAIDecisionUsage(LiteLLMPydanticObjectBase):
+    input_tokens: int
+    input_tokens_details: OpenAIDecisionInputTokensDetails = OpenAIDecisionInputTokensDetails()
+    output_tokens: int
+    output_tokens_details: OpenAIDecisionOutputTokensDetails = OpenAIDecisionOutputTokensDetails()
+    total_tokens: int
+
+    model_config = ConfigDict(frozen=True)
+
+
+class OpenAIDecisionResponse(LiteLLMPydanticObjectBase):
+    model: str
+    answers: tuple[OpenAIDecisionAnswer, ...]
+    usage: OpenAIDecisionUsage
+
+    model_config = ConfigDict(frozen=True)
