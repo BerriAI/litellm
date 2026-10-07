@@ -93,18 +93,16 @@ def test_my_keys_hides_team_keys_for_team_admin(gateway: Gateway) -> None:
         carol_key: Final = scenario.key(user_id=carol, key_alias=carol_auth_alias)
         scenario.key(user_id=carol, team_id=team, key_alias=carol_team_alias)
         scenario.key(user_id=dave, team_id=team, key_alias=dave_team_alias)
-        service_account_body: Final = {"team_id": team, "key_alias": service_account_alias}
-        carol_service_account_response: Final = gateway.request(
+        response: Final = gateway.request(
             "POST",
             "/key/service-account/generate",
-            service_account_body,
+            {"team_id": team, "key_alias": service_account_alias},
             key=carol_key,
         )
-        service_account: Final = (
-            JSON_OBJECT.validate_json(carol_service_account_response.content)
-            if carol_service_account_response.status_code == 200
-            else gateway.post("/key/service-account/generate", service_account_body, key=gateway.key)
+        assert response.status_code == 200, (
+            f"POST /key/service-account/generate: {response.status_code} {response.text}"
         )
+        service_account: Final = JSON_OBJECT.validate_json(response.content)
         scenario.cleanups.callback(scenario.delete_key, string_value(service_account["key"]))
 
         defaults: Final = gateway.request(
