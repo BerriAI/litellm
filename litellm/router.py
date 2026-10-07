@@ -1,7 +1,9 @@
 import inspect
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, TypeAlias, cast
 
 from litellm.router_backends.python_router import PythonRouter
+from litellm.router_backends.rust_router import RustRouter
+from litellm.router_backends.selection import select_backend
 from litellm.types.router import (
     AlertingConfig,
     AllowedFailsPolicy,
@@ -28,9 +30,9 @@ __all__ = (
 # Provisional (router-poc.md, "Facade surface"): Router exposes the backend's full surface,
 # raw internals included, until callers move to a typed protocol.
 if TYPE_CHECKING:
-    _RouterSurface = PythonRouter
+    _RouterSurface: TypeAlias = PythonRouter
 else:
-    _RouterSurface = object
+    _RouterSurface: TypeAlias = object
 
 
 class _Forwarded:
@@ -40,7 +42,8 @@ class _Forwarded:
         self._name = name
 
     def __get__(self, instance: "Router | None", owner: type) -> object:
-        return cast(object, getattr(PythonRouter if instance is None else instance.backend, self._name))  # cast-ok: forwarded attribute
+        target: Final = PythonRouter if instance is None else instance.backend
+        return cast(object, getattr(target, self._name))  # cast-ok: forwarded attribute
 
     def __set__(self, instance: "Router", value: object) -> None:
         setattr(instance.backend, self._name, value)
@@ -50,12 +53,12 @@ class _Forwarded:
 
 
 class Router(_RouterSurface):
-    backend: PythonRouter
+    backend: PythonRouter | RustRouter
 
     if not TYPE_CHECKING:
 
-        def __init__(self, *args, **kwargs):
-            object.__setattr__(self, "backend", PythonRouter(*args, **kwargs))
+        def __init__(self, *args, **kwargs):  # kwargs-ok: forwards PythonRouter.__init__'s signature
+            object.__setattr__(self, "backend", select_backend(args, kwargs))
 
         __init__.__signature__ = inspect.signature(PythonRouter.__init__)
 
