@@ -76,6 +76,9 @@ CLAIM_CANDIDATES: Final = 20
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 StorageDep: TypeAlias = Annotated[Storage | None, Depends(provide_storage)]
+SAMPLE_PAGE_SIZE: Final = 10_000
+SAMPLE_PAGE_SIZES: Final = (SAMPLE_PAGE_SIZE, 5_000, 2_500, 1_250, 625, 312, 156, 100)
+SAMPLE_RESPONSE_TOO_LARGE: Final = "ClickHouse query exceeded the response size limit"
 
 
 class _ClaimRepository(Protocol):
@@ -570,24 +573,37 @@ async def sample(lens_id: str, job_id: str, worker: WorkerAuth, storage: Storage
     lens, job = await assigned(lens_id, job_id, worker)
     if job.sample is not None:
         return job.sample
-    pages: list[Sample] = []  # mutable-ok: freeze selection after stable cursor traversal
+
+    async def read_page(cursor: str, sizes: tuple[int, ...]) -> tuple[Sample, tuple[int, ...]]:
+        page_size: Final = sizes[0]
+        try:
+            page: Final = await source_reader(storage).sample(
+                lens.scope,
+                job.settings,
+                int(job.start.timestamp() * 1000),
+                int(job.end.timestamp() * 1000),
+                page_size=page_size,
+                cursor=cursor,
+            )
+        except RuntimeError as error:
+            if type(error) is not RuntimeError or str(error) != SAMPLE_RESPONSE_TOO_LARGE or len(sizes) == 1:
+                raise
+            return await read_page(cursor, sizes[1:])
+        return page, sizes
+
+    pages: list[tuple[Sample, tuple[int, ...]]] = []  # mutable-ok: freeze selection after stable cursor traversal
     cursor = ""  # rebind-ok: advance by immutable identity, never by shifting row positions
     while True:
-        page = await source_reader(storage).sample(
-            lens.scope,
-            job.settings,
-            int(job.start.timestamp() * 1000),
-            int(job.end.timestamp() * 1000),
-            cursor=cursor,
-        )
-        pages.append(page)
-        if not page.next_cursor or sum(len(p.executions) for p in pages) >= pages[0].selected:
+        sizes: Final = pages[-1][1] if pages else SAMPLE_PAGE_SIZES
+        page, usable_sizes = await read_page(cursor, sizes)
+        pages.append((page, usable_sizes))
+        if not page.next_cursor or sum(len(p.executions) for p, _ in pages) >= pages[0][0].selected:
             break
         cursor = page.next_cursor
     executions: Final = tuple(
-        execution for p in pages for execution in p.executions
+        execution for p, _ in pages for execution in p.executions
     )  # comprehension-ok: flatten query pages
-    selected: Final = Sample(executions=executions, eligible=pages[0].eligible, selected=len(executions))
+    selected: Final = Sample(executions=executions, eligible=pages[0][0].eligible, selected=len(executions))
 
     def freeze(e: Lens) -> Lens:
         active: Final = current_job(e)
