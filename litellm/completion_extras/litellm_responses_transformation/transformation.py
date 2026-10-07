@@ -24,6 +24,7 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
+from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
@@ -78,6 +79,38 @@ _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"
 _RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
     ChatCompletion.model_fields
 )
+
+
+def _strip_prompt_cache_breakpoint_from_content_block(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    content_block: Final = cast(dict[str, object], value)  # cast-ok: isinstance confirms the content block is a mapping
+    return {key: item for key, item in content_block.items() if key != "prompt_cache_breakpoint"}
+
+
+def _strip_prompt_cache_breakpoints_from_content(value: object) -> object:
+    if isinstance(value, list):
+        list_content: Final = cast(list[object], value)  # cast-ok: isinstance confirms a list of content blocks
+        return [_strip_prompt_cache_breakpoint_from_content_block(item) for item in list_content]
+    if isinstance(value, tuple):
+        tuple_content: Final = cast(tuple[object, ...], value)  # cast-ok: isinstance confirms a tuple of content blocks
+        return tuple(_strip_prompt_cache_breakpoint_from_content_block(item) for item in tuple_content)
+    return _strip_prompt_cache_breakpoint_from_content_block(value)
+
+
+def _strip_prompt_cache_breakpoints_from_item(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    input_item: Final = cast(dict[str, object], value)  # cast-ok: isinstance confirms a Responses input item mapping
+    return {
+        key: _strip_prompt_cache_breakpoints_from_content(item) if key in ("content", "output") else item
+        for key, item in input_item.items()
+        if key != "prompt_cache_breakpoint"
+    }
+
+
+def _strip_prompt_cache_breakpoints(input_items: list[object]) -> list[object]:
+    return [_strip_prompt_cache_breakpoints_from_item(item) for item in input_items]
 
 
 def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -364,6 +397,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return None, index
 
     def convert_chat_completion_messages_to_responses_api(
+        self,
+        messages: list["AllMessageValues"],
+        *,
+        keep_prompt_cache_breakpoints: bool = False,
+    ) -> tuple[list[object], str | None]:
+        converted_input_items, instructions = self._convert_chat_completion_messages_to_responses_input(messages)
+        return (
+            converted_input_items
+            if keep_prompt_cache_breakpoints
+            else _strip_prompt_cache_breakpoints(converted_input_items),
+            instructions,
+        )
+
+    def _convert_chat_completion_messages_to_responses_input(
         self, messages: list["AllMessageValues"]
     ) -> tuple[list[object], str | None]:
         input_items: Final[list[object]] = []
@@ -594,24 +641,31 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
-        (
-            input_items,
-            instructions,
-        ) = self.convert_chat_completion_messages_to_responses_api(messages)
-
+        base_model: Final = litellm_params.get("base_model")
+        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model) or (
+            isinstance(base_model, str) and bool(base_model) and supports_openai_prompt_cache_breakpoint(base_model)
+        )
+        converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
+            messages,
+            keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
+        )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
         # of instructions, mirroring how non-string system content is already
         # handled in convert_chat_completion_messages_to_responses_api.
-        if not input_items and instructions is not None:
-            input_items = [
+        is_system_only_request: Final = not converted_input_items and converted_instructions is not None
+        input_items: Final = (
+            [
                 {
                     "type": "message",
                     "role": "system",
-                    "content": [{"type": "input_text", "text": instructions}],
+                    "content": [{"type": "input_text", "text": converted_instructions}],
                 }
             ]
-            instructions = None
+            if is_system_only_request
+            else converted_input_items
+        )
+        instructions: Final = None if is_system_only_request else converted_instructions
 
         optional_params = self._extract_extra_body_params(optional_params)
 
