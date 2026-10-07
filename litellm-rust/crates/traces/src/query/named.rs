@@ -111,6 +111,8 @@ pub struct TraceSpansRow {
     #[serde(default)]
     pub tool_call_id: String,
     #[serde(default)]
+    pub source_type: String,
+    #[serde(default)]
     pub source_url: String,
     #[serde(default)]
     pub source_title: String,
