@@ -5,6 +5,7 @@ Tests the main entry point: get_attached_policies()
 """
 
 import sys
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from types import FrameType
 from typing import Final, Protocol
@@ -24,19 +25,19 @@ class _TraceFunction(Protocol):
     def __call__(self, frame: FrameType, event: str, arg: object) -> "_TraceFunction | None": ...
 
 
-def _lines_run_resolving(registry: AttachmentRegistry, context: PolicyMatchContext) -> tuple[list[str], int]:
-    lines_run = 0
+def _lines_run_resolving(registry: AttachmentRegistry, context: PolicyMatchContext) -> tuple[Sequence[str], int]:
+    lines_run = 0  # rebind-ok: the trace hook counts line events into this closure cell
 
     def trace(frame: FrameType, event: str, arg: object) -> _TraceFunction | None:
         nonlocal lines_run
         if event == "line":
-            lines_run += 1
+            lines_run += 1  # rebind-ok: the trace hook counts line events into this closure cell
         return trace
 
     previous_tracer: Final = sys.gettrace()
     sys.settrace(trace)
     try:
-        attached = registry.get_attached_policies(context)
+        attached: Final = registry.get_attached_policies(context)
     finally:
         sys.settrace(previous_tracer)
     return attached, lines_run
@@ -291,20 +292,20 @@ class TestGetAttachedPolicies:
         assert attached.count("multi-policy") == 1
 
     def test_many_distinct_policies_resolve_in_linear_time(self):
-        small_policy_count = 1_000
-        small_registry = AttachmentRegistry()
+        small_policy_count: Final = 1_000
+        small_registry: Final = AttachmentRegistry()
         small_registry.load_attachments(
             [{"policy": f"policy-{index}", "scope": "*"} for index in range(small_policy_count)]
         )
-        small_context = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-4")
+        small_context: Final = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-4")
         small_attached, small_lines = _lines_run_resolving(small_registry, small_context)
 
-        large_policy_count = 4_000
-        large_registry = AttachmentRegistry()
+        large_policy_count: Final = 4_000
+        large_registry: Final = AttachmentRegistry()
         large_registry.load_attachments(
             [{"policy": f"policy-{index}", "scope": "*"} for index in range(large_policy_count)]
         )
-        large_context = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-4")
+        large_context: Final = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-4")
         large_attached, large_lines = _lines_run_resolving(large_registry, large_context)
 
         assert small_attached == [f"policy-{index}" for index in range(small_policy_count)]
