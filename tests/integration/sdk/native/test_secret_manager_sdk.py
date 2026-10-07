@@ -29,6 +29,7 @@ from tests._support.rust_secret_manager import preserve_manager_globals as prese
 if TYPE_CHECKING:
     from litellm.rust_bridge._native import _SecretManagerRuntime
 
+
 def _vault(monkeypatch: pytest.MonkeyPatch, address: str) -> HashicorpSecretManager:
     from litellm.proxy import proxy_server
 
@@ -36,6 +37,7 @@ def _vault(monkeypatch: pytest.MonkeyPatch, address: str) -> HashicorpSecretMana
     monkeypatch.setenv("HCP_VAULT_ADDR", address)
     monkeypatch.setenv("HCP_VAULT_TOKEN", "token")
     return HashicorpSecretManager()
+
 
 def _vault_body(value: str) -> dict[str, object]:
     return {
@@ -57,11 +59,13 @@ def _vault_body(value: str) -> dict[str, object]:
         "wrap_info": None,
     }
 
+
 def _native_handle(client: object) -> "_SecretManagerRuntime":
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     handle: Final = native._SecretManagerRuntime.from_client(client)
     assert handle is not None
     return handle
+
 
 @pytest.mark.parametrize("system", ("aws_secret_manager", "hashicorp_vault", "cyberark"))
 async def test_python_native_handle_reuses_backend_across_sync_and_async_reads(system: str) -> None:
@@ -97,6 +101,7 @@ async def test_python_native_handle_reuses_backend_across_sync_and_async_reads(s
         assert await handle.async_read_secret("KEY") == expected
         assert handle.read_secret("KEY") == expected
 
+
 def test_shared_initializer_captures_credentials_and_tracks_instance_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
@@ -126,6 +131,7 @@ def test_shared_initializer_captures_credentials_and_tracks_instance_settings(mo
         assert "/us-east-1/" in server.requests[0].headers["authorization"]
         assert "/us-west-2/" in server.requests[1].headers["authorization"]
 
+
 def test_configuration_replacement_rebuilds_without_invalidating_existing_handles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -144,6 +150,7 @@ def test_configuration_replacement_rebuilds_without_invalidating_existing_handle
         assert second.read_secret("KEY") == "second"
         assert first.read_secret("KEY") == "first"
 
+
 def test_direct_builtin_constructor_can_use_native_without_registration(monkeypatch: pytest.MonkeyPatch) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
@@ -152,6 +159,7 @@ def test_direct_builtin_constructor_can_use_native_without_registration(monkeypa
         handle: Final = native._SecretManagerRuntime.from_client(manager)
         assert handle is not None
         assert handle.read_secret("KEY") == "native-value"
+
 
 def test_native_failure_is_not_replayed_in_python(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
@@ -163,6 +171,7 @@ def test_native_failure_is_not_replayed_in_python(monkeypatch: pytest.MonkeyPatc
         with pytest.raises(ValueError, match="HashiCorp Vault"):
             handle.read_secret("KEY")
         assert len(server.requests) == 1
+
 
 @pytest.mark.parametrize("value", ("text", "", True, False, 42, 2**100, [1, "two"], {"nested": True}, None))
 async def test_aws_primary_values_match_python_handler(monkeypatch: pytest.MonkeyPatch, value: JsonValue) -> None:
@@ -186,6 +195,7 @@ async def test_aws_primary_values_match_python_handler(monkeypatch: pytest.Monke
         assert asynchronous == reference
         assert tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": "primary"},) * 3
 
+
 @pytest.mark.parametrize("primary", (None, "primary"))
 async def test_aws_primary_values_match_python_reads(monkeypatch: pytest.MonkeyPatch, primary: str | None) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
@@ -204,7 +214,10 @@ async def test_aws_primary_values_match_python_reads(monkeypatch: pytest.MonkeyP
         asynchronous: Final = await handle.read_secret_async("KEY", settings_dump)
         assert synchronous == reference
         assert asynchronous == reference
-        assert tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": primary or "KEY"},) * 3
+        assert (
+            tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": primary or "KEY"},) * 3
+        )
+
 
 @pytest.mark.parametrize("primary", (None, "primary"))
 @pytest.mark.parametrize(
@@ -235,6 +248,7 @@ def test_aws_absence_and_failed_reads_match_python_without_environment_fallback(
         assert actual == reference
         assert actual == ("" if primary is None and body.get("SecretString") == "" else None)
 
+
 @pytest.mark.parametrize("document", ("{", "not-json", "[1]", "null", "true", "42", '"text"'))
 async def test_aws_primary_json_errors_preserve_python_exception_details(
     monkeypatch: pytest.MonkeyPatch, document: str
@@ -261,6 +275,7 @@ async def test_aws_primary_json_errors_preserve_python_exception_details(
         with pytest.raises(type(reference.value)) as asynchronous:
             await handle.read_secret_async("KEY", settings_dump)
         assert asynchronous.value.args == reference.value.args
+
 
 async def test_public_aws_reads_preserve_coroutines_and_per_call_credentials(
     monkeypatch: pytest.MonkeyPatch,
@@ -314,6 +329,7 @@ async def test_public_aws_reads_preserve_coroutines_and_per_call_credentials(
                 string_to_sign, signed_request
             )
 
+
 async def test_public_aws_primary_reads_ignore_operation_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server, recording_service() as unused:
@@ -332,6 +348,7 @@ async def test_public_aws_primary_reads_ignore_operation_overrides(monkeypatch: 
         )
         assert tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": "primary"},) * 2
 
+
 async def test_public_aws_bootstrap_names_only_bypass_sync_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
     with recording_service() as server:
@@ -344,6 +361,7 @@ async def test_public_aws_bootstrap_names_only_bypass_sync_reads(monkeypatch: py
         assert manager.sync_read_secret("AWS_ACCESS_KEY_ID") == "environment-access"
         assert server.requests == []
         assert await manager.async_read_secret("AWS_ACCESS_KEY_ID") == "remote-access"
+
 
 @pytest.mark.parametrize("timeout", (0.05, httpx.Timeout(1, read=0.05)))
 async def test_public_aws_read_timeouts_follow_the_python_http_handler(
@@ -359,6 +377,7 @@ async def test_public_aws_read_timeouts_follow_the_python_http_handler(
         manager: Final = AWSSecretsManagerV2(aws_region_name="us-east-1")
         assert manager.sync_read_secret("KEY", timeout=timeout) is None
         assert await manager.async_read_secret("KEY", timeout=timeout) is None
+
 
 async def test_public_vault_reads_keep_overrides_cache_and_coroutines(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("litellm.rust_bridge._native")
@@ -376,6 +395,7 @@ async def test_public_vault_reads_keep_overrides_cache_and_coroutines(monkeypatc
         assert urlsplit(server.requests[0].path).path == "/v1/team/data/keys/KEY"
         assert urlsplit(server.requests[1].path).path == "/v1/secret/data/KEY"
 
+
 @pytest.mark.parametrize("status", (404, 403))
 async def test_public_vault_failed_reads_return_none_without_replay(
     monkeypatch: pytest.MonkeyPatch, status: int
@@ -387,6 +407,7 @@ async def test_public_vault_failed_reads_return_none_without_replay(
         manager: Final = _vault(monkeypatch, server.base_url)
         assert manager.sync_read_secret("KEY") is None
         assert await manager.async_read_secret("KEY") is None
+
 
 async def test_public_cyberark_reads_reuse_authentication_and_cached_values(
     monkeypatch: pytest.MonkeyPatch,
@@ -415,6 +436,7 @@ async def test_public_cyberark_reads_reuse_authentication_and_cached_values(
             "/secrets/account/variable/KEY",
         )
 
+
 @pytest.mark.parametrize("override", ("", 42))
 def test_public_vault_prefix_overrides_match_python_string_conversion(
     monkeypatch: pytest.MonkeyPatch, override: str | int
@@ -430,6 +452,7 @@ def test_public_vault_prefix_overrides_match_python_string_conversion(
             f"/v1/secret/data/{override}/KEY" if override else "/v1/secret/data/KEY"
         )
 
+
 def _cyberark(monkeypatch: pytest.MonkeyPatch, address: str) -> CyberArkSecretManager:
     from litellm.proxy import proxy_server
 
@@ -439,6 +462,7 @@ def _cyberark(monkeypatch: pytest.MonkeyPatch, address: str) -> CyberArkSecretMa
     monkeypatch.setenv("CYBERARK_ACCOUNT", "account")
     monkeypatch.setenv("CYBERARK_USERNAME", "reader")
     return CyberArkSecretManager()
+
 
 async def test_public_cyberark_writes_and_deletes_share_the_read_cache(
     monkeypatch: pytest.MonkeyPatch,
@@ -482,6 +506,7 @@ async def test_public_cyberark_writes_and_deletes_share_the_read_cache(
         )
         assert server.requests[3].raw_body == b"new-value"
 
+
 @pytest.mark.parametrize("status", (401, 403, 500))
 @pytest.mark.parametrize("authentication", (False, True))
 async def test_public_cyberark_write_errors_match_python_without_http_retries(
@@ -511,6 +536,7 @@ async def test_public_cyberark_write_errors_match_python_without_http_retries(
         assert actual["status"] == "error"
         assert str(status) in actual["message"]
 
+
 async def test_public_cyberark_write_recovers_from_initial_policy_authentication_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -530,6 +556,7 @@ async def test_public_cyberark_write_recovers_from_initial_policy_authentication
             "/authn/account/reader/authenticate",
             "/secrets/account/variable/KEY",
         )
+
 
 @pytest.mark.parametrize("name", ("../KEY", "line\nKEY", "a b"))
 async def test_public_cyberark_write_rejects_unsafe_names_before_authentication(

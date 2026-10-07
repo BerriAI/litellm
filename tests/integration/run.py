@@ -41,6 +41,7 @@ GITHUB_FILES: Final = frozenset(
         "tests/integration/sdk/native/test_ocr_requests_sdk.py",
         "tests/integration/sdk/native/test_ocr_secrets_sdk.py",
         "tests/integration/sdk/native/test_secret_manager_sdk.py",
+        "tests/integration/sdk/native/test_tiktoken_encodings_sdk.py",
         "tests/integration/sdk/native/test_trace_storage_sdk.py",
         "tests/integration/sdk/native/test_v2_cache_sdk.py",
     }

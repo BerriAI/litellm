@@ -53,7 +53,6 @@ def test_native_custom_tokenizer_matches_python() -> None:
     assert native.decode(reference.encode("Hello World").ids) == reference.decode(reference.encode("Hello World").ids)
 
 
-
 FAST_TEXTS: Final = (
     "",
     "hello world <|endoftext|>",

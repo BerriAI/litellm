@@ -10,7 +10,7 @@ import pytest
 from pydantic import JsonValue
 
 import litellm
-from tests.integration._support.native.callback_recorder import RecordingLogger
+from tests._support.callback_recorder import RecordingLogger
 from tests._support.recording_server import RecordingServer, ResponseSpec
 from tests.integration._support.native.requests import (
     OCR_DOCUMENT,

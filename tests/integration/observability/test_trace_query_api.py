@@ -36,11 +36,9 @@ from scripts.seed_tracing_fixtures import (
     response_pattern,
     spend_fixtures,
 )
+from tests._support.native_isolation import isolate_ocr_test_state as isolate_ocr_test_state
 from tests._support.recording_server import RecordingServer, ResponseSpec
 from tests.integration._support.native.clickhouse import clickhouse_service
-from tests.integration._support.native.fixtures import (
-    isolate_ocr_test_state as isolate_ocr_test_state,
-)
 
 
 pytestmark = pytest.mark.requires_rust_extension

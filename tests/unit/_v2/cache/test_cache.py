@@ -8,9 +8,12 @@ from litellm._v2.cache import NativeBackend
 
 pytestmark = pytest.mark.requires_rust_extension
 
+
 @pytest.mark.asyncio
 async def test_v2_global_cache_leaves_legacy_only_calls_usable() -> None:
-    litellm.cache = _v2.Cache.memory()  # test-quality-ok: tests/unit conftest resets the cache global after each test
+    litellm.cache = (
+        _v2.Cache.memory()
+    )  # test-quality-ok: the autouse isolate_ocr_test_state fixture resets the cache global after each test
     response: Final = await litellm.aembedding(
         model="openai/cache-test-embedding",
         input=["hello"],

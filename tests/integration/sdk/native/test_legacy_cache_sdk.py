@@ -24,9 +24,9 @@ from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import call_hook
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.types.caching import CachingSupportedCallTypes
-from tests.integration._support.native.cache import cache_key, collect, invoke, payload
-from tests.integration._support.native.callback_recorder import RecordingLogger, drain_logging
+from tests._support.callback_recorder import RecordingLogger, drain_logging
 from tests._support.recording_server import RecordingServer, ResponseSpec
+from tests.integration._support.native.cache import cache_key, collect, invoke, payload
 from tests.integration._support.native.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.integration.sdk.native.test_inference_sdk import RESPONSES_RESPONSE
 

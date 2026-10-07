@@ -621,6 +621,7 @@ async def test_streaming_responses_relay_flush_reaches_the_success_callbacks_wit
     assert probe.logged_call_type == "allm_passthrough_route"
     assert probe.logged_cost == pytest.approx(1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"])
 
+
 MISTRAL_BODY: Final = {
     "pages": [{"index": 0, "markdown": "page one"}, {"index": 1, "markdown": "page two"}],
     "model": "mistral-document-ai-2512",

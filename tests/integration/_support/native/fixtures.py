@@ -1,42 +1,12 @@
-import asyncio
 import threading
-from collections.abc import AsyncIterator, Generator, Iterator
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from collections.abc import Generator, Iterator
 from typing import Final
 
 import fakeredis
 import pytest
-import pytest_asyncio
 
 import litellm
-from litellm import utils
-from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.rust_bridge.configuration import _CONFIGURATION
 from tests._support.recording_server import RecordingServer, recording_service
-from tests.integration._support.native.callback_recorder import drain_logging
-from tests.integration._support.native.isolation import isolated_callback_registries, rebound
-
-
-@pytest_asyncio.fixture(autouse=True, loop_scope="function")
-async def isolate_ocr_test_state() -> AsyncIterator[None]:
-    with ExitStack() as stack:
-        stack.enter_context(isolated_callback_registries())
-        stack.enter_context(rebound(litellm, "cache", None))  # test-quality-ok: isolate process-global cache
-        stack.enter_context(rebound(_CONFIGURATION, "override", None))
-        executor: Final = ThreadPoolExecutor(thread_name_prefix="rust-ocr-test-logging")
-        stack.enter_context(rebound(litellm_logging, "executor", executor))
-        stack.enter_context(rebound(utils, "executor", executor))
-        stack.enter_context(rebound(thread_pool_executor, "executor", executor))
-        try:
-            yield
-        finally:
-            try:
-                await drain_logging()
-            finally:
-                await asyncio.to_thread(executor.shutdown, wait=True)
-                await GLOBAL_LOGGING_WORKER.stop()
 
 
 @pytest.fixture

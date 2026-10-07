@@ -116,6 +116,7 @@ async def test_sql_query_rejects_malformed_clickhouse_envelopes(
     with pytest.raises(RuntimeError, match="Native trace query returned an invalid response"):
         await storage.query_sql("SELECT 1", {"kind": "all"}, "secret")
 
+
 @pytest.mark.asyncio
 @pytest.mark.requires_rust_extension
 async def test_schema_binding_rejects_non_positive_retention(native: ModuleType) -> None:
