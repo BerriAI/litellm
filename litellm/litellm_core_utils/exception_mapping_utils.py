@@ -2402,9 +2402,9 @@ def exception_type(
         if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
-                    redact_secret_string(str(original_exception.message))
+                    redact_secret_string(str(mappable_exception.message))
                     if _ENABLE_SECRET_REDACTION
-                    else str(original_exception.message)
+                    else str(mappable_exception.message)
                 )
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__
