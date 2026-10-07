@@ -18,6 +18,7 @@ struct ListTracesParamsEncoding {
     pub cursor_trace_id: String,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub limit: u32,
+    pub agent: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -305,6 +306,35 @@ impl Query for SpendByResponseIds {
     const SQL: &'static str = include_str!("../../query/spend_by_response_ids.sql");
 }
 
+pub struct TraceAgents;
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Debug)]
+pub struct TraceAgentsParams {
+    #[serde(flatten)]
+    pub access: contracts::ReadAccessParams,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    pub start_ms: i64,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    pub end_ms: i64,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    pub limit: u32,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Debug)]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceAgentRow"))]
+pub struct TraceAgentsRow {
+    pub agent_name: String,
+}
+
+impl Query for TraceAgents {
+    type Params = TraceAgentsParams;
+    type Row = TraceAgentsRow;
+
+    const SQL: &'static str = include_str!("../../query/trace_agents.sql");
+}
+
 pub use contracts::{TraceIdentityParams, TraceIdentityRow};
 
 pub struct TraceIdentity;
@@ -371,7 +401,7 @@ mod tests {
     #[case::quoted(true)]
     fn parameters_preserve_flattened_multi_team_access(#[case] quoted: bool) {
         round_trip::<ListTracesParams>(
-            json!({"all_teams": 0, "user_id": "user", "team_ids": ["team-a", "team-b"], "start_ms": -1, "end_ms": 10, "cursor_ms": 0, "cursor_trace_id": "", "limit": u32::MAX}),
+            json!({"all_teams": 0, "user_id": "user", "team_ids": ["team-a", "team-b"], "start_ms": -1, "end_ms": 10, "cursor_ms": 0, "cursor_trace_id": "", "limit": u32::MAX, "agent": "claude-code"}),
             quoted,
         );
         round_trip::<SpanErrorParams>(
