@@ -3594,6 +3594,7 @@
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_1hr": 8e-06,
         "cache_read_input_token_cost": 2e-07,
+        "deprecation_date": "2027-09-18",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
         "supports_assistant_prefill": false,
@@ -3610,7 +3611,8 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
-        "prompt_cache_min_tokens": 512
+        "prompt_cache_min_tokens": 512,
+        "source": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01"
     },
     "azure_ai/claude-opus-4-8": {
         "deprecation_date": "2027-09-01",
@@ -71390,11 +71392,40 @@
         "input_cost_per_token": 1.2e-05,
         "input_cost_per_token_above_272k_tokens": 2.4e-05,
         "litellm_provider": "azure",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 6e-05,
         "output_cost_per_token_above_272k_tokens": 9e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'swedencentral'%20and%20priceType%20eq%20'Consumption'",
-        "supports_reasoning": true
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
     },
     "azure/eu/gpt-6-luna": {
         "deprecation_date": "2028-03-11",
@@ -79423,6 +79454,7 @@
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
         "cache_read_input_token_cost": 2e-07,
+        "deprecation_date": "2027-09-29",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 1000000,
@@ -79450,7 +79482,8 @@
         "supports_max_reasoning_effort": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
-        "prompt_cache_min_tokens": 512
+        "prompt_cache_min_tokens": 512,
+        "source": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01"
     },
     "bedrock/us-gov-east-1/anthropic.claude-sonnet-5-5": {
         "bedrock_converse_supports_strict_tools": false,
