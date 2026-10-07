@@ -41,6 +41,7 @@ import pytest
 from anthropic import Anthropic
 from anthropic.types import Message, MessageParam, TextBlockParam
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -290,6 +291,16 @@ class TestAzureFoundryMidConversationSystem:
         "llm.messages.azure_foundry.mid_conversation_system.nonstream.cache_hit",
         exercised_on=[],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(FLAGGED_MODEL,),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_flagged_model_keeps_prompt_cache_across_system_reminder(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -298,6 +309,16 @@ class TestAzureFoundryMidConversationSystem:
     @pytest.mark.covers(
         "llm.messages.azure_foundry.mid_conversation_system.nonstream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(UNFLAGGED_MODEL,),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_unflagged_model_converts_system_reminder_and_succeeds(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
@@ -322,6 +343,16 @@ class TestVertexMidConversationSystem:
         "llm.messages.vertex.mid_conversation_system.nonstream.cache_hit",
         exercised_on=[],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.VERTEX_AI,),
+            models=(FLAGGED_MODEL,),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_flagged_model_keeps_prompt_cache_across_system_reminder(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -332,6 +363,16 @@ class TestVertexMidConversationSystem:
     @pytest.mark.covers(
         "llm.messages.vertex.mid_conversation_system.nonstream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.VERTEX_AI,),
+            models=(UNFLAGGED_MODEL,),
+            capabilities=(Capability.MID_CONVERSATION_SYSTEM, Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_unflagged_model_converts_system_reminder_and_succeeds(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients

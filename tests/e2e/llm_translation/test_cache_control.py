@@ -43,6 +43,7 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import Result, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 from models import CacheControl, ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, RichMessage, TextBlock, Usage
@@ -226,6 +227,16 @@ class TestCacheControl:
         "llm.chat_completions.bedrock_converse.prompt_cache_5m.nonstream.works",
         exercised_on=[],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_prompt_caching_reads_cache(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -241,6 +252,16 @@ class TestCacheControl:
     @pytest.mark.covers(
         "llm.chat_completions.vertex.prompt_cache_5m.nonstream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_vertex_prompt_caching_reads_cache(
         self, client: PassthroughClient, resources: ResourceManager
@@ -266,6 +287,16 @@ class TestCacheControl:
         "llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works",
         exercised_on=[],
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_anthropic_prompt_caching_reads_cache(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -281,6 +312,16 @@ class TestCacheControl:
     @pytest.mark.covers(
         "llm.chat_completions.openai.prompt_cache_5m.nonstream.works",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MODEL,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_openai_prompt_caching_reads_cache(
         self, client: PassthroughClient, resources: ResourceManager

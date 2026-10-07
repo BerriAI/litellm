@@ -5,6 +5,7 @@ from typing import Final, Literal, TypeAlias
 import pytest
 from e2e_config import unique_marker
 from e2e_http import Result, unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     CacheControl,
@@ -162,7 +163,36 @@ def _assert_normal_completion(response: ChatResponse, model_name: str) -> None:
 
 @pytest.mark.parametrize(
     "backend",
-    (pytest.param("azure_foundry", id="azure-foundry"), pytest.param("vertex", id="vertex")),
+    (
+        pytest.param(
+            "azure_foundry",
+            id="azure-foundry",
+            marks=meta(
+                Subject(
+                    domain=Domain.LLM_TRANSLATION,
+                    route=Route.CHAT_COMPLETIONS,
+                    providers=(Provider.AZURE_AI,),
+                    models=(AZURE_MODEL,),
+                    capabilities=(Capability.FUNCTION_CALLING, Capability.PROMPT_CACHING),
+                    mode=Mode.NONSTREAM,
+                )
+            ),
+        ),
+        pytest.param(
+            "vertex",
+            id="vertex",
+            marks=meta(
+                Subject(
+                    domain=Domain.LLM_TRANSLATION,
+                    route=Route.CHAT_COMPLETIONS,
+                    providers=(Provider.VERTEX_AI,),
+                    models=(VERTEX_MODEL,),
+                    capabilities=(Capability.FUNCTION_CALLING, Capability.PROMPT_CACHING),
+                    mode=Mode.NONSTREAM,
+                )
+            ),
+        ),
+    ),
 )
 @pytest.mark.provider_live
 @pytest.mark.covers("llm.chat_completions.azure_foundry.basic.nonstream.works")

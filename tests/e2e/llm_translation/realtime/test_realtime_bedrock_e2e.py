@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from realtime_client import (
@@ -41,6 +42,15 @@ class TestNovaSonicRealtime:
     @pytest.mark.covers(
         "llm.realtime.bedrock_converse.basic.stream.works",
         exercised_on=["realtime"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.REALTIME,
+            providers=(Provider.BEDROCK,),
+            models=(NOVA_SONIC,),
+            mode=Mode.WEBSOCKET,
+        )
     )
     def test_nova_sonic_response_create_completes(
         self, client: RealtimeClient, resources: ResourceManager, scoped_key: str

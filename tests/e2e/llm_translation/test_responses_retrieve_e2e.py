@@ -12,6 +12,7 @@ import openai
 import pytest
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import NoBody, Success, UnknownApiError, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from openai.types.responses import (
@@ -27,6 +28,7 @@ from sdk_clients import NO_PROXY_CACHE, SdkClients
 pytestmark = pytest.mark.e2e
 
 OPENAI_BACKEND: Final = "openai/gpt-5.5"
+OPENAI_MINI_BACKEND: Final = "openai/gpt-4o-mini"
 LONG_TASK: Final = "Write a numbered list counting from 1 to 400, one number per line, with a short word after each."
 CANCELLABLE_STATUSES: Final = frozenset({"queued", "in_progress"})
 
@@ -69,11 +71,20 @@ class TestResponsesRetrieve:
         reason="stage red: product gap (LIT-5446), retrieve returns a different id than the stored response (non-idempotent response-id re-encryption)"
     )
     @pytest.mark.covers("llm.responses.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_MINI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_store_and_retrieve_by_id(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = f"e2e-resp-store-{unique_marker()}"
         model_id = proxy.create_model(
             model,
-            LiteLLMParamsBody(model="openai/gpt-4o-mini", api_key="os.environ/OPENAI_API_KEY"),
+            LiteLLMParamsBody(model=OPENAI_MINI_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
         )
         resources.defer(lambda: proxy.delete_model(model_id))
         key = resources.key()
@@ -103,6 +114,12 @@ class TestResponsesRetrieve:
         reason="stage red: product gap (LIT-5447), retrieving an unknown response id returns 400 (model=None) instead of 404"
     )
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+        )
+    )
     def test_invalid_response_id_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         get_result = proxy.transport.get(
@@ -135,6 +152,15 @@ def _input_texts(item: object) -> tuple[str, ...]:
 
 @pytest.mark.provider_live
 class TestStoredResponseLifecycle:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_input_items_list_the_stored_prompt(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -150,6 +176,15 @@ class TestStoredResponseLifecycle:
         texts = tuple(text for item in items for text in _input_texts(item))
         assert any(marker in text for text in texts), f"input_items did not list the stored prompt: {items!r}"
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_deleted_response_is_no_longer_retrievable(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -171,6 +206,15 @@ class TestStoredResponseLifecycle:
 
 @pytest.mark.provider_live
 class TestBackgroundResponseCancel:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_cancel_background_response(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -185,6 +229,15 @@ class TestBackgroundResponseCancel:
         cancelled = client.responses.cancel(created.id)
         assert cancelled.status == "cancelled", f"cancel did not stop the response: {cancelled.status}"
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_cancel_background_streaming_response_by_streamed_id(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:

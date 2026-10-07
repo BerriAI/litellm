@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 from e2e_config import unique_marker
 from e2e_http import NoBody, assert_auth_denied, unwrap
+from e2e_metadata import Domain, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -59,6 +60,14 @@ def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]
 
 class TestRealtimeHttp:
     @pytest.mark.covers("llm.realtime.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.REALTIME,
+            providers=(Provider.OPENAI,),
+            models=(REALTIME_BACKEND,),
+        )
+    )
     def test_create_client_secret(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
         secret = unwrap(
@@ -82,6 +91,7 @@ class TestRealtimeHttp:
             assert secret.session.type in (None, "realtime"), f"unexpected session type: {secret.session.type}"
 
     @pytest.mark.covers("other.auth.realtime.missing_header_denied")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.REALTIME))
     def test_client_secret_missing_auth_is_denied(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, _ = _register(proxy, resources)
         result = proxy.transport.send(
@@ -92,6 +102,7 @@ class TestRealtimeHttp:
         assert_auth_denied(result, "realtime client_secrets missing auth")
 
     @pytest.mark.covers("other.auth.realtime.missing_header_denied")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.REALTIME))
     def test_calls_without_auth_is_denied(self, proxy: ProxyClient) -> None:
         result = proxy.transport.send(
             "/v1/realtime/calls",

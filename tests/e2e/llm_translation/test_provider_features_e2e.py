@@ -16,10 +16,13 @@ Prompt caching lives in test_cache_control.py.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, LiteLLMParamsBody
 from passthrough_client import PassthroughClient
@@ -27,11 +30,21 @@ from passthrough_client import PassthroughClient
 pytestmark = pytest.mark.e2e
 
 SERVICE_TIER = "priority"
+OPENAI_BACKEND: Final = "openai/gpt-5.5"
 
 
 class TestServiceTier:
     @pytest.mark.covers(
         "llm.chat_completions.openai.service_tier.nonstream.works", exercised_on=[]
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_openai_service_tier_is_echoed(
         self, client: PassthroughClient, resources: ResourceManager
@@ -40,7 +53,7 @@ class TestServiceTier:
         model_id = client.proxy.create_model(
             model,
             LiteLLMParamsBody(
-                model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY"
+                model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY"
             ),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
