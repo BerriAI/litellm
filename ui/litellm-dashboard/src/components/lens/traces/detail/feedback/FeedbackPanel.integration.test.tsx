@@ -1,100 +1,87 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, testQueryClient } from "../../../../../../tests/test-utils";
 import { type TracesApi, TracesApiContext } from "../../api";
-import type { Feedback, TraceFeedback } from "../../types";
+import type { Feedback } from "../../types";
 import { FeedbackPanel } from "./FeedbackPanel";
 
 const summary = { trace_id: "trace-1", trace_ref: "REF1" };
 
-const entry = (author: string, score: number, comment: string): Feedback => ({
+const entry = (author: string, score: number, comment: string, updated_at = "2026-03-01T12:00:00Z"): Feedback => ({
   ...summary,
   author,
   score,
   comment,
-  created_at: "2026-03-01T12:00:00Z",
-  updated_at: "2026-03-01T12:00:00Z",
+  created_at: updated_at,
+  updated_at,
 });
 
-function stubApi(initial: TraceFeedback) {
-  const state = { current: initial };
-  const api = {
-    live: true,
-    feedback: vi.fn(async () => state.current),
-    submitFeedback: vi.fn(async (submission: { score: number; comment?: string }) => {
-      const saved = entry("me", submission.score, submission.comment ?? "");
-      state.current = { ...state.current, feedback: [...state.current.feedback.filter((e) => e.author !== "me"), saved] };
-      return saved;
-    }),
-    deleteFeedback: vi.fn(async () => {
-      state.current = { ...state.current, feedback: state.current.feedback.filter((e) => e.author !== "me") };
-    }),
-  };
-  return api;
-}
-
-const renderPanel = (api: ReturnType<typeof stubApi>) =>
+const renderPanel = (feedback: Feedback[]) => {
+  const api = { live: true, feedback: vi.fn(async () => ({ ...summary, feedback })) };
   renderWithProviders(
     <TracesApiContext.Provider value={api as unknown as TracesApi}>
       <FeedbackPanel summary={summary} accessToken="sk-test" />
     </TracesApiContext.Provider>,
   );
+  return api;
+};
 
 describe("FeedbackPanel", () => {
   beforeEach(() => testQueryClient.clear());
 
-  it("shows the average and count on the button and flags a run that someone scored low", async () => {
-    renderPanel(stubApi({ ...summary, viewer: "me", feedback: [entry("alice", 2, "wrong file"), entry("bob", 8, "")] }));
+  it("shows what the end user said and their score, flagged when it is low", async () => {
+    const api = renderPanel([entry("customer-1042", 2, "It edited the wrong file and I had to ask twice")]);
 
-    const button = await screen.findByRole("button", { name: /Feedback/ });
-    expect(await within(button).findByTestId("feedback-count")).toHaveTextContent("5.0 · 2");
-    expect(button).toHaveClass("text-destructive");
+    const panel = await screen.findByRole("region", { name: "User feedback" });
+    expect(panel).toHaveAttribute("data-low", "true");
+    const row = within(panel).getByTestId("feedback-entry");
+    expect(row).toHaveTextContent("2/10");
+    expect(row).toHaveTextContent("“It edited the wrong file and I had to ask twice”");
+    expect(row).toHaveTextContent("customer-1042");
+    expect(api.feedback).toHaveBeenCalledWith("trace-1", "REF1");
   });
 
-  it("lists everyone's feedback and saves the viewer's score and comment for this trace", async () => {
-    const user = userEvent.setup();
-    const api = stubApi({ ...summary, viewer: "me", feedback: [entry("alice", 2, "picked the wrong file")] });
-    renderPanel(api);
+  it("lists every user's feedback newest first with the average when several users rated the run", async () => {
+    renderPanel([
+      entry("customer-1", 9, "Perfect", "2026-03-01T12:00:00Z"),
+      entry("customer-2", 3, "Too slow", "2026-03-01T12:05:00Z"),
+    ]);
 
-    await user.click(await screen.findByRole("button", { name: /Feedback/ }));
-    const others = await screen.findByRole("list", { name: "Feedback from others" });
-    expect(within(others).getByText("alice")).toBeInTheDocument();
-    expect(within(others).getByText("picked the wrong file")).toBeInTheDocument();
-    expect(within(others).getByText("2/10")).toHaveClass("text-destructive");
+    const panel = await screen.findByRole("region", { name: "User feedback" });
+    expect(within(panel).getAllByTestId("feedback-entry").map((row) => row.textContent)).toEqual([
+      expect.stringContaining("customer-2"),
+      expect.stringContaining("customer-1"),
+    ]);
+    expect(panel).toHaveTextContent("6/10 avg from 2 users");
+    expect(panel).toHaveAttribute("data-low", "true");
+  });
 
-    const save = screen.getByRole("button", { name: "Save" });
-    expect(save).toBeDisabled();
-    await user.click(screen.getByRole("radio", { name: "7" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Feedback comment" }), {
-      target: { value: "Right answer after one retry" },
-    });
-    await user.click(save);
+  it("does not flag a run every user scored well and offers no way to edit feedback", async () => {
+    renderPanel([entry("customer-1", 8, "")]);
 
-    await waitFor(() =>
-      expect(api.submitFeedback).toHaveBeenCalledWith({
-        trace_id: "trace-1",
-        trace_ref: "REF1",
-        score: 7,
-        comment: "Right answer after one retry",
-      }),
+    const panel = await screen.findByRole("region", { name: "User feedback" });
+    expect(panel).not.toHaveAttribute("data-low");
+    expect(within(panel).getByText("No comment")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("stays out of the way when feedback cannot be loaded so the run still reads cleanly", async () => {
+    const api = { live: true, feedback: vi.fn(() => Promise.reject(new Error("ClickHouse down"))) };
+    renderWithProviders(
+      <TracesApiContext.Provider value={api as unknown as TracesApi}>
+        <FeedbackPanel summary={summary} accessToken="sk-test" />
+      </TracesApiContext.Provider>,
     );
-    expect(await screen.findByRole("button", { name: "Update" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "7" })).toHaveAttribute("aria-checked", "true");
+    await vi.waitFor(() => expect(api.feedback).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "User feedback" })).not.toBeInTheDocument();
   });
 
-  it("lets the viewer remove their own feedback", async () => {
-    const user = userEvent.setup();
-    const api = stubApi({ ...summary, viewer: "me", feedback: [entry("me", 3, "too slow")] });
-    renderPanel(api);
-
-    await user.click(await screen.findByRole("button", { name: /Feedback/ }));
-    expect(await screen.findByRole("textbox", { name: "Feedback comment" })).toHaveValue("too slow");
-    await user.click(screen.getByRole("button", { name: "Remove" }));
-
-    await waitFor(() => expect(api.deleteFeedback).toHaveBeenCalledWith("trace-1", "REF1"));
-    expect(await screen.findByRole("button", { name: "Save" })).toBeDisabled();
-    expect(screen.getByText("No feedback on this run yet.")).toBeInTheDocument();
+  it("renders nothing when no end user rated the run", async () => {
+    const api = renderPanel([]);
+    await vi.waitFor(() => expect(api.feedback).toHaveBeenCalled());
+    expect(screen.queryByRole("region", { name: "User feedback" })).not.toBeInTheDocument();
   });
 });

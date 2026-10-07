@@ -512,7 +512,7 @@ describe("AgentTracesSection", () => {
     expect(lastUrl(onUrlUpdate).has("fullscreen")).toBe(false);
   });
 
-  it("flags rated runs and narrows the list to rated or low-score runs from the feedback filter", async () => {
+  it("shows each run's end-user score and flags the whole row when a user scored it low", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs, next_cursor: null });
     const [low, good] = runs;
     const score = (trace: TraceKey, average: number, lowest: number) => ({
@@ -531,23 +531,18 @@ describe("AgentTracesSection", () => {
           return unrated([trace])[0];
         }),
     );
-    const onUrlUpdate = vi.fn();
-    renderWithProviders(<AgentTracesSection accessToken="sk-test" isActive range={ROLLING_DAY} />, {
-      searchParams: "?feedback=rated",
-      onUrlUpdate,
-    });
+    renderSection();
 
-    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(2));
-    const flagged = screen.getAllByTestId("feedback-score");
-    expect(flagged.map((cell) => cell.textContent)).toEqual(expect.arrayContaining(["2.0·1", "9.0·1"]));
-    expect(flagged.filter((cell) => cell.dataset.low === "true").map((cell) => cell.textContent)).toEqual(["2.0·1"]);
-
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("combobox", { name: "Filter traces by feedback" }));
-    await user.click(await screen.findByRole("option", { name: "Low score (≤4)" }));
-    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1));
-    expect(screen.getByTestId("agent-trace-row")).toHaveTextContent("2.0·1");
-    expect(lastUrl(onUrlUpdate).get("feedback")).toBe("low");
+    await waitFor(() => expect(screen.getAllByTestId("feedback-score")).toHaveLength(2));
+    const rows = screen.getAllByTestId("agent-trace-row");
+    expect(rows).toHaveLength(runs.length);
+    const lowRow = rows.find((row) => within(row).queryByText("2/10"));
+    const goodRow = rows.find((row) => within(row).queryByText("9/10"));
+    expect(lowRow).toHaveAttribute("data-low-feedback", "true");
+    expect(lowRow).toHaveAttribute("data-flagged", "true");
+    expect(goodRow).not.toHaveAttribute("data-flagged");
+    expect(rows.filter((row) => row.hasAttribute("data-low-feedback"))).toHaveLength(1);
+    expect(screen.queryByRole("combobox", { name: "Filter traces by feedback" })).not.toBeInTheDocument();
   });
 
   it("narrows the list to the zoom window named in the URL and clears it on request", async () => {

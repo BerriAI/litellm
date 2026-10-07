@@ -1,7 +1,7 @@
 "use client";
 
 import { getCoreRowModel, useReactTable, type ColumnDef, type TableOptions } from "@tanstack/react-table";
-import { ArrowDown, ChevronRight, Plus } from "lucide-react";
+import { ArrowDown, ChevronRight, Plus, Star } from "lucide-react";
 import { createContext, useContext, useEffect } from "react";
 import { useInView } from "react-intersection-observer";
 
@@ -16,7 +16,7 @@ import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation 
 import { SpanIcon } from "../ui/SpanIcon";
 import type { TraceFindingState } from "./useTraceFindings";
 import { flaggedSignals, isFlagged, type TraceSignalState } from "./useTraceSignals";
-import { LOW_SCORE, type TraceFeedbackState } from "./useTraceFeedback";
+import { LOW_SCORE, isLowFeedback, type TraceFeedbackState } from "./useTraceFeedback";
 import { SignalPills } from "../ui/SignalPills";
 import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
 import type { TraceSummary } from "../types";
@@ -182,6 +182,8 @@ function SignalsCell({ run }: { run: TraceSummary }) {
   return <SignalPills flags={flags} className="overflow-hidden" />;
 }
 
+export const formatScore = (score: number): string => (Number.isInteger(score) ? String(score) : score.toFixed(1));
+
 export function FeedbackScore({ run }: { run: TraceSummary }) {
   const state = useContext(FeedbackContext).get(runKey(run));
   if (!state || state.status === "pending")
@@ -194,14 +196,14 @@ export function FeedbackScore({ run }: { run: TraceSummary }) {
     <span
       data-testid="feedback-score"
       data-low={low || undefined}
-      title={`${count} ${count === 1 ? "rating" : "ratings"}, lowest ${lowest}/10`}
+      title={`User feedback: ${count} ${count === 1 ? "rating" : "ratings"}, lowest ${lowest}/10`}
       className={cn(
-        "inline-flex items-center gap-1 rounded px-1.5 py-0.5",
+        "inline-flex w-16 items-center justify-between rounded px-1.5 py-0.5 tabular-nums",
         low ? "bg-destructive/10 text-destructive" : "bg-muted text-foreground",
       )}
     >
-      {average.toFixed(1)}
-      <span className="text-muted-foreground">·{count}</span>
+      <Star className={cn("size-3 shrink-0", low ? "fill-destructive" : "fill-amber-400 text-amber-400")} />
+      {formatScore(average)}/10
     </span>
   );
 }
@@ -400,13 +402,15 @@ export function AgentTracesTable({
                 }
               >
                 {(row) => {
-                  const flagged = showSignals && isFlagged(signals.get(runKey(row.original)));
+                  const lowFeedback = isLowFeedback(feedback.get(runKey(row.original)));
+                  const flagged = lowFeedback || (showSignals && isFlagged(signals.get(runKey(row.original))));
                   return (
                     <InspectorTable.Row
                       row={row}
                       item={traceRefOf(row.original)}
                       data-testid="agent-trace-row"
                       data-flagged={flagged || undefined}
+                      data-low-feedback={lowFeedback || undefined}
                       className={cn("h-9", flagged && FLAGGED_ROW)}
                     />
                   );

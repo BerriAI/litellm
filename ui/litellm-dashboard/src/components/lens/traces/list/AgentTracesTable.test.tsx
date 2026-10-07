@@ -350,17 +350,22 @@ describe("AgentTracesTable feedback column", () => {
       ),
     );
 
-  it("shows the average and rating count and flags a run with a low score", () => {
+  it("shows the score and flags both the score and the row when a user scored the run low", () => {
     renderFeedback({ status: "ready", summary: { count: 2, average: 5.5, lowest: LOW_SCORE } });
     const score = screen.getByTestId("feedback-score");
-    expect(score).toHaveTextContent("5.5·2");
+    expect(score).toHaveTextContent(/^5\.5\/10$/);
     expect(score).toHaveAttribute("data-low", "true");
-    expect(score).toHaveAttribute("title", `2 ratings, lowest ${LOW_SCORE}/10`);
+    expect(score).toHaveAttribute("title", `User feedback: 2 ratings, lowest ${LOW_SCORE}/10`);
+    const row = screen.getByTestId("agent-trace-row");
+    expect(row).toHaveAttribute("data-flagged", "true");
+    expect(row).toHaveAttribute("data-low-feedback", "true");
   });
 
-  it("does not flag a run whose lowest score is above the threshold", () => {
+  it("shows a single user's whole-number score plainly and leaves a well scored row unflagged", () => {
     renderFeedback({ status: "ready", summary: { count: 1, average: 9, lowest: LOW_SCORE + 1 } });
+    expect(screen.getByTestId("feedback-score")).toHaveTextContent(/^9\/10$/);
     expect(screen.getByTestId("feedback-score")).not.toHaveAttribute("data-low");
+    expect(screen.getByTestId("agent-trace-row")).not.toHaveAttribute("data-flagged");
   });
 
   it("shows a dash for a run nobody has rated", () => {

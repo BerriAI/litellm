@@ -14,29 +14,18 @@ const entry = (author: string, score: number, updated_at: string): Feedback => (
 });
 
 describe("feedbackView", () => {
-  const feedback = [
-    entry("alice", 2, "2026-03-01T12:00:00Z"),
-    entry("bob", 9, "2026-03-01T12:05:00Z"),
-    entry("carol", 7, "2026-03-01T12:03:00Z"),
-  ];
-
-  it("separates the viewer's entry and lists everyone else newest first", () => {
-    const view = feedbackView({ feedback, viewer: "alice" });
-    expect(view.mine?.author).toBe("alice");
-    expect(view.others.map((item) => item.author)).toEqual(["bob", "carol"]);
+  it("lists every end user's feedback newest first with the average and lowest score", () => {
+    const view = feedbackView([
+      entry("alice", 2, "2026-03-01T12:00:00Z"),
+      entry("bob", 9, "2026-03-01T12:05:00Z"),
+      entry("carol", 7, "2026-03-01T12:03:00Z"),
+    ]);
+    expect(view?.entries.map((item) => item.author)).toEqual(["bob", "carol", "alice"]);
+    expect(view?.average).toBe(6);
+    expect(view?.lowest).toBe(2);
   });
 
-  it("averages every score including the viewer's", () => {
-    expect(feedbackView({ feedback, viewer: "alice" }).average).toBe(6);
-  });
-
-  it("never claims an entry for an anonymous viewer", () => {
-    const view = feedbackView({ feedback: [entry("", 5, "2026-03-01T12:00:00Z")], viewer: "" });
-    expect(view.mine).toBeNull();
-    expect(view.others).toHaveLength(1);
-  });
-
-  it("has no average when nobody has rated the run", () => {
-    expect(feedbackView({ feedback: [], viewer: "alice" })).toEqual({ mine: null, others: [], average: null });
+  it("has nothing to show when nobody rated the run", () => {
+    expect(feedbackView([])).toBeNull();
   });
 });

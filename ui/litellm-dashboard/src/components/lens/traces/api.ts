@@ -20,9 +20,7 @@ import type {
   TraceFindingCount,
   TraceFindingsRequest,
   TraceSignals,
-  Feedback,
   FeedbackQuery,
-  FeedbackSubmission,
   TraceFeedback,
   TraceFeedbackRequest,
   TraceFeedbackSummary,
@@ -48,8 +46,6 @@ export interface TracesApi {
   signals(traces: TraceFindingsRequest["traces"]): Promise<TraceSignals[]>;
   feedbackSummary(traces: TraceFeedbackRequest["traces"]): Promise<TraceFeedbackSummary[]>;
   feedback(traceId: string, traceRef?: string): Promise<TraceFeedback>;
-  submitFeedback(submission: FeedbackSubmission): Promise<Feedback>;
-  deleteFeedback(traceId: string, traceRef?: string): Promise<void>;
   anyRecorded(): Promise<boolean>;
   trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
   span(traceId: string, spanId: string, traceRef?: string): Promise<SpanDetail>;
@@ -109,13 +105,6 @@ export function liveTracesApi(accessToken: string): TracesApi {
         accessToken,
         query: { trace_id: traceId, trace_ref: traceRef ?? "" } satisfies FeedbackQuery,
       }),
-    submitFeedback: (submission) => apiClient.put<Feedback>("/lens/feedback", { accessToken, body: submission }),
-    deleteFeedback: async (traceId, traceRef) => {
-      await apiClient.delete("/lens/feedback", {
-        accessToken,
-        query: { trace_id: traceId, trace_ref: traceRef ?? "" } satisfies FeedbackQuery,
-      });
-    },
     anyRecorded: async () => {
       const page = await apiClient.get<TracePage>("/v1/traces", {
         accessToken,

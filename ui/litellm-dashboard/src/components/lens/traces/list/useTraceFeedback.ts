@@ -2,7 +2,6 @@ import { useQueries } from "@tanstack/react-query";
 import { chunk } from "es-toolkit";
 
 import { useTracesApi } from "../api";
-import type { FeedbackFilter } from "../routing";
 import type { TraceFeedbackSummary, TraceSummary } from "../types";
 
 export const LOW_SCORE = 4;
@@ -14,11 +13,9 @@ export type TraceFeedbackState =
 
 export const traceFeedbackKey = (accessToken: string) => ["traceFeedback", accessToken] as const;
 
-export function matchesFeedback(state: TraceFeedbackState | undefined, filter: FeedbackFilter): boolean {
-  if (filter === "all") return true;
-  if (state?.status !== "ready" || state.summary.count === 0) return false;
-  return filter === "rated" || (state.summary.lowest ?? Infinity) <= LOW_SCORE;
-}
+/** A run some end user scored at or below the low-score threshold. */
+export const isLowFeedback = (state: TraceFeedbackState | undefined): boolean =>
+  state?.status === "ready" && state.summary.count > 0 && (state.summary.lowest ?? Infinity) <= LOW_SCORE;
 
 export function useTraceFeedback(accessToken: string, runs: TraceSummary[], isActive: boolean) {
   const api = useTracesApi(accessToken);

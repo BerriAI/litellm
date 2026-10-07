@@ -51,8 +51,8 @@ function demoLensApi(data: LensDemoData): LensApi {
 }
 
 const DEMO_FEEDBACK = [
-  { score: 3, comment: "Picked the wrong file before retrying; the final answer was right.", author: "reviewer@demo" },
-  { score: 9, comment: "Clean run, exactly what I asked for.", author: "reviewer@demo" },
+  { score: 3, comment: "It edited the wrong file and I had to ask twice.", author: "customer-1042" },
+  { score: 9, comment: "Exactly what I asked for.", author: "customer-2210" },
 ] as const;
 
 function demoFeedback(runs: LensDemoData["runs"]): Feedback[] {
@@ -126,10 +126,8 @@ function demoTracesApi(data: LensDemoData): TracesApi {
       }),
     feedback: async (traceId) => {
       const summary = (await found(run(traceId))).trace.summary;
-      return { trace_id: traceId, trace_ref: summary.trace_ref ?? "", feedback: feedbackFor(traceId), viewer: "" };
+      return { trace_id: traceId, trace_ref: summary.trace_ref ?? "", feedback: feedbackFor(traceId) };
     },
-    submitFeedback: readOnly,
-    deleteFeedback: readOnly,
     anyRecorded: async () => data.runs.length > 0,
     trace: (traceId) => found(run(traceId)?.trace),
     span: (traceId, spanId) => found(run(traceId)?.details.find((span) => span.span_id === spanId)),

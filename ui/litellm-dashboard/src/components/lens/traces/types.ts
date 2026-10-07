@@ -17,7 +17,6 @@ export type TraceSignals = components["schemas"]["TraceSignals"];
 export type SignalFlag = NonNullable<TraceSignals["flags"]>[number];
 export type TraceFeedback = components["schemas"]["TraceFeedback"];
 export type Feedback = components["schemas"]["Feedback"];
-export type FeedbackSubmission = components["schemas"]["FeedbackSubmission"];
 export type TraceFeedbackRequest = components["schemas"]["TraceFeedbackRequest"];
 export type TraceFeedbackSummary = components["schemas"]["TraceFeedbackSummary"];
 export type FeedbackQuery = NonNullable<paths["/lens/feedback"]["get"]["parameters"]["query"]>;
