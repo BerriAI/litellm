@@ -5,14 +5,30 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["posthog"]
+posthog = ["dep:posthog-rs", "dep:chrono"]
+
 [dependencies]
 base64.workspace = true
+chrono = { version = "0.4", default-features = false, optional = true }
 fancy-regex.workspace = true
 percent-encoding.workspace = true
+posthog-rs = { version = "0.14", default-features = false, optional = true }
 serde_json.workspace = true
+serde.workspace = true
+opentelemetry = { version = "0.33", default-features = false, features = ["logs"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["logs"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["logs", "http-proto", "reqwest-blocking-client", "reqwest-rustls"] }
+rand.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 
 [dev-dependencies]
+opentelemetry-proto.workspace = true
+prost.workspace = true
 rstest.workspace = true
 tokio.workspace = true
+wiremock.workspace = true
