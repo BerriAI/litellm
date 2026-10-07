@@ -11,7 +11,7 @@ import asyncio
 import fnmatch
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final, NamedTuple, Protocol, Union, cast
 
@@ -3083,6 +3083,8 @@ async def _run_centralized_common_checks(
             keep_token_limits=user_custom_auth is not None,
         )
 
+    from litellm.proxy.spend_tracking.budget_reservation import invoked_agent_models
+
     skip_budget_checks: Final = _should_skip_budget_checks(
         request_data=request_data,
         route=route,
@@ -3090,6 +3092,7 @@ async def _run_centralized_common_checks(
         llm_router=llm_router,
         team_id=user_api_key_auth_obj.team_id,
         agent_invocation_cost=user_api_key_auth_obj.agent_invocation_cost,
+        invoked_agent_models=invoked_agent_models(user_api_key_auth_obj),
     )
 
     # Pin the metadata variable name (litellm_metadata vs metadata) before
@@ -3265,6 +3268,7 @@ def _should_skip_budget_checks(
     llm_router: litellm.Router | None,
     team_id: str | None = None,
     agent_invocation_cost: float | None = None,
+    invoked_agent_models: Sequence[str] = (),
 ) -> bool:
     if agent_invocation_cost is not None and agent_invocation_cost > 0:
         return False
@@ -3276,7 +3280,7 @@ def _should_skip_budget_checks(
         team_id=team_id,
     )
     if model is not None and llm_router is not None:
-        return _is_model_cost_zero(model=model, llm_router=llm_router)
+        return _is_model_cost_zero(model=[model, *invoked_agent_models], llm_router=llm_router)
     return False
 
 

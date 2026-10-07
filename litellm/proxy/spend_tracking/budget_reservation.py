@@ -275,7 +275,7 @@ async def reserve_budget_for_request(
     invocation_cost: Final = valid_token.agent_invocation_cost
     if (
         invocation_cost is None
-        and not _invoked_agent_models(valid_token)
+        and not invoked_agent_models(valid_token)
         and get_model_from_request(request_body, route, llm_router=llm_router) is None
     ):
         return None
@@ -323,7 +323,7 @@ async def reserve_budget_for_request(
         and _models_have_positive_price(
             models=(
                 *_get_request_models(request_body=request_body, route=route, llm_router=llm_router),
-                *_invoked_agent_models(valid_token),
+                *invoked_agent_models(valid_token),
             ),
             llm_router=llm_router,
         )
@@ -1785,7 +1785,7 @@ def _cost_info_has_positive_price(cost_info: object) -> bool:
     )
 
 
-def _invoked_agent_models(
+def invoked_agent_models(
     valid_token: UserAPIKeyAuth,
 ) -> tuple[str, ...]:
     policy: Final = valid_token.invoked_agent_policy

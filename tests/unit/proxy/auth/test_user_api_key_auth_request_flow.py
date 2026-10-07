@@ -10451,9 +10451,20 @@ async def test_human_agent_discovery_does_not_reserve_target_budget_but_send_and
     assert reserved is auth and (reserved.billing_agent_policy is not None) is billed, (http_method, body.get("method"))
 
 
-@pytest.mark.parametrize("invocation_cost,skipped", [(None, True), (0.0, True), (0.25, False)])
+@pytest.mark.parametrize(
+    "invocation_cost,invoked_agent_models,skipped",
+    [
+        (None, (), True),
+        (0.0, (), True),
+        (0.25, (), False),
+        (None, ("free-model",), True),
+        (None, ("paid-model",), False),
+    ],
+)
 def test_free_model_only_waives_budgets_without_a_paid_agent_invocation(
-    invocation_cost: float | None, skipped: bool
+    invocation_cost: float | None,
+    invoked_agent_models: tuple[str, ...],
+    skipped: bool,
 ) -> None:
     from typing import Final
 
@@ -10465,7 +10476,12 @@ def test_free_model_only_waives_budgets_without_a_paid_agent_invocation(
                 "model_name": "free-model",
                 "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
                 "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
-            }
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+            },
         ]
     )
     assert (
@@ -10475,6 +10491,7 @@ def test_free_model_only_waives_budgets_without_a_paid_agent_invocation(
             request=None,
             llm_router=router,
             agent_invocation_cost=invocation_cost,
+            invoked_agent_models=invoked_agent_models,
         )
         is skipped
     )
