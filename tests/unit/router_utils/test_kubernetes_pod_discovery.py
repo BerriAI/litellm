@@ -83,6 +83,178 @@ def _records(*ips: str, port: int = 8000) -> list[_AddrInfo]:
     return [_record(ip, port) for ip in ips]
 
 
+@pytest.mark.asyncio
+async def test_async_lookup_pods_returns_sorted_unique_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    loop: Final = asyncio.get_running_loop()
+
+    async def getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[_AddrInfo]:
+        assert host == "vllm-headless.ns.svc.cluster.local"
+        assert port == 8000
+        assert type == socket.SOCK_STREAM
+        return _records("10.0.0.3", "10.0.0.1", "10.0.0.2", "10.0.0.1")
+
+    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
+    discovery: Final = KubernetesPodDiscovery(proxy_environment=_empty_proxy_environment)
+
+    lookup: Final = await discovery.async_lookup_pods(_deployment())
+
+    assert lookup is not None
+    assert lookup.service_host == "vllm-headless.ns.svc.cluster.local"
+    assert lookup.port == 8000
+    assert lookup.pod_ips == ("10.0.0.1", "10.0.0.2", "10.0.0.3")
+    assert lookup.error is None
+
+
+@pytest.mark.asyncio
+async def test_async_lookup_pods_treats_authoritative_no_pods_as_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop: Final = asyncio.get_running_loop()
+
+    async def getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[_AddrInfo]:
+        raise socket.gaierror(socket.EAI_NONAME, "no ready pods")
+
+    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
+    discovery: Final = KubernetesPodDiscovery(proxy_environment=_empty_proxy_environment)
+
+    lookup: Final = await discovery.async_lookup_pods(_deployment())
+
+    assert lookup is not None
+    assert lookup.pod_ips == ()
+    assert lookup.error is None
+
+
+@pytest.mark.asyncio
+async def test_async_lookup_pods_returns_non_authoritative_dns_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop: Final = asyncio.get_running_loop()
+
+    async def getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[_AddrInfo]:
+        raise OSError("temporary DNS failure")
+
+    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
+    discovery: Final = KubernetesPodDiscovery(proxy_environment=_empty_proxy_environment)
+
+    lookup: Final = await discovery.async_lookup_pods(_deployment())
+
+    assert lookup is not None
+    assert lookup.pod_ips == ()
+    assert lookup.error == "temporary DNS failure"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_base", "discovery_enabled"),
+    [
+        (_SERVICE_URL, False),
+        ("https://vllm-headless.ns.svc.cluster.local:8000/v1", True),
+        ("http://10.0.0.4:8000/v1", True),
+    ],
+)
+async def test_async_lookup_pods_skips_ineligible_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+    api_base: str,
+    discovery_enabled: bool,
+) -> None:
+    loop: Final = asyncio.get_running_loop()
+    lookups: Final = count()
+
+    async def getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[_AddrInfo]:
+        next(lookups)
+        return _records("10.0.0.1")
+
+    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
+    discovery: Final = KubernetesPodDiscovery(proxy_environment=_empty_proxy_environment)
+
+    lookup: Final = await discovery.async_lookup_pods(
+        _deployment(api_base=api_base, kubernetes_pod_discovery=discovery_enabled)
+    )
+
+    assert lookup is None
+    assert next(lookups) == 0
+
+
+@pytest.mark.asyncio
+async def test_async_lookup_pods_does_not_cache_or_advance_round_robin_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop: Final = asyncio.get_running_loop()
+    async_lookups: Final = count()
+    sync_lookups: Final = count()
+
+    async def async_getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[_AddrInfo]:
+        next(async_lookups)
+        return _records("10.0.0.9")
+
+    def sync_getaddrinfo(
+        host: str | None,
+        port: str | int | None,
+        family: int = 0,
+        type: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[_AddrInfo]:
+        next(sync_lookups)
+        return _records("10.0.0.1", "10.0.0.2")
+
+    monkeypatch.setattr(loop, "getaddrinfo", async_getaddrinfo)
+    monkeypatch.setattr(socket, "getaddrinfo", sync_getaddrinfo)
+    discovery: Final = KubernetesPodDiscovery(
+        refresh_interval_seconds=30,
+        proxy_environment=_empty_proxy_environment,
+    )
+
+    first_lookup: Final = await discovery.async_lookup_pods(_deployment())
+    first_resolution: Final = discovery.resolve_deployment(_deployment())
+    second_lookup: Final = await discovery.async_lookup_pods(_deployment())
+    second_resolution: Final = discovery.resolve_deployment(_deployment())
+
+    assert first_lookup is not None
+    assert first_lookup.pod_ips == ("10.0.0.9",)
+    assert second_lookup is not None
+    assert second_lookup.pod_ips == ("10.0.0.9",)
+    assert _api_base(first_resolution) == "http://10.0.0.1:8000/v1"
+    assert _api_base(second_resolution) == "http://10.0.0.2:8000/v1"
+    assert next(async_lookups) == 2
+    assert next(sync_lookups) == 1
+
+
 def _clock(ticks: tuple[float, ...]) -> Callable[[], float]:
     timestamps: Final = iter(ticks)
 

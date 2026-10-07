@@ -29,6 +29,14 @@ _PodSelection: TypeAlias = tuple[str, int, Literal["round_robin", "session_affin
 _DeploymentT = TypeVar("_DeploymentT")
 
 
+@dataclass(frozen=True, slots=True)
+class KubernetesPodLookup:
+    service_host: str
+    port: int | None
+    pod_ips: tuple[str, ...]
+    error: str | None
+
+
 def _retry_count_from_metadata(metadata: object) -> int | None:
     if not isinstance(metadata, Mapping):
         return None
@@ -141,6 +149,18 @@ class KubernetesPodDiscovery:
         finally:
             with self._lock:
                 self._refreshing = self._refreshing - {key}
+
+    async def async_lookup_pods(self, deployment: object) -> KubernetesPodLookup | None:
+        eligible: Final = self._eligible(deployment)
+        if eligible is None:
+            return None
+        _, (host, port), _ = eligible
+        result: Final = await self._async_getaddrinfo(host, port)
+        if isinstance(result, OSError):
+            if isinstance(result, socket.gaierror) and self._is_authoritative_no_pods(result):
+                return KubernetesPodLookup(service_host=host, port=port, pod_ips=(), error=None)
+            return KubernetesPodLookup(service_host=host, port=port, pod_ips=(), error=str(result))
+        return KubernetesPodLookup(service_host=host, port=port, pod_ips=self._pod_ips(result), error=None)
 
     @staticmethod
     def _session_id(request_kwargs: Mapping[str, object] | None) -> str | None:
