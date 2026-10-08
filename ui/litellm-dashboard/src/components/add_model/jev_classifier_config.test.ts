@@ -28,6 +28,27 @@ describe("OSS classifier provider defaults", () => {
     expect(jevClassifierConfigSchema.safeParse({ provider: "cloudflare", model: "nimble" }).success).toBe(false);
   });
 
+  it("accepts the full Cloudflare model name the proxy already takes", () => {
+    expect(jevClassifierConfigSchema.parse({ provider: "cloudflare", model: "@cf/cloudflare/clef" }).model).toBe(
+      "clef",
+    );
+    expect(jevClassifierConfigSchema.safeParse({ provider: "cloudflare", model: "@cf/meta/llama" }).success).toBe(
+      false,
+    );
+    expect(jevClassifierConfigSchema.parse({ provider: "bespoke", model: "bespokelabs/Bespoke-Nimble-9B" }).model).toBe(
+      "bespokelabs/Bespoke-Nimble-9B",
+    );
+  });
+
+  it("keeps a Cloudflare classifier saved under its full model name when editing", () => {
+    expect(
+      hydrateOssClassifier({
+        classifier_type: "oss_classifier",
+        opensource_classifier_config: { provider: "cloudflare", model: "@cf/cloudflare/clef-flash", timeout_ms: 900 },
+      }).jev_classifier_config,
+    ).toEqual({ provider: "cloudflare", model: "clef-flash", timeout_ms: 900 });
+  });
+
   it("hydrates a saved Decisions provider config into the editor", () => {
     expect(
       hydrateOssClassifier({

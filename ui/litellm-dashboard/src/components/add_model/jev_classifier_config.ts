@@ -37,9 +37,19 @@ const jevClassifierConfigFields = {
   circuit_breaker_cooldown_seconds: z.number().finite().positive().optional(),
 };
 
+const CLOUDFLARE_MODEL_PREFIX = "@cf/cloudflare/";
+
+const shortClassifierModel = (provider: OssClassifierProvider | undefined, model: string): string =>
+  provider === "cloudflare" && model.startsWith(CLOUDFLARE_MODEL_PREFIX)
+    ? model.slice(CLOUDFLARE_MODEL_PREFIX.length)
+    : model;
+
 export const jevClassifierConfigSchema = z
   .object(jevClassifierConfigFields)
-  .transform((config) => ({ ...config, model: config.model ?? defaultClassifierModel(config.provider) }))
+  .transform((config) => ({
+    ...config,
+    model: shortClassifierModel(config.provider, config.model ?? defaultClassifierModel(config.provider)),
+  }))
   .refine((config) => fixedClassifierModels(config.provider)?.some((model) => model === config.model) ?? true, {
     error: "Select a supported classifier model",
     path: ["model"],
