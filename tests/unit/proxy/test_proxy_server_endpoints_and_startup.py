@@ -12088,10 +12088,10 @@ def test_db_config_sync_unregisters_a_callback_the_stored_config_no_longer_lists
     pc = ps.ProxyConfig()
 
     for _ in range(2):
-        pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: [callback_name]}})
+        pc._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved({"litellm_settings": {setting_key: [callback_name]}}))
     assert callback_name in _runtime_callback_names()
 
-    pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: []}})
+    pc._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved({"litellm_settings": {setting_key: []}}))
     assert callback_name not in _runtime_callback_names()
 
 
@@ -12105,11 +12105,13 @@ def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.
     pc = ps.ProxyConfig()
 
     pc._add_callbacks_from_db_config(
-        {"litellm_settings": {"success_callback": ["langfuse_otel", "helicone", "humanloop", "supabase"]}}
+        ProxyRuntimeConfig.from_resolved(
+            {"litellm_settings": {"success_callback": ["langfuse_otel", "helicone", "humanloop", "supabase"]}}
+        )
     )
     assert {"humanloop", "supabase"} <= _runtime_callback_names()
 
-    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+    pc._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved({"litellm_settings": {"success_callback": []}}))
     remaining: Final = _runtime_callback_names()
     assert {"langfuse_otel", "helicone"} <= remaining
     assert not {"humanloop", "supabase"} & remaining
@@ -12122,11 +12124,11 @@ def test_db_config_sync_restores_a_code_callback_it_replaced(monkeypatch: pytest
     litellm.logging_callback_manager.add_litellm_success_callback("langfuse_otel")
     pc = ps.ProxyConfig()
 
-    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": ["langfuse_otel"]}})
+    pc._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved({"litellm_settings": {"success_callback": ["langfuse_otel"]}}))
     assert "langfuse_otel" not in litellm.success_callback
     assert "langfuse_otel" in _runtime_callback_names()
 
-    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+    pc._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved({"litellm_settings": {"success_callback": []}}))
     assert litellm.success_callback == ["langfuse_otel"]
 
 
@@ -12160,7 +12162,7 @@ def test_db_config_sync_registers_otel_v2_arize_next_to_otel(
         add_custom_logger_callback_to_specific_event("otel", event)
         pc = ps.ProxyConfig()
         for _ in range(2):
-            pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: ["arize"]}})
+            pc._add_callbacks_from_db_config(ProxyRuntimeConfig.from_resolved({"litellm_settings": {setting_key: ["arize"]}}))
     finally:
         is_otel_v2_enabled.cache_clear()
 
@@ -12179,7 +12181,9 @@ async def test_failed_config_load_keeps_callbacks_the_stored_config_registered(m
     monkeypatch.setattr(ps, "llm_router", None)
     monkeypatch.setattr(ps, "master_key", MASTER_KEY)
     monkeypatch.setattr(
-        pc, "get_config", AsyncMock(return_value={"litellm_settings": {"success_callback": ["helicone"]}})
+        pc,
+        "get_config",
+        AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {"success_callback": ["helicone"]}})),
     )
     await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
     assert "helicone" in _runtime_callback_names()
@@ -12188,7 +12192,11 @@ async def test_failed_config_load_keeps_callbacks_the_stored_config_registered(m
     await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
     assert "helicone" in _runtime_callback_names()
 
-    monkeypatch.setattr(pc, "get_config", AsyncMock(return_value={"litellm_settings": {"success_callback": []}}))
+    monkeypatch.setattr(
+        pc,
+        "get_config",
+        AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {"success_callback": []}})),
+    )
     await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
     assert "helicone" not in _runtime_callback_names()
 

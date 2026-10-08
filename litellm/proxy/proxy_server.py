@@ -7665,7 +7665,7 @@ class ProxyConfig:
 
         return _model_list
 
-    async def _load_router_update_config(self) -> tuple[ProxyRuntimeConfig, "list[SearchToolTypedDict] | None"]:
+    async def _load_router_update_config(self) -> "tuple[ProxyRuntimeConfig | None, list[SearchToolTypedDict] | None]":
         try:
             config_data: Final[ProxyRuntimeConfig] = await proxy_config.get_config()
             return config_data, self.parse_search_tools(config_data)
@@ -7675,7 +7675,7 @@ class ProxyConfig:
                 "Proceeding with model loading using cached/empty config.",
                 str(e),
             )
-            return ProxyRuntimeConfig(), None
+            return None, None
 
     async def _update_llm_router(
         self,
