@@ -1,4 +1,12 @@
-import { chooseSelectOption, fireEvent, renderHook, screen, waitFor, within, renderWithProviders } from "../../../tests/test-utils";
+import {
+  chooseSelectOption,
+  fireEvent,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+  renderWithProviders,
+} from "../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
@@ -505,9 +513,7 @@ describe("AddModelForm", () => {
 
       await user.click(screen.getByRole("button", { name: "Create credential" }));
       const dialog = await screen.findByRole("dialog");
-      expect(within(dialog).getByPlaceholderText("Select a provider")).toHaveValue(
-        Providers.MICROSOFT_365_COPILOT,
-      );
+      expect(within(dialog).getByPlaceholderText("Select a provider")).toHaveValue(Providers.MICROSOFT_365_COPILOT);
       expect(within(dialog).getByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
         "OAuth token exchange (on-behalf-of)",
       );
@@ -576,9 +582,7 @@ describe("AddModelForm", () => {
         "Static delegated access token",
       );
       await waitFor(() =>
-        expect(screen.getByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
-          "Static delegated access token",
-        ),
+        expect(screen.getByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Static delegated access token"),
       );
       fireEvent.change(screen.getByLabelText("Delegated Access Token"), { target: { value: "delegated-token" } });
       props.handleOk.mockImplementation(async () => {
