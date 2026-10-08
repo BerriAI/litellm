@@ -13513,6 +13513,38 @@ async def test_cimd_without_https_origin_falls_back_to_available_dcr(monkeypatch
     assert post.call_count == 1
 
 
+@pytest.mark.asyncio
+async def test_cimd_yields_to_dynamic_registration_when_the_authorization_server_offers_both(monkeypatch, respx_mock):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.oauth_utils import get_cimd_client_id
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server = _cimd_oauth_server().model_copy(update={"registration_url": "https://idp.example.com/register"})
+    post = respx_mock.post("https://idp.example.com/register").respond(201, json={"client_id": "registered-client"})
+    response = await endpoints.register_client_with_server(_cimd_request(), server, "Gateway", None, None, None)
+    assert json.loads(response.body)["client_id"] == "registered-client"
+    assert post.call_count == 1
+    assert get_cimd_client_id(server) is None
+
+
+@pytest.mark.asyncio
+async def test_cimd_is_preferred_over_dynamic_registration_when_the_deployment_opts_in(monkeypatch, respx_mock):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setattr(proxy_server, "general_settings", {"mcp_prefer_client_id_metadata_document": True})
+    server = _cimd_oauth_server().model_copy(update={"registration_url": "https://idp.example.com/register"})
+    post = respx_mock.post("https://idp.example.com/register").respond(201, json={"client_id": "registered-client"})
+    response = await endpoints.register_client_with_server(_cimd_request(), server, "Gateway", None, None, None)
+    body = json.loads(response.body) if hasattr(response, "body") else response
+    assert body["client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
+    assert "client_secret" not in body
+    assert post.call_count == 0
+
+
 @pytest.mark.parametrize(
     "updates",
     [
@@ -13697,8 +13729,8 @@ async def test_token_route_preserves_saved_cimd_grant_after_origin_change(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", [
-    "matching", "foreign_refresh", "missing_refresh", "missing_grant", "database_missing", "database_outage",
-    "static_client", "anonymous",
+    "matching", "unicode_grant", "foreign_refresh", "missing_refresh", "missing_grant", "database_missing",
+    "database_outage", "static_client", "anonymous",
 ])
 async def test_saved_cimd_refresh_identity_is_bound_to_the_callers_stored_grant(
     monkeypatch: pytest.MonkeyPatch, state: str,
@@ -13712,6 +13744,7 @@ async def test_saved_cimd_refresh_identity_is_bound_to_the_callers_stored_grant(
     monkeypatch.setenv("LITELLM_SALT_KEY", "saved-cimd-owner-test-salt")
     server: Final = _cimd_oauth_server()
     identity: Final = "https://original-gateway.example.com/oauth/client-metadata.json"
+    grant: Final = "alice-refresh-\u00e9" if state == "unicode_grant" else "alice-refresh"
     database: Final = MagicMock()
     table: Final = database.db.litellm_mcpusercredentials
     table.find_unique = AsyncMock(return_value=None)
@@ -13719,7 +13752,7 @@ async def test_saved_cimd_refresh_identity_is_bound_to_the_callers_stored_grant(
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     await db.store_user_oauth_credential(
         database, "alice", server.server_id, "expired",
-        refresh_token=None if state == "missing_refresh" else "alice-refresh", cimd_client_id=identity,
+        refresh_token=None if state == "missing_refresh" else grant, cimd_client_id=identity,
     )
     table.find_unique.reset_mock()
     table.find_unique.return_value = (
@@ -13735,9 +13768,9 @@ async def test_saved_cimd_refresh_identity_is_bound_to_the_callers_stored_grant(
         server.client_id = "configured-client"
     resolved: Final = await endpoints._saved_cimd_refresh_client_id(
         server, None if state == "anonymous" else "alice",
-        "foreign-refresh" if state == "foreign_refresh" else "alice-refresh",
+        "foreign-refresh" if state == "foreign_refresh" else grant,
     )
-    assert resolved == (identity if state == "matching" else None)
+    assert resolved == (identity if state in ("matching", "unicode_grant") else None)
     if state in ("anonymous", "static_client", "database_missing"):
         table.find_unique.assert_not_awaited()
     else:

@@ -163,8 +163,20 @@ def needs_cimd_discovery(server: "MCPServer") -> bool:
     )
 
 
+def _deployment_prefers_cimd() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("mcp_prefer_client_id_metadata_document") is True
+
+
+def _dynamic_registration_takes_precedence(server: "MCPServer") -> bool:
+    return server.effective_registration_url is not None and not _deployment_prefers_cimd()
+
+
 def get_cimd_client_id(server: "MCPServer") -> str | None:
     if getattr(server, "client_id_metadata_document_supported", False) is not True or not _can_use_cimd(server):
+        return None
+    if _dynamic_registration_takes_precedence(server):
         return None
     return get_cimd_document_url()
 

@@ -121,7 +121,6 @@ class MCPServer(LiteLLMBaseModel):
     client_secret: str | None = None
     issuer: str | None = None
     issuer_is_anchored: bool = False
-    # None means capability discovery has not completed; False means the AS did not advertise it.
     client_id_metadata_document_supported: bool | None = None
     authorization_response_iss_parameter_supported: bool = False
     dcr_issuer: str | None = None

@@ -1115,7 +1115,7 @@ async def _saved_cimd_refresh_client_id(
     if credential is None:
         return None
     stored_refresh: Final = credential.get("refresh_token")
-    if not stored_refresh or not secrets.compare_digest(stored_refresh, refresh_token):
+    if not stored_refresh or not secrets.compare_digest(stored_refresh.encode(), refresh_token.encode()):
         return None
     return credential.get("cimd_client_id")
 

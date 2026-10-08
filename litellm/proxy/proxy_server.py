@@ -18522,6 +18522,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "mcp_client_id_header": "String",
         "mcp_trusted_proxy_ranges": "List",
         "mcp_xff_num_trusted_hops": "Integer",
+        "mcp_prefer_client_id_metadata_document": "Boolean",
         "always_include_stream_usage": "Boolean",
         "forward_client_headers_to_llm_api": "Boolean",
         "mcp_required_fields": "List",
