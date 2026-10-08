@@ -217,7 +217,6 @@ describe("provider_info_helpers", () => {
       expect(logo).toContain("tencent");
     });
 
-
     it("should resolve the typesafe slug and TypeSafe enum key to the TypeSafe name and bundled logo", () => {
       const fromSlug = getProviderLogoAndName("typesafe");
       expect(fromSlug.displayName).toBe(Providers.TypeSafe);
