@@ -30,6 +30,7 @@ _OPENAPI_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
 
 _OPENAPI_TOOL_NAME_MAX_LEN: Final = OPENAPI_TOOL_NAME_MAX_LEN
+_MAX_YAML_INT_LENGTH: Final = 1024
 
 
 def sanitize_openapi_tool_name(raw_name: str) -> str:
@@ -181,6 +182,7 @@ def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
         parsed: Any = json.loads(text)
     except json.JSONDecodeError:
         import yaml
+        from yaml.nodes import ScalarNode
 
         class _NoMergeSafeLoader(yaml.SafeLoader):
             def compose_node(self, parent: object, index: object) -> object:
@@ -193,6 +195,16 @@ def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
                 if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node_values):
                     raise yaml.YAMLError("YAML merge keys are not supported")
                 super().flatten_mapping(node)
+
+            def construct_yaml_int(self, node: ScalarNode) -> int:
+                if len(node.value) > _MAX_YAML_INT_LENGTH:
+                    raise yaml.YAMLError("YAML integer is too long")
+                return super().construct_yaml_int(node)
+
+        _NoMergeSafeLoader.add_constructor(
+            "tag:yaml.org,2002:int",
+            _NoMergeSafeLoader.construct_yaml_int,
+        )
 
         parsed = yaml.load(text, Loader=_NoMergeSafeLoader)
 

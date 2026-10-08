@@ -347,6 +347,14 @@ components:
         )
 
 
+def test_parse_openapi_spec_rejects_oversized_yaml_integer() -> None:
+    import yaml
+
+    oversized_integer: Final = "1" + ":11" * gen._MAX_YAML_INT_LENGTH
+    with pytest.raises(yaml.YAMLError, match="YAML integer is too long"):
+        gen._parse_openapi_spec(f"openapi: 3.0.0\nx-expensive: {oversized_integer}\n")
+
+
 def _create_mock_client(method: str, response_text: str, status_code: int = 200) -> AsyncMock:
     """Utility to create a mocked async httpx client for the given method.
 
