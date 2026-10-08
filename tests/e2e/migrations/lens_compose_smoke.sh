@@ -15,6 +15,8 @@ if worker_image > /dev/null 2>&1; then
   exit 1
 fi
 
+release_version=${LENS_TEST_RELEASE:-0.0.0-lens-ci}
+worker_image_tag="ghcr.io/berriai/litellm-lens-worker:v$release_version"
 qa_dir=$(mktemp -d)
 master_key="sk-$(openssl rand -hex 16)"
 compose=(docker compose -p lens-compose-ci --env-file "$qa_dir/env" -f deploy/lens/stack.yaml)
@@ -25,21 +27,25 @@ cleanup() {
 }
 trap cleanup EXIT
 umask 077
-printf 'LITELLM_VERSION=0.0.0-lens-ci\nLITELLM_PORT=4418\nLITELLM_MASTER_KEY=%s\nLITELLM_SALT_KEY=sk-%s\n' \
-  "$master_key" "$(openssl rand -hex 32)" > "$qa_dir/env"
+printf 'LITELLM_VERSION=%s\nLITELLM_PORT=4418\nLITELLM_MASTER_KEY=%s\nLITELLM_SALT_KEY=sk-%s\n' \
+  "$release_version" "$master_key" "$(openssl rand -hex 32)" > "$qa_dir/env"
 printf 'LITELLM_LENS_SERVICE_TOKEN=%s\nLENS_PORT=4419\n' "$(openssl rand -hex 32)" >> "$qa_dir/env"
 printf 'POSTGRES_PASSWORD=%s:/?#@%%\nCLICKHOUSE_PASSWORD=%s:/?#@%%\n' \
   "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> "$qa_dir/env"
-docker tag "${LITELLM_IMAGE:?Set LITELLM_IMAGE to the built gateway image}" ghcr.io/berriai/litellm:0.0.0-lens-ci
-docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -f deploy/lens/Dockerfile \
-  -t ghcr.io/berriai/litellm-lens-worker:v0.0.0-lens-ci .
-cat > "$qa_dir/local-worker.yaml" <<'YAML'
+docker tag "${LITELLM_IMAGE:?Set LITELLM_IMAGE to the built gateway image}" "ghcr.io/berriai/litellm:$release_version"
+if [[ -n "${LENS_TEST_WORKER_IMAGE:-}" ]]; then
+  docker tag "$LENS_TEST_WORKER_IMAGE" "$worker_image_tag"
+else
+  docker build --build-arg "LITELLM_RELEASE_TAG=v$release_version" -f deploy/lens/Dockerfile \
+    -t "$worker_image_tag" .
+fi
+cat > "$qa_dir/local-worker.yaml" <<YAML
 services:
   lens-worker:
-    image: ghcr.io/berriai/litellm-lens-worker:v0.0.0-lens-ci
+    image: $worker_image_tag
 YAML
 LITELLM_MASTER_KEY="$master_key" LITELLM_LENS_SERVICE_TOKEN="$(openssl rand -hex 32)" \
-LITELLM_RELEASE_TAG=v0.0.0-lens-ci \
+LITELLM_RELEASE_TAG="v$release_version" \
   docker compose --env-file /dev/null -p lens-local-smoke -f docker/docker-compose.tracing.yml \
     -f "$qa_dir/local-worker.yaml" run --rm --no-deps --pull never --entrypoint python3.13 lens-worker -I -S -c '
 import os
@@ -116,7 +122,7 @@ if [[ -z "$key_id" ]]; then
 fi
 jq -n --arg key "$key_id" '{name:"Lens Compose CI",analysis_key_id:$key,managed:true}' > "$qa_dir/registration.json"
 api /lens/workers/register -d "@$qa_dir/registration.json" > "$qa_dir/worker.json"
-jq -e '.image == "ghcr.io/berriai/litellm-lens-worker:v0.0.0-lens-ci"' "$qa_dir/worker.json" > /dev/null
+jq -e --arg expected "$worker_image_tag" '.image == $expected' "$qa_dir/worker.json" > /dev/null
 jq -e '.managed == true and .token == ""' "$qa_dir/worker.json" > /dev/null
 worker_id=$(jq -r '.worker.id' "$qa_dir/worker.json")
 heartbeat_after=$(date -u +'%Y-%m-%dT%H:%M:%S')

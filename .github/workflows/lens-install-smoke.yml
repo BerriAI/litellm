@@ -7,74 +7,57 @@ permissions:
   contents: read
 
 concurrency:
-  group: lens-install-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: lens-published-qa-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-images:
-    runs-on: ubuntu-latest-16-cores
-    timeout-minutes: 45
+  release-qa:
+    name: Published release (${{ matrix.mode }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         include:
-          - component: gateway
-            dockerfile: gateway/Dockerfile
-          - component: backend
-            dockerfile: backend/Dockerfile
-          - component: ui
-            dockerfile: ui/Dockerfile
-          - component: migrations
-            dockerfile: migrations/Dockerfile
-          - component: monolith
-            dockerfile: Dockerfile
-          - component: worker
-            dockerfile: deploy/lens/Dockerfile
+          - mode: helm
+            runner: ubuntu-latest-16-cores
+          - mode: compose
+            runner: ubuntu-latest
+          - mode: docker
+            runner: ubuntu-latest
     env:
-      COMPONENT: ${{ matrix.component }}
-      DOCKERFILE: ${{ matrix.dockerfile }}
+      LENS_TEST_RELEASE: 1.106.0-dev.2
+      LITELLM_IMAGE: ghcr.io/berriai/litellm@sha256:d29b54b6c57b828a0c4cdb7c387d013e02318b86cf01fcdc18d279643b8131b8
+      LENS_TEST_WORKER_IMAGE: ghcr.io/berriai/litellm-lens-worker@sha256:bef581be0eabdfbc6e87d890af2a4508c1188393e4d9d5272a3417ba470d0901
+      QA_MODE: ${{ matrix.mode }}
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
         with:
           persist-credentials: false
-      - name: Build the matching release image
+      - name: Pull public release images by digest
         run: |
-          docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci \
-            -f "$DOCKERFILE" -t "lens-ci-$COMPONENT:v0.0.0-lens-ci" .
-      - name: Save the matching release image
-        run: |
-          docker save "lens-ci-$COMPONENT:v0.0.0-lens-ci" \
-            | gzip -1 > "$RUNNER_TEMP/lens-install-$COMPONENT.tar.gz"
-      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
-        with:
-          name: lens-install-${{ matrix.component }}-${{ github.sha }}
-          path: ${{ runner.temp }}/lens-install-${{ matrix.component }}.tar.gz
-          compression-level: 0
-          retention-days: 3
-          if-no-files-found: error
-          overwrite: true
-
-  helm-install:
-    needs: build-images
-    runs-on: ubuntu-latest-16-cores
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
-        with:
-          pattern: lens-install-*-${{ github.sha }}
-          merge-multiple: true
-          path: ${{ runner.temp }}/lens-install-images
-      - name: Load the matching release images
-        run: |
-          for component in gateway backend ui migrations monolith worker; do
-            archive="$RUNNER_TEMP/lens-install-images/lens-install-$component.tar.gz"
-            gzip -dc "$archive" | docker load
-            rm "$archive"
-          done
+          export DOCKER_CONFIG="$RUNNER_TEMP/anonymous-docker"
+          mkdir -p "$DOCKER_CONFIG"
+          echo "DOCKER_CONFIG=$DOCKER_CONFIG" >> "$GITHUB_ENV"
+          docker pull --platform linux/amd64 "$LITELLM_IMAGE"
+          docker pull --platform linux/amd64 "$LENS_TEST_WORKER_IMAGE"
+          docker tag "$LITELLM_IMAGE" lens-ci-monolith:v0.0.0-lens-ci
+          docker tag "$LENS_TEST_WORKER_IMAGE" lens-ci-worker:v0.0.0-lens-ci
+          if [[ "$QA_MODE" == helm ]]; then
+            while read -r component digest; do
+              image="ghcr.io/berriai/litellm-$component@$digest"
+              docker pull --platform linux/amd64 "$image"
+              docker tag "$image" "lens-ci-$component:v0.0.0-lens-ci"
+            done <<'IMAGES'
+          gateway sha256:b02fd02c6f5de6d0ab0d67170b926a817d21442588f608d09d7e0ab109e570d3
+          backend sha256:13dc8febfe6a4b66ae23dd609664eec5ca84f2877e01331c4041384b201e39aa
+          ui sha256:2ddd666427083be97c8dc176d6a4ddac30943132b0bfde1d5b27a245d1012863
+          migrations sha256:f6b720de689fa5d797d86461bc2d99033d19dee45a140d6dc9d51dd03129783c
+          IMAGES
+          fi
       - name: Install pinned Kubernetes test tools
+        if: matrix.mode == 'helm'
         run: |
           curl --fail --location --output "$RUNNER_TEMP/kind" \
             https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
@@ -90,5 +73,22 @@ jobs:
           tar -xzf "$RUNNER_TEMP/helm.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/linux-amd64" >> "$GITHUB_PATH"
-      - name: Install, ingest, upgrade, and restart both charts
+      - name: Pull and verify the published componentized chart
+        if: matrix.mode == 'helm'
+        run: |
+          helm pull oci://ghcr.io/berriai/litellm/chart/litellm \
+            --version "$LENS_TEST_RELEASE" --untar --untardir "$RUNNER_TEMP/published" 2>&1 | tee "$RUNNER_TEMP/chart-pull.log"
+          grep -Fq 'sha256:b2d5d17df61f100605fdbc635dfff6b232ab311bdfa385425496f9f6a25a8d37' "$RUNNER_TEMP/chart-pull.log"
+          grep -Fq 'sha256:bef581be0eabdfbc6e87d890af2a4508c1188393e4d9d5272a3417ba470d0901' "$RUNNER_TEMP/published/litellm/values.yaml"
+          echo "LENS_TEST_PUBLISHED_CHART=$RUNNER_TEMP/published/litellm" >> "$GITHUB_ENV"
+      - name: Test published Helm images, published chart and bundled storage
+        if: matrix.mode == 'helm'
+        env:
+          LENS_TEST_HELM_MODES: litellm litellm-bundled litellm-helm
         run: bash tests/e2e/migrations/lens_helm_smoke.sh
+      - name: Test published images in Compose
+        if: matrix.mode == 'compose'
+        run: bash tests/e2e/migrations/lens_compose_smoke.sh
+      - name: Test published images with docker run
+        if: matrix.mode == 'docker'
+        run: bash tests/e2e/migrations/lens_docker_smoke.sh

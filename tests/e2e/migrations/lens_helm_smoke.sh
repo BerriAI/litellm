@@ -72,8 +72,9 @@ forward() {
   return 1
 }
 
-for chart in litellm-helm litellm; do
-  namespace="lens-$chart"
+for mode in ${LENS_TEST_HELM_MODES:-litellm-helm litellm}; do
+  chart=${mode%-bundled}
+  namespace="lens-$mode"
   kubectl create namespace "$namespace"
   master_key="sk-$(openssl rand -hex 24)"
   kubectl -n "$namespace" create secret generic lens-secrets \
@@ -135,7 +136,7 @@ YAML
 fullnameOverride: lens
 lensWorker:
   enabled: true
-  image: {repository: lens-ci-worker, tag: v0.0.0-lens-ci, pullPolicy: Never}
+  image: {repository: lens-ci-worker, tag: v0.0.0-lens-ci, digest: "", pullPolicy: Never}
   serviceTokenSecret: {name: lens-secrets, key: service-token}
   clickhouseSecret: {name: lens-secrets, key: url}
   clickhouseDatabase: existing_traces
@@ -198,7 +199,15 @@ ui:
   hpa: {enabled: false}
 YAML
   fi
-  install=(helm upgrade --install lens "helm/$chart" -n "$namespace" \
+  chart_path="helm/$chart"
+  if [[ "$chart" == litellm && -n "${LENS_TEST_PUBLISHED_CHART:-}" ]]; then
+    chart_path=$LENS_TEST_PUBLISHED_CHART
+  fi
+  storage_args=()
+  if [[ "$mode" == litellm-bundled ]]; then
+    storage_args=(--set lensWorker.serviceTokenSecret.name= --set lensWorker.clickhouseSecret.name=)
+  fi
+  install=(helm upgrade --install lens "$chart_path" -n "$namespace" "${storage_args[@]}" \
     -f "$qa_dir/common.yaml" -f "$qa_dir/chart.yaml" --wait --wait-for-jobs --timeout 8m)
   "${install[@]}" || diagnose
   forward "$control" 14418 "$control_port"
@@ -219,8 +228,10 @@ YAML
     -H "Authorization: Bearer $tracing_key" -H 'Content-Type: application/json' \
     -d "@$qa_dir/trace.json" http://127.0.0.1:14419/v1/traces
   saved_trace
-  kubectl -n "$namespace" exec deployment/clickhouse -- clickhouse-client --query \
-    "SELECT count() FROM existing_traces.otel_traces WHERE TraceId = '$trace_id'" | grep -qx 1
+  if [[ "$mode" != litellm-bundled ]]; then
+    kubectl -n "$namespace" exec deployment/clickhouse -- clickhouse-client --query \
+      "SELECT count() FROM existing_traces.otel_traces WHERE TraceId = '$trace_id'" | grep -qx 1
+  fi
   "${install[@]}" || diagnose
   saved_trace
   for pid in "${forward_pids[@]}"; do kill "$pid"; wait "$pid" 2>/dev/null || true; done
@@ -230,7 +241,12 @@ YAML
   kubectl -n "$namespace" rollout status deployment/lens-lens-worker --timeout=180s
   forward "$control" 14418 "$control_port"
   saved_trace
-  printf '%s: fresh install, direct ingestion, custom database, upgrade, and restart passed\n' "$chart"
+  if [[ "$mode" == litellm-bundled ]]; then
+    kubectl -n "$namespace" rollout restart statefulset/lens-lens-clickhouse
+    kubectl -n "$namespace" rollout status statefulset/lens-lens-clickhouse --timeout=180s
+    saved_trace
+  fi
+  printf '%s: fresh install, direct ingestion, custom database, upgrade, and restart passed\n' "$mode"
   for pid in "${forward_pids[@]}"; do kill "$pid"; wait "$pid" 2>/dev/null || true; done
   forward_pids=()
   kubectl delete namespace "$namespace" --wait=true
