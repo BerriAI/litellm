@@ -25,8 +25,8 @@ fn optional(value: &str) -> Option<String> {
 fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span {
     let row = resolution.row(index);
     let status = resolution.status_source(index);
-    let (requests, spend_match) = if let Some((requests, matched)) = resolution.call_match(index) {
-        (requests.clone(), Some(*matched))
+    let (requests, spend_match) = if let Some(matched) = resolution.call_match(index) {
+        (matched.requests.clone(), Some(matched.state))
     } else {
         (resolution.requests(index).complete_requests(), None)
     };
@@ -249,6 +249,7 @@ pub fn resolve_trace(
         }),
     };
     Some(Trace {
+        gateway_spend_pending: resolution.gateway_spend_pending(),
         summary,
         agents,
         spans,

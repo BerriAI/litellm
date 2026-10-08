@@ -162,6 +162,10 @@ pub(super) enum SpendEvidence<'a> {
 }
 
 impl<'a> SpendEvidence<'a> {
+    pub(super) fn has_complete_keys(&self) -> bool {
+        matches!(self, Self::Complete(keys) if !keys.is_empty())
+    }
+
     pub(super) fn unmatched_reason(&self) -> SpendMatch {
         match self {
             Self::Unknown => SpendMatch::NoCallId,
