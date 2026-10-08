@@ -13,3 +13,20 @@ Listing failures retain per-server outcome metadata. An incomplete upstream cata
 For a scoped rollout, keep the previous source build serving the control pool and send only selected clients to a separate candidate pool. All candidate replicas must share configuration and salt. Verify page one on one candidate replica and continuation on another, plus a fresh listing and tool call on the control pool. Do not mirror tool calls between pools
 
 For rollback, stop sending new requests to the candidate pool, drain its in-flight operations, and return selected clients to the control pool. Clients must discard candidate cursors and start a fresh listing when crossing versions; older gateways do not validate these cursors. Keep the registry-revision migration installed when rolling back pagination. Verify a fresh listing and a tool call after switching pools
+
+## Elicitation
+
+Elicitation is disabled by default. Enable it per upstream in `config.yaml`; `allow_elicitation` is currently YAML-only and is not editable through the Admin UI or database-backed server API
+
+```yaml
+mcp_servers:
+  interactive:
+    url: https://mcp.example.com/mcp
+    transport: http
+    allow_elicitation: true
+    timeout: 60
+```
+
+The downstream MCP client must advertise the requested form or URL capability during initialization. Streamable HTTP relays use the active tool-call response stream, so a separate GET stream is not required. Legacy SSE clients remain supported. A request without initialized client capabilities, including a stateless call or an LLM tool bridge with no downstream MCP client, receives an explicit elicitation error
+
+The relay wait uses the upstream server's existing `timeout` setting, or `LITELLM_MCP_CLIENT_TIMEOUT` (60 seconds by default). The enclosing tool call also retains its existing timeout. Unsupported modes, disconnects and relay failures return errors, never a fabricated user decline. Actual user accept, decline and cancel responses are preserved; cancellation stops the relay
