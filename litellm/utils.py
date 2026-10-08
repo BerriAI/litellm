@@ -8295,7 +8295,7 @@ def convert_to_dict(message: BaseModel | dict) -> dict:
 
 def convert_list_message_to_dict(
     messages: Sequence[BaseModel | Mapping[str, object]],
-) -> list[dict[str, object]]:
+) -> list[dict[str, object]]:  # mutable-ok: callers mutate the returned message dicts
     def _as_message_value(message: BaseModel | Mapping[str, object]) -> AllMessageValues:
         return cast(AllMessageValues, convert_to_dict(message))  # cast-ok: message dicts satisfy the TypedDict shape
 
