@@ -28,7 +28,7 @@ async def _invalid_request(
 ) -> Exception:
     from litellm.proxy.proxy_server import proxy_logging_obj, version
 
-    return await ProxyBaseLLMRequestProcessing(data=dict(raw_data))._handle_llm_api_exception(
+    return await ProxyBaseLLMRequestProcessing(data=dict(raw_data)).handle_llm_api_exception(
         e=BadRequestError(
             message=f"Invalid Decisions request: {error}",
             model=str(raw_data.get("model", "")),
@@ -112,7 +112,7 @@ async def _process_systemone(
     except ValidationError as error:
         raise await _invalid_request(raw_data=data, error=error, user_api_key_dict=user_api_key_dict)
     except Exception as error:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=error,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

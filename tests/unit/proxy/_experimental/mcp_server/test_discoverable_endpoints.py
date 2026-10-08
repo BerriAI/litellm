@@ -251,7 +251,7 @@ async def test_register_resolves_cold_oauth_metadata():
             "_discover_oauth_metadata_for_server",
             new=AsyncMock(return_value=_resolved_oauth_metadata()),
         ) as discovery,
-        patch.object(discoverable_endpoints, "_read_request_body", new=AsyncMock(return_value={})),
+        patch.object(discoverable_endpoints, "read_request_body", new=AsyncMock(return_value={})),
         patch.object(
             discoverable_endpoints,
             "get_async_httpx_client",
@@ -307,7 +307,7 @@ async def test_register_route_bridge_missing_registration_url_joins_discovery():
         ) as discovery,
         patch.object(  # test-quality-ok: the MagicMock Request carries no body; this seam feeds the RFC 7591 redirect_uris
             discoverable_endpoints,
-            "_read_request_body",
+            "read_request_body",
             new=AsyncMock(return_value={"redirect_uris": ["https://client.example.com/cb"]}),
         ),
         patch.object(  # test-quality-ok: keeps the DCR POST off the network so its target URL can be asserted
@@ -766,7 +766,7 @@ async def test_register_client_without_mcp_server_name_returns_dummy(server_name
     mock_request.base_url = "https://proxy.litellm.example/"
     mock_request.headers = {}
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
         new=AsyncMock(return_value={}),
     ):
         result = await register_client(request=mock_request, mcp_server_name=server_name)
@@ -817,7 +817,7 @@ async def test_register_client_returns_existing_server_credentials(use_root):
 
     try:
         with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
             new=AsyncMock(return_value={}),
         ):
             result = await register_client(
@@ -889,7 +889,7 @@ async def test_register_client_remote_registration_success():
     try:
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
                 new=AsyncMock(return_value=request_payload),
             ),
             patch(
@@ -975,7 +975,7 @@ async def test_register_client_non_bridge_returns_client_redirect_not_gateway_ca
     try:
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
                 new=AsyncMock(return_value=request_payload),
             ),
             patch(
@@ -1031,7 +1031,7 @@ async def test_register_client_admin_client_id_echoes_client_redirect_uris():
 
     try:
         with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
             new=AsyncMock(return_value={"redirect_uris": [client_redirect]}),
         ):
             result = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
@@ -1107,7 +1107,7 @@ async def test_dcr_full_loop_lands_on_client_redirect_not_gateway_callback(monke
     try:
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
                 new=AsyncMock(
                     return_value={
                         "client_name": "Open WebUI",
@@ -1268,7 +1268,7 @@ async def test_register_client_malformed_redirect_uris_falls_back_to_gateway_cal
 
     try:
         with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
             new=AsyncMock(return_value={"redirect_uris": malformed_redirect_uris}),
         ):
             result = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
@@ -1312,7 +1312,7 @@ async def test_register_client_valid_multi_redirect_uris_all_echoed():
     client_redirects = ["https://app.example/cb", "http://127.0.0.1:6274/callback"]
     try:
         with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
             new=AsyncMock(return_value={"redirect_uris": client_redirects}),
         ):
             result = await register_client(request=mock_request, mcp_server_name=oauth2_server.server_name)
@@ -2258,7 +2258,7 @@ async def test_register_client_reuses_existing_client_id_without_re_dcr():
     try:
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
                 new=AsyncMock(return_value=request_payload),
             ),
             patch(
@@ -2337,7 +2337,7 @@ async def test_public_register_route_does_not_persist_client_credentials():
     try:
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
                 new=AsyncMock(return_value=request_payload),
             ),
             patch(
@@ -2631,7 +2631,7 @@ async def test_register_client_respects_x_forwarded_proto():
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
         new=AsyncMock(return_value={}),
     ):
         result = await register_client(request=mock_request)
@@ -3737,7 +3737,7 @@ async def test_register_client_resolves_server_by_id_when_name_lookup_fails():
     with (
         patch.object(global_mcp_server_manager, "get_mcp_server_by_name", return_value=None) as by_name,  # test-quality-ok: resolver seam
         patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=server) as by_id,  # test-quality-ok: resolver seam
-        patch.object(discoverable_endpoints, "_read_request_body", new=AsyncMock(return_value={})),  # test-quality-ok: request seam
+        patch.object(discoverable_endpoints, "read_request_body", new=AsyncMock(return_value={})),  # test-quality-ok: request seam
         patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=client),  # test-quality-ok: HTTP seam
     ):
         result = await discoverable_endpoints.register_client(request=request, mcp_server_name=server.server_id)
@@ -4065,7 +4065,7 @@ async def test_register_root_does_aggregate_dcr_not_single_server_resolution():
     try:
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
                 new=AsyncMock(return_value={"redirect_uris": ["https://claude.ai/cb"]}),
             ),
             patch("litellm.proxy.proxy_server.master_key", "sk-test-salt-for-lit3637"),
@@ -4106,7 +4106,7 @@ async def test_register_root_does_not_leak_a_private_server():
     try:
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
                 new=AsyncMock(return_value={"redirect_uris": ["https://claude.ai/cb"]}),
             ),
             patch(
@@ -5879,7 +5879,7 @@ async def test_interactive_bridge_authorize_seals_sso_user_into_state():
 
     with (
         patch(
-            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._user_id_from_session_cookie",
+            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.user_id_from_session_cookie",
             return_value="sso-user-42",
         ),
         patch(
@@ -5944,7 +5944,7 @@ async def test_bridge_authorize_gates_on_the_egress_server_access_resolver(user_
     try:
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._user_id_from_session_cookie",
+                "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.user_id_from_session_cookie",
                 return_value="bridge-user-1",
             ),
             patch(
@@ -6015,7 +6015,7 @@ async def test_bridge_authorize_reload_failure_denies_or_stays_retryable(reload_
     try:
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._user_id_from_session_cookie",
+                "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.user_id_from_session_cookie",
                 return_value="bridge-user-1",
             ),
             patch(
@@ -6061,7 +6061,7 @@ async def test_interactive_bridge_authorize_without_session_redirects_to_login()
 
     server = _bridge_server(auth_type=MCPAuth.oauth_delegate, client_id="admin-client", registration_url=None)
     with patch(
-        "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints._user_id_from_session_cookie",
+        "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.user_id_from_session_cookie",
         return_value=None,
     ):
         response = await authorize_with_server(
@@ -6600,7 +6600,7 @@ async def test_revalidate_active_subject_dispatches_on_subject_type():
             new=AsyncMock(return_value=_ResolvedKey(key_hash="kh", key=MagicMock())),
         ) as key_reload,
         patch(
-            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_user_by_id",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow.reload_active_user_by_id",
             new=AsyncMock(return_value=None),
         ) as user_reload,
     ):
@@ -6614,7 +6614,7 @@ async def test_revalidate_active_subject_dispatches_on_subject_type():
             new=AsyncMock(),
         ) as key_reload2,
         patch(
-            "litellm.proxy._experimental.mcp_server.bridge_token_flow._reload_active_user_by_id",
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow.reload_active_user_by_id",
             new=AsyncMock(return_value="no_active_key"),
         ) as user_reload2,
     ):
@@ -7262,7 +7262,7 @@ def test_bridge_reported_expires_in_can_be_zero_at_jwt_exp_boundary():
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         _BridgeMintReady,
-        _finish_bridge_mint,
+        finish_bridge_mint,
     )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
         envelope_keys_from_master_key,
@@ -7274,7 +7274,7 @@ def test_bridge_reported_expires_in_can_be_zero_at_jwt_exp_boundary():
         identity=key_hash_identity(server_id="bridge_srv", key_hash="hashed-litellm-key-77"),
         keys=envelope_keys_from_master_key(_BRIDGE_MASTER_KEY),
     )
-    response = _finish_bridge_mint(
+    response = finish_bridge_mint(
         ready=ready,
         mcp_server=_bridge_server(auth_type=MCPAuth.oauth_delegate),
         token_response={"access_token": "UP", "expires_in": 1},
@@ -7439,7 +7439,7 @@ async def _exchange_persistence_attempted_for_auth_type(auth_type) -> bool:
             return_value=fake_http_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.extract_user_id_from_request",
             new_callable=AsyncMock,
             return_value="admin-user",
         ),
@@ -7623,7 +7623,7 @@ async def test_extract_user_id_reads_x_litellm_api_key_header(proxy_globals):
     Authorization. Reading only Authorization dropped the identity, so the per-user token was
     never stored and the egress 401'd forever. Resolution must honor x-litellm-api-key."""
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        _extract_user_id_from_request,
+        extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -7639,7 +7639,7 @@ async def test_extract_user_id_reads_x_litellm_api_key_header(proxy_globals):
     proxy_globals.prisma_client = object()
 
     request = _token_request({"x-litellm-api-key": f"Bearer {key}"})
-    assert await _extract_user_id_from_request(request) == "alice"
+    assert await extract_user_id_from_request(request) == "alice"
 
 
 @pytest.mark.asyncio
@@ -7648,7 +7648,7 @@ async def test_extract_user_id_rehydrates_cross_replica_dict_cache(proxy_globals
     Resolution must rehydrate it; the old getattr(cached, "user_id") returned None on a dict,
     which is exactly why a multi-replica gateway never found the stored token."""
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        _extract_user_id_from_request,
+        extract_user_id_from_request,
     )
     from litellm.proxy._types import hash_token
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -7660,7 +7660,7 @@ async def test_extract_user_id_rehydrates_cross_replica_dict_cache(proxy_globals
     proxy_globals.prisma_client = object()
 
     request = _token_request({"Authorization": f"Bearer {key}"})
-    assert await _extract_user_id_from_request(request) == "alice"
+    assert await extract_user_id_from_request(request) == "alice"
 
 
 @pytest.mark.asyncio
@@ -7669,7 +7669,7 @@ async def test_extract_user_id_falls_back_to_db_on_cache_miss(proxy_globals):
     cache-only peek and skipped the DB, so any replica that hadn't just authenticated the key
     failed to store the token."""
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        _extract_user_id_from_request,
+        extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -7684,14 +7684,14 @@ async def test_extract_user_id_falls_back_to_db_on_cache_miss(proxy_globals):
     proxy_globals.prisma_client = _FakePrisma()
 
     request = _token_request({"x-litellm-api-key": key})
-    assert await _extract_user_id_from_request(request) == "db-bob"
+    assert await extract_user_id_from_request(request) == "db-bob"
 
 
 @pytest.mark.asyncio
 async def test_extract_user_id_none_without_litellm_key(proxy_globals):
     """No LiteLLM key on the request resolves to None without consulting the resolver."""
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        _extract_user_id_from_request,
+        extract_user_id_from_request,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -7699,7 +7699,7 @@ async def test_extract_user_id_none_without_litellm_key(proxy_globals):
     proxy_globals.prisma_client = object()
 
     request = _token_request({"content-type": "application/json"})
-    assert await _extract_user_id_from_request(request) is None
+    assert await extract_user_id_from_request(request) is None
 
 
 @pytest.mark.asyncio
@@ -7708,7 +7708,7 @@ async def test_extract_user_id_rejects_blocked_key(proxy_globals):
     checking blocked/expiry (the main auth pipeline does, and the public token endpoint bypasses it),
     so a revoked key could otherwise overwrite the stored per-user OAuth token for its user."""
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        _extract_user_id_from_request,
+        extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -7721,7 +7721,7 @@ async def test_extract_user_id_rejects_blocked_key(proxy_globals):
     proxy_globals.prisma_client = _FakePrisma()
 
     request = _token_request({"x-litellm-api-key": "sk-blocked-key"})
-    assert await _extract_user_id_from_request(request) is None
+    assert await extract_user_id_from_request(request) is None
 
 
 @pytest.mark.asyncio
@@ -7730,7 +7730,7 @@ async def test_extract_user_id_rejects_expired_key(proxy_globals):
     from datetime import datetime, timedelta, timezone
 
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        _extract_user_id_from_request,
+        extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -7745,7 +7745,7 @@ async def test_extract_user_id_rejects_expired_key(proxy_globals):
     proxy_globals.prisma_client = _FakePrisma()
 
     request = _token_request({"x-litellm-api-key": "sk-expired-key"})
-    assert await _extract_user_id_from_request(request) is None
+    assert await extract_user_id_from_request(request) is None
 
 
 @pytest.mark.asyncio
@@ -7785,7 +7785,7 @@ async def test_resolve_active_litellm_key_resolves_key_without_user_id(proxy_glo
     blocked and expiry, and the key hash (not the user) is what the mint seals. The per-user token
     store still gets no user for such a key, since there is none to key a stored credential by."""
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        _extract_user_id_from_request,
+        extract_user_id_from_request,
         _ResolvedKey,
         _resolve_active_litellm_key,
     )
@@ -7806,7 +7806,7 @@ async def test_resolve_active_litellm_key_resolves_key_without_user_id(proxy_glo
     resolved = await _resolve_active_litellm_key(request)
     assert isinstance(resolved, _ResolvedKey)
     assert resolved.key_hash == hash_token(key)
-    assert await _extract_user_id_from_request(request) is None
+    assert await extract_user_id_from_request(request) is None
 
 
 @pytest.mark.asyncio
@@ -7979,7 +7979,7 @@ async def test_reload_active_user_by_id_missing_user_is_no_active_key(proxy_glob
     refresh path maps it to invalid_grant), not unresolvable/500. get_user_object catches the missing row
     and re-raises a bare ValueError, so a missing user must not be misclassified as a DB outage or an
     opaque gateway fault."""
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import reload_active_user_by_id
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     proxy_globals.user_api_key_cache = UserApiKeyCache()
@@ -7989,7 +7989,7 @@ async def test_reload_active_user_by_id_missing_user_is_no_active_key(proxy_glob
         "litellm.proxy.auth.auth_checks.get_user_object",
         new=AsyncMock(side_effect=_wrapped_user_lookup_error(Exception())),
     ):
-        assert await _reload_active_user_by_id("gone-user") == "no_active_key"
+        assert await reload_active_user_by_id("gone-user") == "no_active_key"
 
 
 @pytest.mark.asyncio
@@ -7998,7 +7998,7 @@ async def test_reload_active_user_by_id_db_outage_is_unavailable(proxy_globals):
     a missing user, so the refresh path surfaces "unavailable" (a 503) rather than blaming the caller.
     get_user_object wraps the outage in a bare ValueError, so this exercises the chain-aware classifier; a
     raw ConnectionError would falsely pass even a chain-blind check because it is an OSError."""
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import reload_active_user_by_id
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     proxy_globals.user_api_key_cache = UserApiKeyCache()
@@ -8008,7 +8008,7 @@ async def test_reload_active_user_by_id_db_outage_is_unavailable(proxy_globals):
         "litellm.proxy.auth.auth_checks.get_user_object",
         new=AsyncMock(side_effect=_wrapped_user_lookup_error(ConnectionError("user database unreachable"))),
     ):
-        assert await _reload_active_user_by_id("sso-user-7") == "unavailable"
+        assert await reload_active_user_by_id("sso-user-7") == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -8018,7 +8018,7 @@ async def test_reload_active_user_by_id_permanent_engine_fault_is_faulted(proxy_
     wraps the fault in a bare ValueError, so the classification has to read the wrapped cause."""
     from prisma.engine.errors import MismatchedVersionsError
 
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import reload_active_user_by_id
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     proxy_globals.user_api_key_cache = UserApiKeyCache()
@@ -8028,7 +8028,7 @@ async def test_reload_active_user_by_id_permanent_engine_fault_is_faulted(proxy_
         "litellm.proxy.auth.auth_checks.get_user_object",
         new=AsyncMock(side_effect=_wrapped_user_lookup_error(MismatchedVersionsError(expected="1", got="2"))),
     ):
-        assert await _reload_active_user_by_id("sso-user-7") == "faulted"
+        assert await reload_active_user_by_id("sso-user-7") == "faulted"
 
 
 @pytest.mark.asyncio
@@ -8067,7 +8067,7 @@ async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_rea
     cached row answers without a database read, and only a caller that asks for the database row pays for
     one."""
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        _reload_active_user_by_id,
+        reload_active_user_by_id,
         load_active_user_by_id,
     )
     from litellm.proxy._types import LiteLLM_UserTable
@@ -8090,7 +8090,7 @@ async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_rea
 
     assert not isinstance(loaded, str)
     assert loaded.teams == ["team-a"]
-    assert await _reload_active_user_by_id("cached-jwt-user") is None
+    assert await reload_active_user_by_id("cached-jwt-user") is None
     prisma.db.litellm_usertable.find_unique.assert_not_awaited()
 
 
@@ -8343,7 +8343,7 @@ async def test_register_client_rejects_non_oauth2_server():
     try:
         with pytest.raises(HTTPException) as exc_info:
             with patch(
-                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.read_request_body",
                 new=AsyncMock(return_value={}),
             ):
                 await register_client(request=mock_request, mcp_server_name="access_group_server")
@@ -8731,7 +8731,7 @@ async def test_token_exchange_refresh_passes_presented_refresh_ownership():
             return_value=client,
         ),
         patch(  # test-quality-ok: no injection seam exists for request identity extraction
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.extract_user_id_from_request",
             new=AsyncMock(return_value="user-a"),
         ),
         patch(  # test-quality-ok: captures the ownership value at the exchange boundary
@@ -8797,7 +8797,7 @@ async def test_token_exchange_authorization_code_passes_no_refresh_ownership(mon
             return_value=client,
         ),
         patch(  # test-quality-ok: no injection seam exists for request identity extraction
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.extract_user_id_from_request",
             new=AsyncMock(return_value="user-a"),
         ),
         patch(  # test-quality-ok: captures the ownership value at the exchange boundary
@@ -9294,7 +9294,7 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
         issuer="https://idp.example",
     )
 
-    monkeypatch.setattr(enc, "_get_salt_key", lambda: "salt-hydrate-key")
+    monkeypatch.setattr(enc, "get_salt_key", lambda: "salt-hydrate-key")
     stored_blob = safe_dumps(
         encrypt_credentials(
             credentials={**({} if legacy else {"dcr_issuer": "https://idp.example", "dcr_server_url": "https://resource.example/mcp"}),
@@ -9351,7 +9351,7 @@ async def test_reuse_config_server_reads_store_with_real_crypto(monkeypatch):
         issuer="https://idp.example",
     )
 
-    monkeypatch.setattr(enc, "_get_salt_key", lambda: "salt-reuse-key")
+    monkeypatch.setattr(enc, "get_salt_key", lambda: "salt-reuse-key")
     blob = safe_dumps(
         encrypt_credentials(
             credentials={"dcr_issuer": "https://idp.example", "dcr_server_url": "https://resource.example/mcp","client_id": "stored-client", "client_secret": "sec", "redirect_uris": ["https://x/callback"]},
@@ -11697,7 +11697,7 @@ def test_introspect_route_answers_for_authenticated_caller(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_user_by_id", fake_reload
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.reload_active_user_by_id", fake_reload
     )
     app = FastAPI()
     app.include_router(router)
@@ -12153,7 +12153,7 @@ async def test_oauth_jwt_identity_rejects_untrusted_or_inactive_owner(
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import mcp_server_manager
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        _extract_user_id_from_request, authorize_oauth_credential_request,
+        extract_user_id_from_request, authorize_oauth_credential_request,
     )
 
     allowed_servers: Final = AsyncMock(return_value=["server-a"])
@@ -12184,7 +12184,7 @@ async def test_oauth_jwt_identity_rejects_untrusted_or_inactive_owner(
     request: Final = _token_request({"Authorization": f"Bearer {bearer}"})
     result: Final = (
         await authorize_oauth_credential_request(request, "server-a")
-        if credential_write else await _extract_user_id_from_request(request)
+        if credential_write else await extract_user_id_from_request(request)
     )
     assert result is None
     allowed_servers.assert_not_awaited()
@@ -12196,7 +12196,7 @@ async def test_oauth_jwt_cannot_override_explicit_litellm_key(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     blocked: bool,
 ) -> None:
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import extract_user_id_from_request
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
 
     handler, signing_key = jwt_oauth_identity
@@ -12208,7 +12208,7 @@ async def test_oauth_jwt_cannot_override_explicit_litellm_key(
             "x-litellm-api-key": key,
         }
     )
-    assert await _extract_user_id_from_request(request) == (None if blocked else "key-owner")
+    assert await extract_user_id_from_request(request) == (None if blocked else "key-owner")
 
 
 @pytest.mark.asyncio
@@ -12220,7 +12220,7 @@ async def test_oauth_jwt_uses_configured_virtual_key_owner(
     mapping: str,
 ) -> None:
     from litellm.models.user import LiteLLM_UserTable
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import extract_user_id_from_request
     from litellm.proxy._types import UserAPIKeyAuth, UnregisteredJWTClientBehavior, hash_token
     from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 
@@ -12248,7 +12248,7 @@ async def test_oauth_jwt_uses_configured_virtual_key_owner(
     )
     request: Final = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}"})
     expected: Final = "jwt-owner" if mapping == "fallback" else "mapped-owner" if mapping == "active" else None
-    assert await _extract_user_id_from_request(request) == expected
+    assert await extract_user_id_from_request(request) == expected
 
 
 @pytest.mark.asyncio
@@ -12257,13 +12257,13 @@ async def test_oauth_jwt_respects_custom_validation_and_email_policy(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     allowed_domain: str | None,
 ) -> None:
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import extract_user_id_from_request
 
     handler, signing_key = jwt_oauth_identity
     handler.litellm_jwtauth.custom_validate = lambda claims: True
     handler.litellm_jwtauth.user_allowed_email_domain = allowed_domain
     request: Final = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}"})
-    assert await _extract_user_id_from_request(request) == (None if allowed_domain else "jwt-owner")
+    assert await extract_user_id_from_request(request) == (None if allowed_domain else "jwt-owner")
 
 
 @pytest.mark.asyncio
@@ -12274,7 +12274,7 @@ async def test_oauth_jwt_identity_preserves_separate_mcp_route_authorization(
     route_allowed: bool,
 ) -> None:
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import extract_user_id_from_request
     from litellm.proxy._types import LitellmUserRoles, RoleBasedPermissions, RoleMapping
     from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
@@ -12301,7 +12301,7 @@ async def test_oauth_jwt_identity_preserves_separate_mcp_route_authorization(
     )
     bearer: Final = _oauth_identity_jwt(signing_key)
     request: Final = _token_request({"Authorization": f"Bearer {bearer}"}, path="/example/token")
-    assert await _extract_user_id_from_request(request) == "jwt-owner"
+    assert await extract_user_id_from_request(request) == "jwt-owner"
     admission: Final = JWTAuthManager.auth_builder(
         api_key=bearer,
         jwt_handler=handler,
@@ -12335,7 +12335,7 @@ async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
 ) -> None:
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import extract_user_id_from_request
     from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
     handler, signing_key = jwt_oauth_identity
@@ -12356,7 +12356,7 @@ async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     bearer: Final = _oauth_identity_jwt(signing_key, owner=external_id, scope="litellm_proxy_admin" if admin else "")
     request: Final = _token_request({"Authorization": f"Bearer {bearer}"})
-    stored_owner: Final = await _extract_user_id_from_request(request)
+    stored_owner: Final = await extract_user_id_from_request(request)
     assert stored_owner == (None if inactive else external_id if admin else "canonical-oauth-owner")
     assert table.find_unique.await_count == 2
     if identity == "email":
@@ -12382,7 +12382,7 @@ async def test_oauth_jwt_identity_does_not_provision_or_synchronize_teams(
 ) -> None:
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import extract_user_id_from_request
 
     handler, signing_key = jwt_oauth_identity
     handler.litellm_jwtauth.enforce_team_based_model_access = True
@@ -12394,7 +12394,7 @@ async def test_oauth_jwt_identity_does_not_provision_or_synchronize_teams(
     request: Final = _token_request(
         {"Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}"}, path="/example/token"
     )
-    assert await _extract_user_id_from_request(request) == "jwt-owner"
+    assert await extract_user_id_from_request(request) == "jwt-owner"
     assert owner.teams == ["existing-team"]
     proxy_server.prisma_client.db.litellm_teamtable.find_unique.assert_not_called()
     proxy_server.prisma_client.db.litellm_teamtable.upsert.assert_not_called()
@@ -12410,7 +12410,7 @@ async def test_oauth_refresh_revalidates_the_same_active_user_rule(
 ) -> None:
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import reload_active_user_by_id
 
     handler, _ = jwt_oauth_identity
     user_id: Final = f"jwt-owner-{state}"
@@ -12419,7 +12419,7 @@ async def test_oauth_refresh_revalidates_the_same_active_user_rule(
     if state == "missing_database":
         monkeypatch.setattr(proxy_server, "prisma_client", None)
     expected: Final = None if state == "active" else "no_active_key" if state == "inactive" else "unresolvable"
-    assert await _reload_active_user_by_id(user_id) == expected
+    assert await reload_active_user_by_id(user_id) == expected
     if state != "missing_database":
         cached: Final = handler.user_api_key_cache.get_cache(user_id, model_type=LiteLLM_UserTable)
         assert cached is not None
@@ -13247,3 +13247,118 @@ async def test_registration_losing_conditional_write_reuses_only_a_matching_winn
     assert result == ("reused" if winner_available else "failed")
     assert update.await_args.kwargs["expected_updated_at"] == row.updated_at
     assert server.client_id == ("winner-client" if winner_available else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", (MCPAuth.true_passthrough, MCPAuth.oauth_delegate, MCPAuth.oauth2))
+@pytest.mark.parametrize(
+    "metadata", ({"application_type": "native"}, {"application_type": "web"}, {}, {"application_type": None})
+)
+async def test_register_preserves_client_application_type_only_for_bridge_relay(
+    auth_type: MCPAuth, metadata: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    import respx
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server: Final = _bridge_server(auth_type=auth_type, server_id="application-client", alias="application-client")
+    app: Final = FastAPI()
+    app.include_router(router)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    client_redirect: Final = "http://127.0.0.1:53682/callback"
+    with respx.mock as upstream:
+        registration: Final = upstream.post(server.registration_url).respond(
+            201, json={"client_id": "registered-client"}
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://gateway.example"
+        ) as client:
+            response: Final = await client.post(
+                f"/{server.server_id}/register",
+                json={"client_name": "Test client", "redirect_uris": [client_redirect], **metadata},
+            )
+    assert response.status_code == 200
+    assert response.json()["client_id"] == "registered-client"
+    assert registration.call_count == 1
+    posted: Final = json.loads(registration.calls[0].request.content)
+    expected_type: Final = metadata.get("application_type") if auth_type != MCPAuth.oauth2 else None
+    if expected_type is None:
+        assert "application_type" not in posted
+    else:
+        assert posted["application_type"] == expected_type
+    assert posted["redirect_uris"] == (
+        ["https://gateway.example/callback"] if auth_type == MCPAuth.oauth2 else [client_redirect]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("application_type", ("desktop", "", 1, ["native"], {"value": "native"}))
+async def test_register_rejects_invalid_application_type_before_upstream(
+    application_type: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    import respx
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server: Final = _bridge_server(server_id="invalid-application-client", alias="invalid-application-client")
+    app: Final = FastAPI()
+    app.include_router(router)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    with respx.mock(assert_all_called=False) as upstream:
+        registration: Final = upstream.post(server.registration_url).respond(
+            201, json={"client_id": "must-not-register"}
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://gateway.example"
+        ) as client:
+            response: Final = await client.post(
+                f"/{server.server_id}/register",
+                json={"redirect_uris": ["http://127.0.0.1:53682/callback"], "application_type": application_type},
+            )
+    assert response.status_code == 400
+    assert "application_type" in response.json()["detail"]
+    assert registration.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_id", (None, "preconfigured-client"))
+async def test_register_application_type_keeps_no_registration_endpoint_fallback(
+    client_id: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    import respx
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server: Final = _bridge_server(
+        auth_type=MCPAuth.oauth2,
+        server_id="static-client",
+        alias="static-client",
+        registration_url=None,
+        client_id=client_id,
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+    with respx.mock as upstream:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://gateway.example"
+        ) as client:
+            response: Final = await client.post(f"/{server.server_id}/register", json={"application_type": "native"})
+    assert response.status_code == 200
+    assert response.json() == {
+        "client_id": server.server_id,
+        "client_secret": "dummy",
+        "redirect_uris": ["https://gateway.example/callback"],
+    }
+    assert len(upstream.calls) == 0

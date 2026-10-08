@@ -13,6 +13,7 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import LiteralString
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.lens.ingestion import IngestionKey
 from litellm.proxy.lens.models import (
     Job,
     Lens,
@@ -88,6 +89,29 @@ class LensRepository:
     def __init__(self, db: Database, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         self.db: Final = db
         self.sleep: Final = sleep
+
+    async def ingestion_keys(self) -> tuple[IngestionKey, ...]:
+        rows: Final = _ROWS.validate_python(
+            await self.db.query_raw('SELECT data FROM "LiteLLM_LensIngestionKey" ORDER BY id LIMIT 10001')
+        )
+        if len(rows) > 10000:
+            raise HTTPException(503, "Lens ingestion key limit exceeded")
+        return tuple(IngestionKey.model_validate(row.data) for row in rows)
+
+    async def save_ingestion_key(self, key: IngestionKey) -> None:
+        async with self.db.transaction() as db:
+            await db.execute_raw('LOCK TABLE "LiteLLM_LensIngestionKey" IN EXCLUSIVE MODE')
+            inserted: Final = await db.execute_raw(
+                'INSERT INTO "LiteLLM_LensIngestionKey" (id,data) SELECT $1,$2::jsonb '
+                'WHERE (SELECT count(*) FROM "LiteLLM_LensIngestionKey") < 10000',
+                key.id,
+                key.model_dump_json(),
+            )
+            if not inserted:
+                raise HTTPException(409, "Revoke an unused ingestion key before creating another")
+
+    async def revoke_ingestion_key(self, key_id: str) -> None:
+        await self.db.execute_raw('DELETE FROM "LiteLLM_LensIngestionKey" WHERE id=$1', key_id)
 
     async def finding_runs(self, lens_id: str, finding_ids: tuple[str, ...]) -> tuple[FindingRun, ...]:
         if not finding_ids:
@@ -215,7 +239,7 @@ class LensRepository:
     async def create(self, lens: Lens) -> Lens:
         await self.db.execute_raw(
             """INSERT INTO "LiteLLM_Lens" (id, version, data, due_at)
-            VALUES ($1,0,$2::jsonb,($3::timestamptz AT TIME ZONE 'UTC'))""",
+            VALUES ($1,0,$2::jsonb,($3::text::timestamptz AT TIME ZONE 'UTC'))""",
             lens.id,
             lens.model_dump_json(),
             scheduled_at.isoformat() if (scheduled_at := due_at(lens)) else None,
@@ -225,9 +249,9 @@ class LensRepository:
     async def sync_due(self, lens: Lens) -> None:
         await self.db.execute_raw(
             """UPDATE "LiteLLM_Lens"
-            SET due_at=($3::timestamptz AT TIME ZONE 'UTC')
+            SET due_at=($3::text::timestamptz AT TIME ZONE 'UTC')
             WHERE id=$1 AND version=$2
-              AND due_at IS DISTINCT FROM ($3::timestamptz AT TIME ZONE 'UTC')""",
+              AND due_at IS DISTINCT FROM ($3::text::timestamptz AT TIME ZONE 'UTC')""",
             lens.id,
             lens.version,
             scheduled_at.isoformat() if (scheduled_at := due_at(lens)) else None,
@@ -264,7 +288,7 @@ class LensRepository:
                 SELECT data FROM "LiteLLM_Lens" WHERE id=$2 AND version=$3 FOR UPDATE
             ), updated AS (
                 UPDATE "LiteLLM_Lens" SET data=$1::jsonb, version=version+1,
-                    due_at=($4::timestamptz AT TIME ZONE 'UTC')
+                    due_at=($4::text::timestamptz AT TIME ZONE 'UTC')
                 WHERE id=$2 AND version=$3 AND EXISTS (SELECT 1 FROM previous) RETURNING id
             )
             , archived AS (INSERT INTO "LiteLLM_LensRun" (id, lens_id, created_at, data)
@@ -405,6 +429,19 @@ class LensRepository:
         await self.db.execute_raw(
             'UPDATE "LiteLLM_LensWorker" SET data=$1::jsonb WHERE id=$2', worker.model_dump_json(), worker.id
         )
+
+    async def configure_service_worker(self, worker: Worker, token_hash: str) -> Worker:
+        rows: Final = _ROWS.validate_python(
+            await self.db.query_raw(
+                'INSERT INTO "LiteLLM_LensWorker" AS existing (id,token_hash,data) VALUES ($1,$2,$3::jsonb) '
+                "ON CONFLICT (token_hash) DO UPDATE "
+                "SET data=jsonb_set(EXCLUDED.data, '{id}', to_jsonb(existing.id)) RETURNING data",
+                worker.id,
+                token_hash,
+                worker.model_dump_json(),
+            )
+        )
+        return Worker.model_validate(rows[0].data)
 
     async def set_worker_billing(self, worker_id: str, key_id: str) -> Worker | None:
         rows: Final = _ROWS.validate_python(

@@ -283,6 +283,131 @@ class PartRow(LiteLLMBaseModel):
     truncated: int = Field(..., ge=0, le=1)
 
 
+Runs: TypeAlias = Annotated[
+    int,
+    Field(
+        ...,
+        ge=0,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        le=18446744073709551615,
+    ),
+]
+
+
+Runs1: TypeAlias = Annotated[
+    str,
+    Field(
+        ...,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        pattern="^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$",
+    ),
+]
+
+
+FailedRuns: TypeAlias = Annotated[
+    int,
+    Field(
+        ...,
+        ge=0,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        le=18446744073709551615,
+    ),
+]
+
+
+FailedRuns1: TypeAlias = Annotated[
+    str,
+    Field(
+        ...,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        pattern="^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$",
+    ),
+]
+
+
+LastSeenMs: TypeAlias = Annotated[
+    int,
+    Field(
+        ...,
+        ge=0,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        le=18446744073709551615,
+    ),
+]
+
+
+LastSeenMs1: TypeAlias = Annotated[
+    str,
+    Field(
+        ...,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        pattern="^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$",
+    ),
+]
+
+
+class TraceAgentRow(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        frozen=True,
+    )
+
+    agent_name: str
+    runs: int = Field(..., ge=0, le=18446744073709551615)
+    failed_runs: int = Field(..., ge=0, le=18446744073709551615)
+    last_seen_ms: int = Field(..., ge=0, le=18446744073709551615)
+    frameworks: tuple[str, ...] = ()
+
+
+class TraceAgentsParams(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    all_teams: Literal[0, 1]
+    user_id: str
+    team_ids: tuple[str, ...]
+    start_ms: int = Field(..., ge=-9223372036854775808, le=9223372036854775807)
+    end_ms: int = Field(..., ge=-9223372036854775808, le=9223372036854775807)
+    limit: int = Field(..., ge=0, le=4294967295)
+
+
 TraceTableName: TypeAlias = Literal["otel_traces", "agent_traces_by_key", "spend_logs"]
 
 
@@ -435,6 +560,8 @@ TraceWireModels: TypeAlias = Annotated[
     | LensEvidenceParams
     | LensSampleParams
     | PartRow
+    | TraceAgentRow
+    | TraceAgentsParams
     | TraceQueryHelp,
     Field(..., title="TraceWireModels"),
 ]

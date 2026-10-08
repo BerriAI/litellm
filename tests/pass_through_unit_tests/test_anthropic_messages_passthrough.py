@@ -68,7 +68,6 @@ class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
     """Tests for direct Anthropic API calls"""
 
     test_non_streaming_base = None
-    test_streaming_base = None
 
     @property
     def model_config(self) -> Dict[str, Any]:
@@ -88,8 +87,6 @@ class TestAnthropicDirectAPI(BaseAnthropicMessagesTest):
 class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
     """Tests for Anthropic via Bedrock"""
 
-    test_streaming_base = None
-
     @property
     def model_config(self) -> Dict[str, Any]:
         return {
@@ -106,8 +103,6 @@ class TestAnthropicBedrockAPI(BaseAnthropicMessagesTest):
 
 class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
     """Tests for OpenAI via Anthropic messages interface"""
-
-    test_streaming_base = None
 
     @property
     def model_config(self) -> Dict[str, Any]:
