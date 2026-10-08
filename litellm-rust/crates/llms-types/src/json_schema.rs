@@ -1,21 +1,21 @@
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum JsonSchema {
     Boolean(bool),
     Object(Box<JsonSchemaObject>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum JsonSchemaType {
     Name(String),
     Names(Vec<String>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum JsonSchemaItems {
     Schema(Box<JsonSchema>),
@@ -23,7 +23,7 @@ pub enum JsonSchemaItems {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct JsonSchemaObject {
     #[serde(rename = "type")]
