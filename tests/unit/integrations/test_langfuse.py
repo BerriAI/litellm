@@ -1346,6 +1346,20 @@ def test_langfuse_environment_falls_back_to_deployment_env_var(monkeypatch):
     assert _exported_environment(logger) == "deployment-wide"
 
 
+def test_langfuse_logger_keeps_sending_after_the_shared_httpx_client_is_closed(monkeypatch):
+    """The cached "httpx_client" is closed on TTL eviction, so a live logger must not be holding it"""
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.custom_httpx.http_handler import get_httpx_client
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    shared: Final = get_httpx_client()
+    logger: Final = _build_langfuse_logger(monkeypatch)
+
+    shared.client.close()
+
+    assert not logger.langfuse_client.is_closed
+
+
 def _exported_release(logger: LangFuseLogger):
     from langfuse import LangfuseOtelSpanAttributes
 
@@ -1396,7 +1410,6 @@ def test_dynamic_langfuse_environment_triggers_dynamic_logger():
 
 def test_langfuse_rest_client_survives_httpx_cache_eviction(monkeypatch):
     import gc
-    import weakref
 
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.llms.custom_httpx.http_handler import get_httpx_client
@@ -1405,21 +1418,19 @@ def test_langfuse_rest_client_survives_httpx_cache_eviction(monkeypatch):
     logger = _build_langfuse_logger(monkeypatch)
 
     cached_handler = get_httpx_client()
-    handler_ref = weakref.ref(cached_handler)
 
-    assert logger.langfuse_client is cached_handler.client
+    assert logger.langfuse_client is not cached_handler.client
 
     litellm.in_memory_llm_clients_cache = LLMClientCache()
     del cached_handler
     gc.collect()
 
     assert litellm.in_memory_llm_clients_cache.get_cache("httpx_client") is None
-    assert handler_ref() is not None, "logger must keep the handler that owns the client behind its REST API"
     assert not logger.langfuse_client.is_closed
     assert logger.api_client.auth_check() is not None
 
 
-def test_langfuse_logger_reuses_the_shared_cached_client(monkeypatch):
+def test_langfuse_loggers_each_own_their_httpx_client(monkeypatch):
     import gc
 
     from litellm.caching.llm_caching_handler import LLMClientCache
@@ -1429,7 +1440,7 @@ def test_langfuse_logger_reuses_the_shared_cached_client(monkeypatch):
     first = _build_langfuse_logger(monkeypatch)
     second = _build_langfuse_logger(monkeypatch)
 
-    assert first.langfuse_client is second.langfuse_client
+    assert first.langfuse_client is not second.langfuse_client
 
     del second
     gc.collect()
