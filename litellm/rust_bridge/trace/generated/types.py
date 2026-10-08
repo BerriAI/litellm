@@ -109,6 +109,7 @@ class RunSource(typing_extensions.TypedDict):
     type: ReadOnly[RunSourceType]
     url: ReadOnly[str]
     title: ReadOnly[str]
+    user: ReadOnly[NotRequired[str]]
 
 
 class Span(typing_extensions.TypedDict):
