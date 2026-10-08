@@ -448,8 +448,8 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
 
 
 def _check_banned_params(
-    body: dict,
-    general_settings: dict,
+    body: Mapping[str, object],
+    general_settings: Mapping[str, object],
     llm_router: Router | None,
     model: str,
     *,
@@ -570,8 +570,8 @@ def _reject_url_valued_fallback_target(value: str) -> None:
 
 
 def is_request_body_safe(
-    request_body: dict[str, object],
-    general_settings: dict[str, object],
+    request_body: Mapping[str, object],
+    general_settings: Mapping[str, object],
     llm_router: Router | None,
     model: str,
     *,
@@ -614,7 +614,7 @@ def is_request_body_safe(
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model, manages_deployments=manages_deployments)
-        if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
+        if any(key.startswith(f"{metadata_key}[") for key in request_body):
             _check_banned_params(
                 extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["),
                 general_settings,
