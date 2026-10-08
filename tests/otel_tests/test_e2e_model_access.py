@@ -1,8 +1,10 @@
+import os
 import pytest
 import asyncio
 import aiohttp
 import json
 from httpx import AsyncClient
+from openai import PermissionDeniedError
 from typing import Any, Optional, List, Literal
 
 
@@ -17,7 +19,7 @@ async def generate_key(
 ):
     """Helper function to generate a key with specific model access controls"""
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data: dict = {"metadata": dict(_ALLOW_CLIENT_MOCK_METADATA)}
     if models is not None:
         data["models"] = models
@@ -30,7 +32,7 @@ async def generate_key(
 async def generate_team(session, models: Optional[List[str]] = None):
     """Helper function to generate a team with specific model access"""
     url = "http://0.0.0.0:4000/team/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data: dict = {"metadata": dict(_ALLOW_CLIENT_MOCK_METADATA)}
     if models is not None:
         data["models"] = models
@@ -100,7 +102,7 @@ async def test_model_access_patterns(key_models, test_model, expect_success):
             assert _error_body["type"] == "key_model_access_denied"
             assert _error_body["param"] == "model"
             assert _error_body["code"] == "403"
-            assert "key not allowed to access model" in _error_body["message"]
+            assert "is not available for this API key" in _error_body["message"]
 
 
 @pytest.mark.asyncio
@@ -113,7 +115,7 @@ async def test_model_access_update():
     4. Verify new access patterns
     """
     client = AsyncClient(base_url="http://0.0.0.0:4000")
-    headers = {"Authorization": "Bearer sk-1234"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"}
 
     # Create initial key with restricted access
     response = await client.post(
@@ -134,7 +136,7 @@ async def test_model_access_update():
         await mock_chat_completion(session=session, key=key, model="openai/gpt-5.5")
 
         # Should fail with gpt-5-mini
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(PermissionDeniedError) as exc_info:
             await mock_chat_completion(
                 session=session, key=key, model="openai/gpt-5-mini"
             )
@@ -157,7 +159,7 @@ async def test_model_access_update():
         )
 
         # Non-OpenAI model should still fail
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(PermissionDeniedError) as exc_info:
             await mock_chat_completion(
                 session=session, key=key, model="anthropic/claude-2"
             )
@@ -182,7 +184,7 @@ async def test_team_model_access_patterns(team_models, test_model, expect_succes
     4. Verify access is granted/denied as expected
     """
     client = AsyncClient(base_url="http://0.0.0.0:4000")
-    headers = {"Authorization": "Bearer sk-1234"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"}
 
     async with aiohttp.ClientSession() as session:
         try:
@@ -220,7 +222,7 @@ async def test_team_model_access_update():
     4. Verify new access patterns
     """
     client = AsyncClient(base_url="http://0.0.0.0:4000")
-    headers = {"Authorization": "Bearer sk-1234"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"}
 
     # Create initial team with restricted access
     response = await client.post(
@@ -254,7 +256,7 @@ async def test_team_model_access_update():
         await mock_chat_completion(session=session, key=key, model="openai/gpt-5.5")
 
         # Should fail with gpt-5-mini
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(PermissionDeniedError) as exc_info:
             await mock_chat_completion(
                 session=session, key=key, model="openai/gpt-5-mini"
             )
@@ -279,7 +281,7 @@ async def test_team_model_access_update():
         )
 
         # Non-OpenAI model should still fail
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(PermissionDeniedError) as exc_info:
             await mock_chat_completion(
                 session=session, key=key, model="anthropic/claude-2"
             )
@@ -298,7 +300,5 @@ def _validate_model_access_exception(
     assert _error_body["type"] == expected_type
     assert _error_body["param"] == "model"
     assert _error_body["code"] == "403"
-    if expected_type == "key_model_access_denied":
-        assert "key not allowed to access model" in _error_body["message"]
-    elif expected_type == "team_model_access_denied":
-        assert "eam not allowed to access model" in _error_body["message"]
+    assert "is not available for this API key" in _error_body["message"]
+    assert "not allowed to access model" not in _error_body["message"]

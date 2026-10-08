@@ -2,20 +2,55 @@
 Auto-Routing Strategy that works with a Semantic Router Config
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+import asyncio
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional
+
+from pydantic import ConfigDict
 
 from litellm._logging import verbose_router_logger
+from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+from litellm.exceptions import Timeout as LiteLLMTimeout
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.internal_call_metadata import (
+    effective_turn_off_message_logging,
+    forwarded_internal_call_metadata,
+    parent_session_kwargs,
+)
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.utils import (
+    AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+    ClassifierFailureReason,
+    RoutingDecisionCause,
+    StandardLoggingRoutingDecision,
+)
 
 if TYPE_CHECKING:
+    from semantic_router.routers import SemanticRouter
     from semantic_router.routers.base import Route
 
     from litellm.router import Router
+    from litellm.router_strategy.auto_router.litellm_encoder import LiteLLMRouterEncoder
     from litellm.types.router import PreRoutingHookResponse
 else:
     Router = Any
     PreRoutingHookResponse = Any
     Route = Any
+    SemanticRouter = Any
+    LiteLLMRouterEncoder = Any
+
+
+class _CallerMetadata(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    metadata: Mapping[str, object] | None = None
+    litellm_metadata: Mapping[str, object] | None = None
+
+
+class _SemanticMatchOutcome(NamedTuple):
+    route_name: str | None = None
+    failure_reason: ClassifierFailureReason | None = None
+    error_type: str | None = None
 
 
 class AutoRouter(CustomLogger):
@@ -27,8 +62,9 @@ class AutoRouter(CustomLogger):
         default_model: str,
         embedding_model: str,
         litellm_router_instance: "Router",
-        auto_router_config_path: Optional[str] = None,
-        auto_router_config: Optional[str] = None,
+        auto_router_config_path: str | None = None,
+        auto_router_config: str | None = None,
+        max_input_chars: int = DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     ):
         """
         Auto-Router class that uses a semantic router to route requests to the appropriate model.
@@ -40,19 +76,33 @@ class AutoRouter(CustomLogger):
             default_model: The default model to use if no route is found.
             embedding_model: The embedding model to use for the auto-router.
             litellm_router_instance: The instance of the LiteLLM Router.
+            max_input_chars: Longest prompt, in characters, handed to the embedding model. Longer
+                prompts are cut to this length so an embedding context window far smaller than the
+                routed model's never fails the request.
         """
         from semantic_router.routers import SemanticRouter
 
-        self.auto_router_config_path: Optional[str] = auto_router_config_path
-        self.auto_router_config: Optional[str] = auto_router_config
+        from litellm.router_strategy.auto_router.litellm_encoder import LiteLLMRouterEncoder
+
+        self.model_name: Final = model_name
+        self.auto_router_config_path: str | None = auto_router_config_path
+        self.auto_router_config: str | None = auto_router_config
         self.auto_sync_value = self.DEFAULT_AUTO_SYNC_VALUE
-        self.loaded_routes: List[Route] = self._load_semantic_routing_routes()
-        self.routelayer: Optional[SemanticRouter] = None
+        self.loaded_routes: list[Route] = self._load_semantic_routing_routes()
+        self.routelayer: SemanticRouter | None = None
+        self._routelayer_lock = asyncio.Lock()
+        self._routelayer_build_task: asyncio.Task[SemanticRouter] | None = None
         self.default_model = default_model
         self.embedding_model: str = embedding_model
-        self.litellm_router_instance: "Router" = litellm_router_instance
+        self.max_input_chars: int = max_input_chars
+        self.litellm_router_instance: Router = litellm_router_instance
+        self.encoder: LiteLLMRouterEncoder = LiteLLMRouterEncoder(
+            litellm_router_instance=litellm_router_instance,
+            model_name=embedding_model,
+            max_input_chars=max_input_chars,
+        )
 
-    def _load_semantic_routing_routes(self) -> List[Route]:
+    def _load_semantic_routing_routes(self) -> list[Route]:
         from semantic_router.routers import SemanticRouter
 
         if self.auto_router_config_path:
@@ -62,15 +112,15 @@ class AutoRouter(CustomLogger):
         else:
             raise ValueError("No router config provided")
 
-    def _load_auto_router_routes_from_config_json(self) -> List[Route]:
+    def _load_auto_router_routes_from_config_json(self) -> list[Route]:
         import json
 
         from semantic_router.routers.base import Route
 
         if self.auto_router_config is None:
             raise ValueError("No auto router config provided")
-        auto_router_routes: List[Route] = []
-        loaded_config = json.loads(self.auto_router_config)
+        auto_router_routes: Final[list[Route]] = []
+        loaded_config: Final = json.loads(self.auto_router_config)
         for route in loaded_config.get("routes", []):
             auto_router_routes.append(
                 Route(
@@ -82,8 +132,47 @@ class AutoRouter(CustomLogger):
             )
         return auto_router_routes
 
+    def _build_routelayer(self) -> "SemanticRouter":
+        """Synchronous (embeds every route's utterances); run only via `_ensure_routelayer`."""
+        if self.routelayer is not None:
+            return self.routelayer
+
+        from semantic_router.routers import SemanticRouter
+
+        routelayer: Final = SemanticRouter(
+            routes=self.loaded_routes,
+            encoder=self.encoder,
+            auto_sync=self.auto_sync_value,
+        )
+        self.routelayer = routelayer
+        return routelayer
+
+    def _clear_build_task_on_failure(self, build_task: "asyncio.Task[SemanticRouter]") -> None:
+        """Runs even with no caller left awaiting, so a failure never stays cached forever."""
+        if build_task is self._routelayer_build_task and not build_task.cancelled() and build_task.exception():
+            self._routelayer_build_task = None
+
+    async def _ensure_routelayer(self) -> "SemanticRouter":
+        """Build the route layer once, off the event loop, shared across concurrent callers.
+
+        A shared task (not a bare `asyncio.to_thread` awaited under the lock) survives one
+        caller's cancellation, so `cancel_on_disconnect` can't free a second caller into
+        starting a duplicate build.
+        """
+        if self.routelayer is not None:
+            return self.routelayer
+        async with self._routelayer_lock:
+            if self.routelayer is not None:
+                return self.routelayer
+            build_task = self._routelayer_build_task
+            if build_task is None:
+                build_task = asyncio.ensure_future(asyncio.to_thread(self._build_routelayer))
+                build_task.add_done_callback(self._clear_build_task_on_failure)
+                self._routelayer_build_task = build_task
+        return await asyncio.shield(build_task)
+
     @staticmethod
-    def _extract_text_from_messages(messages: List[Dict[str, Any]]) -> str:
+    def _extract_text_from_messages(messages: Sequence[Mapping[str, object]]) -> str:
         """
         Extract text content from the last user message for routing.
 
@@ -108,50 +197,97 @@ class AutoRouter(CustomLogger):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: Dict,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        input: Optional[Union[str, List]] = None,
-        specific_deployment: Optional[bool] = False,
+        request_kwargs: dict,
+        messages: list[dict[str, Any]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
     ) -> Optional["PreRoutingHookResponse"]:
         """
         This hook is called before the routing decision is made.
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
-        from semantic_router.routers import SemanticRouter
-        from semantic_router.schema import RouteChoice
-
-        from litellm.router_strategy.auto_router.litellm_encoder import (
-            LiteLLMRouterEncoder,
-        )
+        from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
         from litellm.types.router import PreRoutingHookResponse
 
-        if messages is None:
-            # do nothing, return same inputs
+        resolved_messages: Final = (
+            messages
+            if messages is not None
+            else resolve_structured_messages(messages=None, request_kwargs=request_kwargs)
+        )
+        if resolved_messages is None:
             return None
 
-        if self.routelayer is None:
-            #######################
-            # Create the route layer
-            #######################
-            self.routelayer = SemanticRouter(
-                routes=self.loaded_routes,
-                encoder=LiteLLMRouterEncoder(
-                    litellm_router_instance=self.litellm_router_instance,
-                    model_name=self.embedding_model,
-                ),
-                auto_sync=self.auto_sync_value,
-            )
+        routelayer: Final = await self._ensure_routelayer()
 
-        message_content = self._extract_text_from_messages(messages)
-        route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(text=message_content)
-        verbose_router_logger.debug(f"route_choice: {route_choice}")
-        if isinstance(route_choice, RouteChoice):
-            model = route_choice.name or self.default_model
-        elif isinstance(route_choice, list):
-            model = route_choice[0].name or self.default_model
+        message_content: Final = self._extract_text_from_messages(resolved_messages)
+        outcome: Final = await self._match_route(routelayer, message_content, request_kwargs)
+        routed_model: Final = outcome.route_name or self.default_model
+        cause: Final[RoutingDecisionCause] = (
+            "semantic_error"
+            if outcome.failure_reason is not None
+            else "semantic_match"
+            if outcome.route_name
+            else "semantic_no_match"
+        )
+        decision: Final[StandardLoggingRoutingDecision] = {
+            "router_model_name": self.model_name,
+            "router_type": "semantic",
+            "routed_model": routed_model,
+            "cause": cause,
+            "classifier_model": self.embedding_model,
+            **({"classifier_failure_reason": outcome.failure_reason} if outcome.failure_reason is not None else {}),
+            **({"classifier_error_type": outcome.error_type} if outcome.error_type is not None else {}),
+        }
 
         return PreRoutingHookResponse(
-            model=model,
+            model=routed_model,
             messages=messages,
+            routing_decision=decision,
         )
+
+    async def _match_route(
+        self, routelayer: "SemanticRouter", text: str, request_kwargs: Mapping[str, object]
+    ) -> _SemanticMatchOutcome:
+        """Matched route or the reason a default model will serve the request.
+
+        `text` is embedded here rather than by `routelayer(text=...)` so the caller's metadata reaches
+        `aembedding()` and the embedding's spend lands on the key/team that sent the request;
+        SemanticRouter has no way to pass kwargs through to its encoder. That embedding call can
+        fail (context limit, timeout, provider error). Choosing a model is a routing decision, so a
+        failure here falls back to the default model rather than failing the user's request.
+        """
+        from semantic_router.schema import RouteChoice
+
+        try:
+            caller: Final = _CallerMetadata.model_validate(request_kwargs)
+            query_vector: Final = (
+                await self.encoder.aencode_queries(
+                    [text],
+                    metadata=forwarded_internal_call_metadata(caller.metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
+                    litellm_metadata=forwarded_internal_call_metadata(
+                        caller.litellm_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+                    ),
+                    proxy_server_request={"body": {"model": self.embedding_model, "input": [text]}},
+                    turn_off_message_logging=effective_turn_off_message_logging(request_kwargs),
+                    **parent_session_kwargs(request_kwargs),
+                )
+            )[0]
+            route_choice: Final = await routelayer.acall(vector=query_vector)
+        except Exception as e:  # noqa: BLE001 -- the embedding call behind the route layer can fail many ways (context limit, timeout, provider/network error); none of them may fail the request
+            verbose_router_logger.warning(
+                "AutoRouter: semantic routing failed (%s), falling back to default model %s", e, self.default_model
+            )
+            failure: Final = e.__cause__ if isinstance(e, ValueError) and e.__cause__ is not None else e
+            return _SemanticMatchOutcome(
+                failure_reason="timeout"
+                if isinstance(failure, (TimeoutError, asyncio.TimeoutError, LiteLLMTimeout))
+                else "classifier_error",
+                error_type=type(failure).__name__,
+            )
+        verbose_router_logger.debug("route_choice: %s", route_choice)
+        if isinstance(route_choice, RouteChoice):
+            return _SemanticMatchOutcome(route_name=route_choice.name)
+        if isinstance(route_choice, list) and route_choice:
+            return _SemanticMatchOutcome(route_name=route_choice[0].name)
+        return _SemanticMatchOutcome()

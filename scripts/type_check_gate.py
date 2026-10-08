@@ -2,23 +2,44 @@
 """Delta-vs-base per-rule gate for basedpyright.
 
 basedpyright's ``--outputjson`` is reduced to a count of errors per *rule*
-(``reportAny``, ``reportArgumentType``, ...) and checked against a committed
-budget of the form ``{rule: {limit}}``, the same shape as
-``ruff-strict-budget.json``. A rule fails only when its codebase-wide total is
-both over its ``limit`` *and* higher than the count on the base it merges into,
-so a change is blamed for the errors it adds, never for drift that already sits
-in the base. That ``> base`` guard is what stops an unrelated PR from inheriting
-a red once two PRs each land near the limit and their sum crosses it: the
-bystander's count equals its base, so it is spared, while any PR that actually
-grows the rule past its limit still fails.
+(``reportAny``, ``reportArgumentType``, ...) at HEAD and at the merge-base with
+the branch this change merges into. A rule fails only when its codebase-wide
+total grew past the merge-base count, so a change is blamed for the errors it
+adds, never for drift that already sits in the base, and an unrelated PR never
+inherits a red from what landed next to it: its count equals its base.
 
-Head counts are read from stdin (the caller runs basedpyright once and pipes
-``--outputjson`` in); the base count is a second basedpyright pass over a
-detached worktree at the merge-base, run under the same environment so import
-resolution matches. ``--update`` ratchets each rule's ``limit`` down by the
-number of errors this branch fixed relative to its branch point (the merge-base),
-so the headroom you were granted shrinks by exactly what you cleared and never
-grows.
+``reportAny`` and ``reportExplicitAny`` are the exception, because Any spreads:
+a correct change can surface new ones far from the lines it touched. Their
+ceiling is the larger of the merge-base count and a fixed codebase-wide cap in
+ANY_CAPS, so a change may add some while the total stays under the cap, and the
+total can never pass it. The cap moves only when someone lowers it on main.
+
+Installed packages are part of the measurement: a typed dependency that is
+present changes what basedpyright can prove (and therefore which diagnostics
+fire) versus when it is absent, so counts from two differently provisioned
+venvs are not comparable and their comparison produces phantom breaches no
+diff hunk explains. The gate therefore provisions its own environment at
+``.venv-typecheck`` (a frozen ``uv sync`` of one canonical dependency-group
+set, plus a generated Prisma client) and runs every basedpyright pass from it,
+so pre-commit, the CI lint job, and the artifact publisher measure one package
+set by construction; re-syncs of an up-to-date env are a near-instant no-op.
+The group set is folded into the cache and artifact fingerprint, so counts
+recorded under a different set are never matched, only recomputed.
+
+The gate runs basedpyright itself, for both the head and the base pass, with
+``NODE_OPTIONS`` raised to the heap this repo needs: basedpyright's node
+process OOMs at the ~4 GB default, and when callers had to remember the flag,
+every hand-copied pipeline (Makefile, CI, a dev running the recipe by hand)
+was one forgotten env line away from an 80-second crash. The base pass is a
+second basedpyright run over a detached worktree at the merge-base, under the
+same environment so import resolution matches, and scripts/lint_base_counts.py
+spares it whenever it can: the per-rule counts are cached under the repo's git
+common dir keyed by merge-base commit, ``pyrightconfig.json``, ``uv.lock``,
+the Prisma schema, and the dependency-group set, and on a disk-cache miss the
+artifact publish-lint-base-counts.yml uploaded for the merge-base is
+downloaded through the ``gh`` CLI (``--emit-counts-dir`` is the publisher's
+entry point); any fetch failure falls back silently to the local base pass, so
+the gate never gets worse than it was without CI.
 
 ``--outputjson`` is used rather than text diagnostics because the latter wrap
 across lines, leaving the ``(reportRule)`` on a continuation line away from the
@@ -28,35 +49,51 @@ carries an unambiguous ``rule`` field.
 
 import argparse
 import contextlib
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
-from typing import NamedTuple
+from types import MappingProxyType
+from typing import Final
+
+from lint_base_counts import (
+    Checker,
+    base_counts_cached,
+    emit_counts,
+    evaluate,
+    head_sha,
+    resolve_base_point,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BUDGET_PATH = REPO_ROOT / "basedpyright-code-budget.json"
 PYRIGHT_CONFIG = REPO_ROOT / "pyrightconfig.json"
-DEFAULT_BASE = "origin/litellm_internal_staging"
+UV_LOCK = REPO_ROOT / "uv.lock"
+
+# The one environment every basedpyright pass measures in. The group set is
+# the slim one the CI publisher has always installed (not bootstrap's fatter
+# --extra proxy env), so published and cached counts stay comparable; changing
+# it re-keys every cache and artifact fingerprint, so stale counts can never be
+# matched.
+TYPECHECK_ENV_DIR = REPO_ROOT / ".venv-typecheck"
+TYPECHECK_DEP_GROUPS = ("proxy-dev", "e2e-dev")
+PRISMA_GENERATE_SCRIPT = REPO_ROOT / "scripts" / "prisma_generate_if_needed.py"
+PRISMA_SCHEMA = REPO_ROOT / "litellm" / "proxy" / "schema.prisma"
+
+# basedpyright's node process needs more than the ~4 GB default heap on this
+# repo; appended last so it wins node's last-flag-wins resolution over any
+# caller-set value while preserving the caller's other NODE_OPTIONS flags.
+NODE_HEAP_OPTION = "--max-old-space-size=8192"
 
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
 
-# Limit for a rule that shows up at HEAD but isn't in the budget at all -- a
-# brand-new error category (new construct, or a tool/version change). The rule
-# fails once it clears this many errors.
-DEFAULT_LIMIT = 10
-
-
-class Breach(NamedTuple):
-    code: str
-    total: int
-    cap: int
-    added: int
+ANY_CAPS: Final[Mapping[str, int]] = MappingProxyType({"reportAny": 6150, "reportExplicitAny": 1440})
 
 
 def _to_relative(raw: str, root: Path) -> str | None:
@@ -99,6 +136,98 @@ def _run(cmd: list[str], cwd: Path = REPO_ROOT) -> str:
     return proc.stdout
 
 
+def node_options_with_heap(base_env: Mapping[str, str]) -> str:
+    return f"{base_env.get('NODE_OPTIONS', '')} {NODE_HEAP_OPTION}".strip()
+
+
+def typecheck_python_version() -> str | None:
+    """The interpreter version to build the owned env with, read from
+    pyrightconfig's `pythonVersion` so the packages installed for basedpyright
+    to see always come from the same version it type-checks against."""
+    try:
+        config = json.loads(PYRIGHT_CONFIG.read_text())
+    except (OSError, ValueError):
+        return None
+    version: Final = config.get("pythonVersion") if isinstance(config, dict) else None
+    return version if isinstance(version, str) else None
+
+
+def typecheck_env_commands(env_dir: Path = TYPECHECK_ENV_DIR) -> tuple[tuple[str, ...], ...]:
+    python_pin: Final = typecheck_python_version()
+    sync: Final = (
+        "uv",
+        "sync",
+        "--frozen",
+        *(("--python", python_pin) if python_pin else ()),
+        *(flag for group in TYPECHECK_DEP_GROUPS for flag in ("--group", group)),
+    )
+    generate: Final = (str(env_dir / "bin" / "python"), str(PRISMA_GENERATE_SCRIPT))
+    return (sync, generate)
+
+
+def _run_provision_step(cmd: tuple[str, ...], env: Mapping[str, str]) -> int:
+    proc = subprocess.run(
+        list(cmd), cwd=REPO_ROOT, env=dict(env), capture_output=True, text=True
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+    return proc.returncode
+
+
+def ensure_typecheck_env(
+    env_dir: Path = TYPECHECK_ENV_DIR,
+    run: Callable[[tuple[str, ...], Mapping[str, str]], int] = _run_provision_step,
+) -> Path:
+    """Sync the gate-owned venv (and its generated Prisma client) before a
+    measurement pass. Unconditional on purpose: an up-to-date env makes both
+    steps near-instant no-ops, and skipping them on a heuristic is how the
+    measured environment and the fingerprinted one drift apart."""
+    if not env_dir.exists():
+        sys.stderr.write(
+            f"provisioning {env_dir.name} (first run installs packages and "
+            "generates the Prisma client; re-runs are near-instant no-ops)\n"
+        )
+    env: Final = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(env_dir)}
+    for cmd in typecheck_env_commands(env_dir):
+        if run(cmd, env) != 0:
+            raise SystemExit(
+                f"could not provision the type-check environment at {env_dir}: "
+                f"`{' '.join(cmd)}` failed"
+            )
+    return env_dir
+
+
+def run_basedpyright(cwd: Path = REPO_ROOT, env_dir: Path = TYPECHECK_ENV_DIR) -> str:
+    """One basedpyright pass over `cwd` from the gate-owned venv, with the
+    raised node heap exported.
+
+    `--pythonpath` pins import resolution to the owned env's interpreter; it is
+    the only pin that works, because basedpyright auto-detects a `.venv` in the
+    project root and that beats both PATH order and VIRTUAL_ENV, silently
+    measuring the caller's fatter venv (whose extra typed packages flip
+    diagnostics) whenever the repo has one. Exit 0 (clean) and 1 (errors
+    found) are both output-bearing runs; anything else is a crash and fails
+    loudly instead of reading as zero errors."""
+    bin_dir: Final = env_dir / "bin"
+    proc = subprocess.run(
+        [
+            str(bin_dir / "basedpyright"),
+            "--outputjson",
+            "--pythonpath",
+            str(bin_dir / "python"),
+        ],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "NODE_OPTIONS": node_options_with_heap(os.environ)},
+    )
+    if proc.returncode not in (0, 1):
+        sys.stderr.write(proc.stderr)
+        raise SystemExit(f"basedpyright exited {proc.returncode}")
+    return proc.stdout
+
+
 @contextlib.contextmanager
 def _temp_worktree(ref: str) -> Iterator[Path]:
     parent = Path(tempfile.mkdtemp(prefix="bpr_base_"))
@@ -120,129 +249,88 @@ def base_counts(ref: str) -> dict[str, int]:
     """basedpyright error counts per rule for the merge-base tree. The head
     config is copied in so the base is judged by today's rules, and the run uses
     the head environment's basedpyright (on PATH) so imports resolve the same."""
-    exe = shutil.which("basedpyright") or "basedpyright"
     with _temp_worktree(ref) as worktree:
         shutil.copy(PYRIGHT_CONFIG, worktree / "pyrightconfig.json")
-        proc = subprocess.run(
-            [exe, "--outputjson"], cwd=worktree, capture_output=True, text=True
-        )
-        return count_basedpyright(proc.stdout, root=worktree)
+        return count_basedpyright(run_basedpyright(worktree), root=worktree)
 
 
-def evaluate(
-    head: Mapping[str, int],
-    base: Mapping[str, int],
-    budget: Mapping[str, Mapping[str, int]],
-) -> list[Breach]:
-    breaches = []
-    for code, total in head.items():
-        spec = budget.get(code)
-        cap = spec["limit"] if spec else DEFAULT_LIMIT
-        prior = base.get(code, 0)
-        if total > cap and total > prior:
-            breaches.append(Breach(code, total, cap, total - prior))
-    return sorted(breaches)
-
-
-def is_vacuous_run(
-    counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
-) -> bool:
-    """True when nothing was parsed but the budget expects errors -- the
-    signature of a type checker that crashed or produced no output. The CI pipe
-    swallows the tool's exit code (`tool || true`), so without this guard an
-    empty run would clear every limit and pass silently."""
-    return not counts and any(spec["limit"] for spec in budget.values())
-
-
-def ratcheted_budget(
-    budget: Mapping[str, Mapping[str, int]],
-    current: Mapping[str, int],
-    base: Mapping[str, int],
-) -> dict[str, dict[str, int]]:
-    """Each rule's limit lowered by the errors `current` fixed vs `base`.
-
-    `base` is the count at the branch point (the commit this branch diverged
-    from). The drop is clamped to what was actually cleared (a rule that grew
-    stays put), so the limit only ever falls. Rules absent from the budget are
-    dropped: a genuinely new error category is added to the JSON deliberately,
-    not on update.
-    """
-    return {
-        code: {
-            "limit": max(0, spec["limit"] - max(0, base.get(code, 0) - current.get(code, 0)))
-        }
-        for code, spec in sorted(budget.items())
-    }
-
-
-def cmd_update(current: Mapping[str, int], base_ref: str = DEFAULT_BASE) -> None:
-    """Ratchet each rule's limit down by the errors this branch fixed.
-
-    `current` is the working-tree count (piped in); the reference count comes
-    from a second basedpyright pass over a detached worktree at the branch point
-    (the merge-base with `base_ref`), so a branch's fixes tighten its own ceilings
-    by exactly what they cleared since it diverged, and limits never rise.
-    """
-    budget = json.loads(BUDGET_PATH.read_text()) if BUDGET_PATH.exists() else {}
-    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
-    updated = ratcheted_budget(budget, current, base_counts(base_point))
-    BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
-    cleared = sum(budget[code]["limit"] - updated[code]["limit"] for code in updated)
-    print(
-        f"Ratcheted basedpyright limits down by {cleared} errors this branch fixed "
-        f"across {len(updated)} rules"
+def environment_fingerprints(
+    dep_groups: tuple[str, ...] = TYPECHECK_DEP_GROUPS,
+) -> tuple[str, ...]:
+    return (
+        *(
+            hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (PYRIGHT_CONFIG, UV_LOCK, PRISMA_SCHEMA)
+            if path.exists()
+        ),
+        "groups:" + ",".join(dep_groups),
     )
 
 
-def cmd_check(base_ref: str) -> None:
-    budget = json.loads(BUDGET_PATH.read_text())
-    head = count_basedpyright(sys.stdin.read())
-    if is_vacuous_run(head, budget):
-        expected = sum(spec["limit"] for spec in budget.values())
+def checker_identity(dep_groups: tuple[str, ...] = TYPECHECK_DEP_GROUPS) -> Checker:
+    return Checker("basedpyright", environment_fingerprints(dep_groups))
+
+
+def cmd_check(head: Mapping[str, int], base_ref: str) -> None:
+    if not head:
         print(
-            f"FAIL: basedpyright produced no errors, but {BUDGET_PATH.name} allows "
-            f"up to ~{expected}. The type checker almost certainly crashed or emitted "
-            f"nothing; refusing to certify a vacuous run."
+            "FAIL: basedpyright produced no errors. The type checker almost certainly "
+            "crashed or emitted nothing; refusing to certify a vacuous run."
         )
         raise SystemExit(1)
-    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
-    base = base_counts(base_point)
-    if is_vacuous_run(base, budget):
+    base_point: Final = resolve_base_point(base_ref)
+    base: Final = base_counts_cached(checker_identity(), base_point, base_counts)
+    if not base:
         print(
-            f"FAIL: basedpyright produced no errors for the base tree at "
-            f"{base_point[:12]}, so every rule would look freshly added. The base "
-            f"pass almost certainly crashed; refusing to blame this change for it."
+            f"FAIL: basedpyright produced no errors for the base tree at {base_point[:12]}, "
+            "so every rule would look freshly added. The base pass almost certainly "
+            "crashed; refusing to blame this change for it."
         )
         raise SystemExit(1)
-    breaches = evaluate(head, base, budget)
+    judge(head, base, base_point)
+
+
+def judge(head: Mapping[str, int], base: Mapping[str, int], base_point: str) -> None:
+    breaches: Final = evaluate(head, base, ANY_CAPS)
     if not breaches:
         print(
-            f"OK: every rule is within its basedpyright limit or no higher than base ({sum(head.values())} errors total)"
+            f"OK: every basedpyright rule is within its ceiling "
+            f"({sum(head.values())} errors total, base {base_point[:12]})"
         )
         return
-    print("FAIL: basedpyright errors exceed the per-rule limit:")
+    print(f"FAIL: basedpyright errors grew past their ceiling (base {base_point[:12]}):")
     for breach in breaches:
-        print(
-            f"  {breach.code}: total {breach.total} over limit {breach.cap} (this change added {breach.added})"
-        )
+        print(f"  {breach.rule}: total {breach.total} over ceiling {breach.ceiling} (this change added {breach.added})")
     print(
-        "Reduce the new errors or remove an equal number elsewhere; the ceiling is "
-        "the limit in basedpyright-code-budget.json."
+        "Reduce the new errors or remove an equal number elsewhere; the ceiling is the merge-base "
+        "count, or the cap in ANY_CAPS (scripts/type_check_gate.py) when that is higher."
     )
-    summary = "; ".join(f"{b.code} {b.total}/{b.cap} (+{b.added})" for b in breaches)
+    summary: Final = "; ".join(f"{b.rule} {b.total}/{b.ceiling} (+{b.added})" for b in breaches)
     print(f"BREACHED RULES: {summary}")
     raise SystemExit(1)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
-    parser.add_argument("--update", action="store_true")
-    args = parser.parse_args()
-    if args.update:
-        cmd_update(count_basedpyright(sys.stdin.read()), args.base)
-    else:
-        cmd_check(args.base)
+    parser: Final = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
+    parser.add_argument(
+        "--emit-counts-dir",
+        type=Path,
+        help="Write HEAD's per-rule counts to this directory as a base-counts artifact instead of gating",
+    )
+    args: Final = parser.parse_args()
+    from default_branch import resolve_base_ref
+    from gate_slot_lock import held_slot
+
+    if args.emit_counts_dir is not None:
+        with held_slot():
+            ensure_typecheck_env()
+            emit_counts(checker_identity(), count_basedpyright(run_basedpyright()), args.emit_counts_dir, head_sha())
+        return
+    base_ref: Final = resolve_base_ref(args.base, REPO_ROOT)
+    with held_slot():
+        ensure_typecheck_env()
+        cmd_check(count_basedpyright(run_basedpyright()), base_ref)
 
 
 if __name__ == "__main__":

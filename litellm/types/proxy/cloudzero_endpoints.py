@@ -3,12 +3,14 @@ CloudZero endpoint types for LiteLLM Proxy
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class CloudZeroInitRequest(BaseModel):
+class CloudZeroInitRequest(LiteLLMBaseModel):
     """Request model for initializing CloudZero settings"""
 
     api_key: str = Field(..., description="CloudZero API key for authentication")
@@ -16,49 +18,49 @@ class CloudZeroInitRequest(BaseModel):
     timezone: str = Field(default="UTC", description="Timezone for date handling (default: UTC)")
 
 
-class CloudZeroInitResponse(BaseModel):
+class CloudZeroInitResponse(LiteLLMBaseModel):
     """Response model for CloudZero initialization"""
 
     message: str
     status: str
 
 
-class CloudZeroExportRequest(BaseModel):
+class CloudZeroExportRequest(LiteLLMBaseModel):
     """Request model for CloudZero export operations"""
 
-    limit: Optional[int] = Field(None, description="Optional limit on number of records to export")
+    limit: int | None = Field(None, description="Optional limit on number of records to export")
     operation: str = Field(
         default="replace_hourly",
         description="CloudZero operation type (replace_hourly or sum)",
     )
-    start_time_utc: Optional[datetime] = Field(None, description="Start time for data export in UTC")
-    end_time_utc: Optional[datetime] = Field(None, description="End time for data export in UTC")
+    start_time_utc: datetime | None = Field(None, description="Start time for data export in UTC")
+    end_time_utc: datetime | None = Field(None, description="End time for data export in UTC")
 
 
-class CloudZeroExportResponse(BaseModel):
+class CloudZeroExportResponse(LiteLLMBaseModel):
     """Response model for CloudZero export operations"""
 
     message: str
     status: str
-    records_exported: Optional[int] = None
-    dry_run_data: Optional[Dict[str, Any]] = Field(
+    records_exported: int | None = None
+    dry_run_data: dict[str, Any] | None = Field(
         None, description="Dry run data including usage data and CBF transformed data"
     )
-    summary: Optional[Dict[str, Any]] = Field(None, description="Summary statistics for dry run")
+    summary: dict[str, Any] | None = Field(None, description="Summary statistics for dry run")
 
 
-class CloudZeroSettingsView(BaseModel):
+class CloudZeroSettingsView(LiteLLMBaseModel):
     """Response model for viewing CloudZero settings with masked API key"""
 
-    api_key_masked: Optional[str] = Field(None, description="Masked API key showing only first 4 and last 4 characters")
-    connection_id: Optional[str] = Field(None, description="CloudZero connection ID for data submission")
-    timezone: Optional[str] = Field(None, description="Timezone for date handling")
-    status: Optional[str] = Field(None, description="Configuration status")
+    api_key_masked: str | None = Field(None, description="Masked API key showing only first 4 and last 4 characters")
+    connection_id: str | None = Field(None, description="CloudZero connection ID for data submission")
+    timezone: str | None = Field(None, description="Timezone for date handling")
+    status: str | None = Field(None, description="Configuration status")
 
 
-class CloudZeroSettingsUpdate(BaseModel):
+class CloudZeroSettingsUpdate(LiteLLMBaseModel):
     """Request model for updating CloudZero settings"""
 
-    api_key: Optional[str] = Field(None, description="New CloudZero API key for authentication")
-    connection_id: Optional[str] = Field(None, description="New CloudZero connection ID for data submission")
-    timezone: Optional[str] = Field(None, description="New timezone for date handling")
+    api_key: str | None = Field(None, description="New CloudZero API key for authentication")
+    connection_id: str | None = Field(None, description="New CloudZero connection ID for data submission")
+    timezone: str | None = Field(None, description="New timezone for date handling")

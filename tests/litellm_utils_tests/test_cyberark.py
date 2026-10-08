@@ -3,13 +3,12 @@ Integration test for CyberArk Conjur Secret Manager.
 """
 
 import os
-import sys
 import pytest
+import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import AsyncMock, MagicMock, patch
 from litellm._uuid import uuid
 
@@ -43,6 +42,85 @@ def create_mock_response(status_code: int, text: str = ""):
 
 
 @pytest.mark.asyncio
+async def test_cyberark_write_secret_rejects_yaml_injection():
+    """
+    Regression test: async_write_secret must reject a secret_name that is not
+    safe to embed in the Conjur policy body, before any HTTP call is made.
+    """
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        malicious_secret_name = "foo\n- !grant\n  role: !!admin\n  member: attacker"
+
+        mock_sync_client = MagicMock()
+        mock_async_client = AsyncMock()
+
+        with (
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
+                return_value=mock_sync_client,
+            ),
+            patch(
+                "litellm.secret_managers.cyberark_secret_manager.get_async_httpx_client",
+                return_value=mock_async_client,
+            ),
+        ):
+            cyberark_manager = CyberArkSecretManager()
+
+            response = await cyberark_manager.async_write_secret(
+                secret_name=malicious_secret_name,
+                secret_value="sk-9876",
+            )
+
+            assert response["status"] == "error"
+            assert "Invalid secret_name" in response["message"]
+            # The malicious policy YAML must never reach the wire.
+            mock_sync_client.client.post.assert_not_called()
+            mock_async_client.post.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "secret_name",
+    [
+        "foo: bar",
+        "foo # bar",
+        "plain-alias",
+        "team/user@example.com",
+    ],
+)
+@pytest.mark.asyncio
+async def test_cyberark_ensure_variable_exists_escapes_yaml_metacharacters(secret_name):
+    """
+    Regression test: _ensure_variable_exists must escape secret_name (not just
+    denylist-check it) so the policy body always parses back to exactly one
+    '!variable' scalar node holding the untouched secret_name.
+    """
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        captured = {}
+
+        async def _capture_post(url, headers=None, content=None):
+            captured["content"] = content
+            return create_mock_response(status_code=201, text="")
+
+        mock_sync_client = MagicMock()
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
+        mock_async_client = MagicMock()
+        mock_async_client.client.post.side_effect = _capture_post
+
+        with patch(
+            "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
+            return_value=mock_sync_client,
+        ):
+            cyberark_manager = CyberArkSecretManager()
+            await cyberark_manager._ensure_variable_exists(secret_name, mock_async_client)
+
+        policy_yaml = captured["content"]
+        parsed = yaml.compose(policy_yaml)
+        assert len(parsed.value) == 1
+        node = parsed.value[0]
+        assert node.tag == "!variable"
+        assert node.value == secret_name
+
+
+@pytest.mark.asyncio
 async def test_cyberark_write_and_read_secret():
     """
     Test writing a secret to CyberArk Conjur and reading it back using mocked HTTP requests.
@@ -53,26 +131,20 @@ async def test_cyberark_write_and_read_secret():
         secret_value = f"test-value-{uuid.uuid4()}"
 
         # Mock sync httpx client (for auth, ensure variable exists, sync read)
-        # The _get_httpx_client returns an HTTPHandler with a .client property
+        # The get_httpx_client returns an HTTPHandler with a .client property
         mock_sync_client = MagicMock()
         # Auth response - note: the actual client is accessed via .client property
-        mock_sync_client.client.post.return_value = create_mock_response(
-            status_code=200, text="mock-token"
-        )
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token")
         # Sync read response
-        mock_sync_client.client.get.return_value = create_mock_response(
-            status_code=200, text=secret_value
-        )
+        mock_sync_client.client.get.return_value = create_mock_response(status_code=200, text=secret_value)
 
         # Mock async httpx client (for async write)
         mock_async_client = AsyncMock()
-        mock_async_client.post.return_value = create_mock_response(
-            status_code=201, text=""
-        )
+        mock_async_client.post.return_value = create_mock_response(status_code=201, text="")
 
         with (
             patch(
-                "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
                 return_value=mock_sync_client,
             ),
             patch(
@@ -108,7 +180,7 @@ async def test_cyberark_rotate_secret():
     Test key rotation in CyberArk Conjur using mocked HTTP requests.
 
     This test simulates what happens when a virtual key is rotated:
-    1. Write initial secret with alias (like sk-1234)
+    1. Write initial secret with alias (like a proxy key)
     2. Rotate to new value (like sk-12359)
     3. Verify reading the secret returns the NEW value
     """
@@ -127,7 +199,7 @@ async def test_cyberark_rotate_secret():
         current_value = {"value": initial_key_value}
 
         # Mock sync httpx client (for auth, ensure variable exists, sync reads)
-        # The _get_httpx_client returns an HTTPHandler with a .client property
+        # The get_httpx_client returns an HTTPHandler with a .client property
         mock_sync_client = MagicMock()
         # Auth response - note: the actual client is accessed via .client property
         mock_sync_client.client.post.return_value = create_mock_response(
@@ -160,7 +232,7 @@ async def test_cyberark_rotate_secret():
 
         with (
             patch(
-                "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
                 return_value=mock_sync_client,
             ),
             patch(
@@ -238,7 +310,7 @@ async def test_cyberark_rotate_secret_with_new_alias():
         secrets_store = {}
 
         # Mock sync httpx client (for auth, ensure variable exists, sync reads)
-        # The _get_httpx_client returns an HTTPHandler with a .client property
+        # The get_httpx_client returns an HTTPHandler with a .client property
         mock_sync_client = MagicMock()
         # Auth response - note: the actual client is accessed via .client property
         mock_sync_client.client.post.return_value = create_mock_response(
@@ -287,7 +359,7 @@ async def test_cyberark_rotate_secret_with_new_alias():
 
         with (
             patch(
-                "litellm.secret_managers.cyberark_secret_manager._get_httpx_client",
+                "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
                 return_value=mock_sync_client,
             ),
             patch(

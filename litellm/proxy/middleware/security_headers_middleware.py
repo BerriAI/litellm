@@ -13,16 +13,17 @@ value is never overridden.
 """
 
 import os
+from typing import Final
 
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-STATIC_SECURITY_HEADERS = (
+STATIC_SECURITY_HEADERS: Final = (
     ("X-Frame-Options", "DENY"),
     ("Content-Security-Policy", "frame-ancestors 'none'"),
     ("X-Content-Type-Options", "nosniff"),
 )
-HSTS_HEADER = ("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+HSTS_HEADER: Final = ("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 
 
 def _hsts_enabled() -> bool:
@@ -40,8 +41,8 @@ class SecurityHeadersMiddleware:
 
         async def send_with_security_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
-                headers = MutableHeaders(scope=message)
-                applied = (*STATIC_SECURITY_HEADERS, HSTS_HEADER) if _hsts_enabled() else STATIC_SECURITY_HEADERS
+                headers: Final = MutableHeaders(scope=message)
+                applied: Final = (*STATIC_SECURITY_HEADERS, HSTS_HEADER) if _hsts_enabled() else STATIC_SECURITY_HEADERS
                 for name, value in applied:
                     headers.setdefault(name, value)
             await send(message)

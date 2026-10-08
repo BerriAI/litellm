@@ -1,6 +1,9 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -14,10 +17,47 @@ from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class FalImageProviderSpecificFields(TypedDict, total=False):
+    width: ReadOnly[int]
+    height: ReadOnly[int]
+    content_type: ReadOnly[str]
+
+
+_FAL_IMAGE_DATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def fal_images_to_image_objects(images: object) -> tuple[ImageObject, ...]:
+    if not isinstance(images, list):
+        return ()
+
+    def to_image_object(image_data: object) -> ImageObject:
+        if isinstance(image_data, Mapping):
+            image_map: Final = _FAL_IMAGE_DATA.validate_python(image_data)
+            url: Final = image_map.get("url")
+            b64_json: Final = image_map.get("b64_json")
+            width: Final = image_map.get("width")
+            height: Final = image_map.get("height")
+            content_type: Final = image_map.get("content_type")
+            provider_specific_fields: Final[FalImageProviderSpecificFields] = {
+                **({"width": width} if isinstance(width, int) and type(width) is int and width > 0 else {}),
+                **({"height": height} if isinstance(height, int) and type(height) is int and height > 0 else {}),
+                **({"content_type": content_type} if isinstance(content_type, str) else {}),
+            }
+            return ImageObject(
+                url=url if isinstance(url, str) else None,
+                b64_json=b64_json if isinstance(b64_json, str) else None,
+                provider_specific_fields=provider_specific_fields or None,
+            )
+        return ImageObject(url=image_data if isinstance(image_data, str) else None, b64_json=None)
+
+    return tuple(to_image_object(image_data) for image_data in images if isinstance(image_data, (Mapping, str)))
 
 
 class FalAIBaseConfig(BaseImageGenerationConfig):
@@ -31,12 +71,12 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request
@@ -54,13 +94,13 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        final_api_key: Optional[str] = api_key or get_secret_str("FAL_AI_API_KEY")
+        final_api_key: Final[str | None] = api_key or get_secret_str("FAL_AI_API_KEY")
         if not final_api_key:
             raise ValueError("FAL_AI_API_KEY is not set")
 
@@ -76,15 +116,15 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the image generation response to the litellm image response
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -94,26 +134,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
-        # Handle fal.ai response format
-        images = response_data.get("images", [])
-        if isinstance(images, list):
-            for image_data in images:
-                if isinstance(image_data, dict):
-                    model_response.data.append(
-                        ImageObject(
-                            url=image_data.get("url", None),
-                            b64_json=image_data.get("b64_json", None),
-                        )
-                    )
-                elif isinstance(image_data, str):
-                    # If images is just a list of URLs
-                    model_response.data.append(
-                        ImageObject(
-                            url=image_data,
-                            b64_json=None,
-                        )
-                    )
-
+        model_response.data.extend(fal_images_to_image_objects(response_data.get("images", ())))
         return model_response
 
 
@@ -122,7 +143,7 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
     Default Fal AI image generation configuration for generic models.
     """
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for fal.ai image generation
         """
@@ -139,9 +160,9 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        supported_params: Final = self.get_supported_openai_params(model)
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     optional_params[k] = non_default_params[k]
                 elif drop_params:
@@ -164,7 +185,7 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         """
         Transform the image generation request to the fal.ai image generation request body
         """
-        fal_ai_image_generation_request_body = {
+        fal_ai_image_generation_request_body: Final = {
             "prompt": prompt,
             **optional_params,
         }

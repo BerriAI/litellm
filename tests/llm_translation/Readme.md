@@ -16,12 +16,16 @@ The persister, header scrubbing, and 2xx-only filtering are defined in
 patches the same httpx transport vcrpy does) are excluded from the
 auto-marker — see `_RESPX_CONFLICTING_FILES` in `conftest.py`.
 
+Requests to `localhost`, `127.0.0.1`, or `0.0.0.0` are never recorded or
+replayed (`ignore_localhost` in `vcr_config_dict()`): a server the test
+process starts itself on an ephemeral port is not a provider, and a cassette
+entry for it would replay against whichever later test lands on that port
+
 The same VCR cache is used by other test directories that exercise live
 provider APIs. The reusable conftest plumbing lives in
 `tests/_vcr_conftest_common.py` and is wired into:
 
 - `tests/llm_translation/`
-- `tests/llm_responses_api_testing/`
 - `tests/audio_tests/`
 - `tests/batches_tests/`
 - `tests/guardrails_tests/`

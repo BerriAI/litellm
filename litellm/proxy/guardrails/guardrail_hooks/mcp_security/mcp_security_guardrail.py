@@ -5,7 +5,8 @@ Validates that MCP servers referenced in request tools are registered
 on the LiteLLM gateway. Blocks or alerts when unregistered servers are found.
 """
 
-from typing import Any, List, Literal, Optional, Set, Union
+from collections.abc import Mapping
+from typing import Any, Final, Literal
 
 from fastapi import HTTPException
 
@@ -27,10 +28,13 @@ class MCPSecurityGuardrail(CustomGuardrail):
         on_violation: Literal["block", "alert"] = "block",
         **kwargs,
     ):
-        if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = [GuardrailEventHooks.pre_call]
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
         self.on_violation = on_violation
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [GuardrailEventHooks.pre_call]
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -39,15 +43,15 @@ class MCPSecurityGuardrail(CustomGuardrail):
         cache: Any,
         data: dict,
         call_type: str,
-    ) -> Optional[Union[Exception, str, dict]]:
+    ) -> Exception | str | dict | None:
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is not True:
             return data
 
-        unregistered = self._find_unregistered_mcp_servers(data)
+        unregistered: Final = await self._find_unregistered_mcp_servers(data)
         if not unregistered:
             return data
 
-        message = (
+        message: Final = (
             f"MCP Security: request references unregistered MCP server(s): "
             f"{', '.join(sorted(unregistered))}. "
             f"Only servers registered on this gateway are allowed."
@@ -69,9 +73,9 @@ class MCPSecurityGuardrail(CustomGuardrail):
         return data
 
     @staticmethod
-    def _extract_mcp_server_names_from_tools(tools: List[dict]) -> Set[str]:
+    def _extract_mcp_server_names_from_tools(tools: list[dict]) -> set[str]:
         """Extract MCP server names from tools with type=mcp and litellm_proxy server_url."""
-        server_names: Set[str] = set()
+        server_names: Final[set[str]] = set()
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
@@ -87,21 +91,22 @@ class MCPSecurityGuardrail(CustomGuardrail):
         return server_names
 
     @staticmethod
-    def _find_unregistered_mcp_servers(data: dict) -> Set[str]:
+    async def _find_unregistered_mcp_servers(data: Mapping[str, object]) -> frozenset[str]:
         """Check tools in data against the MCP server registry. Returns set of unregistered server names."""
-        tools = data.get("tools")
+        tools: Final = data.get("tools")
         if not tools or not isinstance(tools, list):
-            return set()
+            return frozenset()
 
-        requested_servers = MCPSecurityGuardrail._extract_mcp_server_names_from_tools(tools)
+        requested_servers: Final = MCPSecurityGuardrail._extract_mcp_server_names_from_tools(tools)
         if not requested_servers:
-            return set()
+            return frozenset()
 
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
 
-        registry = global_mcp_server_manager.get_registry()
-        registered_names = set(registry.keys())
+        async with global_mcp_server_manager.catalog.operation():
+            registry: Final = global_mcp_server_manager.get_registry()
+            registered_names: Final = set(registry.keys())
 
-        return requested_servers - registered_names
+            return frozenset(requested_servers - registered_names)

@@ -1,7 +1,8 @@
 """Type definitions for Opik payload building."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Final, Literal
 
 
 @dataclass
@@ -13,11 +14,11 @@ class TracePayload:
     name: str
     start_time: str
     end_time: str
-    input: Any
-    output: Any
-    metadata: Dict[str, Any]
-    tags: List[str]
-    thread_id: Optional[str] = None
+    input: object
+    output: object
+    metadata: Mapping[str, object]
+    tags: list[str]
+    thread_id: str | None = None
 
 
 @dataclass
@@ -32,15 +33,15 @@ class SpanPayload:
     model: str
     start_time: str
     end_time: str
-    input: Any
-    output: Any
-    metadata: Dict[str, Any]
-    tags: List[str]
-    usage: Dict[str, int]
-    parent_span_id: Optional[str] = None
-    provider: Optional[str] = None
-    total_cost: Optional[float] = None
+    input: object
+    output: object
+    metadata: Mapping[str, object]
+    tags: list[str]
+    usage: dict[str, int]
+    parent_span_id: str | None = None
+    provider: str | None = None
+    total_cost: float | None = None
 
 
-PayloadItem = Union[TracePayload, SpanPayload]
-TraceSpanPayloadTuple = Tuple[Optional[TracePayload], SpanPayload]
+PayloadItem = TracePayload | SpanPayload
+TraceSpanPayloadTuple: Final = tuple[TracePayload | None, SpanPayload]

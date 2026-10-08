@@ -11,9 +11,9 @@ Has 4 methods:
 import ast
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from functools import partial
-from typing import Optional
-from datetime import datetime, timezone, timedelta
+from typing import Final
 
 from litellm._logging import print_verbose, verbose_logger
 
@@ -26,7 +26,7 @@ class S3Cache(BaseCache):
         s3_bucket_name,
         s3_region_name=None,
         s3_api_version=None,
-        s3_use_ssl: Optional[bool] = True,
+        s3_use_ssl: bool | None = True,
         s3_verify=None,
         s3_endpoint_url=None,
         s3_aws_access_key_id=None,
@@ -63,16 +63,16 @@ class S3Cache(BaseCache):
     def set_cache(self, key, value, **kwargs):
         try:
             print_verbose(f"LiteLLM SET Cache - S3. Key={key}. Value={value}")
-            ttl = kwargs.get("ttl", None)
+            ttl: Final = kwargs.get("ttl", None)
             # Convert value to JSON before storing in S3
-            serialized_value = json.dumps(value)
+            serialized_value: Final = json.dumps(value)
             key = self._to_s3_key(key)
 
             if ttl is not None:
                 cache_control = f"immutable, max-age={ttl}, s-maxage={ttl}"
 
                 # Calculate expiration time
-                expiration_time = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+                expiration_time: Final = datetime.now(timezone.utc) + timedelta(seconds=ttl)
                 # Upload the data to S3 with the calculated expiration time
                 self.s3_client.put_object(
                     Bucket=self.bucket_name,
@@ -105,12 +105,12 @@ class S3Cache(BaseCache):
         Compatible with Python 3.8+.
         """
         try:
-            verbose_logger.debug(f"Set ASYNC S3 Cache: Key={key}. Value={value}")
-            loop = asyncio.get_event_loop()
-            func = partial(self.set_cache, key, value, **kwargs)
+            verbose_logger.debug("Set ASYNC S3 Cache: Key=%s. Value=%s", key, value)
+            loop: Final = asyncio.get_event_loop()
+            func: Final = partial(self.set_cache, key, value, **kwargs)
             await loop.run_in_executor(None, func)
         except Exception as e:
-            verbose_logger.error(f"S3 Caching: async_set_cache() - Got exception from S3: {e}")
+            verbose_logger.error("S3 Caching: async_set_cache() - Got exception from S3: %s", e)
 
     def get_cache(self, key, **kwargs):
         import botocore
@@ -124,8 +124,8 @@ class S3Cache(BaseCache):
 
             if cached_response is not None:
                 if "Expires" in cached_response:
-                    expires_time = cached_response["Expires"]
-                    current_time = datetime.now(expires_time.tzinfo)
+                    expires_time: Final = cached_response["Expires"]
+                    current_time: Final = datetime.now(expires_time.tzinfo)
 
                     if current_time > expires_time:
                         return None
@@ -139,17 +139,20 @@ class S3Cache(BaseCache):
             if not isinstance(cached_response, dict):
                 cached_response = dict(cached_response)
             verbose_logger.debug(
-                f"Got S3 Cache: key: {key}, cached_response {cached_response}. Type Response {type(cached_response)}"
+                "Got S3 Cache: key: %s, cached_response %s. Type Response %s",
+                key,
+                cached_response,
+                type(cached_response),
             )
 
             return cached_response
-        except botocore.exceptions.ClientError as e:  # type: ignore
+        except botocore.exceptions.ClientError as e:
             if e.response["Error"]["Code"] == "NoSuchKey":
-                verbose_logger.debug(f"S3 Cache: The specified key '{key}' does not exist in the S3 bucket.")
+                verbose_logger.debug("S3 Cache: The specified key '%s' does not exist in the S3 bucket.", key)
                 return None
 
         except Exception as e:
-            verbose_logger.error(f"S3 Caching: get_cache() - Got exception from S3: {e}")
+            verbose_logger.error("S3 Caching: get_cache() - Got exception from S3: %s", e)
 
     async def async_get_cache(self, key, **kwargs):
         """
@@ -157,13 +160,13 @@ class S3Cache(BaseCache):
         Compatible with Python 3.8+.
         """
         try:
-            verbose_logger.debug(f"Get ASYNC S3 Cache: key: {key}")
-            loop = asyncio.get_event_loop()
-            func = partial(self.get_cache, key, **kwargs)
-            result = await loop.run_in_executor(None, func)
+            verbose_logger.debug("Get ASYNC S3 Cache: key: %s", key)
+            loop: Final = asyncio.get_event_loop()
+            func: Final = partial(self.get_cache, key, **kwargs)
+            result: Final = await loop.run_in_executor(None, func)
             return result
         except Exception as e:
-            verbose_logger.error(f"S3 Caching: async_get_cache() - Got exception from S3: {e}")
+            verbose_logger.error("S3 Caching: async_get_cache() - Got exception from S3: %s", e)
             return None
 
     def flush_cache(self):
@@ -173,7 +176,7 @@ class S3Cache(BaseCache):
         pass
 
     async def async_set_cache_pipeline(self, cache_list, **kwargs):
-        tasks = []
+        tasks: Final = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
         await asyncio.gather(*tasks)

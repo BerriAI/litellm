@@ -4,19 +4,22 @@ This file contains the calling OpenAI's `/v1/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-from typing import Any, Optional, cast
+import ssl
+from typing import Any, Final, cast
 
-from litellm._logging import _redact_string, verbose_logger
+from litellm._logging import redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from ....litellm_core_utils.realtime_errors import close_after_upstream_handshake_refusal
 from ....litellm_core_utils.realtime_streaming import (
     RealtimeEventNormalizer,
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+from ..common_utils import is_openai_backed_api_base
 from ..openai import OpenAIChatCompletion
 
 
@@ -51,12 +54,12 @@ class OpenAIRealtime(OpenAIChatCompletion):
         so the legacy beta API is used. GA clients omit that header on the client
         connection and must send GA-shaped ``session.update`` payloads.
         """
-        headers: dict = {"Authorization": f"Bearer {api_key}"}
+        headers: Final[dict] = {"Authorization": f"Bearer {api_key}"}
         if openai_beta_realtime:
             headers["OpenAI-Beta"] = "realtime=v1"
         return headers
 
-    def _get_ssl_config(self, url: str) -> Any:
+    def _get_ssl_config(self, url: str) -> bool | str | ssl.SSLContext | None:
         """
         Get SSL configuration for WebSocket connection.
         Override this in subclasses to customize SSL behavior.
@@ -71,7 +74,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             return None
 
         # Use the shared SSL context which respects custom CA certs and SSL settings
-        ssl_config = get_shared_realtime_ssl_context()
+        ssl_config: Final = get_shared_realtime_ssl_context()
 
         # If ssl_config is False (ssl_verify=False), websockets library needs True instead
         # to establish connection without verification (False would fail)
@@ -82,21 +85,37 @@ class OpenAIRealtime(OpenAIChatCompletion):
 
     def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
         """
-        Construct the backend websocket URL with all query parameters (including 'model').
+        Construct the backend websocket URL with the client's query parameters.
+
+        `model` is left out for `intent=transcription` on OpenAI's own hosts: OpenAI
+        reads `?model=` as selecting a conversation session and rejects transcription
+        sessions with `invalid_model`. The transcription model is applied to the session
+        instead (see `force_transcription_model`), mirroring the Azure GA handler. Any
+        other `api_base` keeps `model`, since an OpenAI-compatible gateway may route on it.
         """
         from httpx import URL
 
+        drops_model: Final = query_params.get("intent") == "transcription" and is_openai_backed_api_base(api_base)
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
         url = URL(api_base)
         # Set the correct path
         url = url.copy_with(path="/v1/realtime")
-        # Include all query parameters including 'model'
-        if query_params:
-            url = url.copy_with(params=query_params)
+        upstream_params: Final = tuple(
+            (key, value) for key, value in query_params.items() if not (drops_model and key == "model")
+        )
+        if upstream_params:
+            url = url.copy_with(params=upstream_params)
         return str(url)
 
-    def _make_event_normalizer(self) -> Optional[RealtimeEventNormalizer]:
+    def construct_url(
+        self,
+        api_base: str,
+        query_params: RealtimeQueryParams,
+    ) -> str:
+        return self._construct_url(api_base, query_params)
+
+    def _make_event_normalizer(self) -> RealtimeEventNormalizer | None:
         """Return a per-session GA event normalizer, or None for passthrough.
 
         Subclasses (e.g. XAIRealtime) override this to supply a provider-specific
@@ -109,14 +128,14 @@ class OpenAIRealtime(OpenAIChatCompletion):
         model: str,
         websocket: Any,
         logging_obj: LiteLLMLogging,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        client: Optional[Any] = None,
-        timeout: Optional[float] = None,
-        query_params: Optional[RealtimeQueryParams] = None,
-        user_api_key_dict: Optional[Any] = None,
-        litellm_metadata: Optional[dict] = None,
-        **kwargs: Any,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        client: object | None = None,
+        timeout: float | None = None,
+        query_params: RealtimeQueryParams | None = None,
+        user_api_key_dict: object | None = None,
+        litellm_metadata: dict | None = None,
+        **kwargs: object,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -129,20 +148,20 @@ class OpenAIRealtime(OpenAIChatCompletion):
         # Use all query params if provided, else fallback to just model
         if query_params is None:
             query_params = {"model": model}
-        url = self._construct_url(api_base, query_params)
+        url: Final = self._construct_url(api_base, query_params)
 
         try:
             # Get provider-specific SSL configuration
-            ssl_config = self._get_ssl_config(url)
+            ssl_config: Final = self._get_ssl_config(url)
 
-            openai_beta_realtime = client_sent_openai_beta_realtime_header(websocket)
+            openai_beta_realtime: Final = client_sent_openai_beta_realtime_header(websocket)
             if not openai_beta_realtime:
                 verbose_logger.debug(
                     "OpenAI Realtime: connecting with GA protocol (no OpenAI-Beta header). "
                     "If your client expects beta event names, add 'OpenAI-Beta: realtime=v1' "
                     "to the WebSocket headers sent to the LiteLLM proxy."
                 )
-            headers = self._get_additional_headers(api_key, openai_beta_realtime=openai_beta_realtime)
+            headers: Final = self._get_additional_headers(api_key, openai_beta_realtime=openai_beta_realtime)
 
             # Log a masked request preview consistent with other endpoints.
             logging_obj.pre_call(
@@ -154,13 +173,13 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "complete_input_dict": {"query_params": query_params},
                 },
             )
-            async with websockets.connect(  # type: ignore
+            async with websockets.connect(
                 url,
-                additional_headers=headers,  # type: ignore
+                additional_headers=headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
             ) as backend_ws:
-                realtime_streaming = RealTimeStreaming(
+                realtime_streaming: Final = RealTimeStreaming(
                     websocket,
                     cast(ClientConnection, backend_ws),
                     logging_obj,
@@ -174,11 +193,11 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 )
                 await realtime_streaming.bidirectional_forward()
 
-        except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
-            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
+        except websockets.exceptions.InvalidStatus as e:
+            await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
         except Exception as e:
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal server error: {str(e)}"))
+                await websocket.close(code=1011, reason=redact_string(f"Internal server error: {e}"))
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(close_error):
                     # The WebSocket is already closed or the response is completed, so we can ignore this error

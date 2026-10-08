@@ -2,10 +2,8 @@
 Build the litellm_content_retrieve tool definition for the LLM.
 """
 
-from typing import List
 
-
-def build_retrieval_tool(available_keys: List[str]) -> dict:
+def build_retrieval_tool(available_keys: list[str]) -> dict:
     """
     Return an OpenAI-format tool definition that lets the model
     retrieve the full content of a compressed message.

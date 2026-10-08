@@ -1,38 +1,40 @@
 # Tool Permission Guardrail Type Definitions
-from typing import Dict, List, Literal, Optional
+from typing import Final, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
 
-class ToolPermissionRule(BaseModel):
+class ToolPermissionRule(LiteLLMBaseModel):
     """
     A rule defining permission for a specific tool or tool pattern
     """
 
     id: str = Field(description="Unique identifier for the rule")
-    tool_name: Optional[str] = Field(
+    tool_name: str | None = Field(
         default=None,
         description="Regex pattern applied to the tool's function name",
     )
-    tool_type: Optional[str] = Field(
+    tool_type: str | None = Field(
         default=None,
         description="Regex pattern applied to the tool type (e.g., function)",
     )
     decision: Literal["allow", "deny"] = Field(description="Whether to allow or deny this tool usage")
-    allowed_param_patterns: Optional[Dict[str, str]] = Field(
+    allowed_param_patterns: dict[str, str] | None = Field(
         default=None,
         description="Optional regex map enforcing nested parameter values using dot/[] paths",
     )
 
     @field_validator("tool_name", "tool_type", mode="before")
     @classmethod
-    def _blank_to_none(cls, value: Optional[str]) -> Optional[str]:
+    def _blank_to_none(cls, value: str | None) -> str | None:
         if value is None:
             return None
         if isinstance(value, str):
-            stripped = value.strip()
+            stripped: Final = value.strip()
             if not stripped:
                 return None
             return stripped
@@ -53,7 +55,7 @@ class ToolPermissionRule(BaseModel):
         return self
 
 
-class ToolResult(BaseModel):
+class ToolResult(LiteLLMBaseModel):
     """
     Represents a tool_result block to be added to the response
     """
@@ -64,20 +66,20 @@ class ToolResult(BaseModel):
     is_error: bool = Field(default=True, description="Whether this is an error result")
 
 
-class PermissionError(BaseModel):
+class PermissionError(LiteLLMBaseModel):
     """
     Error information for permission denial
     """
 
     tool_name: str = Field(description="Name of the denied tool")
-    rule_id: Optional[str] = Field(description="ID of the rule that caused denial")
+    rule_id: str | None = Field(description="ID of the rule that caused denial")
     message: str = Field(description="Error message")
 
 
 class ToolPermissionGuardrailConfigModel(GuardrailConfigModel):
     """Configuration parameters exposed to the UI for the Tool Permission guardrail."""
 
-    rules: Optional[List[ToolPermissionRule]] = Field(
+    rules: list[ToolPermissionRule] | None = Field(
         default=None,
         description="Ordered allow/deny rules. Patterns use regex for tool names/types and optional regex constraints on tool arguments.",
     )

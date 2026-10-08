@@ -1,17 +1,28 @@
 "use client";
 
 import React, { Suspense, useState, useRef, useEffect } from "react";
+import { DashboardHeader } from "@/components/DashboardHeader";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
-import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
+import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
+import { EnvCredentialLoginWarningBanner } from "@/components/EnvCredentialLoginWarningBanner";
+import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
+import { UserBanner } from "@/components/UserBanner";
+import { LiteAdminFrame } from "@/components/liteadmin/LiteAdmin";
+import { UpgradeBanner } from "@/components/UpgradeBanner";
+import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { Menu } from "lucide-react";
+import { useMediaQuery } from "usehooks-ts";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -65,7 +76,7 @@ export function AgentControlPlaneView() {
 
   if (!agentPlatformUrl) {
     return (
-      <div className="flex flex-1 items-center justify-center text-gray-500">
+      <div className="flex flex-1 items-center justify-center text-muted-foreground">
         <div className="text-center">
           <p className="text-lg font-medium mb-2">Plugin</p>
           <p className="text-sm">Configure the plugin URL in settings</p>
@@ -92,60 +103,127 @@ export function AgentControlPlaneView() {
   );
 }
 
+const FULL_BLEED_SEGMENTS = new Set(["logs"]);
+
 function DashboardShell({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
   const { accessToken } = useAuth();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { mode } = usePluginMode();
+  const pathname = usePathname();
+  const routeSegment = routeSegmentForPathname(pathname);
+  const searchParams = useSearchParams();
+  const navigationKey = `${pathname}?${searchParams.toString()}`;
+  const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
+  const [mobileNavigationKey, setMobileNavigationKey] = useState<string | null>(null);
+  if (mobileNavigationKey !== null && (isDesktop || mobileNavigationKey !== navigationKey)) {
+    setMobileNavigationKey(null);
+  }
+  const mobileNavigationOpen = !isDesktop && mobileNavigationKey === navigationKey;
+  const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
+  // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
+  const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
+  const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
+  const toggleSidebar = () => setSidebarOverride({ segment: routeSegment, collapsed: !sidebarCollapsed });
 
-  const page = legacyKeyForPathname(pathname) || searchParams.get("page") || "api-keys";
+  const isGateway = mode === "ai-gateway";
 
-  const navigateToPage = (newPage: string) => {
-    const migratedRoute = MIGRATED_PAGES[newPage];
-    router.push(migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(newPage));
-  };
-
-  return (
-    <div className="flex flex-col min-h-screen">
-      <Navbar
-        accessToken={accessToken}
-        isPublicPage={false}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
-      />
-      <DebugWarningBanner accessToken={accessToken} />
-      <div className="flex flex-1">
-        {mode !== "ai-gateway" ? (
-          <div className="flex-1 flex">
-            <AgentControlPlaneView />
-          </div>
-        ) : (
-          <>
-            <div className="mt-2">
-              <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
-            </div>
-            <main className="flex-1 min-w-0">{children}</main>
-          </>
-        )}
+  // Non-gateway (agent control plane) mode keeps the original full-width Navbar,
+  // which carries the account menu; the redesigned sidebar + header shell is
+  // scoped to the ai-gateway dashboard. Chat and the public model hub are
+  // separate routes that likewise keep the old Navbar.
+  if (!isGateway) {
+    return (
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <Navbar accessToken={accessToken} isPublicPage={false} />
+        <DebugWarningBanner accessToken={accessToken} />
+        <NoRedisWarningBanner accessToken={accessToken} />
+        <EnvCredentialLoginWarningBanner accessToken={accessToken} />
+        <LicenseExpiryBanner accessToken={accessToken} />
+        <UserBanner accessToken={accessToken} />
+        <UpgradeBanner accessToken={accessToken} />
+        <main className="flex min-h-0 flex-1 overflow-hidden">
+          <AgentControlPlaneView />
+        </main>
       </div>
-    </div>
+    );
+  }
+
+  // Standard app shell: the viewport is fixed height and never scrolls. The
+  // sidebar owns its own scroll and the content column scrolls independently,
+  // so the page can't be dragged past the end of the nav.
+  return (
+    <Sheet open={mobileNavigationOpen} onOpenChange={(open) => setMobileNavigationKey(open ? navigationKey : null)}>
+      <div className="flex h-screen overflow-hidden bg-background max-md:h-dvh">
+        <div className="hidden h-full md:flex">
+          <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
+        </div>
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
+          onClickCapture={(event) => {
+            if (event.target instanceof Element && event.target.closest("a[href]")) setMobileNavigationKey(null);
+          }}
+        >
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
+        </SheetContent>
+        <LiteAdminFrame>
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <DashboardHeader
+              navigationTrigger={
+                <SheetTrigger
+                  render={
+                    <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation" />
+                  }
+                >
+                  <Menu />
+                </SheetTrigger>
+              }
+            />
+            <DebugWarningBanner accessToken={accessToken} />
+            <NoRedisWarningBanner accessToken={accessToken} />
+            <EnvCredentialLoginWarningBanner accessToken={accessToken} />
+            <LicenseExpiryBanner accessToken={accessToken} />
+            <UserBanner accessToken={accessToken} />
+            <UpgradeBanner accessToken={accessToken} />
+            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</main>
+          </div>
+        </LiteAdminFrame>
+      </div>
+    </Sheet>
   );
 }
 
 function LayoutContent({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const searchParams = useSearchParams();
-  const { accessToken, authLoading } = useAuth();
+  const pathname = usePathname();
+  const { accessToken, authLoading, passwordResetRequired } = useAuth();
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
-  if (authLoading) {
+  // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
+  // /onboarding route. Redirect once ui-config has loaded so uiHref resolves the SERVER_ROOT_PATH base.
+  useEffect(() => {
+    if (!authLoading && isInvitationFlow) {
+      router.replace(`${uiHref("onboarding")}?${searchParams.toString()}`);
+    }
+  }, [authLoading, isInvitationFlow, router, searchParams]);
+
+  // A session flagged for a forced password reset can only reach the change-password
+  // endpoint server-side; keep the UI on the matching page.
+  useEffect(() => {
+    if (!authLoading && passwordResetRequired && !pathname?.endsWith("/change-password")) {
+      router.replace(uiHref("change-password"));
+    }
+  }, [authLoading, passwordResetRequired, pathname, router]);
+
+  if (authLoading || isInvitationFlow) {
     return <LoadingScreen />;
   }
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      {isInvitationFlow ? children : <DashboardShell>{children}</DashboardShell>}
+      <DashboardShell>{children}</DashboardShell>
     </ThemeProvider>
   );
 }

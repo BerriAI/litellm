@@ -3,7 +3,8 @@ Anthropic Batches API Handler
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -36,11 +37,12 @@ class AnthropicBatchesHandler:
     async def aretrieve_batch(
         self,
         batch_id: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        logging_obj: Optional[LiteLLMLoggingObj] = None,
+        api_base: str | None,
+        api_key: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        logging_obj: LiteLLMLoggingObj | None = None,
+        litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
     ) -> LiteLLMBatch:
         """
         Async: Retrieve a batch from Anthropic.
@@ -59,9 +61,7 @@ class AnthropicBatchesHandler:
         # Resolve API credentials
         api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
         api_key = api_key or self.anthropic_model_info.get_api_key()
-
-        if not api_key:
-            raise ValueError("Missing Anthropic API Key")
+        resolved_litellm_params: Final = litellm_params if litellm_params is not None else {}
 
         # Create a minimal logging object if not provided
         if logging_obj is None:
@@ -80,20 +80,22 @@ class AnthropicBatchesHandler:
             )
 
         # Get the complete URL for batch retrieval
-        retrieve_url = self.provider_config.get_retrieve_batch_url(
+        retrieve_url: Final = self.provider_config.get_retrieve_batch_url(
             api_base=api_base,
             batch_id=batch_id,
             optional_params={},
-            litellm_params={},
+            litellm_params=resolved_litellm_params,
         )
 
-        # Validate environment and get headers
-        headers = self.provider_config.validate_environment(
+        # Validate environment and get headers. Offloaded to a worker thread: a WIF token
+        # exchange here would otherwise block the event loop.
+        headers: Final = await asyncio.to_thread(
+            self.provider_config.validate_environment,
             headers={},
             model="",
             messages=[],
             optional_params={},
-            litellm_params={},
+            litellm_params=resolved_litellm_params,
             api_key=api_key,
             api_base=api_base,
         )
@@ -108,8 +110,8 @@ class AnthropicBatchesHandler:
             },
         )
         # Make the request
-        async_client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
-        response = await async_client.get(url=retrieve_url, headers=headers)
+        async_client: Final = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
+        response: Final = await async_client.get(url=retrieve_url, headers=headers)
         response.raise_for_status()
 
         # Transform response to LiteLLM format
@@ -124,12 +126,13 @@ class AnthropicBatchesHandler:
         self,
         _is_async: bool,
         batch_id: str,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        logging_obj: Optional[LiteLLMLoggingObj] = None,
-    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
+        api_base: str | None,
+        api_key: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        logging_obj: LiteLLMLoggingObj | None = None,
+        litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
+    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
         """
         Retrieve a batch from Anthropic.
 
@@ -153,6 +156,7 @@ class AnthropicBatchesHandler:
                 timeout=timeout,
                 max_retries=max_retries,
                 logging_obj=logging_obj,
+                litellm_params=litellm_params,
             )
         else:
             return asyncio.run(
@@ -163,5 +167,6 @@ class AnthropicBatchesHandler:
                     timeout=timeout,
                     max_retries=max_retries,
                     logging_obj=logging_obj,
+                    litellm_params=litellm_params,
                 )
             )

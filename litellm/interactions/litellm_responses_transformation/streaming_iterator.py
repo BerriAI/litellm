@@ -3,16 +3,8 @@ Streaming iterator for transforming Responses API stream to Interactions API str
 """
 
 from collections import deque
-from typing import (
-    Any,
-    AsyncIterator,
-    Deque,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    cast,
-)
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, Final, cast
 
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
@@ -41,24 +33,19 @@ class LiteLLMResponsesInteractionsStreamingIterator:
     streaming events (output.text.delta, response.completed, etc.) to Interactions
     API streaming events.
 
-    Schema selection:
-    - New schema (default, use_legacy_interactions_schema=False):
-        interaction.created -> step.start -> step.delta ... -> step.stop -> interaction.completed
-    - Legacy schema (use_legacy_interactions_schema=True, remove after June 8 2026):
-        interaction.start -> content.start -> content.delta ... -> content.stop -> interaction.complete
+    Emits the event sequence
+    ``interaction.created -> step.start -> step.delta ... -> step.stop -> interaction.completed``.
     """
 
     def __init__(
         self,
         model: str,
         litellm_custom_stream_wrapper: BaseResponsesAPIStreamingIterator,
-        request_input: Optional[InteractionInput],
+        request_input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
-        custom_llm_provider: Optional[str] = None,
-        litellm_metadata: Optional[Dict[str, Any]] = None,
+        custom_llm_provider: str | None = None,
+        litellm_metadata: dict[str, Any] | None = None,
     ):
-        import litellm
-
         self.model = model
         self.responses_stream_iterator = litellm_custom_stream_wrapper
         self.request_input = request_input
@@ -69,33 +56,28 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         self.collected_text = ""
         self.sent_interaction_start = False
         self.sent_content_start = False
-        # Capture the schema flag once at construction time so all events
-        # emitted by this stream use a consistent schema, even if the global
-        # flag is mutated mid-stream (e.g. by a config reload).
-        self._use_legacy: bool = litellm.use_legacy_interactions_schema
         # Buffer of events that have been derived from upstream chunks but not
         # yet returned to the caller. A single Responses API chunk may expand
         # into multiple Interactions API events (e.g. the first text delta
         # produces interaction.created + step.start + step.delta), and the
         # terminal sequence on stream end may also span multiple events
         # (step.stop + interaction.completed).
-        self._pending_events: Deque[InteractionsAPIStreamingResponse] = deque()
+        self._pending_events: deque[InteractionsAPIStreamingResponse] = deque()
         # Tracks whether we've already emitted a terminal completion event so
         # the StopIteration fallback path doesn't double-emit.
         self._sent_completion_event = False
         # ID resolved from the first upstream chunk (item_id on a text delta or
         # response.id on response.created). Persisted so the EOF terminal
         # events stay correlated with the start events delivered earlier.
-        self._interaction_id: Optional[str] = None
+        self._interaction_id: str | None = None
 
     # ------------------------------------------------------------------
     # Event builders
     # ------------------------------------------------------------------
 
     def _build_interaction_start_event(self, interaction_id: str) -> InteractionsAPIStreamingResponse:
-        event_type = "interaction.start" if self._use_legacy else "interaction.created"
         return InteractionsAPIStreamingResponse(
-            event_type=event_type,
+            event_type="interaction.created",
             id=interaction_id,
             object="interaction",
             status="in_progress",
@@ -103,13 +85,6 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         )
 
     def _build_content_start_event(self, interaction_id: str) -> InteractionsAPIStreamingResponse:
-        if self._use_legacy:
-            return InteractionsAPIStreamingResponse(
-                event_type="content.start",
-                id=interaction_id,
-                object="content",
-                delta={"type": "text", "text": ""},
-            )
         return InteractionsAPIStreamingResponse(
             event_type="step.start",
             index=0,
@@ -117,42 +92,19 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         )
 
     def _build_text_delta_event(self, interaction_id: str, delta_text: str) -> InteractionsAPIStreamingResponse:
-        if self._use_legacy:
-            return InteractionsAPIStreamingResponse(
-                event_type="content.delta",
-                id=interaction_id,
-                object="content",
-                delta={"type": "text", "text": delta_text},
-            )
         return InteractionsAPIStreamingResponse(
             event_type="step.delta",
             index=0,
             delta={"type": "text", "text": delta_text},
         )
 
-    def _build_content_stop_event(self, interaction_id: Optional[str]) -> InteractionsAPIStreamingResponse:
-        if self._use_legacy:
-            return InteractionsAPIStreamingResponse(
-                event_type="content.stop",
-                id=interaction_id,
-                object="content",
-                delta={"type": "text", "text": self.collected_text},
-            )
+    def _build_content_stop_event(self, interaction_id: str | None) -> InteractionsAPIStreamingResponse:
         return InteractionsAPIStreamingResponse(
             event_type="step.stop",
             index=0,
         )
 
     def _build_completion_event(self, response_id: str) -> InteractionsAPIStreamingResponse:
-        if self._use_legacy:
-            return InteractionsAPIStreamingResponse(
-                event_type="interaction.complete",
-                id=response_id,
-                object="interaction",
-                status="completed",
-                model=self.model,
-                outputs=[{"type": "text", "text": self.collected_text}],
-            )
         return InteractionsAPIStreamingResponse(
             event_type="interaction.completed",
             id=response_id,
@@ -173,7 +125,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
 
     def _events_for_chunk(
         self, responses_chunk: ResponsesAPIStreamingResponse
-    ) -> List[InteractionsAPIStreamingResponse]:
+    ) -> list[InteractionsAPIStreamingResponse]:
         """
         Translate a single upstream Responses API chunk into the list of
         Interactions API events it should produce.
@@ -187,13 +139,13 @@ class LiteLLMResponsesInteractionsStreamingIterator:
 
         # Text delta: emit any missing start events, then the delta itself.
         if isinstance(responses_chunk, OutputTextDeltaEvent):
-            delta_text = responses_chunk.delta if isinstance(responses_chunk.delta, str) else ""
+            delta_text: Final = responses_chunk.delta if isinstance(responses_chunk.delta, str) else ""
             self.collected_text += delta_text
-            interaction_id = getattr(responses_chunk, "item_id", None) or f"interaction_{id(self)}"
+            interaction_id: Final = getattr(responses_chunk, "item_id", None) or f"interaction_{id(self)}"
             if self._interaction_id is None:
                 self._interaction_id = interaction_id
 
-            events: List[InteractionsAPIStreamingResponse] = []
+            events: Final[list[InteractionsAPIStreamingResponse]] = []
             if not self.sent_interaction_start:
                 self.sent_interaction_start = True
                 events.append(self._build_interaction_start_event(interaction_id))
@@ -224,10 +176,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         # text delta).
         if isinstance(responses_chunk, ResponseCompletedEvent):
             self.finished = True
-            response = responses_chunk.response
+            response: Final = responses_chunk.response
             response_id = self._interaction_id or getattr(response, "id", None) or f"interaction_{id(self)}"
 
-            terminal: List[InteractionsAPIStreamingResponse] = []
+            terminal: Final[list[InteractionsAPIStreamingResponse]] = []
             if self.sent_content_start:
                 terminal.append(self._build_content_stop_event(response_id))
             terminal.append(self._build_completion_event(response_id))
@@ -238,17 +190,17 @@ class LiteLLMResponsesInteractionsStreamingIterator:
 
     def _build_terminal_events_on_eof(
         self,
-    ) -> List[InteractionsAPIStreamingResponse]:
+    ) -> list[InteractionsAPIStreamingResponse]:
         """
         Build the events to flush when the upstream stream ends without a
         ResponseCompletedEvent. Ensures consumers always observe a terminal
-        interaction.completed/interaction.complete carrying the full text.
+        interaction.completed carrying the full text.
         """
         if self._sent_completion_event:
             return []
 
-        fallback_id = self._interaction_id or f"interaction_{id(self)}"
-        terminal: List[InteractionsAPIStreamingResponse] = []
+        fallback_id: Final = self._interaction_id or f"interaction_{id(self)}"
+        terminal: Final[list[InteractionsAPIStreamingResponse]] = []
         if self.sent_content_start:
             terminal.append(self._build_content_stop_event(fallback_id))
         if self.sent_interaction_start or self.collected_text:
@@ -270,7 +222,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         if self.finished:
             raise StopIteration
 
-        sync_iterator = cast(SyncResponsesAPIStreamingIterator, self.responses_stream_iterator)
+        sync_iterator: Final = cast(SyncResponsesAPIStreamingIterator, self.responses_stream_iterator)
         while True:
             try:
                 chunk = next(sync_iterator)
@@ -296,7 +248,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         if self.finished:
             raise StopAsyncIteration
 
-        async_iterator = cast(ResponsesAPIStreamingIterator, self.responses_stream_iterator)
+        async_iterator: Final = cast(ResponsesAPIStreamingIterator, self.responses_stream_iterator)
         while True:
             try:
                 chunk = await async_iterator.__anext__()
@@ -320,7 +272,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
     def _transform_responses_chunk_to_interactions_chunk(
         self,
         responses_chunk: ResponsesAPIStreamingResponse,
-    ) -> Optional[InteractionsAPIStreamingResponse]:
+    ) -> InteractionsAPIStreamingResponse | None:
         """
         Compatibility shim: returns the *first* event produced for this chunk
         and queues any remaining events on ``self._pending_events`` so they
@@ -328,10 +280,10 @@ class LiteLLMResponsesInteractionsStreamingIterator:
 
         Prefer ``_events_for_chunk`` in new code.
         """
-        events = self._events_for_chunk(responses_chunk)
+        events: Final = self._events_for_chunk(responses_chunk)
         if not events:
             return None
-        first = events[0]
+        first: Final = events[0]
         if len(events) > 1:
             self._pending_events.extend(events[1:])
         return first

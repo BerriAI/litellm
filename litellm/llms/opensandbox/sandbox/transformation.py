@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import Union, cast
+from typing import Final, cast
 
 import httpx
 
@@ -18,11 +18,12 @@ from litellm.constants import (
     OPEN_SANDBOX_POLL_INTERVAL,
     OPEN_SANDBOX_READY_TIMEOUT,
 )
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.sandbox.transformation import (
+    SANDBOX_MAX_OUTPUT_BYTES,
     BaseSandboxConfig,
     CodeExecutionResult,
     ContainerHandle,
-    SANDBOX_MAX_OUTPUT_BYTES,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -31,10 +32,10 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
-DEFAULT_SANDBOX_TIMEOUT = OPEN_SANDBOX_DEFAULT_TIMEOUT
-DEFAULT_READY_TIMEOUT = OPEN_SANDBOX_READY_TIMEOUT
-DEFAULT_POLL_INTERVAL = OPEN_SANDBOX_POLL_INTERVAL
-MAX_OUTPUT_BYTES = SANDBOX_MAX_OUTPUT_BYTES
+DEFAULT_SANDBOX_TIMEOUT: Final = OPEN_SANDBOX_DEFAULT_TIMEOUT
+DEFAULT_READY_TIMEOUT: Final = OPEN_SANDBOX_READY_TIMEOUT
+DEFAULT_POLL_INTERVAL: Final = OPEN_SANDBOX_POLL_INTERVAL
+MAX_OUTPUT_BYTES: Final = SANDBOX_MAX_OUTPUT_BYTES
 
 
 class OpenSandboxSandboxConfig(BaseSandboxConfig):
@@ -69,11 +70,11 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         client: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> ContainerHandle:
-        key = self.validate_environment(api_key=api_key)
-        base = self._api_base(api_base)
-        ready_timeout_seconds = float(ready_timeout) if ready_timeout is not None else DEFAULT_READY_TIMEOUT
-        poll_interval_seconds = float(poll_interval) if poll_interval is not None else DEFAULT_POLL_INTERVAL
-        body = self._create_body(
+        key: Final = self.validate_environment(api_key=api_key)
+        base: Final = self._api_base(api_base)
+        ready_timeout_seconds: Final = float(ready_timeout) if ready_timeout is not None else DEFAULT_READY_TIMEOUT
+        poll_interval_seconds: Final = float(poll_interval) if poll_interval is not None else DEFAULT_POLL_INTERVAL
+        body: Final = self._create_body(
             template=template,
             timeout=timeout,
             allow_internet_access=allow_internet_access,
@@ -86,16 +87,13 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             secure_access=secure_access,
         )
 
-        response = cast(
-            httpx.Response,
-            await self._http(client).post(
-                url=f"{base}/sandboxes",
-                headers=self._lifecycle_headers(key),
-                json=body,
-            ),
+        response: Final = await self._http(client).post(
+            url=f"{base}/sandboxes",
+            headers=self._lifecycle_headers(key),
+            json=body,
         )
-        data = response.json()
-        sandbox_id = str(data["id"])
+        data: Final = response.json()
+        sandbox_id: Final = str(data["id"])
 
         if self._sandbox_state(data) != "Running":
             await self._wait_until_running(
@@ -117,8 +115,8 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             poll_interval=poll_interval_seconds,
         )
 
-        handle = ContainerHandle(id=sandbox_id, provider="opensandbox", domain=base)
-        handle._hidden_params = {
+        handle: Final = ContainerHandle(id=sandbox_id, provider="opensandbox", domain=base)
+        handle.hidden_params = {
             "api_base": base,
             "api_key": key,
             "execd_endpoint": endpoint,
@@ -130,7 +128,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     async def arun_code(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         code: str,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -141,7 +139,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         client: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> CodeExecutionResult:
-        handle = await self._ensure_handle(
+        handle: Final = await self._ensure_handle(
             container=container,
             api_key=api_key,
             api_base=api_base,
@@ -150,10 +148,13 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             poll_interval=(float(poll_interval) if poll_interval is not None else DEFAULT_POLL_INTERVAL),
             client=client,
         )
-        endpoint = str(handle._hidden_params["execd_endpoint"])
-        endpoint_headers = self._as_str_dict(handle._hidden_params.get("execd_headers"))
-        base = str(handle._hidden_params.get("api_base") or handle.domain or self._api_base(api_base))
-        lines = await self._post_code(
+        hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
+            dict[str, object], getattr(handle, HIDDEN_PARAMS_ATTR)
+        )
+        endpoint: Final = str(hidden_params["execd_endpoint"])
+        endpoint_headers: Final = self._as_str_dict(hidden_params.get("execd_headers"))
+        base: Final = str(hidden_params.get("api_base") or handle.domain or self._api_base(api_base))
+        lines: Final = await self._post_code(
             url=f"{self._endpoint_base_url(endpoint, base)}/code",
             headers={
                 "Content-Type": "application/json",
@@ -172,22 +173,22 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     async def adelete_sandbox(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> bool:
-        handle = self._as_handle(container, api_base=api_base)
-        base = str(handle._hidden_params.get("api_base") or self._api_base(api_base))
-        key = self._api_key(api_key=api_key, handle=handle)
+        handle: Final = self._as_handle(container, api_base=api_base)
+        hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
+            dict[str, object], getattr(handle, HIDDEN_PARAMS_ATTR)
+        )
+        base: Final = str(hidden_params.get("api_base") or self._api_base(api_base))
+        key: Final = self._api_key(api_key=api_key, handle=handle)
         try:
-            response = cast(
-                httpx.Response,
-                await self._http(client).delete(
-                    url=f"{base}/sandboxes/{handle.id}",
-                    headers=self._lifecycle_headers(key),
-                ),
+            response: Final = await self._http(client).delete(
+                url=f"{base}/sandboxes/{handle.id}",
+                headers=self._lifecycle_headers(key),
             )
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -198,7 +199,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     async def _ensure_handle(
         self,
         *,
-        container: Union[ContainerHandle, str],
+        container: ContainerHandle | str,
         api_key: str | None,
         api_base: str | None,
         use_server_proxy: bool,
@@ -206,13 +207,16 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         poll_interval: float,
         client: AsyncHTTPHandler | None,
     ) -> ContainerHandle:
-        handle = self._as_handle(container, api_base=api_base)
-        if handle._hidden_params.get("execd_endpoint"):
+        handle: Final = self._as_handle(container, api_base=api_base)
+        hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
+            dict[str, object], getattr(handle, HIDDEN_PARAMS_ATTR)
+        )
+        if hidden_params.get("execd_endpoint"):
             return handle
 
-        base = str(handle._hidden_params.get("api_base") or self._api_base(api_base))
-        key = self._api_key(api_key=api_key, handle=handle)
-        resolved_use_server_proxy = bool(handle._hidden_params.get("use_server_proxy", use_server_proxy))
+        base: Final = str(hidden_params.get("api_base") or self._api_base(api_base))
+        key: Final = self._api_key(api_key=api_key, handle=handle)
+        resolved_use_server_proxy: Final = bool(hidden_params.get("use_server_proxy", use_server_proxy))
         endpoint, endpoint_headers = await self._wait_for_execd_endpoint(
             sandbox_id=handle.id,
             api_base=base,
@@ -223,14 +227,17 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             poll_interval=poll_interval,
         )
         handle.domain = base
-        handle._hidden_params = {
-            **handle._hidden_params,
-            "api_base": base,
-            "api_key": key,
-            "execd_endpoint": endpoint,
-            "execd_headers": endpoint_headers,
-            "use_server_proxy": resolved_use_server_proxy,
-        }
+        set_hidden_params(
+            handle,
+            {
+                **hidden_params,
+                "api_base": base,
+                "api_key": key,
+                "execd_endpoint": endpoint,
+                "execd_headers": endpoint_headers,
+                "use_server_proxy": resolved_use_server_proxy,
+            },
+        )
         return handle
 
     async def _wait_until_running(
@@ -243,14 +250,11 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         ready_timeout: float,
         poll_interval: float,
     ) -> None:
-        deadline = time.monotonic() + ready_timeout
+        deadline: Final = time.monotonic() + ready_timeout
         while True:
-            response = cast(
-                httpx.Response,
-                await self._http(client).get(
-                    url=f"{api_base}/sandboxes/{sandbox_id}",
-                    headers=headers,
-                ),
+            response = await self._http(client).get(
+                url=f"{api_base}/sandboxes/{sandbox_id}",
+                headers=headers,
             )
             data = response.json()
             state = self._sandbox_state(data)
@@ -273,7 +277,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         ready_timeout: float,
         poll_interval: float,
     ) -> tuple[str, dict[str, str]]:
-        deadline = time.monotonic() + ready_timeout
+        deadline: Final = time.monotonic() + ready_timeout
         last_error: Exception | None = None
         while True:
             try:
@@ -306,16 +310,13 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         use_server_proxy: bool,
         client: AsyncHTTPHandler | None,
     ) -> tuple[str, dict[str, str]]:
-        response = cast(
-            httpx.Response,
-            await self._http(client).get(
-                url=f"{api_base}/sandboxes/{sandbox_id}/endpoints/{OPEN_SANDBOX_EXECD_PORT}",
-                headers=headers,
-                params={"use_server_proxy": use_server_proxy},
-            ),
+        response: Final = await self._http(client).get(
+            url=f"{api_base}/sandboxes/{sandbox_id}/endpoints/{OPEN_SANDBOX_EXECD_PORT}",
+            headers=headers,
+            params={"use_server_proxy": use_server_proxy},
         )
-        data = response.json()
-        endpoint = data.get("endpoint")
+        data: Final = response.json()
+        endpoint: Final = data.get("endpoint")
         if not endpoint:
             raise ValueError(f"OpenSandbox did not return an execd endpoint for {sandbox_id}")
         return str(endpoint), self._as_str_dict(data.get("headers"))
@@ -328,24 +329,24 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         body: dict[str, object],
         client: AsyncHTTPHandler | None,
     ) -> list[str]:
-        timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=None)
-        response = cast(
-            httpx.Response,
-            await self._http(client).post(
-                url=url,
-                headers=headers,
-                timeout=timeout,
-                json=body,
-                stream=True,
-            ),
+        timeout: Final = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=None)
+        response: Final = await self._http(client).post(
+            url=url,
+            headers=headers,
+            timeout=timeout,
+            json=body,
+            stream=True,
         )
         return await self._read_capped_lines(response)
 
     def _api_key(self, *, api_key: str | None, handle: ContainerHandle) -> str:
         if api_key is not None:
             return api_key
-        if "api_key" in handle._hidden_params:
-            return str(handle._hidden_params["api_key"])
+        hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
+            dict[str, object], getattr(handle, HIDDEN_PARAMS_ATTR)
+        )
+        if "api_key" in hidden_params:
+            return str(hidden_params["api_key"])
         return self.validate_environment()
 
     @staticmethod
@@ -362,7 +363,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         network_policy: dict[str, object] | None,
         secure_access: bool,
     ) -> dict[str, object]:
-        body: dict[str, object] = {
+        body: Final[dict[str, object]] = {
             "image": {"uri": template or OPEN_SANDBOX_DEFAULT_TEMPLATE},
             "entrypoint": list(entrypoint or OPEN_SANDBOX_DEFAULT_ENTRYPOINT),
             "timeout": timeout if timeout is not None else DEFAULT_SANDBOX_TIMEOUT,
@@ -393,10 +394,10 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     def _sandbox_state(data: object) -> str | None:
         if not isinstance(data, dict):
             return None
-        status = data.get("status")
+        status: Final = data.get("status")
         if not isinstance(status, dict):
             return None
-        state = status.get("state")
+        state: Final = status.get("state")
         return str(state) if state is not None else None
 
     @staticmethod
@@ -407,52 +408,52 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
 
     @staticmethod
     def _api_base(api_base: str | None) -> str:
-        base = api_base or get_secret_str(OPEN_SANDBOX_API_BASE_ENV_VAR)
+        base: Final = api_base or get_secret_str(OPEN_SANDBOX_API_BASE_ENV_VAR)
         if not base:
             raise ValueError(f"OpenSandbox api_base is required. Pass api_base or set {OPEN_SANDBOX_API_BASE_ENV_VAR}.")
         return str(base).rstrip("/")
 
     @staticmethod
     def _lifecycle_headers(api_key: str) -> dict[str, str]:
-        headers = {"Content-Type": "application/json"}
+        headers: Final = {"Content-Type": "application/json"}
         if api_key:
             headers["OPEN-SANDBOX-API-KEY"] = api_key
         return headers
 
     @staticmethod
     def _endpoint_base_url(endpoint: str, api_base: str) -> str:
-        normalized_endpoint = endpoint.rstrip("/")
+        normalized_endpoint: Final = endpoint.rstrip("/")
         if normalized_endpoint.startswith(("http://", "https://")):
             return normalized_endpoint
-        protocol = api_base.split("://", 1)[0] if "://" in api_base else "http"
+        protocol: Final = api_base.split("://", 1)[0] if "://" in api_base else "http"
         return f"{protocol}://{normalized_endpoint}"
 
     @staticmethod
-    def _as_handle(container: Union[ContainerHandle, str], *, api_base: str | None) -> ContainerHandle:
+    def _as_handle(container: ContainerHandle | str, *, api_base: str | None) -> ContainerHandle:
         if isinstance(container, ContainerHandle):
             return container
-        handle = ContainerHandle(
+        handle: Final = ContainerHandle(
             id=str(container),
             provider="opensandbox",
             domain=OpenSandboxSandboxConfig._api_base(api_base),
         )
-        handle._hidden_params = {}
+        handle.hidden_params = {}
         return handle
 
     @staticmethod
     def _parse_lines(lines: list[str]) -> CodeExecutionResult:
-        messages = tuple(
+        messages: Final = tuple(
             event for line in lines if (event := OpenSandboxSandboxConfig._parse_sse_line(line)) is not None
         )
 
         def of_type(message_type: str):
             return (m for m in messages if m.get("type") == message_type)
 
-        error = next(
+        error: Final = next(
             (OpenSandboxSandboxConfig._normalize_error(m) for m in of_type("error")),
             None,
         )
-        execution_count = next(
+        execution_count: Final = next(
             (
                 OpenSandboxSandboxConfig._as_int(m.get("execution_count"))
                 for m in of_type("execution_count")
@@ -471,7 +472,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
 
     @staticmethod
     def _parse_sse_line(line: str) -> dict[str, object] | None:
-        stripped = line.strip()
+        stripped: Final = line.strip()
         if not stripped or stripped.startswith(
             (
                 ":",
@@ -481,11 +482,11 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             )
         ):
             return None
-        data = stripped[5:].strip() if stripped.startswith("data:") else stripped
+        data: Final = stripped[5:].strip() if stripped.startswith("data:") else stripped
         if not data:
             return None
         try:
-            parsed = json.loads(data)
+            parsed: Final = json.loads(data)
         except json.JSONDecodeError:
             return None
         if not isinstance(parsed, dict):
@@ -503,18 +504,18 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
 
     @staticmethod
     def _normalize_result(message: dict[str, object]) -> dict[str, object]:
-        results = message.get("results")
+        results: Final = message.get("results")
         if isinstance(results, dict):
             return {str(k): v for k, v in results.items()}
         return {str(k): v for k, v in message.items() if k not in {"type", "timestamp", "execution_count"}}
 
     @staticmethod
     def _normalize_error(message: dict[str, object]) -> dict[str, object]:
-        raw_error = message.get("error")
+        raw_error: Final = message.get("error")
         if isinstance(raw_error, dict):
-            name = OpenSandboxSandboxConfig._first_non_none_value(raw_error, "ename", "name", default="")
-            value = OpenSandboxSandboxConfig._first_non_none_value(raw_error, "evalue", "value", default="")
-            traceback = OpenSandboxSandboxConfig._first_non_none_value(raw_error, "traceback", default=[])
+            name: Final = OpenSandboxSandboxConfig._first_non_none_value(raw_error, "ename", "name", default="")
+            value: Final = OpenSandboxSandboxConfig._first_non_none_value(raw_error, "evalue", "value", default="")
+            traceback: Final = OpenSandboxSandboxConfig._first_non_none_value(raw_error, "traceback", default=[])
             return {
                 "name": name,
                 "value": value,
