@@ -8,7 +8,7 @@ from typing import Final, Literal, TypeAlias
 import httpx
 import pytest
 import respx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -189,7 +189,11 @@ def _assert_valid_response(response: object, final_chunk: bool) -> None:
         assert len(response.output) > 0
 
 
-def _assert_valid_stream(events: tuple[object, ...]) -> None:
+def _json_object(value: object) -> dict[str, object]:
+    return _JSON_OBJECT.validate_python(value.model_dump(mode="json") if isinstance(value, BaseModel) else value)
+
+
+def _assert_valid_stream(events: tuple[object, ...], item_id: str) -> None:
     event_types: Final = tuple(getattr(event, "type", None) for event in events)
     assert event_types == tuple(_STREAM_EVENT_FIELDS)
     missing_fields: Final = {
@@ -205,8 +209,29 @@ def _assert_valid_stream(events: tuple[object, ...]) -> None:
     _assert_valid_response(completed.response, final_chunk=True)
     assert completed.response.id == getattr(created, "id", None)
     assert completed.response.output_text == _OUTPUT_TEXT
+    assert tuple(getattr(event, "sequence_number", None) for event in events) == tuple(range(len(events)))
+    item_ids: Final = (
+        getattr(getattr(events[2], "item", None), "id", None),
+        *(getattr(event, "item_id", None) for event in events[3:7]),
+        getattr(getattr(events[7], "item", None), "id", None),
+    )
+    assert item_ids == (item_id,) * 6
+    assert tuple(getattr(event, "output_index", None) for event in events[2:8]) == (0,) * 6
+    assert tuple(getattr(event, "content_index", None) for event in events[3:7]) == (0,) * 4
+    assert _json_object(getattr(events[3], "part", None)) == {
+        "type": "output_text",
+        "text": "",
+        "annotations": [],
+    }
     assert getattr(events[4], "delta", None) == _OUTPUT_TEXT
     assert getattr(events[5], "text", None) == _OUTPUT_TEXT
+    assert _json_object(getattr(events[6], "part", None)) == {
+        "type": "output_text",
+        "text": _OUTPUT_TEXT,
+        "annotations": [],
+    }
+    assert getattr(getattr(events[7], "item", None), "type", None) == "message"
+    assert tuple(item.id for item in completed.response.output) == (item_id,)
 
 
 def _completed_response(events: tuple[object, ...]) -> ResponsesAPIResponse:
@@ -418,7 +443,7 @@ async def test_responses_stream_emits_valid_events(sync_mode: bool) -> None:
         requests: Final = tuple(route.calls)
 
     assert len(requests) == 1
-    _assert_valid_stream(events)
+    _assert_valid_stream(events, "msg_resp_stream")
 
 
 @pytest.mark.asyncio
@@ -500,7 +525,7 @@ async def test_router_responses_alias_stream_uses_underlying_model(sync_mode: bo
         )
         requests: Final = tuple(route.calls)
 
-    _assert_valid_stream(events)
+    _assert_valid_stream(events, "msg_resp_router_stream")
     assert len(requests) == 1
     request_body: Final = _JSON_OBJECT.validate_json(requests[0].request.content)
     assert request_body["model"] == "gpt-4o"
