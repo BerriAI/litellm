@@ -64,6 +64,7 @@ from litellm.constants import (
     DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
+    DEFAULT_MAX_COOLDOWN_TIME_SECONDS,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
@@ -211,6 +212,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
     is_background_response_cost_poll_not_found,
     is_caller_timeout_408,
+    is_client_credential_rate_limit,
     set_cooldown_deployments,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -941,6 +943,7 @@ class Router:
         allowed_fails: int | None = None,  # Number of times a deployment can failbefore being added to cooldown
         allowed_fails_policy: AllowedFailsPolicy | None = None,  # set custom allowed fails policy
         cooldown_time: float | None = None,  # (seconds) time to cooldown a deployment after failure
+        max_cooldown_time: float | None = None,  # (seconds) maximum cap for response-header cooldowns
         disable_cooldowns: bool | None = None,
         routing_strategy: RoutingStrategyName = "simple-shuffle",
         optional_pre_call_checks: OptionalPreCallChecks | None = None,
@@ -1181,7 +1184,8 @@ class Router:
             self.allowed_fails = allowed_fails
         else:
             self.allowed_fails = litellm.allowed_fails
-        self.cooldown_time = cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
+        self.cooldown_time = cooldown_time if cooldown_time is not None else DEFAULT_COOLDOWN_TIME_SECONDS
+        self.max_cooldown_time = max_cooldown_time
         self.cooldown_cache = CooldownCache(cache=self.cache, default_cooldown_time=self.cooldown_time)
         self.disable_cooldowns = disable_cooldowns
         self.enable_health_check_routing = enable_health_check_routing
@@ -4104,6 +4108,7 @@ class Router:
         original_model_id: Final = model_info.get("id")
         model_info["id"] = _model_id
         model_info["original_model_id"] = original_model_id
+        model_info["is_clientside_credential"] = True
         deployment_pydantic_obj: Final = Deployment(
             model_name=model_group,
             litellm_params=LiteLLM_Params.model_validate(dynamic_litellm_params),
@@ -4161,6 +4166,7 @@ class Router:
             model_info = deployment_pydantic_obj.model_info.model_dump()
             deployment_litellm_model_name = deployment_pydantic_obj.litellm_params.model
             deployment_api_base = deployment_pydantic_obj.litellm_params.api_base
+            kwargs["is_clientside_credential"] = True
 
         metadata_variable_name: Final = get_router_metadata_variable_name(
             function_name=function_name,
@@ -8575,6 +8581,13 @@ class Router:
                 )
                 return False
 
+            if is_client_credential_rate_limit(kwargs, exception_status, exception):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Rate limit error (429) was caused by client-supplied / forwarded credentials, not deployment health."
+                )
+                return False
+
             exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
                 original_exception=exception
             )
@@ -8598,7 +8611,11 @@ class Router:
             if deployment_cooldown is not None and deployment_cooldown >= 0:
                 _time_to_cooldown = deployment_cooldown
             elif header_cooldown is not None and header_cooldown >= 0:
-                _time_to_cooldown = header_cooldown
+                _max_cd: Final = getattr(self, "max_cooldown_time", None) or DEFAULT_MAX_COOLDOWN_TIME_SECONDS
+                if _max_cd is not None and _max_cd >= 0:
+                    _time_to_cooldown = min(header_cooldown, _max_cd)
+                else:
+                    _time_to_cooldown = header_cooldown
             else:
                 _time_to_cooldown = self.cooldown_time
 
