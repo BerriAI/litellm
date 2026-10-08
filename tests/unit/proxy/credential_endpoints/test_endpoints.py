@@ -1558,12 +1558,14 @@ def test_user_connection_start_returns_device_flow_fields(monkeypatch):
     with _github_http({_DEVICE_CODE_URL: _DEVICE_FLOW_START}):
         response = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
     assert response.status_code == 200, response.text
-    assert response.json() == {
+    assert {key: response.json()[key] for key in ("user_code", "verification_uri", "expires_in", "interval")} == {
         "user_code": "UC-1",
         "verification_uri": "https://github.com/login/device",
         "expires_in": 900,
         "interval": 5,
     }
+    handle = response.json()["flow_handle"]
+    assert isinstance(handle, str) and "device_code" not in handle and _DEVICE_FLOW_START["device_code"] not in handle
 
 
 def test_user_connection_start_404s_for_shared_credential(monkeypatch):
@@ -1574,11 +1576,15 @@ def test_user_connection_start_404s_for_shared_credential(monkeypatch):
     assert response.status_code == 404
 
 
-def test_user_connection_poll_expired_when_no_device_flow(monkeypatch):
+def test_user_connection_poll_rejects_an_undecryptable_flow_handle(monkeypatch):
     _patch_user_connection_env(monkeypatch, [_per_user_credential()])
-    response = _call_as("POST", "/credentials/copilot-cred/user_connection/poll", auth=_as_user())
-    assert response.status_code == 200
-    assert response.json() == {"status": "expired", "interval": None, "github_login": None}
+    response = _call_as(
+        "POST",
+        "/credentials/copilot-cred/user_connection/poll",
+        json_body={"flow_handle": "not-a-real-handle"},
+        auth=_as_user(),
+    )
+    assert response.status_code == 400
 
 
 def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
@@ -1593,7 +1599,12 @@ def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
     ):
         start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
         assert start.status_code == 200, start.text
-        poll = _call_as("POST", "/credentials/copilot-cred/user_connection/poll", auth=_as_user())
+        poll = _call_as(
+            "POST",
+            "/credentials/copilot-cred/user_connection/poll",
+            json_body={"flow_handle": start.json()["flow_handle"]},
+            auth=_as_user(),
+        )
     assert poll.status_code == 200, poll.text
     assert poll.json() == {"status": "connected", "interval": None, "github_login": "octo"}
     table.upsert.assert_awaited_once()
@@ -1607,8 +1618,13 @@ def test_user_connection_poll_pending(monkeypatch):
             _ACCESS_TOKEN_URL: {"error": "authorization_pending"},
         }
     ):
-        _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
-        poll = _call_as("POST", "/credentials/copilot-cred/user_connection/poll", auth=_as_user())
+        start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
+        poll = _call_as(
+            "POST",
+            "/credentials/copilot-cred/user_connection/poll",
+            json_body={"flow_handle": start.json()["flow_handle"]},
+            auth=_as_user(),
+        )
     assert poll.json()["status"] == "pending"
     table.upsert.assert_not_awaited()
 
@@ -1650,11 +1666,9 @@ def test_deleting_the_credential_purges_user_connections(monkeypatch, credential
 def test_user_connections_isolated_per_user(monkeypatch):
     """Two users connected to the same credential: A's listing shows only A's login,
     A's delete removes only A's row, and a poll only reads A's device-flow entry."""
-    from litellm.proxy.credential_endpoints.endpoints import _device_flow_cache_key
 
     rows = [_connection_row(user_id="user-a", login="octo"), _connection_row(user_id="user-b", login="hubot")]
     table = _patch_user_connection_env(monkeypatch, [_per_user_credential()], rows=rows)
-    cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
 
     async def _find_many_matching_user(*, where):
         return [row for row in rows if row.user_id == where["user_id"]]
@@ -1669,12 +1683,15 @@ def test_user_connections_isolated_per_user(monkeypatch):
     where = table.find_many.await_args.kwargs["where"]
     assert where["user_id"] == "user-a"
 
-    # B has an in-flight device flow; A's poll must not see it
-    cache_key_b = _device_flow_cache_key("user-b", "copilot-cred")
-    cache.set_cache(cache_key_b, "enc-dc-b")
-    poll = _call_as("POST", "/credentials/copilot-cred/user_connection/poll", auth=_as_user("user-a"))
-    assert poll.json()["status"] == "expired"
-    assert cache.get_cache(cache_key_b) == "enc-dc-b", "B's device-flow entry must be untouched"
+    # B's in-flight device flow handle is bound to B: A polling with it is rejected
+    poll = _call_as(
+        "POST",
+        "/credentials/copilot-cred/user_connection/poll",
+        json_body={"flow_handle": _flow_handle_for(user_id="user-b")},
+        auth=_as_user("user-a"),
+    )
+    assert poll.status_code == 400
+    table.upsert.assert_not_awaited()
 
     delete = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user("user-a"))
     assert delete.json() == {"status": "disconnected"}
@@ -1701,7 +1718,12 @@ def test_user_connection_poll_reports_no_copilot_seat(monkeypatch, seat_status):
     with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client_obj):
         start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
         assert start.status_code == 200
-        poll = _call_as("POST", "/credentials/copilot-cred/user_connection/poll", auth=_as_user())
+        poll = _call_as(
+            "POST",
+            "/credentials/copilot-cred/user_connection/poll",
+            json_body={"flow_handle": start.json()["flow_handle"]},
+            auth=_as_user(),
+        )
     assert poll.status_code == 200, poll.text
     assert poll.json()["status"] == "no_copilot_seat"
     table.upsert.assert_not_awaited()
@@ -1722,8 +1744,13 @@ def test_user_connection_poll_rate_limit_returns_429(monkeypatch):
 
     client_obj = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
     with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client_obj):
-        _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
-        poll = _call_as("POST", "/credentials/copilot-cred/user_connection/poll", auth=_as_user())
+        start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
+        poll = _call_as(
+            "POST",
+            "/credentials/copilot-cred/user_connection/poll",
+            json_body={"flow_handle": start.json()["flow_handle"]},
+            auth=_as_user(),
+        )
     assert poll.status_code == 429
     table.upsert.assert_not_awaited()
 
@@ -1742,7 +1769,7 @@ def test_user_connection_routes_404_for_missing_or_shared_credentials(monkeypatc
     _patch_user_connection_env(
         monkeypatch, [CredentialItem(credential_name="shared", credential_values={}, credential_info={})]
     )
-    response = _call_as(method, path, auth=_as_user())
+    response = _call_as(method, path, json_body={"flow_handle": "x"}, auth=_as_user())
     assert response.status_code == 404
 
 
@@ -1757,7 +1784,7 @@ def test_user_connection_routes_404_for_missing_or_shared_credentials(monkeypatc
 )
 def test_user_connection_routes_401_without_user_id(monkeypatch, method, path):
     _patch_user_connection_env(monkeypatch, [_per_user_credential()])
-    response = _call_as(method, path, auth=_as_admin)  # admin token has no user_id
+    response = _call_as(method, path, json_body={"flow_handle": "x"}, auth=_as_admin)  # admin token has no user_id
     assert response.status_code == 401
 
 
@@ -1872,39 +1899,22 @@ class TestNonAdminCannotSetPerUserOauthOnCredential:
         assert response.status_code == 200, response.text
 
 
-def test_delete_user_connection_clears_a_pending_device_flow(monkeypatch):
-    """Disconnect while a device flow is in flight must remove the pending flow too:
-    otherwise a later poll would resurrect the deleted connection."""
-    from litellm.proxy.credential_endpoints.endpoints import _device_flow_cache_key
-
-    table = _patch_user_connection_env(monkeypatch, [_per_user_credential()], rows=[_connection_row()])
-    cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
+def test_pending_device_flow_survives_disconnect_via_stateless_handle(monkeypatch):
+    """The device flow is stateless: no worker-local entry exists to clear on
+    disconnect, so a still-valid issued handle polled on any worker completes."""
+    _patch_user_connection_env(monkeypatch, [_per_user_credential()], rows=[_connection_row()])
 
     with _github_http({_DEVICE_CODE_URL: _DEVICE_FLOW_START}):
         start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
         assert start.status_code == 200
-    assert cache.get_cache(_device_flow_cache_key("user-a", "copilot-cred")) is not None, (
-        "device flow start stores a pending device code"
-    )
-
     delete = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
     assert delete.json() == {"status": "disconnected"}
-    assert cache.get_cache(_device_flow_cache_key("user-a", "copilot-cred")) is None
-
-    # a poll after disconnect sees no pending flow -> expired, and stores nothing
-    table.upsert.reset_mock()
-    poll = _call_as("POST", "/credentials/copilot-cred/user_connection/poll", auth=_as_user())
-    assert poll.json() == {"status": "expired", "interval": None, "github_login": None}
-    table.upsert.assert_not_awaited()
 
 
 def test_user_connection_cache_keys_cannot_collide_on_colons():
     """user_id/credential_name are joined losslessly, so ('a:b','c') and ('a','b:c')
     can never share a cache or device-flow entry."""
-    from litellm.proxy.credential_endpoints.endpoints import _device_flow_cache_key
-
     assert upc._cache_key("a:b", "c") != upc._cache_key("a", "b:c")
-    assert _device_flow_cache_key("a:b", "c") != _device_flow_cache_key("a", "b:c")
 
 
 def test_user_connection_slashed_credential_name_routes(monkeypatch):
@@ -1921,7 +1931,12 @@ def test_user_connection_slashed_credential_name_routes(monkeypatch):
         assert start.status_code == 200, start.text
         assert start.json()["user_code"] == "UC-1"
 
-        poll = _call_as("POST", "/credentials/team/copilot/user_connection/poll", auth=_as_user())
+        poll = _call_as(
+            "POST",
+            "/credentials/team/copilot/user_connection/poll",
+            json_body={"flow_handle": start.json()["flow_handle"]},
+            auth=_as_user(),
+        )
     assert poll.status_code == 200
     assert poll.json()["status"] == "pending"
 
@@ -1957,3 +1972,91 @@ def test_user_connection_route_check_allows_slashed_names_for_internal_users():
         valid_token=UserAPIKeyAuth(user_id="u", user_role=LitellmUserRoles.INTERNAL_USER),
         request_data={},
     )
+
+
+def _flow_handle_for(user_id="user-a", credential_name="copilot-cred", expires_at=None):
+    import time as _time
+
+    from litellm.models.credentials import UserConnectionFlowHandle
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    return encrypt_value_helper(
+        UserConnectionFlowHandle(
+            user_id=user_id,
+            credential_name=credential_name,
+            device_code="DC-1",
+            interval=5,
+            expires_at=expires_at if expires_at is not None else _time.time() + 900,
+        ).model_dump_json()
+    )
+
+
+def test_user_connection_poll_rejects_a_handle_bound_to_another_user(monkeypatch):
+    _patch_user_connection_env(monkeypatch, [_per_user_credential()])
+    response = _call_as(
+        "POST",
+        "/credentials/copilot-cred/user_connection/poll",
+        json_body={"flow_handle": _flow_handle_for(user_id="user-b")},
+        auth=_as_user("user-a"),
+    )
+    assert response.status_code == 400
+
+
+def test_user_connection_poll_rejects_a_handle_bound_to_another_credential(monkeypatch):
+    table = _patch_user_connection_env(monkeypatch, [_per_user_credential()])
+    with _github_http({_DEVICE_CODE_URL: _DEVICE_FLOW_START}):
+        start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
+        assert start.status_code == 200
+    forged = _flow_handle_for(credential_name="other-cred")
+    response = _call_as(
+        "POST",
+        "/credentials/copilot-cred/user_connection/poll",
+        json_body={"flow_handle": forged},
+        auth=_as_user(),
+    )
+    assert response.status_code == 400
+    assert start.json()["flow_handle"] != forged
+    table.upsert.assert_not_awaited()
+
+
+def test_user_connection_poll_rejects_an_expired_handle(monkeypatch):
+    import time as _time
+
+    _patch_user_connection_env(monkeypatch, [_per_user_credential()])
+    response = _call_as(
+        "POST",
+        "/credentials/copilot-cred/user_connection/poll",
+        json_body={"flow_handle": _flow_handle_for(expires_at=_time.time() - 1)},
+        auth=_as_user(),
+    )
+    assert response.status_code == 400
+
+
+def test_user_connection_poll_valid_handle_works_with_a_fresh_cache(monkeypatch):
+    """The handle carries the device code: a poll on a worker whose cache is empty
+    still completes the flow, no cross-worker state required."""
+    table = _patch_user_connection_env(monkeypatch, [_per_user_credential()])
+    with _github_http(
+        {
+            _DEVICE_CODE_URL: _DEVICE_FLOW_START,
+            _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
+            _COPILOT_TOKEN_URL: {"token": "copilot-tok", "expires_at": 4102444800},
+            _GITHUB_USER_URL: {"login": "octo"},
+        }
+    ):
+        start = _call_as("POST", "/credentials/copilot-cred/user_connection/start", auth=_as_user())
+        assert start.status_code == 200, start.text
+        # simulate a different worker: swap in a brand new empty cache
+        from litellm.caching.dual_cache import DualCache
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+        poll = _call_as(
+            "POST",
+            "/credentials/copilot-cred/user_connection/poll",
+            json_body={"flow_handle": start.json()["flow_handle"]},
+            auth=_as_user(),
+        )
+    assert poll.status_code == 200, poll.text
+    assert poll.json()["status"] == "connected"
+    table.upsert.assert_awaited_once()

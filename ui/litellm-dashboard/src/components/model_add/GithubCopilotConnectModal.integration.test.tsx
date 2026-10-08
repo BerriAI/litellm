@@ -16,6 +16,7 @@ const START_RESPONSE = {
   verification_uri: "https://github.com/login/device",
   expires_in: 900,
   interval: 5,
+  flow_handle: "fh-1",
 };
 
 const renderModal = () => {
@@ -60,6 +61,7 @@ describe("GithubCopilotConnectModal", () => {
     expect(networking.userConnectionPollCall).not.toHaveBeenCalled();
     await advance(0.1);
     expect(networking.userConnectionPollCall).toHaveBeenCalledTimes(1);
+    expect(networking.userConnectionPollCall).toHaveBeenCalledWith("session-token", "copilot-per-user", "fh-1");
     await advance(5);
     expect(networking.userConnectionPollCall).toHaveBeenCalledTimes(2);
 

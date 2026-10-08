@@ -160,9 +160,9 @@ async def _try_cache_get(token_cache: "RedisCache", key: str) -> object:
         return None
 
 
-async def _try_cache_set(token_cache: "RedisCache", key: str, value: str) -> None:
+async def _try_cache_set(token_cache: "RedisCache", key: str, value: str, nx: bool = False) -> None:
     try:
-        await token_cache.async_set_cache(key, value, ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS)
+        await token_cache.async_set_cache(key, value, nx=nx, ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS)
     except Exception:  # noqa: BLE001  # caching is best-effort; a Redis outage is not worth failing the request
         verbose_proxy_logger.warning("aget_user_provider_tokens: Redis set failed; skipping the cache write")
 
@@ -173,13 +173,37 @@ async def invalidate_user_provider_credential_cache(
     user_id: str,
     credential_name: str,
 ) -> None:
+    """Write the not-connected tombstone rather than deleting: a read in flight
+    before the disconnect must not fill the token back in behind it (fills are
+    set-if-absent)."""
+    token_cache: Final = cache.redis_cache
+    if token_cache is None:
+        return
+    try:
+        await token_cache.async_set_cache(
+            _cache_key(user_id, credential_name),
+            _NOT_CONNECTED,
+            ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
+        )
+    except Exception:  # noqa: BLE001  # a Redis outage must not fail a disconnect
+        verbose_proxy_logger.warning("invalidate_user_provider_credential_cache: Redis tombstone failed")
+
+
+@with_service_target("user_provider_connections")
+async def drop_user_provider_credential_cache(
+    cache: DualCache,
+    user_id: str,
+    credential_name: str,
+) -> None:
+    """Connect path: delete the key outright so the next read fills fresh (a
+    tombstone would linger for the TTL and hide the new connection)."""
     token_cache: Final = cache.redis_cache
     if token_cache is None:
         return
     try:
         await token_cache.async_delete_cache(_cache_key(user_id, credential_name))
-    except Exception:  # noqa: BLE001  # a Redis outage must not fail a disconnect
-        verbose_proxy_logger.warning("invalidate_user_provider_credential_cache: Redis delete failed")
+    except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
+        verbose_proxy_logger.warning("drop_user_provider_credential_cache: Redis delete failed")
 
 
 @with_service_target("user_provider_connections")
@@ -229,7 +253,7 @@ async def aget_user_provider_tokens(
     found: Final = {row.credential_name: row.credential_b64 for row in rows}
     for name in misses:
         if token_cache is not None:
-            await _try_cache_set(token_cache, _cache_key(user_id, name), found.get(name, _NOT_CONNECTED))
+            await _try_cache_set(token_cache, _cache_key(user_id, name), found.get(name, _NOT_CONNECTED), nx=True)
         if name in found:
             cached[name] = found[name]
     return {

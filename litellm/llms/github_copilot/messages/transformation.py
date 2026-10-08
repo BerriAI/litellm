@@ -10,6 +10,7 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    pin_session_authorization,
 )
 from ..per_user_auth import require_github_copilot_user_session
 
@@ -91,6 +92,8 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         for key, value in copilot_headers.items():
             if key not in headers:
                 headers[key] = value
+        if user_session is not None:
+            pin_session_authorization(headers, user_session.token)
 
         headers["openai-intent"] = "messages-proxy"
         headers["x-interaction-type"] = "messages-proxy"

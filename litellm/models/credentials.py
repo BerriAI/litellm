@@ -69,6 +69,27 @@ class UserConnectionStartResponse(LiteLLMBaseModel):
     verification_uri: str
     expires_in: int
     interval: int
+    flow_handle: str
+
+
+class UserConnectionPollRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    flow_handle: str
+
+
+class UserConnectionFlowHandle(LiteLLMBaseModel):
+    """The stateless device-flow ticket: the pending ``device_code`` travels
+    encrypted inside ``flow_handle`` instead of a worker-local cache entry, so a
+    poll landing on any worker can complete the connection.``"""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str
+    credential_name: str
+    device_code: str = Field(repr=False)
+    interval: int
+    expires_at: float
 
 
 UserConnectionPollStatus: TypeAlias = Literal[

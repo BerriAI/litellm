@@ -30,6 +30,7 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    pin_session_authorization,
 )
 from ..per_user_auth import require_github_copilot_user_session
 
@@ -217,6 +218,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers: Final = {**copilot_headers, **headers}
+            if user_session is not None:
+                pin_session_authorization(merged_headers, user_session.token)
 
             # Analyze input to determine additional headers
             input_param: Final = self._get_input_from_params(litellm_params)

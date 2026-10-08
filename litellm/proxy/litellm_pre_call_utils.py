@@ -2699,6 +2699,29 @@ def _fallback_edges(
     return frozenset(targets)
 
 
+def _request_fallback_groups(
+    data: Mapping[str, object],
+    model_group: str,
+) -> frozenset[str]:
+    """Request-level fallbacks (``fallbacks``, ``context_window_fallbacks``,
+    ``content_policy_fallbacks``) in the shapes routing accepts: a list of
+    target group names applying to the request, or a list of
+    ``{model_group: [targets]}`` maps matching this model."""
+    targets: Final[set[str]] = set()  # mutable-ok: accumulates request-level fallback targets
+    for key in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks"):
+        entries: Final = data.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, str):
+                targets.add(entry)
+            elif isinstance(entry, dict):
+                raw = entry.get(model_group) or entry.get("*")
+                values = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
+                targets.update(value for value in values if isinstance(value, str))
+    return frozenset(targets)
+
+
 def _fallback_target_groups(
     llm_router: litellm.Router,
     model_group: str,
@@ -2774,17 +2797,19 @@ async def _resolve_user_provider_credentials_for_request(
     one that fails the call with a 401 when per-user mode applies."""
     user_id: Final = authenticated_user_id
     model: Final = data.get("model")
-    if not isinstance(user_id, str) or not user_id or llm_router is None or not isinstance(model, str):
+    if llm_router is None or not isinstance(model, str):
         return
-    model_groups: Final = frozenset({model} | _fallback_target_groups(llm_router, model))
+    model_groups: Final = frozenset(
+        {model} | _fallback_target_groups(llm_router, model) | _request_fallback_groups(data, model)
+    )
     credential_names: Final = _per_user_credential_names_for_groups(llm_router, model_groups, team_id)
-    if not credential_names:
-        return
-    if "litellm_credential_name" in data:
+    if credential_names and "litellm_credential_name" in data:
         raise HTTPException(
             status_code=400,
             detail="litellm_credential_name cannot be set in the request body for a model that uses per-user GitHub OAuth",
         )
+    if not isinstance(user_id, str) or not user_id or not credential_names:
+        return
 
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict

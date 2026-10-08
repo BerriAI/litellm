@@ -15,6 +15,7 @@ export type ConnectFlowState =
       readonly verificationUri: string;
       readonly expiresAt: number;
       readonly intervalSeconds: number;
+      readonly flowHandle: string;
     }
   | { readonly kind: "connected"; readonly attempt: number; readonly githubLogin: string }
   | {
@@ -77,6 +78,7 @@ export const connectFlowReducer = (state: ConnectFlowState, event: ConnectFlowEv
             verificationUri: safeVerificationUri(event.response.verification_uri),
             expiresAt: event.now + event.response.expires_in * 1000,
             intervalSeconds: event.response.interval,
+            flowHandle: event.response.flow_handle,
           };
     case "polled":
       return state.kind === "awaiting" ? afterPoll(state, event.response) : state;

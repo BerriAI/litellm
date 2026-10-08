@@ -76,9 +76,7 @@ def test_github_copilot_embedding_config_get_complete_url():
     assert url == "https://api.githubcopilot.com/embeddings"
 
     # Test with custom API base from authenticator
-    config.authenticator.get_api_base.return_value = (
-        "https://api.enterprise.githubcopilot.com"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
     url = config.get_complete_url(
         api_base=None,
         api_key=None,
@@ -271,11 +269,30 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
 
     session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
     headers = config.validate_environment(
-        headers={}, model="github_copilot/text-embedding-3-small", messages=[], optional_params={},
+        headers={},
+        model="github_copilot/text-embedding-3-small",
+        messages=[],
+        optional_params={},
         litellm_params={"github_copilot_user_session": session},
     )
     assert headers["Authorization"] == "Bearer user-copilot-token"
     config.authenticator.get_api_key.assert_not_called()
+
+
+def test_per_user_session_token_wins_over_caller_authorization():
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotEmbeddingConfig()
+    config.authenticator = MagicMock()
+    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    headers = config.validate_environment(
+        headers={"Authorization": "Bearer caller-token"},
+        model="github_copilot/text-embedding-3-small",
+        messages=[],
+        optional_params={},
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert headers["Authorization"] == "Bearer user-copilot-token"
 
 
 def test_get_complete_url_prefers_per_user_session_api_base():
@@ -285,7 +302,10 @@ def test_get_complete_url_prefers_per_user_session_api_base():
     config.authenticator = MagicMock()
     session = GithubCopilotUserSession(token="t", api_base="https://tenant.githubcopilot.com")
     url = config.get_complete_url(
-        api_base="https://attacker.example", api_key=None, model="m", optional_params={},
+        api_base="https://attacker.example",
+        api_key=None,
+        model="m",
+        optional_params={},
         litellm_params={"github_copilot_user_session": session},
     )
     assert url == "https://tenant.githubcopilot.com/embeddings"

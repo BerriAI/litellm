@@ -100,7 +100,6 @@ def per_user_credential():
         yield
 
 
-
 def test_named_per_user_credential_selects_per_user_mode(per_user_credential):
     assert github_copilot_auth_mode("copilot-cred", None) is True
 
@@ -126,7 +125,6 @@ def test_unknown_named_credential_falls_back_to_kwargs():
         assert github_copilot_auth_mode("missing-cred", None) is False
 
 
-
 @pytest.mark.parametrize(
     "raw,expected",
     [
@@ -148,7 +146,6 @@ def test_validated_copilot_api_base(raw, expected):
     assert validated_copilot_api_base(raw) == expected
 
 
-
 def test_session_repr_and_str_hide_the_token(caplog):
     session = GithubCopilotUserSession(token="secret-copilot-token", api_base="https://api.githubcopilot.com")
     assert "secret-copilot-token" not in repr(session)
@@ -158,7 +155,6 @@ def test_session_repr_and_str_hide_the_token(caplog):
 
         logging.getLogger("litellm").debug("session: %s", session)
     assert "secret-copilot-token" not in caplog.text
-
 
 
 def test_exchange_returns_session_and_caches_per_user():
@@ -209,7 +205,6 @@ def test_exchange_expiry_margin_refetches_near_expiry():
         assert len(requests) == 2
 
 
-
 @pytest.mark.asyncio
 async def test_aexchange_single_flight_one_http_call():
     def respond(request: httpx.Request) -> httpx.Response:
@@ -230,7 +225,6 @@ async def test_aexchange_401_raises_and_evicts():
         with pytest.raises(CallerCredentialAuthenticationError):
             await aexchange_github_token("user-a", "gh-token", "copilot-cred")
         assert _SESSION_CACHE.get_cache(_session_cache_key("user-a", "gh-token")) is None
-
 
 
 def _kwargs_with_connection(token="gho_user_token"):
@@ -280,7 +274,6 @@ def test_evict_drops_cached_session():
         evict_copilot_user_session("user-a", "gh-token")
         exchange_github_token("user-a", "gh-token", "copilot-cred")
         assert len(requests) == 2
-
 
 
 @pytest.mark.asyncio
@@ -341,7 +334,6 @@ async def test_apoll_device_flow_connected():
         assert poll.status == "connected" and poll.access_token == "gho_x"
 
 
-
 def test_is_github_copilot_per_user_request():
     from litellm.llms.github_copilot.per_user_auth import is_github_copilot_per_user_request
 
@@ -350,7 +342,6 @@ def test_is_github_copilot_per_user_request():
     assert is_github_copilot_per_user_request({}) is False
     assert is_github_copilot_per_user_request({GITHUB_COPILOT_USER_SESSION_KWARG_KEY: "not-a-session"}) is False
     assert is_github_copilot_per_user_request({"litellm_credential_name": "copilot-cred"}) is False
-
 
 
 def _chat_completion_response():
@@ -461,7 +452,6 @@ def test_shared_mode_second_identical_call_hits_response_cache(  # test-quality-
         assert mock_completion.call_count == 1, "shared mode must still serve the second call from cache"
 
 
-
 def _embedding_response_payload():
     return {
         "object": "list",
@@ -556,6 +546,29 @@ def test_e2e_completion_per_user_credential(per_user_credential):
     extra_headers = call_kwargs["optional_params"]["extra_headers"]
     assert extra_headers["Authorization"] == "Bearer copilot-token"
     assert response.usage.total_tokens > 0
+
+
+def test_e2e_completion_per_user_session_token_wins_over_caller_authorization(per_user_credential):
+    """The session token reaches the wire even when the caller passes their own
+    Authorization in extra_headers (chat dispatches through _complete_custom_openai)."""
+    with (
+        github_http(_exchange_responder()),
+        _no_authenticator(),
+        patch(
+            "litellm.main.openai_chat_completions.completion",
+            return_value=_chat_completion_response(),
+        ) as mock_completion,
+    ):
+        litellm.completion(
+            model="github_copilot/gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_secret_fields("user-a", "gho_a"),
+            extra_headers={"Authorization": "Bearer caller-token", "x-custom": "keep"},
+        )
+    extra_headers = mock_completion.call_args.kwargs["optional_params"]["extra_headers"]
+    assert extra_headers["Authorization"] == "Bearer copilot-token"
+    assert extra_headers["x-custom"] == "keep"
 
 
 def test_e2e_embedding_per_user_credential(per_user_credential):
@@ -733,7 +746,6 @@ async def test_e2e_anthropic_messages_shared_mode_still_uses_authenticator(tmp_p
     assert response["usage"]["input_tokens"] == 4
 
 
-
 def test_sync_exchange_single_flight_one_http_call():
     import threading
 
@@ -763,7 +775,6 @@ def test_two_users_same_github_token_do_not_share_session():
         s2 = exchange_github_token("user-b", "gh-same", "copilot-cred")
         assert _session_cache_key("user-a", "gh-same") != _session_cache_key("user-b", "gh-same")
         assert s1.token == s2.token == "copilot-token"
-
 
 
 def test_router_constructs_with_per_user_credential_deployment(per_user_credential):
@@ -827,9 +838,7 @@ async def test_aexchange_cancelled_waiter_does_not_cancel_the_shared_exchange(pe
     class _GatedClient:
         async def get(self, url, headers=None):
             await gate.wait()
-            return httpx.Response(
-                200, json=_exchange_payload(), request=httpx.Request("GET", url)
-            )
+            return httpx.Response(200, json=_exchange_payload(), request=httpx.Request("GET", url))
 
     with patch(  # test-quality-ok: the gate holds the HTTP edge open so two waiters overlap
         "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=_GatedClient()
@@ -904,9 +913,10 @@ async def test_per_user_streaming_call_writes_nothing_to_the_response_cache(per_
         call_type="acompletion",
         kwargs=kwargs,
     )
-    assert handler.should_store_result_in_cache(
-        original_function=litellm.acompletion, kwargs=handler.request_kwargs
-    ) is False
+    assert (
+        handler.should_store_result_in_cache(original_function=litellm.acompletion, kwargs=handler.request_kwargs)
+        is False
+    )
 
 
 @pytest.mark.asyncio
@@ -934,6 +944,7 @@ async def test_shared_streaming_call_still_writes_response_cache(tmp_path, monke
         call_type="acompletion",
         kwargs=kwargs,
     )
-    assert handler.should_store_result_in_cache(
-        original_function=litellm.acompletion, kwargs=handler.request_kwargs
-    ) is True
+    assert (
+        handler.should_store_result_in_cache(original_function=litellm.acompletion, kwargs=handler.request_kwargs)
+        is True
+    )

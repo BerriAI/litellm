@@ -2,6 +2,7 @@
 Constants for Copilot integration
 """
 
+from collections.abc import MutableMapping
 from typing import Final
 from uuid import uuid4
 
@@ -75,3 +76,12 @@ def get_copilot_default_headers(api_key: str) -> dict:
         "x-request-id": str(uuid4()),
         "x-vscode-user-agent-library-version": "electron-fetch",
     }
+
+
+def pin_session_authorization(headers: MutableMapping[str, str], session_token: str) -> None:
+    """The stored per-user session token owns Authorization outright: drop every
+    caller-supplied bearer header (any casing) so it can never displace the
+    session's on the wire."""
+    for key in tuple(k for k in headers if k.lower() == "authorization"):
+        del headers[key]
+    headers["Authorization"] = f"Bearer {session_token}"
