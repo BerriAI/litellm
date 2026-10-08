@@ -476,6 +476,7 @@ _COVERED_TABLE_SPECS: Final = [
     ("sso_identity_assertion", "litellm_ssoidentityassertion", (), ("assertion_b64",)),
 ]
 _MCP_CREDENTIAL_TABLES: Final = frozenset({"litellm_mcpservertable", "litellm_mcpserveroauthclient"})
+_PLAINTEXT_LITELLM_PARAMS: Final = frozenset({"complexity_router_config"})
 
 
 def _iter_encrypted_strings(obj: object):
@@ -518,6 +519,8 @@ def _mcp_encrypted_leaves(col: str, raw: object) -> Iterator[str]:
 def _encrypted_leaves(db_attr: str, col: str, raw: object) -> Iterator[str]:
     if db_attr in _MCP_CREDENTIAL_TABLES and col in ("credentials", "env_vars"):
         return _mcp_encrypted_leaves(col, raw)
+    if db_attr == "litellm_proxymodeltable" and isinstance(raw, dict):
+        return _iter_encrypted_strings({k: v for k, v in raw.items() if k not in _PLAINTEXT_LITELLM_PARAMS})
     return _iter_encrypted_strings(raw)
 
 

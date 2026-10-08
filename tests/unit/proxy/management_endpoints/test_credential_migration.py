@@ -159,6 +159,46 @@ async def test_migrate_and_check_refuse_without_pynacl_instead_of_miscounting_le
     client.db.litellm_config.update.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_check_and_rotation_preflight_pass_without_pynacl_when_only_complexity_router_config_is_plaintext(
+    salt_key, monkeypatch
+):
+    _enable_aes(monkeypatch)
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                litellm_params={
+                    "api_key": encrypt_value_helper("migrated-secret"),
+                    "complexity_router_config": {
+                        "strong_model": "gpt-5.1",
+                        "opensource_classifier_config": {"api_base": "http://classifier.internal"},
+                    },
+                }
+            )
+        ]
+    )
+
+    report: Final = await cm.check_encryption(prisma_client=client)
+
+    assert report.residual_legacy == 0, report.to_dict()
+    assert report.as_dict()["locations"]["model_table"] == {
+        "scanned": 1,
+        "migrated": 0,
+        "already_v2": 1,
+        "plaintext": 0,
+        "undecryptable": 0,
+        "legacy": 0,
+    }
+
+
 @pytest.mark.parametrize(
     "db_attr, build_row",
     [
