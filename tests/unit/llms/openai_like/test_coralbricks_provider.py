@@ -9,8 +9,8 @@ import respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 
-CORALBRICKS_MODEL: Final = "coralbricks/glm-5.3-flash-fp4"
-CORALBRICKS_MODEL_ID: Final = "glm-5.3-flash-fp4"
+CORALBRICKS_MODEL: Final = "coralbricks/deepseek-v4.1-flash-fast-fp4"
+CORALBRICKS_MODEL_ID: Final = "deepseek-v4.1-flash-fast-fp4"
 
 
 def test_coralbricks_provider_resolution(monkeypatch: pytest.MonkeyPatch):
