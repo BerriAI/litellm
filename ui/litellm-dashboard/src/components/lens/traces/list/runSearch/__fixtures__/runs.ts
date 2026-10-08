@@ -14,6 +14,7 @@ export const run = (overrides: Partial<TraceSummary>): TraceSummary => ({
   service: "svc",
   span_count: 1,
   spend: null,
+  priced_calls: 0,
   start_time: "2026-10-01T00:00:00Z",
   status: "ok",
   tool_calls: 0,
@@ -36,6 +37,7 @@ const researchOverrides = {
   agent_names: ["researcher"],
   models: ["claude-opus"],
   error_count: 2,
+  status: "error" as const,
 };
 const research = run(researchOverrides);
 const plain = run({ trace_id: "ccc333", name: "health", service: "cron" });

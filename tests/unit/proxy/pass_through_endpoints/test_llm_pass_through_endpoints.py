@@ -23,6 +23,7 @@ from starlette.datastructures import FormData
 
 
 import litellm
+from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
 from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -566,7 +567,7 @@ class TestVertexAIPassThroughHandler:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
             pass_through_router,
         )
-        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master-1234")
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
 
         endpoint = f"/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent"
 
@@ -587,7 +588,7 @@ class TestVertexAIPassThroughHandler:
 
         with (
             mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base.ensure_access_token_async"
             ) as mock_ensure_token,
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
@@ -1139,7 +1140,7 @@ class TestVertexAIPassThroughHandler:
                     end_time=end_time,
                     cache_hit=False,
                 )
-            recomputed: Final = logging_obj._response_cost_calculator(result=result["result"])
+            recomputed: Final = logging_obj.response_cost_calculator(result=result["result"])
             return result["kwargs"]["response_cost"], recomputed
 
         global_handler_cost, global_recomputed_cost = costs_for("global")
@@ -1392,7 +1393,7 @@ class TestBedrockLLMProxyRoute:
 
         with (
             patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._read_request_body",
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.read_request_body",
                 return_value=mock_request_body,
             ),
             patch(
@@ -1434,7 +1435,7 @@ class TestBedrockLLMProxyRoute:
 
         with (
             patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._read_request_body",
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.read_request_body",
                 return_value=mock_request_body,
             ),
             patch(
@@ -1880,7 +1881,7 @@ class TestBedrockAgentRuntimePassthroughToggle:
 class TestBedrockAgentRuntimePassthroughVirtualKeyLeak:
 
     VKEY: Final = "sk-litellm-victim-key"
-    MASTER_KEY: Final = "sk-master-1234"
+    MASTER_KEY: Final = SHARED_MASTER_KEY
     ENDPOINT: Final = "knowledgebases/KB1234567/retrieve"
     AMBIENT_AWS_ENV: Final = (
         "AWS_BEARER_TOKEN_BEDROCK",
@@ -2492,7 +2493,7 @@ class TestForwardHeaders:
 
         with (
             patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints._read_request_body",
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.read_request_body",
                 return_value=mock_request_body,
             ),
             patch(
@@ -2590,7 +2591,7 @@ class TestForwardHeaders:
 
         with (
             patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints._read_request_body",
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.read_request_body",
                 return_value=mock_request_body,
             ),
             patch(
@@ -2677,7 +2678,7 @@ class TestForwardHeaders:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials"
             ) as mock_get_creds,
             patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints._read_request_body",
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.read_request_body",
                 return_value={"messages": [{"role": "user", "content": "test"}]},
             ),
             patch(
@@ -2781,7 +2782,7 @@ class TestMilvusProxyRoute:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
             ) as mock_is_allowed,
             patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._safe_set_request_parsed_body"
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.safe_set_request_parsed_body"
             ) as mock_safe_set,
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
@@ -2995,7 +2996,7 @@ class TestMilvusProxyRoute:
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
             ),
-            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._safe_set_request_parsed_body"),
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.safe_set_request_parsed_body"),
             patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
             patch.object(litellm, "vector_store_registry") as mock_vector_registry,
         ):
@@ -3045,7 +3046,7 @@ class TestMilvusProxyRoute:
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
             ),
-            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._safe_set_request_parsed_body"),
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.safe_set_request_parsed_body"),
             patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
             patch.object(litellm, "vector_store_registry") as mock_vector_registry,
         ):
@@ -3100,7 +3101,7 @@ class TestMilvusProxyRoute:
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"
             ),
-            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._safe_set_request_parsed_body"),
+            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.safe_set_request_parsed_body"),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
             ) as mock_create_route,
@@ -3864,6 +3865,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     """
 
     VKEY = "sk-litellm-victim-key"
+    MASTER_KEY: Final = SHARED_MASTER_KEY
     ENDPOINT = "v1/projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
 
     async def _run(
@@ -3871,7 +3873,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         monkeypatch,
         headers: list[tuple[bytes, bytes]],
         authenticated: UserAPIKeyAuth | None = None,
-        master_key: str | None = "sk-master-1234",
+        master_key: str | None = SHARED_MASTER_KEY,
     ) -> tuple[HTTPException | None, dict | None]:
         monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
         caller: Final = authenticated if authenticated is not None else UserAPIKeyAuth(api_key=self.VKEY)
@@ -4189,12 +4191,12 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         ("master_key", "authenticated"),
         [
             pytest.param(
-                "sk-master-1234",
+                SHARED_MASTER_KEY,
                 UserAPIKeyAuth(api_key="best-api-key-ever", user_role=LitellmUserRoles.PROXY_ADMIN),
                 id="custom-auth-returning-its-own-identifier",
             ),
             pytest.param(
-                "sk-master-1234",
+                SHARED_MASTER_KEY,
                 UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(LITELLM_JWT_CLAIMS)),
                 id="jwt-auth",
             ),
@@ -4278,7 +4280,10 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     async def test_master_key_in_authorization_alone_is_rejected(self, monkeypatch):
         raised, forwarded = await self._run(
             monkeypatch,
-            [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
+            [
+                (b"authorization", f"Bearer {self.MASTER_KEY}".encode()),
+                (b"content-type", b"application/json"),
+            ],
             authenticated=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN),
         )
         assert forwarded is None, "the master key must never reach the upstream forwarder"
@@ -4289,7 +4294,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         raised, forwarded = await self._run(
             monkeypatch,
             [
-                (b"authorization", b"Bearer sk-master-1234"),
+                (b"authorization", f"Bearer {self.MASTER_KEY}".encode()),
                 (b"x-goog-api-key", b"AIza-real-google-api-key"),
                 (b"content-type", b"application/json"),
             ],
@@ -4299,7 +4304,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert forwarded is not None
         assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
         assert "authorization" not in forwarded
-        assert "sk-master-1234" not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+        assert self.MASTER_KEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
 
 class TestAnthropicPassthroughVirtualKeyLeak:
@@ -4312,7 +4317,7 @@ class TestAnthropicPassthroughVirtualKeyLeak:
         monkeypatch,
         headers: list[tuple[bytes, bytes]],
         authenticated: UserAPIKeyAuth | None = None,
-        master_key: str | None = "sk-master-1234",
+        master_key: str | None = SHARED_MASTER_KEY,
         proxy_api_key: str | None = None,
     ) -> tuple[HTTPException | None, dict | None]:
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
@@ -4410,8 +4415,11 @@ class TestAnthropicPassthroughVirtualKeyLeak:
     async def test_master_key_in_authorization_is_rejected_not_forwarded(self, monkeypatch):
         raised, forwarded = await self._run(
             monkeypatch,
-            [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
-            authenticated=UserAPIKeyAuth(api_key="sk-master-1234", user_role=LitellmUserRoles.PROXY_ADMIN),
+            [
+                (b"authorization", f"Bearer {SHARED_MASTER_KEY}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=UserAPIKeyAuth(api_key=SHARED_MASTER_KEY, user_role=LitellmUserRoles.PROXY_ADMIN),
         )
         assert forwarded is None, "the master key must never reach Anthropic"
         assert raised is not None and raised.status_code == 401
@@ -4808,7 +4816,7 @@ class TestAzureProxyRouteCrossIndexAuthorization:
                 new=AsyncMock(),
             ),
             patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler.base_openai_pass_through_handler",
                 new=AsyncMock(return_value=Response()),
             ),
             patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
@@ -4854,7 +4862,7 @@ class TestAzureProxyRouteCrossIndexAuthorization:
                 return_value="azure-key",
             ),
             patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler.base_openai_pass_through_handler",
                 new=AsyncMock(return_value=Response()),
             ) as mock_handler,
             patch.object(litellm, "vector_store_index_registry") as mock_index_registry,
@@ -4914,7 +4922,7 @@ class TestAzureProxyRouteServiceLevelIndexCreate:
                 return_value="https://svc.search.windows.net",
             ),
             patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler.base_openai_pass_through_handler",
                 new=AsyncMock(return_value=Response()),
             ) as mock_handler,
         ):
@@ -4946,7 +4954,7 @@ class TestAzureProxyRouteServiceLevelIndexCreate:
                 return_value="azure-key",
             ),
             patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler._base_openai_pass_through_handler",
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler.base_openai_pass_through_handler",
                 new=AsyncMock(return_value=Response()),
             ) as mock_handler,
         ):
@@ -5494,7 +5502,7 @@ class TestVertexAILiveWebsocketPassthrough:
         ws_passthrough = AsyncMock()
 
         with (
-            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
             patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
         ):
             await passthrough_module.vertex_ai_live_websocket_passthrough(
@@ -5603,7 +5611,7 @@ class TestVertexAILiveWebsocketPassthrough:
         ws_passthrough = AsyncMock()
 
         with (
-            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
             patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
         ):
             await passthrough_module.vertex_ai_live_websocket_passthrough(
@@ -5635,7 +5643,7 @@ class TestVertexAILiveWebsocketPassthrough:
         ensure_token = AsyncMock(side_effect=Exception("Unable to find your credentials"))
 
         with (
-            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
             patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
         ):
             mock_proxy_logging.post_call_failure_hook = AsyncMock()
@@ -7534,16 +7542,16 @@ class TestTypeSafePassthroughRoute:
     ) -> None:
         from litellm.caching.caching import DualCache
         from litellm.proxy import proxy_server
-        from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
+        from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            _PROXY_MaxParallelRequestsHandler_v3,
+            PROXY_MaxParallelRequestsHandler_v3,
             get_request_stash,
         )
         from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 
         cache: Final = DualCache()
-        limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
-        monkeypatch.setattr(litellm, "callbacks", list((limiter, _PROXY_CacheControlCheck())))
+        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        monkeypatch.setattr(litellm, "callbacks", list((limiter, PROXY_CacheControlCheck())))
         monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
         monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
@@ -7711,12 +7719,12 @@ class TestOssDecisionPassthroughRoute:
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, metadata_slot: str, provider: str, checkpoint: str
     ) -> None:
         from litellm.integrations.custom_logger import CustomLogger
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
         from litellm.proxy.utils import InternalUsageCache
         from litellm.proxy.proxy_server import app
 
         cache: Final = DualCache()
-        limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
         auth: Final = UserAPIKeyAuth(
             api_key="oss-native-rpm", metadata={"model_rpm_limit": {f"{provider}/{checkpoint}": 1}},
         )

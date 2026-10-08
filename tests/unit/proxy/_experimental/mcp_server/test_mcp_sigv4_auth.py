@@ -615,7 +615,7 @@ class TestCredentialMergeOnUpdate:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                "litellm.proxy._experimental.mcp_server.db.get_salt_key",
                 return_value=None,
             ),
             patch(
@@ -652,7 +652,7 @@ class TestCredentialMergeOnUpdate:
         )
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+            "litellm.proxy._experimental.mcp_server.db.get_salt_key",
             return_value=None,
         ):
             await update_mcp_server(mock_prisma, data, "test-user")
@@ -682,7 +682,7 @@ class TestCredentialMergeOnUpdate:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                "litellm.proxy._experimental.mcp_server.db.get_salt_key",
                 return_value=None,
             ),
             patch(
@@ -724,7 +724,7 @@ class TestCredentialMergeOnUpdate:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                "litellm.proxy._experimental.mcp_server.db.get_salt_key",
                 return_value=None,
             ),
             patch(
@@ -767,7 +767,7 @@ class TestCredentialMergeOnUpdate:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                "litellm.proxy._experimental.mcp_server.db.get_salt_key",
                 return_value=None,
             ),
             patch(
@@ -995,12 +995,13 @@ class TestRotateCredentials:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[server])
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
         mock_prisma.db.litellm_mcpserveroauthclient.find_many = AsyncMock(return_value=[])
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                "litellm.proxy._experimental.mcp_server.db.get_salt_key",
                 return_value="old-key",
             ),
             patch(
@@ -1043,12 +1044,13 @@ class TestRotateCredentials:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[server])
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
         mock_prisma.db.litellm_mcpserveroauthclient.find_many = AsyncMock(return_value=[])
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                "litellm.proxy._experimental.mcp_server.db.get_salt_key",
                 return_value="old-key",
             ),
             patch(
@@ -1099,7 +1101,7 @@ class TestAuthTypeSwitchClearsCredentials:
         )
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+            "litellm.proxy._experimental.mcp_server.db.get_salt_key",
             return_value=None,
         ):
             await update_mcp_server(mock_prisma, data, "test-user")
@@ -1119,7 +1121,7 @@ class TestInheritCredentials:
     def test_inherits_sigv4_credentials(self):
         """SigV4 fields are copied from existing server to inherited credentials."""
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-            _inherit_credentials_from_existing_server,
+            inherit_credentials_from_existing_server,
         )
         from litellm.proxy._types import NewMCPServerRequest
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -1150,7 +1152,7 @@ class TestInheritCredentials:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager"
         ) as mock_manager:
             mock_manager.get_mcp_server_by_id.return_value = existing
-            result = _inherit_credentials_from_existing_server(payload)
+            result = inherit_credentials_from_existing_server(payload)
 
         assert result.credentials is not None
         assert result.credentials["aws_access_key_id"] == "AKIAEXAMPLE"

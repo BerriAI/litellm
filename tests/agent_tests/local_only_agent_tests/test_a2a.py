@@ -25,7 +25,7 @@ async def test_asend_message_with_client_decorator():
     Test asend_message standalone function with @client decorator.
     This tests the LiteLLM logging integration.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.a2a_protocol import asend_message, create_a2a_client
 
     # Create the A2A client first
@@ -191,7 +191,7 @@ async def test_pydantic_ai_non_streaming():
     Pydantic AI agents follow A2A protocol but don't support streaming.
     This test validates non-streaming requests work correctly.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.a2a_protocol import asend_message
 
     # Build the request
@@ -272,7 +272,7 @@ async def test_pydantic_ai_fake_streaming():
     This test validates that fake streaming works by converting
     non-streaming responses into streaming chunks.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     from litellm.a2a_protocol import asend_message_streaming
 
     # Build the request

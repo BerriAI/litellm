@@ -20,7 +20,7 @@ from litellm.vector_stores import (
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_basic_search_vector_store(sync_mode):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.set_verbose = True
     base_request_args = {
         "vector_store_id": "my-vector-index",

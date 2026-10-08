@@ -1,7 +1,17 @@
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 
 def calendar_lookback(hours: int) -> int:
@@ -99,6 +109,24 @@ class Evidence(Record):
     role: Literal["support", "counterexample"] = "support"
 
 
+class Observation(Record):
+    check_id: str
+    kind: Literal["issue", "pattern"] = "issue"
+    summary: str
+    evidence: tuple[Evidence, ...] = ()
+
+
+class Extraction(Record):
+    observations: tuple[Observation, ...] = ()
+    cannot_assess: bool = False
+    reasoning: str = Field(default="", max_length=800)
+
+
+class ReviewVersion(Record):
+    execution_id: str
+    content_version: str
+
+
 class AgentTestCase(Record):
     input: str = Field(min_length=1)
     expected: str = Field(min_length=1)
@@ -122,6 +150,8 @@ class FindingDraft(Record):
     brief: IssueBrief | None = None
     evidence: tuple[Evidence, ...] = Field(min_length=1)
     existing_finding_id: str | None = None
+    check_ids: tuple[str, ...] = ()
+    merged_finding_ids: tuple[str, ...] = ()
 
 
 class Finding(FindingDraft):
@@ -132,6 +162,7 @@ class Finding(FindingDraft):
     last_seen: datetime
     occurrences: tuple[str, ...] = ()
     revision: int
+    investigation_runs: tuple[str, ...] = ()
 
 
 class Coverage(Record):
@@ -145,6 +176,9 @@ class Coverage(Record):
     candidates: int = 0
     partial: int = 0
     unassessable: int = 0
+    failed_tasks: int = Field(default=0, ge=0)
+    reused: int = Field(default=0, ge=0)
+    reusable: int = Field(default=0, ge=0)
 
 
 class Execution(Record):
@@ -169,6 +203,8 @@ class TracePart(Record):
     kind: str
     content: str
     truncated: bool = False
+    start_time: str = ""
+    end_time: str = ""
 
 
 class ExecutionContent(Record):
@@ -193,6 +229,19 @@ class RunAssessment(Record):
     cannot_assess: bool = False
 
 
+class TraceIdentity(Record):
+    trace_id: str = Field(min_length=1, max_length=128)
+    trace_ref: str = Field(default="", max_length=512)
+
+
+class TraceFindingsRequest(Record):
+    traces: tuple[TraceIdentity, ...] = Field(min_length=1, max_length=500)
+
+
+class TraceFindingCount(TraceIdentity):
+    finding_count: int | None = Field(ge=0)
+
+
 MAX_STEPS = 200
 
 
@@ -205,6 +254,86 @@ class Step(Record):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost: float = 0
+
+
+MAX_REVIEWS = 60
+
+
+ActivityOperation: TypeAlias = Literal[
+    "model",
+    "read",
+    "search",
+    "python",
+    "catalog",
+    "review_catalog",
+    "read_reviews",
+    "search_reviews",
+    "history",
+    "checkpoint",
+]
+ActivityPhase: TypeAlias = Literal["load", "review", "group", "reconcile", "investigate"]
+
+
+class ToolCount(Record):
+    name: ActivityOperation
+    calls: int = Field(ge=0)
+
+
+class Activity(Record):
+    id: str
+    phase: ActivityPhase
+    label: str
+    execution_ids: tuple[str, ...] = ()
+    started_at: datetime
+    operations: tuple[ActivityOperation, ...] = ()
+    tool_calls: tuple[ToolCount, ...] = ()
+    finished: bool = False
+
+
+class ReviewSpan(Record):
+    span_id: str
+    name: str = Field(max_length=120)
+    kind: str = Field(max_length=40)
+    preview: str = Field(max_length=240)
+    cited: bool = False
+
+
+class ReviewVerdict(Record):
+    check_id: str
+    kind: Literal["issue", "pattern"]
+    summary: str = Field(max_length=300)
+
+
+class Review(Record):
+    execution_id: str
+    trace_id: str
+    agent: str
+    name: str
+    spans: tuple[ReviewSpan, ...] = Field(default=(), max_length=8)
+    reasoning: str = Field(default="", max_length=800)
+    verdicts: tuple[ReviewVerdict, ...] = ()
+    cannot_assess: bool = False
+    model: str
+    duration_ms: int = Field(ge=0)
+    at: datetime
+    tool_calls: tuple[ToolCount, ...] = ()
+    extraction: Extraction | None = None
+    content_version: str = ""
+    reused: bool = False
+    consolidated: bool = False
+    partial: bool = False
+
+
+class ReviewPage(Record):
+    reviews: tuple[Review, ...]
+    reviewed: int
+
+
+class InFlight(Record):
+    execution_id: str
+    trace_id: str
+    agent: str
+    started_at: datetime
 
 
 class Job(Record):
@@ -227,7 +356,20 @@ class Job(Record):
     findings: tuple[Finding, ...] | None = None
     assessments: tuple[RunAssessment, ...] = ()
     steps: tuple[Step, ...] = ()
+    reviews: tuple[Review, ...] = ()
+    reviewed: int = 0
+    reading: tuple[InFlight, ...] = ()
+    activities: tuple[Activity, ...] = ()
     trigger: Literal["schedule", "manual"] = "schedule"
+    review_versions: tuple[ReviewVersion, ...] = ()
+
+
+class BudgetReservation(Record):
+    id: str
+    job_id: str
+    amount: float = Field(ge=0, allow_inf_nan=False)
+    month: str
+    expires_at: datetime | None = None
 
 
 class Lens(Record):
@@ -243,6 +385,8 @@ class Lens(Record):
     findings: tuple[Finding, ...] = ()
     budget_month: str
     spent: float = 0
+    reservations: tuple[BudgetReservation, ...] = ()
+    criteria_updated_at: datetime | None = None
 
 
 class Worker(Record):
@@ -258,6 +402,7 @@ class WorkerCreated(Record):
     image: str
     worker: Worker
     token: str
+    managed: bool = False
 
 
 class LensList(Record):
@@ -302,11 +447,15 @@ class Claim(Record):
     lens_id: str
     job: Job
     findings: tuple[Finding, ...]
+    reviews: tuple[Review, ...] | None = None
 
 
 class Progress(Record):
-    stage: str = Field()
-    coverage: Coverage = Coverage()
+    stage: str | None = None
+    coverage: Coverage | None = None
+    review: Review | None = None
+    reading: tuple[InFlight, ...] | None = None
+    activity: Activity | None = None
 
 
 class Result(Record):
@@ -314,14 +463,144 @@ class Result(Record):
     findings: tuple[FindingDraft, ...] = ()
     coverage: Coverage
     error: str = Field(default="")
+    review_versions: tuple[ReviewVersion, ...] = ()
+
+
+class ModelMessage(Record):
+    role: Literal["system", "user", "assistant"]
+    content: str
 
 
 class ModelRequest(Record):
     prompt: str = Field(min_length=1)
     purpose: Literal["extract", "cluster", "investigate"]
+    messages: tuple[ModelMessage, ...] = ()
+
+    def conversation(self) -> tuple[ModelMessage, ...]:
+        if self.messages:
+            return self.messages
+        try:
+            payload: Final = TypeAdapter(dict[str, JsonValue]).validate_json(self.prompt)
+        except ValidationError:
+            if self.prompt.lstrip().startswith(("{", "[")):
+                raise ValueError("Malformed legacy Lens prompt; send structured messages.") from None
+            return (ModelMessage(role="system", content=self.prompt), ModelMessage(role="user", content="{}"))
+        instruction_fields: Final = frozenset(
+            ("task", "navigation", "context", "checks", "questions", "response_schema")
+        )
+        instructions: Final = {key: value for key, value in payload.items() if key in instruction_fields}
+        evidence: Final = {key: value for key, value in payload.items() if key not in instruction_fields}
+        return (
+            ModelMessage(role="system", content=json.dumps(instructions, ensure_ascii=False)),
+            ModelMessage(role="user", content=json.dumps(evidence, ensure_ascii=False)),
+        )
 
 
 class ModelResult(Record):
     content: str
     cost: float
+    context_exceeded: bool = False
     finish_reason: Literal["length", "content_filter"] | None = Field(default=None, exclude=True)
+
+
+class DatasetToolCall(Record):
+    name: str
+    arguments: str
+
+
+class DatasetMessage(Record):
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str
+    name: str = ""
+    tool_calls: tuple[DatasetToolCall, ...] = ()
+
+
+class CaseSource(Record):
+    trace_id: str = ""
+    trace_ref: str = ""
+    span_id: str = ""
+    finding_id: str = ""
+    lens_id: str = ""
+
+
+class DatasetCase(Record):
+    id: str
+    messages: tuple[DatasetMessage, ...]
+    reply: str = ""
+    tool_calls: tuple[DatasetToolCall, ...] = ()
+    expected: str = ""
+    included: bool = True
+    source: CaseSource
+    agent_version: str = ""
+
+
+class SkippedCase(Record):
+    source: CaseSource
+    reason: Literal["duplicate", "no_content", "too_large", "over_limit", "invalid"]
+
+
+class TraceSource(Record):
+    kind: Literal["trace"] = "trace"
+    trace_id: str = Field(min_length=1)
+    trace_ref: str = ""
+    span_id: str = ""
+
+
+class FindingSource(Record):
+    kind: Literal["finding"] = "finding"
+    lens_id: str = Field(min_length=1)
+    finding_ids: tuple[str, ...] = Field(min_length=1)
+
+
+class TextSource(Record):
+    kind: Literal["text"] = "text"
+    text: str = Field(min_length=1)
+
+
+BuildSource: TypeAlias = Annotated[TraceSource | FindingSource | TextSource, Field(discriminator="kind")]
+
+
+class BuildRequest(Record):
+    sources: tuple[BuildSource, ...] = Field(min_length=1)
+    dataset_id: str = ""
+
+
+class BuildResult(Record):
+    cases: tuple[DatasetCase, ...]
+    skipped: tuple[SkippedCase, ...]
+
+
+class DatasetCreate(Record):
+    name: str = Field(min_length=1, max_length=120)
+    agent_name: str = ""
+
+
+class Dataset(Record):
+    id: str
+    name: str
+    agent_name: str
+    team_id: str
+    created_at: datetime
+    revision: int
+    created_by: str
+    cases: tuple[DatasetCase, ...]
+
+
+class DatasetSummary(Record):
+    id: str
+    name: str
+    agent_name: str
+    revision: int
+    case_count: int
+    updated_at: datetime
+
+
+class RevisionSave(Record):
+    base_revision: int = Field(ge=0)
+    cases: tuple[DatasetCase, ...]
+
+
+class EvalCases(Record):
+    dataset_id: str
+    revision: int
+    cases: tuple[DatasetCase, ...]

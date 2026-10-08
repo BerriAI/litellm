@@ -332,7 +332,7 @@ class ModelRateLimitingCheck(CustomLogger):
     @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
         try:
@@ -350,7 +350,7 @@ class ModelRateLimitingCheck(CustomLogger):
                     self.dual_cache,
                     kwargs,
                     response_obj,
-                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                    parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
                 )
                 # Fall through: a deployment can also configure tpm/rpm alongside
                 # itpm/otpm, and that path's pre-call check reads the tpm_key
@@ -390,7 +390,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
         # Never fail the primary logging pipeline over an io-token refund error.
@@ -398,7 +398,7 @@ class ModelRateLimitingCheck(CustomLogger):
             await async_io_token_refund_failure(
                 self.dual_cache,
                 kwargs,
-                parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)

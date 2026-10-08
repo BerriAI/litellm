@@ -283,7 +283,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             openai_dialect
             and AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages) > breakpoints_before
         ):
-            non_default_params.setdefault("prompt_cache_options", PromptCacheOptions(mode="explicit"))
+            non_default_params.setdefault("prompt_cache_options", PromptCacheOptions(mode="implicit"))
 
         # Points this pass did not place: non-message ones for the provider transform, and
         # the deferred role-targeted ones. Deferring is what reaches the Responses API's
@@ -1029,7 +1029,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         AnthropicCacheControlHook.record_gateway_injection(kwargs, breakpoints_added)
         if openai_dialect and breakpoints_added > 0:
-            kwargs.setdefault("prompt_cache_options", PromptCacheOptions(mode="explicit"))
+            kwargs.setdefault("prompt_cache_options", PromptCacheOptions(mode="implicit"))
         if remaining:
             kwargs["cache_control_injection_points"] = remaining
         return messages, system
