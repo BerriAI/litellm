@@ -2886,6 +2886,27 @@ async def test_recompute_scim_member_roles_grants_when_in_admin_group(mocker, mo
 
 
 @pytest.mark.asyncio
+async def test_recompute_scim_member_roles_demotes_when_admin_team_is_excluded(mocker, monkeypatch):
+    """excluding_team_id is treated as already gone, so a member still listed on
+    that admin team is demoted the way a post-delete recompute would demote them."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    prisma = _scim_admin_prisma(mocker, user_teams=["litellm-admins", "engineering"])
+
+    await _recompute_scim_member_roles(prisma, ["member-1"], excluding_team_id="litellm-admins")
+
+    prisma.db.litellm_usertable.update_many.assert_awaited_once_with(
+        where={"user_id": {"in": ["member-1"]}}, data={"user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY}
+    )
+
+
+@pytest.mark.asyncio
 async def test_recompute_scim_member_roles_noop_when_admin_group_unset(mocker, monkeypatch):
     """With scim_admin_group unset the recompute helper must not touch any role,
     preserving current behavior for SCIM group writes."""
@@ -3063,12 +3084,30 @@ async def test_delete_group_deletes_the_whole_team_in_one_request_and_recomputes
     assert delete_team_mock.call_args.kwargs["litellm_changed_by"] is None
     recompute_mock.assert_awaited_once()
     assert list(recompute_mock.call_args[0][1]) == ["user1", "user2"]
+    assert recompute_mock.call_args.kwargs["excluding_team_id"] == "test-team-123"
+
+
+@pytest.mark.asyncio
+async def test_delete_group_leaves_the_team_when_role_recompute_fails(mocker):
+    """A failed role write must not delete the group, so the IdP retry still
+    finds it and can demote members who were PROXY_ADMIN only through it."""
+    team = LiteLLM_TeamTable(team_id="test-team-123", members_with_roles=[Member(user_id="user1", role="user")])
+    delete_team_mock, recompute_mock = _group_delete_mocks(mocker, team)
+    recompute_mock.side_effect = RuntimeError("role write failed")
+
+    with pytest.raises(ProxyException):
+        await delete_group(group_id="test-team-123", user_api_key_dict=_SCIM_CALLER)
+
+    recompute_mock.assert_awaited_once()
+    assert recompute_mock.call_args.kwargs["excluding_team_id"] == "test-team-123"
+    delete_team_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_delete_group_answers_404_when_the_team_vanished_before_the_delete(mocker):
     """A group deleted by a concurrent request between the lookup and the team delete
-    answers 404, the same as a group that never existed, and recomputes no roles."""
+    answers 404, the same as a group that never existed. Roles are still recomputed
+    from the members already loaded, treating the vanished group as gone."""
     team = LiteLLM_TeamTable(team_id="test-team-123", members_with_roles=[Member(user_id="user1", role="user")])
     delete_team_mock, recompute_mock = _group_delete_mocks(mocker, team)
     delete_team_mock.side_effect = HTTPException(status_code=404, detail={"error": "Team not found"})
@@ -3077,7 +3116,8 @@ async def test_delete_group_answers_404_when_the_team_vanished_before_the_delete
         await delete_group(group_id="test-team-123", user_api_key_dict=_SCIM_CALLER)
 
     assert raised.value.code == "404"
-    recompute_mock.assert_not_awaited()
+    recompute_mock.assert_awaited_once()
+    assert recompute_mock.call_args.kwargs["excluding_team_id"] == "test-team-123"
 
 
 @pytest.mark.asyncio

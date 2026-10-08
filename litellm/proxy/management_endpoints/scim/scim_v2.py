@@ -472,12 +472,21 @@ async def _scim_groups_from_team_ids(prisma_client: PrismaClient, team_ids: list
     ]
 
 
-async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: Iterable[str]) -> None:
+async def _recompute_scim_member_roles(
+    prisma_client: PrismaClient,
+    user_ids: Iterable[str],
+    *,
+    excluding_team_id: str | None = None,
+) -> None:
     """
     Recompute and persist each user's global proxy role from their resulting team
     membership. No-op unless scim_admin_group is configured, so a SCIM group write
     that drops a member from the admin group demotes them just like the user
     endpoints do, and the role is left untouched when the feature is off.
+
+    ``excluding_team_id`` is treated as already gone so a group delete can resolve
+    roles before the team row is removed and still demote members who were admin
+    only through that group.
     """
     admin_group: Final = await _get_scim_admin_group()
     if admin_group is None:
@@ -500,7 +509,11 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
         (
             row.user_id,
             _resolve_scim_user_role(
-                [SCIMUserGroup(value=team_id, display=alias_of.get(team_id)) for team_id in row.teams or []],
+                [
+                    SCIMUserGroup(value=team_id, display=alias_of.get(team_id))
+                    for team_id in row.teams or []
+                    if team_id != excluding_team_id
+                ],
                 admin_group,
                 default_role,
             ),
@@ -2756,6 +2769,10 @@ async def delete_group(
     The group's team is deleted the way ``/team/delete`` deletes it, so the members'
     group entries, their membership rows and every key issued on the team go with it,
     however many members the group has.
+
+    Member roles are recomputed before the team is removed, treating this group as
+    already gone, so a failed role write leaves the group for an IdP retry and
+    members who were PROXY_ADMIN only through scim_admin_group are demoted.
     """
     verbose_proxy_logger.debug("SCIM DELETE GROUP request for group_id=%s", group_id)
     try:
@@ -2763,6 +2780,7 @@ async def delete_group(
         existing_team: Final = await _check_team_exists(group_id)
         member_ids: Final = await _get_team_member_user_ids_from_team(existing_team)
 
+        await _recompute_scim_member_roles(prisma_client, member_ids, excluding_team_id=group_id)
         await delete_team(
             data=DeleteTeamRequest(team_ids=[group_id]),
             http_request=Request(scope={"type": "http", "path": f"/scim/v2/Groups/{group_id}"}),
@@ -2773,7 +2791,6 @@ async def delete_group(
             ),
             litellm_changed_by=None,
         )
-        await _recompute_scim_member_roles(prisma_client, member_ids)
 
         return Response(status_code=204)
 
