@@ -1180,9 +1180,7 @@ async def common_checks(
         )
         or pass_through_route
     )
-    team_metadata_value: Final[object] = (
-        cast(object, team_object.metadata) if team_object is not None else None
-    )
+    team_metadata_value: Final[object] = cast(object, team_object.metadata) if team_object is not None else None
     team_metadata: Final[dict[str, object] | None] = (
         cast(dict[str, object], team_metadata_value) if isinstance(team_metadata_value, dict) else None
     )
