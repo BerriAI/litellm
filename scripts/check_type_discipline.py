@@ -865,14 +865,14 @@ def iter_typeddict_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
 
 def _pydantic_classes(tree: ast.AST) -> tuple[ast.ClassDef, ...]:
     classes: Final = tuple(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef))
-    bases_of: Final = {cls.name: _base_names(cls) for cls in classes}
 
     def expand(known: frozenset[str]) -> frozenset[str]:
-        grown: Final = known | frozenset(name for name, bases in bases_of.items() if bases & known)
+        grown: Final = known | frozenset(cls.name for cls in classes if _base_names(cls) & known)
         return grown if grown == known else expand(grown)
 
-    names: Final = expand(PYDANTIC_BASES) - expand(frozenset((TYPEDDICT_BASE,)))
-    return tuple(cls for cls in classes if cls.name in names)
+    model_names: Final = expand(PYDANTIC_BASES)
+    typeddict_names: Final = expand(frozenset((TYPEDDICT_BASE,)))
+    return tuple(cls for cls in classes if _base_names(cls) & model_names and not _base_names(cls) & typeddict_names)
 
 
 def _bool_constant(value: ast.expr) -> bool | None:

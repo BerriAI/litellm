@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -768,6 +769,21 @@ def test_same_named_models_use_each_classes_own_override(tmp_path):
         "    x: int\n"
     )
     assert _codes(tmp_path, src) == ["LIT015"]
+
+
+def test_pydantic_model_discovery_uses_each_class_nodes_bases(tmp_path):
+    src: Final = (
+        "from pydantic import BaseModel\n"
+        "class Config(BaseModel):\n"
+        "    x: int\n"
+        "class Consumer(BaseModel, frozen=True):\n"
+        "    class Config:\n"
+        "        arbitrary_types_allowed = True\n"
+    )
+    path: Final = tmp_path / "snippet.py"
+    path.write_text(src, encoding="utf-8")
+    violations: Final = checker.check_file(path)
+    assert [(violation.line, violation.code) for violation in violations] == [(2, "LIT015")]
 
 
 # --------------------------------------------------------------------------- #
