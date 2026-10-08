@@ -5067,3 +5067,30 @@ async def test_daily_spend_rows_survive_a_lock_timeout_for_the_next_flush():
 
     assert len(prisma_client.db.statements) == 1
     assert list(daily_spend_transactions) == ["key"]
+
+
+def test_record_request_error_feeds_the_failure_rollup_with_the_logged_status() -> None:
+    from litellm.proxy.db import db_spend_update_writer as writer_module
+    from litellm.proxy.db.request_error_tracking import RequestErrorAccumulator
+    from litellm.types.proxy.request_errors import RequestErrorKey
+
+    accumulator = RequestErrorAccumulator()
+    prisma_client = MagicMock()
+    prisma_client.get_request_status.side_effect = lambda payload: json.loads(payload["metadata"])["status"]
+    failed_payload = {
+        "startTime": datetime(2026, 10, 8, 23, 59, tzinfo=timezone.utc),
+        "api_key": "hash-1",
+        "team_id": "team-a",
+        "user": "user-a",
+        "model_group": "gpt-4o",
+        "metadata": json.dumps({"status": "failure", "error_information": {"error_code": "503"}}),
+    }
+    ok_payload = {**failed_payload, "metadata": json.dumps({"status": "success"})}
+    with patch.object(writer_module, "request_error_accumulator", accumulator):
+        DBSpendUpdateWriter._record_request_error(payload=failed_payload, prisma_client=prisma_client)
+        DBSpendUpdateWriter._record_request_error(payload=ok_payload, prisma_client=prisma_client)
+    assert accumulator.drain() == {
+        RequestErrorKey(
+            date="2026-10-08", api_key="hash-1", team_id="team-a", user_id="user-a", model_group="gpt-4o", status_code=503
+        ): 1
+    }

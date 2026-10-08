@@ -75,6 +75,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
+from litellm.proxy.db.request_error_tracking import request_error_accumulator
 from litellm.proxy.db.rollup_lock_timeout import apply_rollup_lock_timeout
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
@@ -1164,6 +1165,13 @@ class DBSpendUpdateWriter:
         except Exception:
             verbose_proxy_logger.debug(
                 "_batch_database_updates: add_spend_log_transaction_to_daily_team_transaction failed: %s",
+                traceback.format_exc(),
+            )
+        try:
+            self._record_request_error(payload=payload_copy, prisma_client=prisma_client)
+        except Exception:  # noqa: BLE001  # the rollup must never skip the sibling spend writes
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _record_request_error failed: %s",
                 traceback.format_exc(),
             )
 
@@ -2724,6 +2732,20 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_spend_transactions,
             entity_type="tag",
             entity_id_field="tag",
+        )
+
+    @staticmethod
+    def _record_request_error(*, payload: SpendLogsPayload, prisma_client: PrismaClient) -> None:
+        start_time: Final = payload.get("startTime")
+        date: Final = start_time.isoformat() if isinstance(start_time, datetime) else str(start_time or "")
+        if not date:
+            return
+        metadata: Final[SpendLogsMetadata] = json.loads(payload["metadata"])
+        request_error_accumulator.record(
+            payload=payload,
+            request_status=prisma_client.get_request_status(payload),
+            date=date.split("T")[0],
+            is_internal_call=bool(metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)),
         )
 
     async def _common_add_spend_log_transaction_to_daily_transaction(
