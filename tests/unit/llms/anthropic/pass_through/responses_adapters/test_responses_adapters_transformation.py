@@ -5,10 +5,12 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-from typing import Any, Dict, List
+from collections.abc import Mapping
+from typing import Any, Dict, Final, List
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import BaseModel, TypeAdapter
 
 
 from litellm.constants import (
@@ -2049,6 +2051,14 @@ def _contains_key(value, key) -> bool:
     return False
 
 
+class _InputMessage(BaseModel, frozen=True):
+    role: str
+    content: tuple[dict[str, object], ...]
+
+
+_INPUT_MESSAGES: Final = TypeAdapter(tuple[_InputMessage, ...])
+
+
 class TestPromptCacheBreakpointToResponses:
     """OpenAI `prompt_cache_breakpoint` markers ride through the /v1/messages -> Responses bridge (#37509)."""
 
@@ -2194,25 +2204,30 @@ class TestPromptCacheBreakpointToResponses:
         )
         assert kwargs["prompt_cache_options"] == {"mode": "explicit"}
 
-    MALFORMED = ("yes", {"mode": "explicit", "ttl": "1h"}, {"mode": "bogus"}, 1)
-    MALFORMED_IDS = ("string", "bad-ttl", "bogus-mode", "int")
-    VALID = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
-    VALID_IDS = ("explicit", "explicit-30m")
-    KINDS = ("system", "midturn-system", "text", "image", "document")
-    PART_TYPE = {"midturn-system": "input_text", "text": "input_text", "image": "input_image", "document": "input_file"}
-    SYSTEM_TEXT = "Be helpful."
+    MALFORMED: Final = ("yes", {"mode": "explicit", "ttl": "1h"}, {"mode": "bogus"}, 1)
+    MALFORMED_IDS: Final = ("string", "bad-ttl", "bogus-mode", "int")
+    VALID: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
+    VALID_IDS: Final = ("explicit", "explicit-30m")
+    KINDS: Final = ("system", "midturn-system", "text", "image", "document")
+    PART_TYPE: Final = {
+        "midturn-system": "input_text",
+        "text": "input_text",
+        "image": "input_image",
+        "document": "input_file",
+    }
+    SYSTEM_TEXT: Final = "Be helpful."
 
     @classmethod
     def _request_with_marker(cls, kind: str, marker: object) -> AnthropicMessagesRequest:
-        pdf = {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQKJSBQT05H"}
-        blocks = {
+        pdf: Final = {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQKJSBQT05H"}
+        blocks: Final[dict[str, dict[str, object]]] = {
             "system": {"type": "text", "text": cls.SYSTEM_TEXT},
             "midturn-system": {"type": "text", "text": cls.SYSTEM_TEXT},
             "text": {"type": "text", "text": "look"},
             "image": {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
             "document": {"type": "document", "source": pdf},
         }
-        block = {**blocks[kind], "prompt_cache_breakpoint": marker}
+        block: Final = {**blocks[kind], "prompt_cache_breakpoint": marker}
         if kind == "system":
             return _make_request(system=[block])
         if kind == "midturn-system":
@@ -2222,16 +2237,16 @@ class TestPromptCacheBreakpointToResponses:
         return _make_request(messages=[{"role": "user", "content": [block]}])
 
     @staticmethod
-    def _marked_part(kwargs: dict, kind: str) -> dict:
-        role = {"system": "developer", "midturn-system": "system"}.get(kind, "user")
-        (message,) = [item for item in kwargs["input"] if item.get("role") == role]
-        (part,) = message["content"]
+    def _marked_part(kwargs: Mapping[str, object], kind: str) -> dict[str, object]:
+        role: Final = {"system": "developer", "midturn-system": "system"}.get(kind, "user")
+        (message,) = [item for item in _INPUT_MESSAGES.validate_python(kwargs["input"]) if item.role == role]
+        (part,) = message.content
         return part
 
     @pytest.mark.parametrize("marker", MALFORMED, ids=MALFORMED_IDS)
     @pytest.mark.parametrize("kind", KINDS)
-    def test_malformed_marker_is_dropped_under_drop_params(self, kind, marker):
-        kwargs = _ADAPTER.translate_request(self._request_with_marker(kind, marker), drop_params=True)
+    def test_malformed_marker_is_dropped_under_drop_params(self, kind: str, marker: object) -> None:
+        kwargs: Final = _ADAPTER.translate_request(self._request_with_marker(kind, marker), drop_params=True)
         assert not _contains_key(kwargs, "prompt_cache_breakpoint")
         if kind == "system":
             assert kwargs["instructions"] == self.SYSTEM_TEXT
@@ -2241,29 +2256,31 @@ class TestPromptCacheBreakpointToResponses:
 
     @pytest.mark.parametrize("marker", MALFORMED, ids=MALFORMED_IDS)
     @pytest.mark.parametrize("kind", KINDS)
-    def test_malformed_marker_passes_verbatim_without_drop_params(self, kind, marker):
-        kwargs = _ADAPTER.translate_request(self._request_with_marker(kind, marker), drop_params=False)
+    def test_malformed_marker_passes_verbatim_without_drop_params(self, kind: str, marker: object) -> None:
+        kwargs: Final = _ADAPTER.translate_request(self._request_with_marker(kind, marker), drop_params=False)
         assert self._marked_part(kwargs, kind)["prompt_cache_breakpoint"] == marker
 
-    def test_translate_request_forwards_markers_verbatim_by_default(self):
-        kwargs = _ADAPTER.translate_request(self._request_with_marker("text", "yes"))
+    def test_translate_request_forwards_markers_verbatim_by_default(self) -> None:
+        kwargs: Final = _ADAPTER.translate_request(self._request_with_marker("text", "yes"))
         assert self._marked_part(kwargs, "text")["prompt_cache_breakpoint"] == "yes"
 
     @pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
     @pytest.mark.parametrize("marker", VALID, ids=VALID_IDS)
     @pytest.mark.parametrize("kind", KINDS)
-    def test_valid_marker_is_kept_under_both_settings(self, kind, marker, drop_params):
-        kwargs = _ADAPTER.translate_request(self._request_with_marker(kind, marker), drop_params=drop_params)
+    def test_valid_marker_is_kept_under_both_settings(
+        self, kind: str, marker: dict[str, str], drop_params: bool
+    ) -> None:
+        kwargs: Final = _ADAPTER.translate_request(self._request_with_marker(kind, marker), drop_params=drop_params)
         assert self._marked_part(kwargs, kind)["prompt_cache_breakpoint"] == marker
 
-    def test_system_list_whose_only_marker_is_dropped_falls_back_to_instructions(self):
-        request = _make_request(
+    def test_system_list_whose_only_marker_is_dropped_falls_back_to_instructions(self) -> None:
+        request: Final = _make_request(
             system=[
                 {"type": "text", "text": "Be concise."},
                 {"type": "text", "text": "Be helpful.", "prompt_cache_breakpoint": "yes"},
             ]
         )
-        kwargs = _ADAPTER.translate_request(request, drop_params=True)
+        kwargs: Final = _ADAPTER.translate_request(request, drop_params=True)
         assert kwargs["instructions"] == "Be concise.\nBe helpful."
         assert kwargs["input"] == [
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}

@@ -2,10 +2,13 @@ import datetime
 import json
 import os
 import sys
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import respx
+from pydantic import BaseModel, TypeAdapter
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
@@ -188,18 +191,24 @@ async def test_streaming_hands_the_logging_object_the_message_id_the_caller_is_s
     assert logging_obj.streamed_anthropic_message_id == message_start["message"]["id"]
 
 
-_MALFORMED_BREAKPOINT_MESSAGES = [
+class _InputMessage(BaseModel, frozen=True):
+    role: str
+    content: tuple[dict[str, object], ...]
+
+
+_INPUT_MESSAGES: Final = TypeAdapter(tuple[_InputMessage, ...])
+_MALFORMED_BREAKPOINT_MESSAGES: Final[list[dict[str, object]]] = [
     {"role": "user", "content": [{"type": "text", "text": "hello", "prompt_cache_breakpoint": "yes"}]}
 ]
 
 
-def _user_block(responses_kwargs: dict) -> dict:
-    (message,) = responses_kwargs["input"]
-    (block,) = message["content"]
+def _user_block(responses_kwargs: Mapping[str, object]) -> dict[str, object]:
+    (message,) = _INPUT_MESSAGES.validate_python(responses_kwargs["input"])
+    (block,) = message.content
     return block
 
 
-def _malformed_breakpoint_kwargs(extra_kwargs: dict) -> dict:
+def _malformed_breakpoint_kwargs(extra_kwargs: Mapping[str, object]) -> dict[str, object]:
     return _build_responses_kwargs(
         max_tokens=16, messages=_MALFORMED_BREAKPOINT_MESSAGES, model="openai/gpt-6.1-sol", extra_kwargs=extra_kwargs
     )
@@ -207,7 +216,7 @@ def _malformed_breakpoint_kwargs(extra_kwargs: dict) -> dict:
 
 def test_build_responses_kwargs_drops_a_malformed_prompt_cache_breakpoint_under_deployment_drop_params(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     assert _user_block(_malformed_breakpoint_kwargs({"drop_params": True})) == {"type": "input_text", "text": "hello"}
 
@@ -215,13 +224,13 @@ def test_build_responses_kwargs_drops_a_malformed_prompt_cache_breakpoint_under_
 @pytest.mark.parametrize("drop_params", (False, None), ids=("false", "null"))
 def test_build_responses_kwargs_forwards_a_malformed_prompt_cache_breakpoint_without_drop_params(
     monkeypatch: pytest.MonkeyPatch, drop_params: bool | None
-):
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     assert _user_block(_malformed_breakpoint_kwargs({"drop_params": drop_params}))["prompt_cache_breakpoint"] == "yes"
 
 
 def test_build_responses_kwargs_drops_a_malformed_prompt_cache_breakpoint_under_global_drop_params(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", True)
     assert _user_block(_malformed_breakpoint_kwargs({})) == {"type": "input_text", "text": "hello"}
