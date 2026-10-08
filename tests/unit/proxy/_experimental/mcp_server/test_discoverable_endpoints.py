@@ -13640,3 +13640,105 @@ async def test_optional_cimd_discovery_preserves_the_callers_configured_endpoint
             assert redirect.status_code == 307
             assert redirect.headers["location"].startswith("https://idp.example.com/authorize?")
     assert discovery.call_count > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [None, "https://renamed-gateway.example.com"])
+async def test_token_route_preserves_saved_cimd_grant_after_origin_change(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    origin: str | None,
+) -> None:
+    from types import SimpleNamespace
+    from urllib.parse import parse_qs
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db, mcp_server_manager
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "saved-cimd-route-test-salt")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server: Final = _cimd_oauth_server()
+    mcp_server_manager.global_mcp_server_manager.registry[server.server_id] = server
+    identity: Final = "https://gateway.example.com/oauth/client-metadata.json"
+    table: Final = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    await endpoints._store_per_user_token_server_side(
+        server, "jwt-owner", {"access_token": "expired", "refresh_token": "saved-refresh", "expires_in": -1},
+        cimd_client_id=identity,
+    )
+
+    async def saved_row(**kwargs):
+        return SimpleNamespace(credential_b64=table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+
+    table.find_unique.side_effect = saved_row
+    if origin is None:
+        monkeypatch.delenv("PROXY_BASE_URL")
+    else:
+        monkeypatch.setenv("PROXY_BASE_URL", origin)
+    _, key = jwt_oauth_identity
+    upstream: Final = respx_mock.post(server.token_url).respond(
+        200, json={"access_token": "fresh", "refresh_token": "rotated", "expires_in": 3600}
+    )
+    response: Final = await endpoints.exchange_token_with_server(
+        _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(key, scope='litellm_proxy_admin')}"}),
+        server, "refresh_token", None, None, identity, None, None, refresh_token="saved-refresh",
+    )
+    assert response.status_code == 200
+    assert parse_qs(upstream.calls[0].request.content.decode())["client_id"] == [identity]
+    persisted: Final = await db.get_user_oauth_credential(proxy_server.prisma_client, "jwt-owner", server.server_id)
+    assert persisted is not None and persisted["cimd_client_id"] == identity
+    assert persisted["refresh_token"] == "rotated"
+    assert table.upsert.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [
+    "matching", "foreign_refresh", "missing_refresh", "missing_grant", "database_missing", "database_outage",
+    "static_client", "anonymous",
+])
+async def test_saved_cimd_refresh_identity_is_bound_to_the_callers_stored_grant(
+    monkeypatch: pytest.MonkeyPatch, state: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "saved-cimd-owner-test-salt")
+    server: Final = _cimd_oauth_server()
+    identity: Final = "https://original-gateway.example.com/oauth/client-metadata.json"
+    database: Final = MagicMock()
+    table: Final = database.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    await db.store_user_oauth_credential(
+        database, "alice", server.server_id, "expired",
+        refresh_token=None if state == "missing_refresh" else "alice-refresh", cimd_client_id=identity,
+    )
+    table.find_unique.reset_mock()
+    table.find_unique.return_value = (
+        None if state == "missing_grant" else SimpleNamespace(
+            credential_b64=table.upsert.call_args.kwargs["data"]["create"]["credential_b64"]
+        )
+    )
+    if state == "database_missing":
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+    if state == "database_outage":
+        table.find_unique.side_effect = RuntimeError("database unavailable")
+    if state == "static_client":
+        server.client_id = "configured-client"
+    resolved: Final = await endpoints._saved_cimd_refresh_client_id(
+        server, None if state == "anonymous" else "alice",
+        "foreign-refresh" if state == "foreign_refresh" else "alice-refresh",
+    )
+    assert resolved == (identity if state == "matching" else None)
+    if state in ("anonymous", "static_client", "database_missing"):
+        table.find_unique.assert_not_awaited()
+    else:
+        table.find_unique.assert_awaited_once_with(where={"user_id_server_id": {"user_id": "alice", "server_id": server.server_id}})

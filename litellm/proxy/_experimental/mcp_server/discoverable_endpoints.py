@@ -1090,6 +1090,36 @@ def _token_credential_source(mcp_server: MCPServer) -> CredentialSource:
     return "gateway_stored" if mcp_server.client_id or get_cimd_client_id(mcp_server) else "caller_supplied"
 
 
+async def _saved_cimd_refresh_client_id(
+    server: MCPServer, user_id: str | None, refresh_token: str | None
+) -> str | None:
+    """Reuse only the client identity bound to this caller's presented refresh grant."""
+    if (
+        not user_id
+        or not refresh_token
+        or not server.needs_user_oauth_token
+        or server.auth_type != MCPAuth.oauth2
+        or server.client_id
+        or server.client_secret
+    ):
+        return None
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.db import get_user_oauth_credential
+
+    if proxy_server.prisma_client is None:
+        return None
+    try:
+        credential: Final = await get_user_oauth_credential(proxy_server.prisma_client, user_id, server.server_id)
+    except Exception:  # noqa: BLE001  # optional storage must not prevent a caller-owned OAuth exchange
+        return None
+    if credential is None:
+        return None
+    stored_refresh: Final = credential.get("refresh_token")
+    if not stored_refresh or not secrets.compare_digest(stored_refresh, refresh_token):
+        return None
+    return credential.get("cimd_client_id")
+
+
 async def exchange_token_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -1124,6 +1154,17 @@ async def exchange_token_with_server(
             ),
         )
 
+    request_user_id: Final = (
+        await extract_user_id_from_request(request)
+        if resolved_server.needs_user_oauth_token or resolved_server.oauth_identity_binding is not None
+        else None
+    )
+    cimd_client_id: Final = (
+        await _saved_cimd_refresh_client_id(resolved_server, request_user_id, refresh_token)
+        if grant_type == "refresh_token"
+        else None
+    ) or get_cimd_client_id(resolved_server)
+
     # The id, secret, and token-endpoint auth method must come from the same source. When the
     # server-side client_id wins, falling back to the caller's secret pairs the persisted client
     # with a foreign secret; the register short-circuit hands clients a placeholder secret
@@ -1145,15 +1186,10 @@ async def exchange_token_with_server(
             auth_method=resolved_auth_method,
             client_id=resolved_client_id,
             client_secret=resolved_client_secret,
+            cimd_client_id=cimd_client_id,
         )
     except TokenEndpointAuthConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    request_user_id: Final = (
-        await extract_user_id_from_request(request)
-        if resolved_server.needs_user_oauth_token or resolved_server.oauth_identity_binding is not None
-        else None
-    )
 
     bridge_identity: _BridgeAuthorizationCode | None = None
     bridge_mint_ready: _BridgeMintReady | None = None
@@ -1272,7 +1308,7 @@ async def exchange_token_with_server(
     except httpx.HTTPStatusError as exc:
         fault: Final = classify_upstream_token_rejection(
             exc.response,
-            credential_source=_token_credential_source(resolved_server),
+            credential_source="gateway_stored" if cimd_client_id else _token_credential_source(resolved_server),
             log_context=resolved_server.server_id,
         )
         upstream_rejected_bridge_refresh: Final = (
@@ -1343,13 +1379,7 @@ async def exchange_token_with_server(
                         user_id=user_id,
                         token_response=token_response,
                         identity_binding_proof=binding_proof,
-                        **(
-                            {"cimd_client_id": selected_client_id}
-                            if (selected_client_id := token_request.body.get("client_id"))
-                            and selected_client_id == get_cimd_document_url()
-                            and not resolved_server.client_id
-                            else {}
-                        ),
+                        **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
                     )
                 else:
                     verbose_logger.warning(
