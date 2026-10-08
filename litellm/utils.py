@@ -2558,10 +2558,10 @@ def create_tokenizer(json: str):
 
 
 def token_counter(
-    model: str = "",
-    custom_tokenizer: Mapping[str, object] | SelectTokenizerResponse | None = None,
+    model="",
+    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: Sequence[AllMessageValues | BaseModel | Mapping[str, object]] | None = None,
+    messages: Sequence | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
@@ -8269,28 +8269,31 @@ from litellm.types.llms.openai import (
 )
 
 
-def convert_to_dict(message: BaseModel | Mapping[str, object]) -> dict[str, object]:
+def convert_to_dict(message: BaseModel | dict) -> dict:
     """
-    Converts a Pydantic model or mapping into a dictionary.
+    Converts a message to a dictionary if it's a Pydantic model.
 
     Args:
-        message: The message, which may be a Pydantic model or mapping.
+        message: The message, which may be a Pydantic model or a dictionary.
 
     Returns:
         dict: The converted message.
     """
     if isinstance(message, BaseModel):
         return message.model_dump(exclude_none=True)
-    return dict(message)
+    elif isinstance(message, dict):
+        return message
+    else:
+        raise TypeError(f"Invalid message type: {type(message)}. Expected dict or Pydantic model.")
 
 
-def convert_list_message_to_dict(
-    messages: Sequence[BaseModel | Mapping[str, object]],
-) -> list[dict[str, object]]:
-    return [
-        dict(cleanup_none_field_in_message(message=cast(AllMessageValues, convert_to_dict(message))))
-        for message in messages
-    ]
+def convert_list_message_to_dict(messages: Sequence):
+    new_messages: Final = []
+    for message in messages:
+        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
+        cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
+        new_messages.append(cleaned_message)
+    return new_messages
 
 
 def validate_and_fix_openai_messages(messages: list):
