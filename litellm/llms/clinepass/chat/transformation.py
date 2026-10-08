@@ -18,9 +18,11 @@ Moderation and realtime endpoints are unsupported and rejected before dispatch.
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, NoReturn
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -30,16 +32,11 @@ from litellm.types.utils import ModelResponse
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import ClinePassException
 
-# Mirrors litellm/llms/openai/chat/gpt_transformation.py: these are needed only
-# for annotations, and importing litellm_logging at runtime from a provider
-# module risks a circular import.
+# Needed only for annotations; importing litellm_logging at runtime from a
+# provider module risks a circular import.
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
-else:
-    LiteLLMLoggingObj = object
 
 CLINEPASS_API_BASE: Final = "https://api.cline.bot/api/v1"
 
@@ -62,6 +59,15 @@ CLINEPASS_MODEL_PREFIX: Final = "cline-pass/"
 # body is rewritten by _unwrap_response_envelope().
 _BODY_SPECIFIC_HEADERS: Final = ("content-length", "content-encoding")
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+
+def _as_json_object(value: object) -> Mapping[str, object] | None:
+    try:
+        return _JSON_OBJECT.validate_python(value)
+    except ValidationError:
+        return None
+
 
 def _unwrap_response_envelope(raw_response: httpx.Response) -> httpx.Response:
     """Strip ClinePass's ``data`` wrapper off a JSON completion body.
@@ -74,45 +80,45 @@ def _unwrap_response_envelope(raw_response: httpx.Response) -> httpx.Response:
     under the same key -- is not mistaken for one.
     """
     try:
-        payload = raw_response.json()
-    except ValueError:
-        # Not a JSON body -- there is no envelope to strip.
+        payload: Final = _JSON_OBJECT.validate_json(raw_response.content)
+    except ValidationError:
+        # Not a JSON object body -- there is no envelope to strip.
         return raw_response
 
-    if not isinstance(payload, dict) or "choices" in payload:
+    if "choices" in payload:
         return raw_response
 
-    inner = payload.get(CLINEPASS_RESPONSE_ENVELOPE_KEY)
-    if not isinstance(inner, dict) or "choices" not in inner:
+    inner: Final = _as_json_object(payload.get(CLINEPASS_RESPONSE_ENVELOPE_KEY))
+    if inner is None or "choices" not in inner:
         return raw_response
 
-    headers = {k: v for k, v in raw_response.headers.items() if k.lower() not in _BODY_SPECIFIC_HEADERS}
+    return httpx.Response(
+        status_code=raw_response.status_code,
+        headers={k: v for k, v in raw_response.headers.items() if k.lower() not in _BODY_SPECIFIC_HEADERS},
+        content=json.dumps(inner, ensure_ascii=False).encode("utf-8"),
+        request=_attached_request(raw_response),
+    )
 
+
+def _attached_request(raw_response: httpx.Response) -> httpx.Request | None:
     # httpx.Response.request raises RuntimeError rather than returning None when
     # no request is attached, so ask for it defensively instead of reaching for
     # the private attribute behind it.
     try:
-        original_request = raw_response.request
+        return raw_response.request
     except RuntimeError:
-        original_request = None
-
-    return httpx.Response(
-        status_code=raw_response.status_code,
-        headers=headers,
-        content=json.dumps(inner, ensure_ascii=False).encode("utf-8"),
-        request=original_request,
-    )
+        return None
 
 
-def _apply_model_prefix(data: dict) -> dict:  # mutable-ok: request body handed to the dict-typed base transform_request
+def _apply_model_prefix(data: dict[str, object]) -> dict[str, object]:  # mutable-ok: dict-typed base transform_request
     """Restore the ``modelType/model`` qualifier on the outbound model id.
 
     Only prefix ids that lost their qualifier, so a cross-provider id
     (``clinepass/openrouter/foo`` -> ``openrouter/foo``) is forwarded unchanged.
     """
-    model = data.get("model")
+    model: Final = data.get("model")
     if isinstance(model, str) and "/" not in model:
-        data["model"] = f"{CLINEPASS_MODEL_PREFIX}{model}"
+        return {**data, "model": f"{CLINEPASS_MODEL_PREFIX}{model}"}
     return data
 
 
@@ -149,9 +155,10 @@ class ClinePassConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("CLINEPASS_API_BASE") or CLINEPASS_API_BASE
-        dynamic_api_key = api_key or get_secret_str("CLINEPASS_API_KEY")
-        return api_base, dynamic_api_key
+        return (
+            api_base or get_secret_str("CLINEPASS_API_BASE") or CLINEPASS_API_BASE,
+            api_key or get_secret_str("CLINEPASS_API_KEY"),
+        )
 
     def get_openai_compatible_provider_info(
         self,
@@ -165,18 +172,15 @@ class ClinePassConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,  # mutable-ok: matches the dict-typed base-class signature
-        litellm_params: dict,  # mutable-ok: matches the dict-typed base-class signature
+        optional_params: dict[str, object],  # mutable-ok: matches the dict-typed base-class signature
+        litellm_params: dict[str, object],  # mutable-ok: matches the dict-typed base-class signature
         stream: bool | None = None,
     ) -> str:
-        if not api_base:
-            api_base = CLINEPASS_API_BASE
+        base: Final = (api_base or CLINEPASS_API_BASE).rstrip("/")
+        if base.endswith("/chat/completions"):
+            return base
 
-        api_base = api_base.rstrip("/")
-        if api_base.endswith("/chat/completions"):
-            return api_base
-
-        return f"{api_base}/chat/completions"
+        return f"{base}/chat/completions"
 
     def get_models(
         self, api_key: str | None = None, api_base: str | None = None
@@ -193,13 +197,14 @@ class ClinePassConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,  # mutable-ok: matches the dict-typed base-class signature
-        optional_params: dict,  # mutable-ok: matches the dict-typed base-class signature
+        non_default_params: dict[str, object],  # mutable-ok: matches the dict-typed base-class signature
+        optional_params: dict[str, object],  # mutable-ok: matches the dict-typed base-class signature
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: matches the dict-typed base-class signature
+    ) -> dict[str, object]:  # mutable-ok: matches the dict-typed base-class signature
         """ClinePass takes the legacy ``max_tokens`` spelling only."""
-        mapped_params = super().map_openai_params(
+        mapped_params: Final[dict[str, object]]  # mutable-ok: dict-typed base map_openai_params
+        mapped_params = super().map_openai_params(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # base signature takes bare dict
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -213,14 +218,15 @@ class ClinePassConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: matches the dict-typed base-class signature
-        optional_params: dict,  # mutable-ok: matches the dict-typed base-class signature
-        litellm_params: dict,  # mutable-ok: matches the dict-typed base-class signature
-        headers: dict,  # mutable-ok: matches the dict-typed base-class signature
-    ) -> dict:  # mutable-ok: matches the dict-typed base-class signature
+        optional_params: dict[str, object],  # mutable-ok: matches the dict-typed base-class signature
+        litellm_params: dict[str, object],  # mutable-ok: matches the dict-typed base-class signature
+        headers: dict[str, object],  # mutable-ok: matches the dict-typed base-class signature
+    ) -> dict[str, object]:  # mutable-ok: matches the dict-typed base-class signature
         # BaseLLMHTTPHandler builds the body with this synchronous method on
         # both the sync and the async path, so there is deliberately no
         # async_transform_request() override -- it would never be called.
-        data = super().transform_request(
+        data: Final[dict[str, object]]  # mutable-ok: dict-typed base transform_request
+        data = super().transform_request(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # base signature takes bare dict
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -234,11 +240,11 @@ class ClinePassConfig(OpenAIGPTConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: LiteLLMLoggingObj,
-        request_data: dict,  # mutable-ok: matches the dict-typed base-class signature
+        logging_obj: "Logging",
+        request_data: dict[str, object],  # mutable-ok: matches the dict-typed base-class signature
         messages: list[AllMessageValues],  # mutable-ok: matches the dict-typed base-class signature
-        optional_params: dict,  # mutable-ok: matches the dict-typed base-class signature
-        litellm_params: dict,  # mutable-ok: matches the dict-typed base-class signature
+        optional_params: dict[str, object],  # mutable-ok: matches the dict-typed base-class signature
+        litellm_params: dict[str, object],  # mutable-ok: matches the dict-typed base-class signature
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -248,7 +254,7 @@ class ClinePassConfig(OpenAIGPTConfig):
         # The provider therefore reports the upstream finish reason unmodified: inferring
         # truncation from usage equalling the cap produces false positives on natural
         # completions that happen to land exactly on the cap.
-        return super().transform_response(
+        return super().transform_response(  # pyright: ignore[reportUnknownMemberType]  # base signature takes bare dict
             model=model,
             raw_response=_unwrap_response_envelope(raw_response),
             model_response=model_response,
@@ -266,7 +272,7 @@ class ClinePassConfig(OpenAIGPTConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,  # mutable-ok: matches the dict-typed base-class signature
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: matches the dict-typed base-class signature
     ) -> BaseLLMException:
         return ClinePassException(
             message=error_message,

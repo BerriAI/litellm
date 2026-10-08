@@ -648,7 +648,7 @@ gemini_models: Set = set()
 xai_models: Set = set()
 zai_models: Set = set()
 deepseek_models: Set = set()
-clinepass_models: Set = set()
+clinepass_models: set[str] = set()  # mutable-ok: filled from the model cost map at import
 tencent_models: Set = set()
 runwayml_models: Set = set()
 azure_ai_models: Set = set()
@@ -871,7 +871,7 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
-        elif value.get("litellm_provider") == "clinepass":
+        elif value.get("litellm_provider") == "clinepass":  # pyright: ignore[reportUnknownMemberType]  # value comes from the untyped model cost map
             clinepass_models.add(key)  # pyright: ignore[reportUnknownArgumentType]  # key comes from the untyped model cost map
         elif value.get("litellm_provider") == "tencent":
             tencent_models.add(key)
