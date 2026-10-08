@@ -294,4 +294,4 @@ class OpenAIDecisionResponse(LiteLLMPydanticObjectBase):
     answers: tuple[OpenAIDecisionAnswer, ...]
     usage: OpenAIDecisionUsage
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)

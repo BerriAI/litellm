@@ -8,7 +8,11 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.decisions.openai_transformation import to_openai_response, to_systemone_request
 from litellm.exceptions import BadRequestError
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    attach_guardrail_information,
+    include_guardrail_response_requested,
+)
 from litellm.types.decisions import DecisionsRequestBody, DecisionsResponse, OpenAIDecisionRequestBody
 
 router: Final = APIRouter()
@@ -104,11 +108,14 @@ async def _process_systemone(
         )
         if openai_body is None or isinstance(result, Response):
             return result
-        return to_openai_response(
+        openai_response: Final = to_openai_response(
             _DECISIONS_RESPONSE_ADAPTER.validate_python(result),
             openai_body.questions,
             str(data.get("model", "")),
         )
+        if include_guardrail_response_requested(processor.data):
+            return attach_guardrail_information(response=openai_response, request_data=processor.data)
+        return openai_response
     except ValidationError as error:
         raise await _invalid_request(raw_data=data, error=error, user_api_key_dict=user_api_key_dict)
     except Exception as error:
