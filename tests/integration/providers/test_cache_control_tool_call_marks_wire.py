@@ -1,16 +1,26 @@
 import asyncio
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Final, cast
 
 import anthropic
 import httpx
 import openai
 import pytest
+import yaml
 from anthropic.types import MessageParam, TextBlockParam, ToolParam
-from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
     ANTHROPIC_MODEL,
@@ -52,6 +62,7 @@ from pydantic import JsonValue, TypeAdapter
 from litellm.utils import get_prompt_cache_min_tokens
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_LANE_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _CLIENT_MARKED: Final = client_marked()
 _GEMINI_REPLY: Final = json.dumps(
     {
@@ -69,6 +80,25 @@ _OPENAI_REPLY: Final = json.dumps(
         "usage": {"prompt_tokens": 12, "completion_tokens": 1, "total_tokens": 13},
     }
 ).encode()
+
+
+def _uncapped_cache_config(directory: Path) -> Path:
+    lane: Final = object_value(yaml.safe_load(_LANE_CONFIG.read_text()))
+    settings: Final = object_value(lane["litellm_settings"])
+    cache_params: Final = object_value(settings["cache_params"])
+    config: Final = {**lane, "litellm_settings": {**settings, "cache_params": {**cache_params, "max_messages": None}}}
+    path: Final = directory / "proxy_config_uncapped_cache.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False))
+    return path
+
+
+@pytest.fixture(scope="module")
+def uncapped_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    """A proxy whose response cache has no `max_messages` cap, so a seven-message tool conversation is cached"""
+    with gateway_from_environment() as lane:
+        directory: Final = tmp_path_factory.mktemp("uncapped_cache")
+        with owned_proxy(lane, directory, {}, config=_uncapped_cache_config(directory)) as owned:
+            yield owned
 
 
 def _anthropic_deployment(scenario: Scenario, wire: Wire, **fields: JsonValue) -> str:
@@ -485,13 +515,14 @@ def test_responses_bridge_keeps_system_and_user_marks_within_the_cap(gateway: Ga
         assert anthropic_labels(_only_request(wire)) == [SYSTEM_LABEL, ASK_LABEL]
 
 
-def test_response_cache_serves_the_capped_request_once(gateway: Gateway) -> None:
+@pytest.mark.timeout(240)
+def test_response_cache_serves_the_capped_request_once(uncapped_gateway: Gateway) -> None:
     marker: Final = new_marker()
-    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(anthropic_peer) as wire, uncapped_gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
         body: Final = chat_body(model, conversation(marker, marked_calls()))
-        first: Final = post_chat(gateway, body)
-        second: Final = post_chat(gateway, body)
+        first: Final = post_chat(uncapped_gateway, body)
+        second: Final = post_chat(uncapped_gateway, body)
         received: Final = wire.drain()
     assert (first[0], second[0]) == (200, 200), (first[2], second[2])
     assert first[1].startswith("chatcmpl-"), first[2]
@@ -828,14 +859,15 @@ def _cache_hit_rows(response_id: str) -> list[dict[str, JsonValue]]:
     )
 
 
-def test_response_cache_hit_records_the_injection_on_the_first_row_only(gateway: Gateway) -> None:
+@pytest.mark.timeout(240)
+def test_response_cache_hit_records_the_injection_on_the_first_row_only(uncapped_gateway: Gateway) -> None:
     marker: Final = new_marker()
     unmarked: Final = [tool_call(city) for city in CITIES]
-    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(anthropic_peer) as wire, uncapped_gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
         body: Final = chat_body(model, conversation(marker, unmarked, ask_marked=False))
-        first: Final = post_chat(gateway, body)
-        second: Final = post_chat(gateway, body)
+        first: Final = post_chat(uncapped_gateway, body)
+        second: Final = post_chat(uncapped_gateway, body)
         received: Final = wire.drain()
     assert (first[0], second[0]) == (200, 200), (first[2], second[2])
     assert first[1] == second[1], (first[2], second[2])
@@ -845,15 +877,18 @@ def test_response_cache_hit_records_the_injection_on_the_first_row_only(gateway:
     assert hit_rows[0]["injected"] is None, hit_rows
 
 
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("path", ("/v1/messages", "/v1/responses"))
-def test_response_cache_twins_on_messages_and_responses_stay_within_the_cap(gateway: Gateway, path: str) -> None:
+def test_response_cache_twins_on_messages_and_responses_stay_within_the_cap(
+    uncapped_gateway: Gateway, path: str
+) -> None:
     marker: Final = new_marker()
-    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+    with wire_server(anthropic_peer) as wire, uncapped_gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
         body: Final = (
             messages_body(model, marker, stream=False) if path == "/v1/messages" else responses_body(model, marker)
         )
-        responses: Final = tuple(gateway.request("POST", path, body) for _ in range(2))
+        responses: Final = tuple(uncapped_gateway.request("POST", path, body) for _ in range(2))
         received: Final = wire.drain()
     assert [response.status_code for response in responses] == [200, 200], [response.text for response in responses]
     expected: Final = _CLIENT_MARKED if path == "/v1/messages" else [SYSTEM_LABEL, ASK_LABEL]
