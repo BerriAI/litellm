@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,6 +11,7 @@ import {
   useAutoRouters,
   useInfiniteModelInfo,
   useModelHub,
+  useModelAccessGroupNames,
   useModelsInfo,
   usePlainChatModelGroups,
   useSelectedTeamModels,
@@ -562,6 +563,127 @@ describe("useUserModels", () => {
 
     expect(result.current.isFetched).toBe(false);
     expect(modelAvailableCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("useModelAccessGroupNames", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("fetches and returns the caller's model access group names", async () => {
+    vi.mocked(modelAvailableCall).mockResolvedValue({
+      data: [
+        { id: "repro-access-group", object: "model", created: 0, owned_by: "litellm" },
+        { id: "another-access-group", object: "model", created: 0, owned_by: "litellm" },
+      ],
+    });
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current).toEqual(new Set(["repro-access-group", "another-access-group"]));
+    });
+
+    expect(modelAvailableCall).toHaveBeenCalledWith(
+      "test-access-token",
+      "test-user-id",
+      "Admin",
+      false,
+      null,
+      true,
+      true,
+    );
+  });
+
+  it("returns undefined while the access-group lookup is pending", () => {
+    vi.mocked(modelAvailableCall).mockReturnValue(new Promise<AllProxyModelsResponse>(() => undefined));
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    expect(result.current).toBeUndefined();
+  });
+
+  it("returns undefined until authorization is ready", () => {
+    const unauthorizedContext = {
+      accessToken: null,
+      userId: null,
+      userRole: null,
+      token: null,
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    };
+    mockUseAuthorized.mockReturnValue(unauthorizedContext);
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    expect(result.current).toBeUndefined();
+    expect(modelAvailableCall).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty set when the access-group lookup fails", async () => {
+    vi.mocked(modelAvailableCall).mockRejectedValue(new Error("lookup failed"));
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    await waitFor(() => expect(result.current).toBeDefined());
+    expect(result.current?.size).toBe(0);
+  });
+
+  it("keeps cached access-group names after a failed refetch", async () => {
+    vi.mocked(modelAvailableCall).mockResolvedValueOnce({
+      data: [{ id: "repro-access-group", object: "model", created: 0, owned_by: "litellm" }],
+    });
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current?.has("repro-access-group")).toBe(true);
+    });
+
+    const queryKey = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => {
+        return query.queryKey[0] === "modelAccessGroupNames";
+      })?.queryKey;
+    expect(queryKey).toBeDefined();
+    if (!queryKey) throw new Error("The access-group query was not created");
+
+    vi.mocked(modelAvailableCall).mockRejectedValueOnce(new Error("refetch failed"));
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey });
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryCache().find({ queryKey })?.state.status).toBe("error");
+    });
+    expect(result.current).toEqual(new Set(["repro-access-group"]));
   });
 });
 
