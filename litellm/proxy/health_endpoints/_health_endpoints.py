@@ -53,8 +53,10 @@ from litellm.proxy.db.health_check_latest import (
     query_latest_health_checks,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
-from litellm.proxy.health_check import (
+from litellm.proxy.health_check import (  # noqa: F401
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
+    _clean_endpoint_data,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _update_litellm_params_for_health_check,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     clean_endpoint_data,
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,

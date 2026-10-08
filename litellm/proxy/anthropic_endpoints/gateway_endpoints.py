@@ -52,7 +52,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+    _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    safe_set_request_parsed_body,
+)
 from litellm.proxy.management_endpoints.sso_helper_utils import CLI_SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
 from litellm.types.llms.base import LiteLLMBaseModel

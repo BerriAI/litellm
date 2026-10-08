@@ -133,7 +133,10 @@ from litellm.proxy.common_utils.callback_utils import (
     process_callback,
     strip_callback_config,
 )
-from litellm.proxy.common_utils.realtime_utils import realtime_request_body
+from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401
+    _realtime_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    realtime_request_body,
+)
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
@@ -384,7 +387,8 @@ from litellm.proxy.auth.model_checks import (
     get_team_models,
 )
 from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
-from litellm.proxy.auth.user_api_key_auth import (
+from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401
+    _fetch_global_spend_with_event_coordination,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     fetch_global_spend_with_event_coordination,
     user_api_key_auth,
     user_api_key_auth_websocket,
@@ -394,9 +398,11 @@ from litellm.proxy.bug_report_config import build_proxy_bug_report
 
 ## Import All Misc routes here ##
 from litellm.proxy.caching_routes import router as caching_router
-from litellm.proxy.common_request_processing import (
+from litellm.proxy.common_request_processing import (  # noqa: F401
     KNOWN_PROXY_ROUTES,
     ProxyBaseLLMRequestProcessing,
+    _is_azure_model_router_request,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _should_return_raw_model_name,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     close_guarded_stream,
     create_response,
     is_azure_model_router_request,
@@ -437,7 +443,9 @@ from litellm.proxy.common_utils.healthy_model_filter import (
 )
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
-from litellm.proxy.common_utils.http_parsing_utils import (
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     check_file_size_under_limit,
     get_form_data,
     read_request_body,
@@ -570,14 +578,20 @@ from litellm.proxy.health_check import (
     perform_health_check,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
-from litellm.proxy.hooks.model_max_budget_limiter import (
+from litellm.proxy.hooks.model_max_budget_limiter import (  # noqa: F401
     PROXY_VirtualKeyModelMaxBudgetLimiter,
+    _PROXY_VirtualKeyModelMaxBudgetLimiter,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import fail_closed_rate_limit_enforcement_enabled
-from litellm.proxy.hooks.prompt_injection_detection import (
+from litellm.proxy.hooks.prompt_injection_detection import (  # noqa: F401
     OPTIONAL_PromptInjectionDetection,
+    _OPTIONAL_PromptInjectionDetection,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
 )
-from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger, run_spend_event
+from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401
+    ProxyDBLogger,
+    _ProxyDBLogger,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    run_spend_event,
+)
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.lens.dataset_endpoints import router as lens_dataset_router
 from litellm.proxy.lens.endpoints import router as lens_router
@@ -612,7 +626,9 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.common_utils import (
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401
+    _user_has_admin_privileges,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     admin_can_invite_user,
     user_api_key_has_admin_view,
     user_has_admin_privileges,
@@ -658,7 +674,10 @@ from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
     router as model_access_group_management_router,
 )
-from litellm.proxy.management_endpoints.model_management_endpoints import (
+from litellm.proxy.management_endpoints.model_management_endpoints import (  # noqa: F401
+    _add_model_to_db,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _add_team_model_to_db,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _deduplicate_litellm_router_models,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     add_model_to_db,
     add_team_model_to_db,
     deduplicate_litellm_router_models,
@@ -840,10 +859,17 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.ui_crud_endpoints.user_banner_endpoints import (
     router as user_banner_endpoints_router,
 )
-from litellm.proxy.utils import (
+from litellm.proxy.utils import (  # noqa: F401
     PrismaClient,
     ProxyLogging,
     ProxyUpdateSpend,
+    _cache_user_row,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_docs_url,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_openapi_url,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_redoc_url,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _is_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _is_valid_team_configs,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     cache_user_row,
     evict_config_param,
     get_config_param,

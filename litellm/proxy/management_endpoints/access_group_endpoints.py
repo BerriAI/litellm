@@ -17,7 +17,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-from litellm.proxy.auth.auth_checks import (
+from litellm.proxy.auth.auth_checks import (  # noqa: F401
+    _cache_access_object,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _cache_key_object,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _cache_team_object,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_team_object_from_cache,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     cache_access_object,
     cache_key_object,
     cache_team_object,

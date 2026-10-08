@@ -176,7 +176,8 @@ if MCP_AVAILABLE:
         store_user_oauth_credential,
         update_mcp_server,
     )
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: F401
+        _raise_if_not_oauth2,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
         authorize_with_server,
         client_supplied_application_type,
         client_supplied_redirect_uris,
@@ -225,15 +226,20 @@ if MCP_AVAILABLE:
         UserMCPManagementMode,
         is_per_server_oauth_discovery_eligible,
     )
-    from litellm.proxy.auth.user_api_key_auth import (
+    from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401
+        _user_api_key_auth_builder,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
         user_api_key_auth,
         user_api_key_auth_builder,
     )
-    from litellm.proxy.common_utils.http_parsing_utils import (
+    from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+        _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
         populate_request_with_path_params,
         read_request_body,
     )
-    from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
+    from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401
+        _user_has_admin_view,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+        user_api_key_has_admin_view,
+    )
     from litellm.proxy.management_endpoints.mcp_connector_import import (
         ConnectorConversionError,
         ConvertedConnector,

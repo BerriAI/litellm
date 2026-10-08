@@ -12,7 +12,8 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401
+    _get_salt_key,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     decrypt_if_encrypted_with,
     encrypt_value_helper,
     get_salt_key,

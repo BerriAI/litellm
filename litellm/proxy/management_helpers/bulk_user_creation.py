@@ -42,14 +42,16 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _update_internal_new_user_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # /user/new defaults; result validated below
     check_if_default_team_set,
 )
-from litellm.proxy.management_endpoints.key_management_endpoints import (
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401
+    _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage]  # same permission check /user/new uses
     generate_key_helper_fn,  # pyright: ignore[reportUnknownVariableType]  # legacy untyped helper; result validated by _KEY_RESPONSE
     metadata_json_with_limits,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
-from litellm.proxy.management_helpers.object_permission_utils import (
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     set_object_permission,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared with /user/new; result validated below
 )
 from litellm.proxy.management_helpers.utils import (

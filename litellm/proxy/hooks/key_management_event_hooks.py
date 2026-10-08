@@ -21,7 +21,10 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.utils import hash_token_if_needed
+from litellm.proxy.utils import (  # noqa: F401
+    _hash_token_if_needed,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    hash_token_if_needed,
+)
 from litellm.secret_managers.base_secret_manager import BaseSecretManager
 
 if TYPE_CHECKING:

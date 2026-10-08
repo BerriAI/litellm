@@ -15,7 +15,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 
-from .auth_checks_organization import user_is_org_admin
+from .auth_checks_organization import (  # noqa: F401
+    _user_is_org_admin,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    user_is_org_admin,
+)
 
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
 # endpoint to a management router REQUIRES adding it here too — the surrounding

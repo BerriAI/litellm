@@ -32,8 +32,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: F401
     MCPRequestHandler,
+    _is_mcp_admitted_user_subject,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     is_mcp_admitted_user_subject,
 )
 from litellm.proxy._experimental.mcp_server.client_allowlist import (
@@ -47,7 +48,10 @@ from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
-from litellm.proxy._experimental.mcp_server.mcp_context import (
+from litellm.proxy._experimental.mcp_server.mcp_context import (  # noqa: F401
+    _mcp_active_toolset_id,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _mcp_gateway_initialize_instructions,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _mcp_gateway_server_name,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # server-owned request mode
     active_mcp_request_ctx_var,
     get_active_mcp_request_ctx,

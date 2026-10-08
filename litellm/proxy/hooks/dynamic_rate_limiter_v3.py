@@ -20,11 +20,12 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401
     PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
     RateLimitResponse,
+    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     claim_request_stash_for_data,
     get_or_create_request_stash,
 )

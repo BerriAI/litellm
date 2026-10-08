@@ -119,7 +119,11 @@ from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
     route_request,
 )
-from litellm.proxy.utils import ProxyLogging, check_and_merge_model_level_guardrails
+from litellm.proxy.utils import (  # noqa: F401
+    ProxyLogging,
+    _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    check_and_merge_model_level_guardrails,
+)
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias

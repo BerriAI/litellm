@@ -69,7 +69,8 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import enforced_model_allowlists
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import (
+from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401
+    _get_bearer_token,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     get_bearer_token,
     is_no_auth_dev_mode,
     user_api_key_auth,
@@ -77,7 +78,10 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket_for_model,
 )
 from litellm.proxy.common_request_processing import open_sse_before_first_byte
-from litellm.proxy.common_utils.http_parsing_utils import (
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     get_form_data,
     get_request_body,
     is_json_content_type,

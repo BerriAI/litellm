@@ -33,7 +33,8 @@ from litellm.proxy._types import (
     RegenerateKeyRequest,
     UpdateKeyRequest,
 )
-from litellm.proxy.auth.auth_checks import (
+from litellm.proxy.auth.auth_checks import (  # noqa: F401
+    _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     delete_cache_access_object,  # pyright: ignore[reportPrivateUsage]  # the access-group endpoints reach for this same cache primitive
 )
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper

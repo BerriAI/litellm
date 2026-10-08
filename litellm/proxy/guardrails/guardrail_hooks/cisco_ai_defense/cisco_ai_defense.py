@@ -52,7 +52,10 @@ from litellm.types.utils import (
     TextCompletionResponse,
 )
 
-from .cisco_ai_defense_mcp import CiscoAIDefenseMcpMixin
+from .cisco_ai_defense_mcp import (  # noqa: F401
+    CiscoAIDefenseMcpMixin,
+    _CiscoAIDefenseMcpMixin,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+)
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import (

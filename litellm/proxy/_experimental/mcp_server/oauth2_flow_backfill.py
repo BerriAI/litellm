@@ -42,7 +42,11 @@ from typing import Final, Literal, Protocol
 from pydantic import JsonValue
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._experimental.mcp_server.db import decode_oauth_payload, decrypt_credentials
+from litellm.proxy._experimental.mcp_server.db import (  # noqa: F401
+    _decode_oauth_payload,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    decode_oauth_payload,
+    decrypt_credentials,
+)
 from litellm.proxy.utils import PrismaClient
 from litellm.types.mcp import MCPCredentials
 

@@ -96,7 +96,9 @@ from litellm.proxy.auth.model_access_denied import (
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
-from litellm.proxy.common_utils.http_parsing_utils import (
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     safe_get_request_headers,
     safe_get_request_query_params,
 )

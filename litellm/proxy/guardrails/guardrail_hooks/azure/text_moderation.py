@@ -16,7 +16,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs, LLMResponseTypes
 
-from .base import RESPONSES_API_CALL_TYPES, AzureGuardrailBase
+from .base import (  # noqa: F401
+    _RESPONSES_API_CALL_TYPES,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    RESPONSES_API_CALL_TYPES,
+    AzureGuardrailBase,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache

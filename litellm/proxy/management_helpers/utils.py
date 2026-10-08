@@ -35,7 +35,10 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     UserAPIKeyAuth,
     VirtualKeyEvent,
 )
-from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.utils import PrismaClient, jsonify_object

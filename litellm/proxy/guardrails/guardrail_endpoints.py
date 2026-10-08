@@ -43,7 +43,10 @@ from litellm.proxy.guardrails.guardrail_registry import (
     parse_tolerant_litellm_params,
 )
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
-from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    user_api_key_has_admin_view,
+)
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import (

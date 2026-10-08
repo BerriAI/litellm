@@ -94,8 +94,9 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
+from litellm.proxy.auth.auth_checks import (  # noqa: F401
     OrganizationNotFoundError,
+    _cache_team_object,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     allowed_route_check_inside_route,
     cache_team_object,
     can_org_access_model,
@@ -129,7 +130,14 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
     parse_canonical_date_range,
 )
-from litellm.proxy.management_endpoints.common_utils import (
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401
+    _check_disable_global_guardrails_caller_permission,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _check_passthrough_routes_caller_permission,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _set_object_metadata_field,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _team_member_has_permission,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _update_metadata_fields,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     check_disable_global_guardrails_caller_permission,
     check_passthrough_routes_caller_permission,
     member_budget_patch,
@@ -161,7 +169,8 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     reconcile_team_access_group_membership,
     sync_team_access_group_membership,
 )
-from litellm.proxy.management_helpers.object_permission_utils import (
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
     handle_update_object_permission_common,
     invalidate_cached_object_permissions,

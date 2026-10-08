@@ -20,7 +20,8 @@ from litellm.proxy._types import (
     RegenerateKeyRequest,
 )
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
-from litellm.proxy.management_endpoints.key_management_endpoints import (
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401
+    _calculate_key_rotation_time,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     calculate_key_rotation_time,
     regenerate_key_fn,
 )

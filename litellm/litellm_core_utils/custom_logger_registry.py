@@ -53,8 +53,14 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
     VectorStorePreCallHook,
 )
 from litellm.integrations.zerobus import ZerobusLogger
-from litellm.proxy.hooks.dynamic_rate_limiter import PROXY_DynamicRateLimitHandler
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
+from litellm.proxy.hooks.dynamic_rate_limiter import (  # noqa: F401
+    PROXY_DynamicRateLimitHandler,
+    _PROXY_DynamicRateLimitHandler,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+)
+from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (  # noqa: F401
+    PROXY_DynamicRateLimitHandlerV3,
+    _PROXY_DynamicRateLimitHandlerV3,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+)
 
 
 class CustomLoggerRegistry:

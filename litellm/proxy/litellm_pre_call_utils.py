@@ -65,7 +65,10 @@ from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
     strip_callback_config,
 )
-from litellm.proxy.common_utils.http_parsing_utils import safe_get_request_headers
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    safe_get_request_headers,
+)
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 

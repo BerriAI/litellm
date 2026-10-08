@@ -73,9 +73,10 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: F401
     MCPRequestHandler,
     MCPServerAccess,
+    _is_mcp_admitted_user_subject,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     is_mcp_admitted_user_subject,
 )
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
@@ -96,7 +97,8 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
     MCPPerUserTokenCache,
     mcp_per_user_token_cache,
 )
-from litellm.proxy._experimental.mcp_server.oauth_utils import (
+from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401
+    _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     canonicalize_url_identity,
     get_byok_www_authenticate,
     redact_mcp_resource_url,

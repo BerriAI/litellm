@@ -14,7 +14,8 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401
+    _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage]  # reuse the encrypted credential's format discriminator
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer

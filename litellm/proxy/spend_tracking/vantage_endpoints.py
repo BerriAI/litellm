@@ -18,7 +18,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    user_api_key_has_admin_view,
+)
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.vantage_endpoints import (

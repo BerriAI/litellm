@@ -30,7 +30,10 @@ from litellm.proxy.common_request_processing import (
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
-from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
     error_status_code,

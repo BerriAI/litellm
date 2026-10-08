@@ -34,19 +34,24 @@ from litellm.proxy.common_utils.callback_config_validation import (
     conflicting_span_scope_error,
     cross_entry_family_error,
 )
-from litellm.proxy.common_utils.callback_utils import (
+from litellm.proxy.common_utils.callback_utils import (  # noqa: F401
+    _CALLBACK_VAR_ENCRYPTED_PREFIX,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
     encrypt_callback_vars,
     is_sensitive_callback_key,
 )
-from litellm.proxy.litellm_pre_call_utils import (
+from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401
+    _get_validated_callback_metadata,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     convert_key_logging_metadata_to_callback,
     get_validated_callback_metadata,
 )
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
-from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
+from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401
+    _refresh_cached_team,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    refresh_cached_team,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
 

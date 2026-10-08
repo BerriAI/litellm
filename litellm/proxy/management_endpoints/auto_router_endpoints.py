@@ -28,7 +28,8 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
+from litellm.proxy.auth.auth_checks import (  # noqa: F401
+    _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     can_key_call_resolved_model,
     virtual_key_max_budget_check,
 )

@@ -27,7 +27,12 @@ from litellm.types.utils import (
     GuardrailTracingDetail,
 )
 
-from .base import AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH, RESPONSES_API_CALL_TYPES, AzureGuardrailBase
+from .base import (  # noqa: F401
+    _RESPONSES_API_CALL_TYPES,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH,
+    RESPONSES_API_CALL_TYPES,
+    AzureGuardrailBase,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

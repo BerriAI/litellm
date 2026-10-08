@@ -45,10 +45,16 @@ from litellm.proxy._types import (
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import delete_cache_key_object
+from litellm.proxy.auth.auth_checks import (  # noqa: F401
+    _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    delete_cache_key_object,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-from litellm.proxy.common_utils.http_parsing_utils import safe_get_request_headers
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    safe_get_request_headers,
+)
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
@@ -58,8 +64,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_add,
     team_member_delete,
 )
-from litellm.proxy.utils import (
+from litellm.proxy.utils import (  # noqa: F401
     PrismaClient,
+    _premium_user_check,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
     handle_exception_on_proxy,
     premium_user_check,
 )

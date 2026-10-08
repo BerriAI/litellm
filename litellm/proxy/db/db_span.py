@@ -22,7 +22,12 @@ from typing import Final, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm.proxy.db.log_db_metrics import claim_db_io, db_io_claimed, is_exception_related_to_db
+from litellm.proxy.db.log_db_metrics import (  # noqa: F401
+    _is_exception_related_to_db,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    claim_db_io,
+    db_io_claimed,
+    is_exception_related_to_db,
+)
 
 _T = TypeVar("_T")
 
