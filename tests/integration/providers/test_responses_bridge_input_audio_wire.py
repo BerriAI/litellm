@@ -442,12 +442,23 @@ def _answered_in_its_own_shape(served: _Served) -> None:
     assert rv.answer(served.call.marker) in served.text, served.text
 
 
-def _posts_by_marker(bridge: _Bridge, calls: Sequence[_Call]) -> Mapping[str, Request]:
+def _attempts_by_marker(bridge: _Bridge, calls: Sequence[_Call]) -> Mapping[str, tuple[Request, ...]]:
     posts: Final = pcb.drained_posts(bridge.wire)
-    by_marker: Final = {marker: request for request in posts if (marker := rv.newest_marker(request.body.decode()))}
-    assert len(by_marker) == len(posts), [request.body for request in posts]
-    assert set(by_marker) == {call.marker for call in calls}, sorted(by_marker)
-    return by_marker
+    marked: Final = tuple((rv.newest_marker(request.body.decode()), request) for request in posts)
+    attempts: Final = {
+        call.marker: tuple(request for marker, request in marked if marker == call.marker) for call in calls
+    }
+    assert sum(len(group) for group in attempts.values()) == len(posts), [request.body for request in posts]
+    assert all(attempts.values()), sorted(marker for marker, group in attempts.items() if not group)
+    return attempts
+
+
+def _posts_by_marker(bridge: _Bridge, calls: Sequence[_Call]) -> Mapping[str, Request]:
+    attempts: Final = _attempts_by_marker(bridge, calls)
+    assert all(len(group) == 1 for group in attempts.values()), {
+        marker: len(group) for marker, group in attempts.items()
+    }
+    return {marker: group[0] for marker, group in attempts.items()}
 
 
 def _landed_once(bridge: _Bridge, model: str, served: Sequence[_Served], *, status: str = "success") -> None:
@@ -515,8 +526,11 @@ async def test_dropped_upstream_connections_fail_only_their_own_calls(bridge: _B
             assert "answer marker" not in item.text, item.text
         for item in answered:
             _answered_in_its_own_shape(item)
-        by_marker: Final = _posts_by_marker(rig, calls)
+        attempts: Final = _attempts_by_marker(rig, calls)
+        for item in answered:
+            assert len(attempts[item.call.marker]) == 1, attempts[item.call.marker]
         for call in calls:
-            assert pcb.content_of(pcb.input_items(by_marker[call.marker]), "user") == [_text(call.marker)]
+            for request in attempts[call.marker]:
+                assert pcb.content_of(pcb.input_items(request), "user") == [_text(call.marker)], request.body
         _landed_once(rig, model, answered)
         _landed_once(rig, model, failed, status="failure")
