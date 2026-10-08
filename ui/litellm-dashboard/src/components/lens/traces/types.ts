@@ -18,6 +18,11 @@ export type TraceFindingsRequest = components["schemas"]["TraceFindingsRequest"]
 export type TraceFindingCount = components["schemas"]["TraceFindingCount"];
 export type TraceSignals = components["schemas"]["TraceSignals"];
 export type SignalFlag = NonNullable<TraceSignals["flags"]>[number];
+export type TraceFeedback = components["schemas"]["TraceFeedback"];
+export type Feedback = components["schemas"]["Feedback"];
+export type TraceFeedbackRequest = components["schemas"]["TraceFeedbackRequest"];
+export type TraceFeedbackSummary = components["schemas"]["TraceFeedbackSummary"];
+export type FeedbackQuery = NonNullable<paths["/lens/feedback"]["get"]["parameters"]["query"]>;
 type ApiSpanDetail =
   paths["/v1/traces/{trace_id}/spans/{span_id}"]["get"]["responses"][200]["content"]["application/json"];
 export type Span = Trace["spans"][number];

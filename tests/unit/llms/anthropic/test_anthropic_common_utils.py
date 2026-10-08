@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
@@ -2534,6 +2535,29 @@ class TestWifZeroBehaviorChange:
         assert "ANTHROPIC_ORGANIZATION_ID" in exc_info.value.message
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in exc_info.value.message
         assert "ANTHROPIC_IDENTITY_TOKEN_FILE" in exc_info.value.message
+
+    def test_a_token_file_credential_missing_an_id_names_the_id_not_the_key(self, clean_anthropic_env: None, tmp_path: Path):
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            AnthropicModelInfo().validate_environment(
+                headers={},
+                model="claude-haiku-5-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={
+                    "anthropic_federation_rule_id": "fdrl_1",
+                    "anthropic_identity_token_file": str(tmp_path / "token"),
+                },
+                api_key=None,
+                api_base=None,
+            )
+
+        assert (
+            "anthropic_identity_token_file is set, but anthropic_organization_id is not set" in exc_info.value.message
+        )
+        assert "Missing Anthropic API Key" not in exc_info.value.message
 
 
 class TestWifHeaderContract:

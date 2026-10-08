@@ -206,36 +206,108 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
     return system_content_str, msg_i
 
 
+_OLLAMA_USER_ROLES: Final = frozenset({"user", "tool", "function"})
+
+
+def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detail: str) -> "litellm.BadRequestError":
+    return litellm.BadRequestError(
+        message=BAD_MESSAGE_ERROR_STR + f"the {message['role']} message at index {msg_i} {detail}",
+        model=model,
+        llm_provider="ollama",
+    )
+
+
+def _ollama_content_part(model: str, message: AllMessageValues, part: object, msg_i: int) -> tuple[str, str]:
+    match part:
+        case {"type": "text", "text": str() as text}:
+            return text, ""
+        case {"type": "text", "text": bad_text}:
+            raise _ollama_bad_message(
+                model, message, msg_i, f"has a {type(bad_text).__name__} text part; text must be a string"
+            )
+        case {"type": "text"}:
+            raise _ollama_bad_message(model, message, msg_i, "has a text part with no text; text must be a string")
+        case {"type": "image_url", "image_url": str() as image_url}:
+            return "", image_url
+        case {"type": "image_url", "image_url": {"url": str() as image_url}}:
+            return "", image_url
+        case {"type": "image_url", "image_url": dict()}:
+            raise _ollama_bad_message(
+                model,
+                message,
+                msg_i,
+                "has an image_url object without a url string; image_url must be a URL string or an object with a url",
+            )
+        case {"type": "image_url", "image_url": bad_image_url}:
+            raise _ollama_bad_message(
+                model,
+                message,
+                msg_i,
+                f"has a {type(bad_image_url).__name__} image_url; image_url must be a URL string or an object with a url",
+            )
+        case {"type": "image_url"}:
+            raise _ollama_bad_message(
+                model,
+                message,
+                msg_i,
+                "has an image_url part with no image_url; image_url must be a URL string or an object with a url",
+            )
+        case Mapping():
+            return "", ""
+        case _:
+            raise _ollama_bad_message(
+                model, message, msg_i, f"has a {type(part).__name__} content part; content parts must be objects"
+            )
+
+
+def _ollama_user_message_parts(
+    model: str, message: AllMessageValues, msg_i: int
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    msg_content: Final = message.get("content")
+    if msg_content is None:
+        return (), ()
+    if isinstance(msg_content, str):
+        return ((msg_content,) if msg_content else ()), ()
+    if not isinstance(msg_content, list):
+        raise _ollama_bad_message(
+            model,
+            message,
+            msg_i,
+            f"has {type(msg_content).__name__} content; content must be a string or a list of content parts",
+        )
+    parts: Final = tuple(_ollama_content_part(model, message, part, msg_i) for part in msg_content)
+    texts: Final = tuple(text for text, _ in parts if text)
+    image_urls: Final = tuple(image_url for _, image_url in parts if image_url)
+    return texts, image_urls
+
+
+def _ollama_user_turn(model: str, messages: Sequence[AllMessageValues], msg_i: int) -> tuple[str, tuple[str, ...], int]:
+    user_run: Final = tuple(
+        itertools.takewhile(
+            lambda message: message["role"] in _OLLAMA_USER_ROLES, (messages[i] for i in range(msg_i, len(messages)))
+        )
+    )
+    user_parts: Final = tuple(
+        _ollama_user_message_parts(model, message, msg_i + offset) for offset, message in enumerate(user_run)
+    )
+    user_content_str: Final = "\n".join("\n".join(texts) for texts, _ in user_parts if texts)
+    image_urls: Final = tuple(itertools.chain.from_iterable(urls for _, urls in user_parts))
+    return user_content_str, image_urls, len(user_run)
+
+
 def ollama_pt(
     model: str, messages: list
 ) -> (
     str | OllamaVisionModelObject
 ):  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
-    user_message_types: Final = {"user", "tool", "function"}
     msg_i = 0
     images: Final = []
     prompt = ""
     while msg_i < len(messages):
         init_msg_i = msg_i
-        user_content_str = ""
-        ## MERGE CONSECUTIVE USER CONTENT ##
-        while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
-            msg_content = messages[msg_i].get("content")
-            if msg_content:
-                if isinstance(msg_content, list):
-                    for m in msg_content:
-                        if m.get("type", "") == "image_url":
-                            if isinstance(m["image_url"], str):
-                                images.append(m["image_url"])
-                            elif isinstance(m["image_url"], dict):
-                                images.append(m["image_url"]["url"])
-                        elif m.get("type", "") == "text":
-                            user_content_str += m["text"]
-                else:
-                    # Tool message content will always be a string
-                    user_content_str += msg_content
-
-            msg_i += 1
+        user_content_str, image_urls, user_run_len = _ollama_user_turn(model, messages, msg_i)
+        images.extend(image_urls)
+        msg_i += user_run_len
 
         if user_content_str:
             prompt += f"### User:\n{user_content_str}\n\n"

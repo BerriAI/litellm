@@ -561,7 +561,7 @@ class VertexPassthroughLoggingHandler:
         }
 
     @staticmethod
-    def _handle_logging_vertex_collected_chunks(
+    def handle_logging_vertex_collected_chunks(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
@@ -615,6 +615,8 @@ class VertexPassthroughLoggingHandler:
             "result": complete_streaming_response,
             "kwargs": kwargs,
         }
+
+    _handle_logging_vertex_collected_chunks = handle_logging_vertex_collected_chunks
 
     @staticmethod
     def _build_complete_streaming_response(

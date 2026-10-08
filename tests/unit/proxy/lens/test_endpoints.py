@@ -1048,6 +1048,7 @@ async def test_service_status_uses_internal_auth_and_only_advertises_the_public_
         result: Final = await service_connection(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
     assert result.url == "https://traces.example/lens-ingest"
     assert result.connected is connected
+    assert result.configured is True
     assert result.status.storage_ready is connected
     assert route.calls[0].request.headers["Authorization"] == "Bearer " + "x" * 32
     assert "private storage details" not in result.model_dump_json()
@@ -1055,6 +1056,23 @@ async def test_service_status_uses_internal_auth_and_only_advertises_the_public_
     with pytest.raises(HTTPException) as denied:
         user_scope(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
     assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,configured", (("", False), ("http://lens", True)))
+async def test_service_setup_distinguishes_missing_installation_from_incomplete_configuration(
+    monkeypatch: pytest.MonkeyPatch, url: str, configured: bool
+) -> None:
+    from litellm.proxy.lens.endpoints import service_connection
+
+    monkeypatch.setenv("LITELLM_LENS_URL", url)
+    monkeypatch.delenv("LITELLM_LENS_SERVICE_TOKEN", raising=False)
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "v1.2.3")
+    result: Final = await service_connection(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
+    assert result.configured is configured
+    assert result.connected is False
+    assert result.release == "v1.2.3"
+    assert result.status.storage_ready is False
 
 
 @pytest.mark.asyncio

@@ -38,7 +38,7 @@ litellm/proxy/management_endpoints/auto_router_endpoints.py start_shadow_eval pr
 litellm/proxy/management_endpoints/auto_router_endpoints.py start_shadow_eval prisma user_id.in `list(data.user_ids)` 0
 litellm/proxy/management_endpoints/budget_management_endpoints.py info_budget prisma budget_id.in `data.budgets` 0
 litellm/proxy/management_endpoints/common_utils.py _team_admin_can_invite_user prisma team_id.in `admin_user_obj.teams` 0
-litellm/proxy/management_endpoints/common_utils.py _user_has_admin_privileges prisma team_id.in `user_obj.teams` 0
+litellm/proxy/management_endpoints/common_utils.py user_has_admin_privileges prisma team_id.in `user_obj.teams` 0
 litellm/proxy/management_endpoints/customer_endpoints.py delete_end_user prisma user_id.in `data.user_ids` 0
 litellm/proxy/management_endpoints/customer_endpoints.py delete_end_user prisma user_id.in `data.user_ids` 1
 litellm/proxy/management_endpoints/internal_user_endpoints.py _check_user_info_v2_access prisma team_id.in `caller_user.teams` 0
@@ -61,7 +61,7 @@ litellm/proxy/management_endpoints/key_management_endpoints.py _build_key_filter
 litellm/proxy/management_endpoints/key_management_endpoints.py _build_key_filter_conditions prisma team_id.in `member_only_team_ids` 0
 litellm/proxy/management_endpoints/key_management_endpoints.py _build_key_filter_conditions prisma team_id.in `member_team_ids` 0
 litellm/proxy/management_endpoints/key_management_endpoints.py _fetch_user_team_objects prisma team_id.in `complete_user_info.teams` 0
-litellm/proxy/management_endpoints/key_management_endpoints.py _list_key_helper prisma user_id.in `all_ids` 0
+litellm/proxy/management_endpoints/key_management_endpoints.py list_key_helper prisma user_id.in `all_ids` 0
 litellm/proxy/management_endpoints/key_management_endpoints.py bulk_update_team_keys prisma token.in `hashed_key_ids` 0
 litellm/proxy/management_endpoints/key_management_endpoints.py delete_key_aliases prisma key_alias.in `key_aliases` 0
 litellm/proxy/management_endpoints/key_management_endpoints.py delete_verification_tokens prisma token.in `hashed_tokens` 0

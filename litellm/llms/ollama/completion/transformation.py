@@ -39,6 +39,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     ProviderField,
     StreamingChoices,
+    generate_id,
 )
 
 from ..common_utils import OllamaError, OllamaModelInfo, convert_image
@@ -524,6 +525,7 @@ class OllamaConfig(BaseConfig):
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         super().__init__(streaming_response, sync_stream, json_mode)
+        self.response_id: Final[str] = generate_id()
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
         self.streamed_content: bool = False
@@ -622,6 +624,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         content = self._hold_json_object_start(text)
 
                 return ModelResponseStream(
+                    id=self.response_id,
                     choices=[
                         StreamingChoices(
                             index=0,
@@ -641,24 +644,26 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 # Return reasoning content as ModelResponseStream so UIs can render it
                 thinking_content: Final = chunk.get("thinking") or ""
                 return ModelResponseStream(
+                    id=self.response_id,
                     choices=[
                         StreamingChoices(
                             index=0,
                             delta=Delta(reasoning_content=thinking_content),
                         )
-                    ]
+                    ],
                 )
             else:
                 # In this case, 'thinking' is not present in the chunk, chunk["done"] is false,
                 # and chunk["response"] is falsy (None or empty string),
                 # but Ollama is just starting to stream, so it should be processed as a normal dict
                 return ModelResponseStream(
+                    id=self.response_id,
                     choices=[
                         StreamingChoices(
                             index=0,
                             delta=Delta(reasoning_content=""),
                         )
-                    ]
+                    ],
                 )
                 # raise Exception(f"Unable to parse ollama chunk - {chunk}")
         except Exception as e:

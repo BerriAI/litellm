@@ -104,7 +104,7 @@ class ManagedFileIdResolver(Protocol):
     ) -> Mapping[str, str]: ...
 
 
-def _is_base64_encoded_unified_file_id(b64_uid: object) -> str | Literal[False]:
+def is_base64_encoded_unified_file_id(b64_uid: object) -> str | Literal[False]:
     # Ensure b64_uid is a string and not a mock object
     if not isinstance(b64_uid, str):
         return False
@@ -121,8 +121,11 @@ def _is_base64_encoded_unified_file_id(b64_uid: object) -> str | Literal[False]:
         return False
 
 
+_is_base64_encoded_unified_file_id: Final = is_base64_encoded_unified_file_id
+
+
 def convert_b64_uid_to_unified_uid(b64_uid: str) -> str:
-    is_base64_unified_file_id: Final = _is_base64_encoded_unified_file_id(b64_uid)
+    is_base64_unified_file_id: Final = is_base64_encoded_unified_file_id(b64_uid)
     if is_base64_unified_file_id:
         return is_base64_unified_file_id
     else:
@@ -942,10 +945,10 @@ async def extract_file_creation_params(
     Returns:
         FileCreationParams: Structured parameters extracted from the request
     """
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
     if request_body is None:
-        request_body = await _read_request_body(request=request) or {}
+        request_body = await read_request_body(request=request) or {}
 
     # Extract target_storage (simplified - just use form parameter)
     target_storage: Final = _extract_target_storage_simple(target_storage_form)
@@ -1097,7 +1100,7 @@ async def validate_managed_id_requirement(
     if not resource_id:
         return
 
-    if not _is_base64_encoded_unified_file_id(resource_id):
+    if not is_base64_encoded_unified_file_id(resource_id):
         raise HTTPException(
             status_code=400,
             detail=(
@@ -1150,7 +1153,7 @@ def _batch_response_model_id_candidates(
 ) -> tuple[str, ...]:
     response_id: Final = getattr(response, "id", None)
     decoded_response_id: Final = (
-        _is_base64_encoded_unified_file_id(response_id) if isinstance(response_id, str) else False
+        is_base64_encoded_unified_file_id(response_id) if isinstance(response_id, str) else False
     )
     return tuple(
         candidate
@@ -1215,7 +1218,7 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
     if (
         hasattr(response, "input_file_id")
         and response.input_file_id
-        and not _is_base64_encoded_unified_file_id(response.input_file_id)
+        and not is_base64_encoded_unified_file_id(response.input_file_id)
         and prisma_client
     ):
         try:
@@ -1238,7 +1241,7 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
         return
     for attr in ("output_file_id", "error_file_id"):
         raw_id = getattr(response, attr, None)
-        if not raw_id or _is_base64_encoded_unified_file_id(raw_id):
+        if not raw_id or is_base64_encoded_unified_file_id(raw_id):
             continue
         try:
             managed_file = await ManagedFileRepository(prisma_client).table.find_first(
@@ -1307,7 +1310,7 @@ async def ensure_batch_response_managed_file_ids(
 
     for file_attr in ("output_file_id", "error_file_id"):
         raw_file_id = getattr(response, file_attr, None)
-        if not raw_file_id or _is_base64_encoded_unified_file_id(raw_file_id):
+        if not raw_file_id or is_base64_encoded_unified_file_id(raw_file_id):
             continue
         try:
             new_unified_file_id = managed_files_obj.get_unified_output_file_id(
