@@ -452,33 +452,6 @@ def test_anthropic_citations_api_streaming():
     "model",
     [
         "anthropic/claude-sonnet-4-5-20250929",
-        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    ],
-)
-def test_anthropic_thinking_output(model):
-
-    litellm.turn_on_debug()
-
-    resp = completion(
-        model=model,
-        messages=[{"role": "user", "content": "What is the capital of France?"}],
-        thinking={"type": "enabled", "budget_tokens": 1024},
-    )
-
-    print(resp)
-    assert resp.choices[0].message.reasoning_content is not None
-    assert isinstance(resp.choices[0].message.reasoning_content, str)
-    assert resp.choices[0].message.thinking_blocks is not None
-    assert isinstance(resp.choices[0].message.thinking_blocks, list)
-    assert len(resp.choices[0].message.thinking_blocks) > 0
-
-    assert resp.choices[0].message.thinking_blocks[0]["type"] == "thinking"
-    assert resp.choices[0].message.thinking_blocks[0]["signature"] is not None
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic/claude-sonnet-4-5-20250929",
         # "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         # "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],

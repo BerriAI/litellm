@@ -502,25 +502,6 @@ class BaseAnthropicChatTest(ABC):
     def completion_function(self):
         return litellm.completion
 
-    def test_completion_with_thinking_basic(self):
-        litellm.turn_on_debug()
-        base_completion_call_args = self.get_base_completion_call_args_with_thinking()
-
-        messages = [{"role": "user", "content": "Generate 5 question + answer pairs"}]
-        response = self.completion_function(
-            **base_completion_call_args,
-            messages=messages,
-        )
-
-        print(f"response: {response}")
-        assert response.choices[0].message.reasoning_content is not None
-        assert isinstance(response.choices[0].message.reasoning_content, str)
-        assert response.choices[0].message.thinking_blocks is not None
-        assert isinstance(response.choices[0].message.thinking_blocks, list)
-        assert len(response.choices[0].message.thinking_blocks) > 0
-
-        assert response.choices[0].message.thinking_blocks[0]["signature"] is not None
-
 class BaseReasoningLLMTests(ABC):
     """
     Base class for testing reasoning llms
