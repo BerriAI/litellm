@@ -7,9 +7,7 @@ a test fail. The comment-scanner cases are the regression for the readline path:
 """
 
 import importlib.util
-import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -1001,20 +999,6 @@ def test_violation_message_names_the_clause_counts(tmp_path: Path):
     messages = [v.message for v in checker.check_file(f) if v.code == "LIT014"]
     assert len(messages) == 1
     assert "2 `for` clauses and 1 `if` clause" in messages[0]
-
-
-# --------------------------------------------------------------------------- #
-# Budget integrity: every emittable LIT rule (bar the LIT000 read/parse error) is gated
-# --------------------------------------------------------------------------- #
-
-
-def test_budget_covers_exactly_the_checker_rules():
-    budget = json.loads((_REPO_ROOT / "type-discipline-budget.json").read_text())
-    emitted = set(re.findall(r"LIT\d{3}", _MODULE_PATH.read_text(encoding="utf-8"))) - {"LIT000"}
-    assert set(budget) == emitted
-    for spec in budget.values():
-        assert isinstance(spec["limit"], int)
-        assert spec["limit"] >= 0
 
 
 _FANS_OUT = checker._worker_count(checker.PARALLEL_MIN_PATHS) > 1

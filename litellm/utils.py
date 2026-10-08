@@ -1895,17 +1895,18 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            # Copy the current context to propagate it to the background thread
-            # This is essential for OpenTelemetry span context propagation
-            ctx: Final = contextvars.copy_context()
-            executor: Final[BoundedLoggingThreadPoolExecutor] = getattr(sys.modules[__name__], "executor")
-            executor.submit(
-                ctx.run,
-                logging_obj.success_handler,
-                result,
-                start_time,
-                end_time,
-            )
+            if not is_internal_call.get():
+                # Copy the current context to propagate it to the background thread
+                # This is essential for OpenTelemetry span context propagation
+                ctx: Final = contextvars.copy_context()
+                executor: Final[BoundedLoggingThreadPoolExecutor] = getattr(sys.modules[__name__], "executor")
+                executor.submit(
+                    ctx.run,
+                    logging_obj.success_handler,
+                    result,
+                    start_time,
+                    end_time,
+                )
             # RETURN RESULT
             return result
         except Exception as e:
@@ -2962,7 +2963,7 @@ def supports_pdf_input(model: str, custom_llm_provider: str | None = None) -> bo
 
 def supports_audio_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """Check if a given model supports audio output in a chat completion call"""
-    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input")
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_output")
 
 
 def supports_prompt_caching(model: str, custom_llm_provider: str | None = None) -> bool:

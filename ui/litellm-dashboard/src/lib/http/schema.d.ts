@@ -30315,6 +30315,11 @@ export interface components {
              */
             mcp_internal_ip_ranges?: string[] | null;
             /**
+             * Mcp Prefer Client Id Metadata Document
+             * @description When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.
+             */
+            mcp_prefer_client_id_metadata_document?: boolean | null;
+            /**
              * Mcp Required Fields
              * @description List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).
              */

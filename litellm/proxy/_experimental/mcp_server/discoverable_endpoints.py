@@ -79,9 +79,13 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     enforce_oauth_identity_binding,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    CIMD_METADATA_PATH,
     TOKEN_NO_CACHE_HEADERS,
     build_upstream_oauth2_token_request,
+    get_cimd_client_id,
+    get_cimd_document_url,
     get_request_base_url,
+    needs_cimd_discovery,
     oauth_client_registration_matches,
     resolve_upstream_resource,
     validate_trusted_redirect_uri,
@@ -638,6 +642,7 @@ async def _store_per_user_token_server_side(
     user_id: str,
     token_response: dict[str, Any],
     identity_binding_proof: str | None = None,
+    cimd_client_id: str | None = None,
 ) -> None:
     """Persist the OAuth token server-side and warm the Redis cache.
 
@@ -680,6 +685,7 @@ async def _store_per_user_token_server_side(
             expires_in=expires_in,
             scopes=scopes,
             identity_binding_proof=identity_binding_proof,
+            **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
         )
         verbose_logger.info(
             "_store_per_user_token_server_side: stored token for user=%s server=%s",
@@ -778,20 +784,20 @@ async def _server_with_oauth_endpoints(
     mcp_server: MCPServer,
     needed_endpoint: Callable[[MCPServer], str | None],
 ) -> MCPServer:
-    """Join deferred OAuth discovery only when the endpoint this caller needs is still missing.
+    """Join deferred discovery for missing endpoints or unknown public-client metadata.
 
-    Admin-entered endpoints live on ``configured_*`` after an anchored issuer empties the
-    resolved fields. A caller whose needed endpoint already resolves never awaits discovery
-    and cannot 503 over a leftover pin. A server still missing it joins the deferred task;
-    no slot is a no-op and the caller 400s.
+    Capability discovery is optional when manual endpoints already resolve; the manager
+    preserves those endpoints if discovery fails. No discovery slot remains a no-op.
     """
-    if needed_endpoint(mcp_server) is not None:
+    if needed_endpoint(mcp_server) is not None and not needs_cimd_discovery(mcp_server):
         return mcp_server
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import with mcp_server_manager at module load
         global_mcp_server_manager,
     )
 
-    return await global_mcp_server_manager.ensure_oauth_metadata_discovered(mcp_server)
+    if needed_endpoint(mcp_server) is None:
+        return await global_mcp_server_manager.ensure_oauth_metadata_discovered(mcp_server)
+    return await global_mcp_server_manager.ensure_oauth_metadata_discovered(mcp_server, needed_endpoint=needed_endpoint)
 
 
 def _raise_unless_oauth2_discovery_server(
@@ -979,7 +985,8 @@ async def authorize_with_server(
 
     binding: Final = resolved_server.oauth_identity_binding
     enforce_binding: Final = binding is not None and binding.mode == "enforce"
-    if enforce_binding:
+    cimd_client_id: Final = get_cimd_client_id(resolved_server)
+    if enforce_binding or cimd_client_id:
         _require_s256_pkce(code_challenge, code_challenge_method)
 
     if resolved_server.is_dcr_bridge:
@@ -1043,7 +1050,7 @@ async def authorize_with_server(
     relay_state: Final = secrets.token_urlsafe(_OAUTH_STATE_HANDLE_BYTES)
 
     params: Final = {
-        "client_id": resolved_server.client_id if resolved_server.client_id else client_id,
+        "client_id": resolved_server.client_id or cimd_client_id or client_id,
         "redirect_uri": f"{request_base_url}/callback",
         "state": relay_state,
         "response_type": response_type or "code",
@@ -1080,7 +1087,37 @@ def _token_credential_source(mcp_server: MCPServer) -> CredentialSource:
     """Mirrors the resolved-client rule in :func:`exchange_token_with_server`: when the server has a
     stored client_id the gateway presents its own credentials upstream, so a credential rejection is
     the operator's fault, not the caller's."""
-    return "gateway_stored" if mcp_server.client_id else "caller_supplied"
+    return "gateway_stored" if mcp_server.client_id or get_cimd_client_id(mcp_server) else "caller_supplied"
+
+
+async def _saved_cimd_refresh_client_id(
+    server: MCPServer, user_id: str | None, refresh_token: str | None
+) -> str | None:
+    """Reuse only the client identity bound to this caller's presented refresh grant."""
+    if (
+        not user_id
+        or not refresh_token
+        or not server.needs_user_oauth_token
+        or server.auth_type != MCPAuth.oauth2
+        or server.client_id
+        or server.client_secret
+    ):
+        return None
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.db import get_user_oauth_credential
+
+    if proxy_server.prisma_client is None:
+        return None
+    try:
+        credential: Final = await get_user_oauth_credential(proxy_server.prisma_client, user_id, server.server_id)
+    except Exception:  # noqa: BLE001  # optional storage must not prevent a caller-owned OAuth exchange
+        return None
+    if credential is None:
+        return None
+    stored_refresh: Final = credential.get("refresh_token")
+    if not stored_refresh or not secrets.compare_digest(stored_refresh.encode(), refresh_token.encode()):
+        return None
+    return credential.get("cimd_client_id")
 
 
 async def exchange_token_with_server(
@@ -1117,6 +1154,17 @@ async def exchange_token_with_server(
             ),
         )
 
+    request_user_id: Final = (
+        await extract_user_id_from_request(request)
+        if resolved_server.needs_user_oauth_token or resolved_server.oauth_identity_binding is not None
+        else None
+    )
+    cimd_client_id: Final = (
+        await _saved_cimd_refresh_client_id(resolved_server, request_user_id, refresh_token)
+        if grant_type == "refresh_token"
+        else None
+    ) or get_cimd_client_id(resolved_server)
+
     # The id, secret, and token-endpoint auth method must come from the same source. When the
     # server-side client_id wins, falling back to the caller's secret pairs the persisted client
     # with a foreign secret; the register short-circuit hands clients a placeholder secret
@@ -1138,15 +1186,10 @@ async def exchange_token_with_server(
             auth_method=resolved_auth_method,
             client_id=resolved_client_id,
             client_secret=resolved_client_secret,
+            cimd_client_id=cimd_client_id,
         )
     except TokenEndpointAuthConfigError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    request_user_id: Final = (
-        await extract_user_id_from_request(request)
-        if resolved_server.needs_user_oauth_token or resolved_server.oauth_identity_binding is not None
-        else None
-    )
 
     bridge_identity: _BridgeAuthorizationCode | None = None
     bridge_mint_ready: _BridgeMintReady | None = None
@@ -1265,7 +1308,7 @@ async def exchange_token_with_server(
     except httpx.HTTPStatusError as exc:
         fault: Final = classify_upstream_token_rejection(
             exc.response,
-            credential_source=_token_credential_source(resolved_server),
+            credential_source="gateway_stored" if cimd_client_id else _token_credential_source(resolved_server),
             log_context=resolved_server.server_id,
         )
         upstream_rejected_bridge_refresh: Final = (
@@ -1336,6 +1379,7 @@ async def exchange_token_with_server(
                         user_id=user_id,
                         token_response=token_response,
                         identity_binding_proof=binding_proof,
+                        **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
                     )
                 else:
                     verbose_logger.warning(
@@ -1991,8 +2035,21 @@ async def register_client_with_server(
             ),
         )
 
+    cimd_client_id: Final = get_cimd_client_id(resolved_server)
+    if cimd_client_id:
+        return {
+            "client_id": cimd_client_id,
+            "token_endpoint_auth_method": "none",
+            "redirect_uris": client_facing_redirect_uris,
+        }
     registration_url: Final = resolved_server.effective_registration_url
     if registration_url is None:
+        if resolved_server.client_id_metadata_document_supported and resolved_server.is_gateway_managed_oauth2:
+            raise HTTPException(
+                status_code=400,
+                detail="CIMD requires a stable HTTPS PROXY_BASE_URL and public-client authentication; "
+                "configure these or provide a pre-registered OAuth client",
+            )
         return dummy_return
 
     bridge_relay: Final = _dcr_bridge_relays_client_registration(resolved_server)
@@ -3162,3 +3219,25 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
             client_redirect_uris=client_redirect_uris,
             client_application_type=client_application_type,
         )
+
+
+@router.get(CIMD_METADATA_PATH, include_in_schema=False)
+async def oauth_client_metadata() -> JSONResponse:
+    from mcp.shared.auth import OAuthClientInformationFull
+    from pydantic import AnyUrl
+
+    document_url: Final = get_cimd_document_url()
+    if document_url is None:
+        raise HTTPException(status_code=404, detail="CIMD requires a configured HTTPS PROXY_BASE_URL")
+    base_url: Final = document_url.removesuffix(CIMD_METADATA_PATH)
+    metadata: Final = OAuthClientInformationFull(
+        client_id=document_url,
+        client_name="LiteLLM MCP Gateway",
+        redirect_uris=[AnyUrl(f"{base_url}/callback")],
+        token_endpoint_auth_method="none",
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+    )
+    return JSONResponse(
+        metadata.model_dump(mode="json", exclude_none=True), headers={"Cache-Control": "public, max-age=300"}
+    )
