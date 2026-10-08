@@ -427,10 +427,18 @@ def tool_names(gateway: Gateway, key: str, identity: str) -> dict[str, str]:
     }
 
 
-def call_tool(gateway: Gateway, key: str, identity: str, name: str, arguments: dict[str, object]) -> httpx.Response:
+def call_tool(
+    gateway: Gateway,
+    key: str,
+    identity: str,
+    name: str,
+    arguments: dict[str, object],
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> httpx.Response:
     return gateway.client.post(
         "/mcp-rest/tools/call",
-        headers={"x-litellm-api-key": key},
+        headers={"x-litellm-api-key": key, **(headers or {})},
         json={"server_id": identity, "name": name, "arguments": arguments},
     )
 

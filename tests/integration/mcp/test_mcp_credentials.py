@@ -130,6 +130,38 @@ def test_caller_headers_for_other_servers_and_unknown_headers_never_reach_the_pe
         assert tool_calls(other.drain()) == ()
 
 
+@pytest.mark.parametrize(
+    ("auth_type", "per_server_header"),
+    (("none", True), ("true_passthrough", False)),
+)
+def test_callers_own_litellm_key_never_reaches_the_peer_over_rest(
+    gateway: Gateway, auth_type: str, per_server_header: bool
+) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "cred" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, auth_type=auth_type)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller_headers: Final = {
+            "x-litellm-api-key": f"Bearer {key}",
+            (f"x-mcp-{alias}-authorization" if per_server_header else "Authorization"): f"Bearer {key}",
+        }
+        peer.drain()
+        response: Final = call_tool(
+            gateway, key, identity, tool_names(gateway, key, identity)["add"], ADD, headers=caller_headers
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["isError"] is False
+        observed: Final = peer.drain()
+        calls: Final = tool_calls(observed)
+        assert len(calls) == 1, calls
+        header_sets: Final = tuple(
+            TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"]) for request in observed
+        )
+        assert all(all(key.encode() not in value for value in headers.values()) for headers in header_sets), (
+            "caller key appeared in the recorded MCP header set"
+        )
+
+
 def test_server_scoped_caller_header_reaches_only_its_server(gateway: Gateway) -> None:
     with mcp_peer() as peer, mcp_peer() as other, gateway.scenario() as scenario:
         alias: Final = "cred" + uuid.uuid4().hex[:8]
