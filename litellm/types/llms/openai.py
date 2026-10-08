@@ -896,7 +896,7 @@ class ChatCompletionToolMessage(TypedDict):
     # litellm-internal carrier for Anthropic tool_result.is_error, so the flag
     # survives translation to the OpenAI shape and downstream provider
     # translations can restore it. Not an OpenAI wire field.
-    is_error: NotRequired[bool]
+    is_error: NotRequired[bool]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 class ChatCompletionFunctionMessage(TypedDict):

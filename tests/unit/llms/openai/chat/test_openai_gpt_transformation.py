@@ -1358,7 +1358,7 @@ def test_openai_transform_strips_is_error_carrier_from_tool_messages():
     # a litellm-internal carrier (see the anthropic adapter); real OpenAI must
     # not receive it, mirroring how cache_control is stripped for openai.com
     # hosts.
-    messages = [
+    messages: Final = [
         {"role": "user", "content": "check the weather"},
         {
             "role": "assistant",
@@ -1380,7 +1380,7 @@ def test_openai_transform_strips_is_error_carrier_from_tool_messages():
         },
     ]
 
-    transformed = OpenAIGPTConfig().transform_request(
+    transformed: Final = OpenAIGPTConfig().transform_request(
         model="gpt-4o",
         messages=messages,
         optional_params={},
@@ -1388,8 +1388,11 @@ def test_openai_transform_strips_is_error_carrier_from_tool_messages():
         headers={},
     )
 
-    tool_messages = [m for m in transformed["messages"] if m.get("role") == "tool"]
+    tool_messages: Final = [m for m in transformed["messages"] if m.get("role") == "tool"]
     assert len(tool_messages) == 1
-    assert "is_error" not in tool_messages[0]
-    assert "cache_control" not in tool_messages[0]
-    assert tool_messages[0]["content"] == "ToolNotFound: get_weather is not available"
+    # whole-value assert: the internal carriers are gone and nothing else moved
+    assert tool_messages[0] == {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "ToolNotFound: get_weather is not available",
+    }
