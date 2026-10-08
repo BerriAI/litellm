@@ -1109,7 +1109,7 @@ _DEFERRED_STREAM_CALLBACK_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutab
 async def _run_deferred_stream_callback(callback: Coroutine[object, object, object]) -> None:
     try:
         await callback
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # background callback failures must not escape
         verbose_proxy_logger.exception("Error in deferred stream callback: %s", e)
 
 
