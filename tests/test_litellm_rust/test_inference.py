@@ -338,6 +338,29 @@ async def test_native_keyword_deleted_by_a_hook_falls_back_to_the_default(
 
 
 @pytest.mark.asyncio
+async def test_native_failure_names_the_model_a_hook_rewrote(
+    route: Route, recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caller_model: Final = MESSAGES_MODEL if route == "chat" else RESPONSES_MODEL
+    rewritten: Final = f"{caller_model.partition('/')[0]}/hook-model"
+
+    class Reroute(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object]:
+            return {**kwargs, "model": rewritten, "api_base": recording_server.base_url}
+
+    monkeypatch.setattr(litellm, "callbacks", [Reroute()])
+    recording_server.enqueue(
+        ResponseSpec(body={"error": {"message": "slow down", "type": "rate_limit_error"}}, status=429)
+    )
+    with pytest.raises(RateLimitError) as caught:
+        await execute(route, True, recording_server, {"api_base": "http://127.0.0.1:1"})
+    assert len(recording_server.requests) == 1
+    assert caught.value.model == rewritten.partition("/")[2]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", (False, True))
 @pytest.mark.parametrize("source", ("explicit", "base_url", "global", "provider", "environment", "empty"))
 async def test_native_connection_settings_reach_the_provider(

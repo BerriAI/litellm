@@ -27,16 +27,22 @@ enum OcrHostData {
 /// document as it goes), acquires Azure AD tokens, and builds the public response and
 /// exception.
 pub(super) struct OcrPythonHost {
-    request: Py<PyDict>,
+    request: Option<Py<PyDict>>,
     data: OcrHostData,
 }
 
 impl OcrPythonHost {
-    pub(super) fn new(request: Py<PyDict>) -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            request,
+            request: None,
             data: OcrHostData::Unprojected,
         }
+    }
+
+    fn request<'py>(&self, py: Python<'py>) -> Bound<'py, PyDict> {
+        self.request
+            .as_ref()
+            .map_or_else(|| PyDict::new(py), |request| request.bind(py).clone())
     }
 
     fn handles(&self) -> PyResult<&OcrHostHandles> {
@@ -58,6 +64,7 @@ impl OcrPythonHost {
         let OcrHostData::Unprojected = self.data else {
             return Err(missing_state());
         };
+        self.request = Some(arguments.clone().unbind());
         let (request, handles) = project_request(arguments)?;
         let caller_token = handles.azure_ad_token_provider.is_some();
         self.data = OcrHostData::Projected(Box::new(handles));
@@ -78,7 +85,7 @@ impl OcrPythonHost {
         let mapped = py
             .import("litellm.rust_bridge.ocr.route_host")
             .and_then(|module| module.getattr("map_failure"))
-            .and_then(|map| map.call1((error.value(py), self.request.bind(py), provider)))
+            .and_then(|map| map.call1((error.value(py), self.request(py), provider)))
             .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
         match mapped {
             Ok(mapped) => PyErr::from_value(mapped.into_bound(py).into_any()),
@@ -151,6 +158,7 @@ impl PythonHostCalls<Ocr> for OcrPythonHost {
 
 impl PythonOwned for OcrPythonHost {
     fn close(&mut self, _: Python<'_>) {
+        self.request = None;
         self.data = OcrHostData::Released;
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
@@ -169,35 +177,64 @@ mod tests {
     use super::*;
 
     #[rstest::rstest]
-    fn an_option_missing_from_the_arguments_is_not_sent() {
+    fn failures_name_the_model_of_the_call_it_decoded() {
         Python::initialize();
         Python::attach(|py| {
-            let dict = |source: &std::ffi::CStr| {
-                py.eval(source, None, None)
-                    .unwrap()
-                    .cast_into::<PyDict>()
-                    .unwrap()
-            };
-            let call = c"{
-                'model': 'mistral/mistral-ocr-latest',
-                'custom_llm_provider': None,
-                'document': {'type': 'document_url', 'document_url': 'https://example.com/a.pdf'},
-                'api_key': None,
-                'api_base': None,
-                'extra_headers': None,
-                'timeout': None,
-            }";
-            let caller = dict(call);
-            caller.set_item("pages", vec![1]).unwrap();
-            let mut host = OcrPythonHost::new(caller.unbind());
-            let decoded = host.decode_request(py, &dict(call)).unwrap();
-            assert!(
-                decoded
-                    .request
-                    .optional_params
-                    .select(&["pages"])
-                    .is_empty()
-            );
+            let locals = PyDict::new(py);
+            py.run(
+                c"
+import sys
+import types
+name = 'litellm.rust_bridge.ocr.route_host'
+previous = sys.modules.get(name)
+route_host = types.ModuleType(name)
+def map_failure(error, request, provider):
+    failure = Exception()
+    failure.model = request['model']
+    return failure
+route_host.map_failure = map_failure
+sys.modules[name] = route_host
+arguments = {
+    'model': 'azure_ai/hook-model',
+    'custom_llm_provider': None,
+    'document': {'type': 'document_url', 'document_url': 'https://example.com/a.pdf'},
+    'api_key': None,
+    'api_base': None,
+    'extra_headers': None,
+    'timeout': None,
+}
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let arguments = locals
+                .get_item("arguments")
+                .unwrap()
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let mut host = OcrPythonHost::new();
+            host.decode_request(py, &arguments).unwrap();
+            let mapped = host.map_error(py, Error::RequestFormat).unwrap();
+            py.run(
+                c"
+if previous is None:
+    sys.modules.pop(name, None)
+else:
+    sys.modules[name] = previous
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let model: String = mapped
+                .value(py)
+                .getattr("model")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(model, "azure_ai/hook-model");
         });
     }
 
@@ -242,7 +279,7 @@ del provider
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let mut host = OcrPythonHost::new(PyDict::new(py).unbind());
+            let mut host = OcrPythonHost::new();
             assert!(host.decode_request(py, &kwargs).unwrap().caller_token);
             locals.del_item("kwargs").unwrap();
             drop(kwargs);

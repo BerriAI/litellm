@@ -112,6 +112,25 @@ async def test_native_messages_provider_error_reaches_caller_and_failure_callbac
     assert all(error is raised.value for _, error in observed)
 
 
+@pytest.mark.asyncio
+async def test_native_messages_failure_names_the_model_a_hook_rewrote(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Reroute(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            return {**kwargs, "model": "anthropic/hook-model", "api_base": messages_server.base_url}
+
+    monkeypatch.setattr(litellm, "callbacks", [Reroute()])
+    messages_server.enqueue(
+        ResponseSpec(body={"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}}, status=400)
+    )
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await litellm.anthropic.messages.acreate(**arguments(messages_server, api_base="http://127.0.0.1:1"))
+
+    assert_served_natively(messages_server)
+    assert raised.value.model == "hook-model"
+
+
 def sse_payload() -> bytes:
     return b"".join(STREAM.payloads())
 
