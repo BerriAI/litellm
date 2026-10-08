@@ -82,8 +82,8 @@ const PREFETCH_MARGIN = "0px 0px 480px 0px";
 const PLACEHOLDER_ROWS = [0, 1, 2];
 const SKELETON_ROWS = Array.from({ length: 12 }, (_, i) => i);
 const ROW_HEIGHT = 36;
-const MUTED_NUM = "font-mono text-muted-foreground";
-const NUM = "font-mono text-foreground";
+const MUTED_NUM = "text-muted-foreground";
+const NUM = "text-foreground";
 const FindingsContext = createContext<ReadonlyMap<string, TraceFindingState>>(new Map());
 const SignalsContext = createContext<ReadonlyMap<string, TraceSignalState>>(new Map());
 const NO_SIGNALS: ReadonlyMap<string, TraceSignalState> = new Map();
@@ -186,9 +186,7 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     header: () => (
       <span className="inline-flex items-center gap-1 whitespace-nowrap">
         Time <ArrowDown className="size-2.5" />
-        <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
-          {localTimeZoneAbbreviation()}
-        </span>
+        <span className="text-muted-foreground/70">{localTimeZoneAbbreviation()}</span>
       </span>
     ),
     cell: ({ row }) => (
@@ -198,7 +196,7 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     ),
     meta: {
       title: "Time",
-      className: "font-mono tabular-nums text-muted-foreground",
+      className: "tabular-nums text-muted-foreground",
       renderSkeleton: () => <Skeleton className="h-3 w-24" />,
     },
   },
@@ -220,7 +218,7 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
   { id: "input", header: "Input", cell: ({ row }) => <InputCell run={row.original} /> },
   {
     id: "signals",
-    size: 300,
+    size: 200,
     header: () => <SignalsHeader />,
     cell: ({ row }) => <SignalsCell run={row.original} />,
     meta: { title: "Signals", renderSkeleton: () => <Skeleton className="h-3 w-16" /> },
