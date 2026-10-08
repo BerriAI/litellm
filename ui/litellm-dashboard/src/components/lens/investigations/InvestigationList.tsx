@@ -107,10 +107,7 @@ function FindingCount({ row: { original: item } }: Cell) {
   const count = openFindings(item.lens).length;
   if (count === 0) return null;
   return (
-    <span
-      title={`${count} open ${count === 1 ? "finding" : "findings"}`}
-      className="inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 font-mono text-xs tabular-nums text-foreground"
-    >
+    <span title={`${count} open ${count === 1 ? "finding" : "findings"}`} className="tabular-nums text-foreground">
       {count}
     </span>
   );
@@ -259,7 +256,7 @@ export function InvestigationList({
             )}
           </InspectorTable.Root>
         </ListContext.Provider>
-        <footer className="flex h-8 shrink-0 items-center border-t bg-muted/30 px-3 text-xs text-muted-foreground">
+        <footer className="flex h-9 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
           {shown.length} {shown.length === 1 ? "investigation" : "investigations"} ·{" "}
           {shown.filter((lens) => lens.settings.enabled).length} watching
         </footer>

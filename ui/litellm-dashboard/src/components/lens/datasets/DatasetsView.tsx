@@ -96,11 +96,7 @@ function RevisionCell({ row: { original: dataset } }: Cell) {
 }
 
 function CasesCell({ row: { original: dataset } }: Cell) {
-  return (
-    <span className="inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 font-mono text-xs tabular-nums text-foreground">
-      {dataset.case_count}
-    </span>
-  );
+  return <span className="tabular-nums text-foreground">{dataset.case_count}</span>;
 }
 
 function UpdatedCell({ row: { original: dataset } }: Cell) {
@@ -159,7 +155,7 @@ function DatasetTable({ datasets, onOpen }: { datasets: readonly DatasetSummary[
             </InspectorTable.Body>
           </InspectorTable.Grid>
         </InspectorTable.Root>
-        <footer className="flex h-8 shrink-0 items-center border-t bg-muted/30 px-3 text-xs text-muted-foreground">
+        <footer className="flex h-9 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
           {datasets.length} {datasets.length === 1 ? "dataset" : "datasets"} · {cases} {cases === 1 ? "case" : "cases"}
         </footer>
       </div>

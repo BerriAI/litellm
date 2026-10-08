@@ -273,7 +273,7 @@ function TraceCounts({ runs }: { runs: readonly TraceSummary[] }) {
 
 function TraceFooter({ runs, hasMore }: { runs: readonly TraceSummary[]; hasMore: boolean }) {
   return (
-    <footer className="flex h-8 shrink-0 items-center border-t bg-muted/30 px-3 text-xs text-muted-foreground">
+    <footer className="flex h-9 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
       {runs.length} {runs.length === 1 ? "run" : "runs"}
       {hasMore ? " loaded" : ""}
     </footer>

@@ -125,10 +125,7 @@ function ToolCallsCell({ row: { original: item } }: Cell) {
   const count = toolCallCount(item);
   if (count === 0) return null;
   return (
-    <span
-      title={`${count} tool ${count === 1 ? "call" : "calls"}`}
-      className="inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 font-mono text-xs tabular-nums text-foreground"
-    >
+    <span title={`${count} tool ${count === 1 ? "call" : "calls"}`} className="tabular-nums text-foreground">
       {count}
     </span>
   );
@@ -199,7 +196,7 @@ export function CaseTable({ cases, editable, selectedId, onSelect, onToggle, chi
               </InspectorTable.Body>
             </InspectorTable.Grid>
           </InspectorTable.Root>
-          <footer className="flex h-8 shrink-0 items-center border-t bg-muted/30 px-3 text-xs text-muted-foreground">
+          <footer className="flex h-9 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
             {cases.length} {cases.length === 1 ? "case" : "cases"} · {included} included
           </footer>
         </div>
