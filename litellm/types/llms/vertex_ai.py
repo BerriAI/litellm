@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
     Required,
@@ -425,22 +425,35 @@ class UrlContextMetadata(TypedDict, total=False):
     urlMetadata: list[UrlMetadata]
 
 
+GeminiFinishReason = Literal[
+    "FINISH_REASON_UNSPECIFIED",
+    "STOP",
+    "MAX_TOKENS",
+    "SAFETY",
+    "RECITATION",
+    "LANGUAGE",
+    "OTHER",
+    "BLOCKLIST",
+    "PROHIBITED_CONTENT",
+    "SPII",
+    "MALFORMED_FUNCTION_CALL",
+    "IMAGE_SAFETY",
+    "IMAGE_PROHIBITED_CONTENT",
+    "TOO_MANY_TOOL_CALLS",
+    "MALFORMED_RESPONSE",
+    "NO_IMAGE",
+    "IMAGE_RECITATION",
+    "IMAGE_OTHER",
+    "ESCALATION",
+    "UNEXPECTED_TOOL_CALL",
+    "MISSING_THOUGHT_SIGNATURE",
+]
+
+
 class Candidates(TypedDict, total=False):
     index: int
     content: HttpxContentType
-    finishReason: Literal[
-        "FINISH_REASON_UNSPECIFIED",
-        "STOP",
-        "MAX_TOKENS",
-        "SAFETY",
-        "RECITATION",
-        "OTHER",
-        "BLOCKLIST",
-        "PROHIBITED_CONTENT",
-        "SPII",
-        "MALFORMED_FUNCTION_CALL",
-        "IMAGE_SAFETY",
-    ]
+    finishReason: GeminiFinishReason
     safetyRatings: list[SafetyRatings]
     citationMetadata: CitationMetadata
     groundingMetadata: GroundingMetadata
@@ -745,6 +758,17 @@ class VertexVideoGenerationResponse(TypedDict, total=False):
 
 
 VERTEX_CREDENTIALS_TYPES = str | dict[str, str]
+
+
+class VertexAccessTokenResolver(Protocol):
+    """Resolves a Google OAuth access token and the project id it belongs to."""
+
+    async def __call__(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> tuple[str, str]: ...
 
 
 class VertexPartnerProvider(str, Enum):

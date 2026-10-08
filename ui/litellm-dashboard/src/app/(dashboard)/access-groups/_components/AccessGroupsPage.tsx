@@ -1,13 +1,14 @@
+import { Page, PageContent } from "@/components/shared/Page";
 import { AccessGroupResponse, useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup";
-import { Plus, SearchIcon, X } from "lucide-react";
+import { Boxes, Plus, SearchIcon, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
-import { AccessGroupCreateModal } from "./AccessGroupsModal/AccessGroupCreateModal";
+import { AccessGroupCreateDialog } from "./access-group-create/AccessGroupCreateDialog";
 import { AccessGroupsTable } from "./AccessGroupsTable";
 import { AccessGroup } from "./types";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -59,52 +60,55 @@ export function AccessGroupsPage() {
   }
 
   return (
-    <div className="p-6 px-12">
-      <div className="mb-4">
-        <PageHeader
-          title="Access Groups"
-          subtitle="Manage resource permissions for your organization"
-          actions={
-            canModify ? (
-              <Button onClick={() => setIsCreateModalVisible(true)}>
-                <Plus className="size-4" />
-                Create Access Group
-              </Button>
-            ) : undefined
-          }
-        />
-      </div>
+    <Page>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Boxes />
+          Access Groups
+        </PageHeaderTitle>
+        <PageHeaderDescription>Manage resource permissions for your organization</PageHeaderDescription>
+        {canModify && (
+          <PageHeaderControls>
+            <Button onClick={() => setIsCreateModalVisible(true)}>
+              <Plus className="size-4" />
+              Create Access Group
+            </Button>
+          </PageHeaderControls>
+        )}
+      </PageHeader>
 
-      <div className="mb-3 flex items-center">
-        <InputGroup className="max-w-[400px]">
-          <InputGroupAddon>
-            <SearchIcon className="size-4 text-muted-foreground" />
-          </InputGroupAddon>
-          <InputGroupInput
-            placeholder="Search groups by name, ID, or description..."
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-          />
-          {searchText && (
-            <InputGroupAddon align="inline-end">
-              <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
-                <X />
-              </InputGroupButton>
+      <PageContent className="gap-3">
+        <div className="flex items-center">
+          <InputGroup className="max-w-[400px]">
+            <InputGroupAddon>
+              <SearchIcon className="size-4 text-muted-foreground" />
             </InputGroupAddon>
-          )}
-        </InputGroup>
-      </div>
+            <InputGroupInput
+              placeholder="Search groups by name, ID, or description..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+            {searchText && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchText("")}>
+                  <X />
+                </InputGroupButton>
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+        </div>
 
-      <AccessGroupsTable
-        groups={filteredGroups}
-        isLoading={isLoading}
-        isFiltered={searchText.trim().length > 0}
-        canModify={canModify}
-        onGroupClick={setSelectedGroupId}
-        onDeleteClick={setGroupToDelete}
-      />
+        <AccessGroupsTable
+          groups={filteredGroups}
+          isLoading={isLoading}
+          isFiltered={searchText.trim().length > 0}
+          canModify={canModify}
+          onGroupClick={setSelectedGroupId}
+          onDeleteClick={setGroupToDelete}
+        />
+      </PageContent>
 
-      <AccessGroupCreateModal visible={isCreateModalVisible} onCancel={() => setIsCreateModalVisible(false)} />
+      <AccessGroupCreateDialog open={isCreateModalVisible} onOpenChange={setIsCreateModalVisible} />
 
       <DeleteResourceModal
         isOpen={!!groupToDelete}
@@ -127,6 +131,6 @@ export function AccessGroupsPage() {
         }}
         confirmLoading={deleteMutation.isPending}
       />
-    </div>
+    </Page>
   );
 }

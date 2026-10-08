@@ -8,10 +8,11 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
@@ -20,17 +21,26 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.types.utils import Usage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
 
-    Span = _Span | Any
+    Span = _Span
     InternalUsageCache = _InternalUsageCache
 else:
     Span = Any
     InternalUsageCache = Any
+
+
+def _response_total_tokens(response_obj: object) -> int:
+    if not isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)):
+        return 0
+    response_usage: Final = getattr(response_obj, "usage", None)
+    return response_usage.total_tokens if isinstance(response_usage, Usage) else 0
 
 
 class CacheObject(TypedDict):
@@ -47,7 +57,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
 
-    def print_verbose(self, print_statement):
+    def print_verbose(self, print_statement) -> None:
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
@@ -55,6 +65,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         except Exception:
             pass
 
+    @with_service_target("rate_limits")
     async def check_key_in_limits(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -67,7 +78,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         current: dict | None,
         request_count_api_key: str,
         rate_limit_type: Literal["key", "model_per_key", "user", "customer", "team"],
-        values_to_update_in_cache: list[tuple[Any, Any]],
+        values_to_update_in_cache: list[tuple[str, object]],
     ) -> dict:
         verbose_proxy_logger.info("Current Usage of %s in this minute: %s", rate_limit_type, current)
         if current is None:
@@ -192,6 +203,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             llm_provider=llm_provider,
         )
 
+    @with_service_target("rate_limits")
     async def get_all_cache_objects(
         self,
         current_global_requests: str | None,
@@ -234,15 +246,16 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             request_count_end_user_id=results[5],
         )
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
         call_type: str,
-    ):
+    ) -> None:
         self.print_verbose("Inside Max Parallel Request Pre-Call Hook")
-        api_key: Final = user_api_key_dict.api_key
+        api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         max_parallel_requests = user_api_key_dict.max_parallel_requests
         if max_parallel_requests is None:
             max_parallel_requests = sys.maxsize
@@ -258,7 +271,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             rpm_limit = sys.maxsize
 
         values_to_update_in_cache: list[
-            tuple[Any, Any]
+            tuple[str, object]
         ] = []  # values that need to get updated in cache, will run a batch_set_cache after this function
 
         # ------------
@@ -480,12 +493,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )  # don't block execution for cache updates
         )
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("rate_limits")
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
 
-        litellm_parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
+        litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=kwargs)
         try:
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
@@ -529,21 +543,18 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             current_minute: Final = datetime.now().strftime("%M")
             precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
 
-            total_tokens = 0
-
-            if isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)):
-                total_tokens = response_obj.usage.total_tokens
+            total_tokens: int = _response_total_tokens(response_obj)
 
             # ------------
             # Update usage - API Key
             # ------------
 
-            values_to_update_in_cache: Final = []
+            values_to_update_in_cache: Final[list[tuple[str, object]]] = []
 
             if user_api_key is not None:
                 request_count_api_key = f"{user_api_key}::{precise_minute}::request_count"
 
-                current = await self.internal_usage_cache.async_get_cache(
+                current: dict[str, int] = await self.internal_usage_cache.async_get_cache(
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
@@ -606,13 +617,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - User
             # ------------
             if user_api_key_user_id is not None:
-                total_tokens = 0
-
-                if isinstance(
-                    response_obj,
-                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
-                ):
-                    total_tokens = response_obj.usage.total_tokens
+                total_tokens = _response_total_tokens(response_obj)
 
                 request_count_api_key = f"{user_api_key_user_id}::{precise_minute}::request_count"
 
@@ -638,13 +643,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - Team
             # ------------
             if user_api_key_team_id is not None:
-                total_tokens = 0
-
-                if isinstance(
-                    response_obj,
-                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
-                ):
-                    total_tokens = response_obj.usage.total_tokens
+                total_tokens = _response_total_tokens(response_obj)
 
                 request_count_api_key = f"{user_api_key_team_id}::{precise_minute}::request_count"
 
@@ -670,13 +669,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Update usage - End User
             # ------------
             if user_api_key_end_user_id is not None:
-                total_tokens = 0
-
-                if isinstance(
-                    response_obj,
-                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
-                ):
-                    total_tokens = response_obj.usage.total_tokens
+                total_tokens = _response_total_tokens(response_obj)
 
                 request_count_api_key = f"{user_api_key_end_user_id}::{precise_minute}::request_count"
 
@@ -706,10 +699,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         except Exception as e:
             self.print_verbose(e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("rate_limits")
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
         try:
             self.print_verbose("Inside Max Parallel Request Failure Hook")
-            litellm_parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
+            litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=kwargs)
             _metadata: Final = kwargs["litellm_params"].get("metadata", {}) or {}
             global_max_parallel_requests: Final = _metadata.get("global_max_parallel_requests", None)
             user_api_key: Final = _metadata.get("user_api_key", None)
@@ -778,6 +772,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
 
+    @with_service_target("rate_limits")
     async def get_internal_user_object(
         self,
         user_id: str,
@@ -812,11 +807,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             verbose_proxy_logger.debug("Parallel Request Limiter: Error getting user object", str(e))
             return None
 
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
+    @with_service_target("rate_limits")
+    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response) -> None:
         """
         Retrieve the key's remaining rate limits.
         """
-        api_key: Final = user_api_key_dict.api_key
+        api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
         current_date: Final = datetime.now().strftime("%Y-%m-%d")
         current_hour: Final = datetime.now().strftime("%H")
         current_minute: Final = datetime.now().strftime("%M")
@@ -865,3 +861,6 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )
 
             return await super().async_post_call_success_hook(data, user_api_key_dict, response)
+
+
+PROXY_MaxParallelRequestsHandler: Final = _PROXY_MaxParallelRequestsHandler

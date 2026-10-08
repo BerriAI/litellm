@@ -7,11 +7,12 @@ export enum ModelMode {
   IMAGE_GENERATION = "image_generation",
   VIDEO_GENERATION = "video_generation",
   CHAT = "chat",
+  COMPLETION = "completion",
   RESPONSES = "responses",
-  IMAGE_EDITS = "image_edits",
+  IMAGE_EDITS = "image_edit",
   ANTHROPIC_MESSAGES = "anthropic_messages",
   EMBEDDING = "embedding",
-  // add additional modes as needed
+  REALTIME = "realtime",
 }
 
 // Define an enum for the endpoint types your UI calls
@@ -36,12 +37,14 @@ export const litellmModeMapping: Record<ModelMode, EndpointType> = {
   [ModelMode.IMAGE_GENERATION]: EndpointType.IMAGE,
   [ModelMode.VIDEO_GENERATION]: EndpointType.VIDEO,
   [ModelMode.CHAT]: EndpointType.CHAT,
+  [ModelMode.COMPLETION]: EndpointType.CHAT,
   [ModelMode.RESPONSES]: EndpointType.RESPONSES,
   [ModelMode.IMAGE_EDITS]: EndpointType.IMAGE_EDITS,
   [ModelMode.ANTHROPIC_MESSAGES]: EndpointType.ANTHROPIC_MESSAGES,
   [ModelMode.AUDIO_SPEECH]: EndpointType.SPEECH,
   [ModelMode.AUDIO_TRANSCRIPTION]: EndpointType.TRANSCRIPTION,
   [ModelMode.EMBEDDING]: EndpointType.EMBEDDINGS,
+  [ModelMode.REALTIME]: EndpointType.REALTIME,
 };
 
 export const getEndpointType = (mode: string): EndpointType => {
@@ -53,4 +56,21 @@ export const getEndpointType = (mode: string): EndpointType => {
 
   // else default to chat
   return EndpointType.CHAT;
+};
+
+export const isModeCompatibleWithEndpoint = (mode: string | null | undefined, endpointType: EndpointType): boolean => {
+  if (!mode) return true;
+  if (!Object.values(ModelMode).includes(mode as ModelMode)) return false;
+  const optionEndpoint = getEndpointType(mode);
+  if (
+    endpointType === EndpointType.RESPONSES ||
+    endpointType === EndpointType.ANTHROPIC_MESSAGES ||
+    endpointType === EndpointType.INTERACTIONS
+  ) {
+    return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
+  }
+  if (endpointType === EndpointType.IMAGE_EDITS) {
+    return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
+  }
+  return optionEndpoint === endpointType;
 };

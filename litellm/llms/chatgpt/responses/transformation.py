@@ -1,9 +1,13 @@
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, cast
+
+import httpx
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _safe_convert_created_field,
+    safe_convert_created_field,
 )
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -13,6 +17,7 @@ from litellm.responses.sse_output_recovery import (
     record_output_text_chunk,
 )
 from litellm.types.llms.openai import (
+    ResponseInputParam,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -28,11 +33,16 @@ from ..common_utils import (
     get_chatgpt_default_instructions,
 )
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+_CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
+
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
-    def __init__(self) -> None:
+    def __init__(self, authenticator: Authenticator | None = None) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
+        self.authenticator = authenticator if authenticator is not None else Authenticator()
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -61,7 +71,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_responses_api_request(
         self,
         model: str,
-        input: Any,
+        input: str | ResponseInputParam,
         response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -101,14 +111,18 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "truncation",
         }
 
-        return {k: v for k, v in request.items() if k in allowed_keys}
+        filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
+        service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
+        if service_tier is not None:
+            filtered["service_tier"] = service_tier
+        return filtered
 
     def transform_response_api_response(
         self,
         model: str,
-        raw_response: Any,
-        logging_obj: Any,
-    ):
+        raw_response: httpx.Response,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> ResponsesAPIResponse:
         body_text: Final = raw_response.text or ""
         if not self._should_parse_as_sse(raw_response=raw_response, body_text=body_text):
             return super().transform_response_api_response(
@@ -132,7 +146,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self._attach_response_headers(completed_response=completed_response, raw_response=raw_response)
         return completed_response
 
-    def _should_parse_as_sse(self, raw_response: Any, body_text: str) -> bool:
+    def _should_parse_as_sse(self, raw_response: httpx.Response, body_text: str) -> bool:
         content_type: Final = (raw_response.headers or {}).get("content-type", "")
         if "text/event-stream" in content_type.lower():
             return True
@@ -147,8 +161,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _extract_completed_response_from_sse(self, body_text: str) -> tuple[ResponsesAPIResponse | None, str | None]:
         completed_response = None
         error_message = None
-        streamed_output_items: Final[dict[int, dict]] = {}
-        text_only_output_items: Final[dict[int, dict]] = {}
+        streamed_output_items: Final[dict[int, dict[str, object]]] = {}
+        text_only_output_items: Final[dict[int, dict[str, object]]] = {}
         for chunk in body_text.splitlines():
             parsed_chunk = parse_sse_json_chunk(chunk)
             if parsed_chunk is None:
@@ -175,7 +189,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 # output_index, but text-only items at indices without a
                 # matching OUTPUT_ITEM_DONE must still be preserved (e.g.
                 # providers that emit only OUTPUT_TEXT_DONE for some indices).
-                merged_items: dict[int, dict] = {**text_only_output_items}
+                merged_items: dict[int, dict[str, object]] = {**text_only_output_items}
                 merged_items.update(streamed_output_items)
                 completed_response = self._build_completed_response_from_chunk(
                     parsed_chunk=parsed_chunk,
@@ -194,7 +208,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return completed_response, error_message
 
     def _build_completed_response_from_chunk(
-        self, parsed_chunk: dict[str, Any], streamed_output_items: dict[int, dict]
+        self, parsed_chunk: Mapping[str, object], streamed_output_items: Mapping[int, dict[str, object]]
     ) -> ResponsesAPIResponse | None:
         response_payload = parsed_chunk.get("response")
         if not isinstance(response_payload, dict):
@@ -203,7 +217,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if not response_payload.get("output") and streamed_output_items:
             response_payload["output"] = [item for _, item in sorted(streamed_output_items.items())]
         if "created_at" in response_payload:
-            response_payload["created_at"] = _safe_convert_created_field(response_payload["created_at"])
+            response_payload["created_at"] = safe_convert_created_field(response_payload["created_at"])
         try:
             return ResponsesAPIResponse(**response_payload)
         except Exception:
@@ -220,14 +234,17 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _attach_response_headers(
         self,
         completed_response: ResponsesAPIResponse,
-        raw_response: Any,
+        raw_response: httpx.Response,
     ) -> None:
         raw_headers: Final = dict(raw_response.headers)
         processed_headers: Final = process_response_headers(raw_headers)
-        if not hasattr(completed_response, "_hidden_params"):
-            setattr(completed_response, "_hidden_params", {})
-        completed_response._hidden_params["additional_headers"] = processed_headers
-        completed_response._hidden_params["headers"] = raw_headers
+        if not hasattr(completed_response, HIDDEN_PARAMS_ATTR):
+            set_hidden_params(completed_response, {})
+        hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+            dict[str, object], getattr(completed_response, HIDDEN_PARAMS_ATTR)
+        )
+        hidden_params["additional_headers"] = processed_headers
+        hidden_params["headers"] = raw_headers
 
     def get_complete_url(
         self,

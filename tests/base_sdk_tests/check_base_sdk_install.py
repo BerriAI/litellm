@@ -11,7 +11,7 @@ import sys
 import traceback
 from collections.abc import Callable
 
-EXTRAS_ONLY_MODULES = ("fastapi", "boto3", "uvicorn")
+EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring", "mcp", "mcp_types", "httpx2", "httpcore2")
 
 
 def _require(condition: bool, message: str) -> None:
@@ -50,6 +50,17 @@ def check_completion() -> str:
     return "mock completion round-trips"
 
 
+def check_mcp_install_guidance() -> str:
+    try:
+        import litellm.experimental_mcp_client
+    except ImportError as error:
+        _require("pip install 'litellm[mcp]'" in str(error), f"missing MCP installation guidance: {error}")
+        _require(isinstance(error.__cause__, ModuleNotFoundError), "original missing-dependency cause was lost")
+        _require(error.__cause__.name == "mcp", f"unexpected missing dependency: {error.__cause__}")
+        return "optional MCP client explains how to install litellm[mcp]"
+    raise AssertionError("MCP client imported without the MCP extra")
+
+
 def check_embedding() -> str:
     import litellm
 
@@ -86,13 +97,35 @@ def check_token_counter() -> str:
     return f"token_counter returned {count}"
 
 
+def check_bedrock_credential_resolution() -> str:
+    import os
+    from unittest import mock
+
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    non_aws_environ = {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
+    with mock.patch.dict(os.environ, non_aws_environ, clear=True):
+        credentials = BaseAWSLLM().get_credentials(
+            aws_access_key_id="AKIA-fake-base-sdk-check",
+            aws_secret_access_key="fake-secret",
+            aws_region_name="us-east-1",
+        )
+    _require(
+        credentials.access_key == "AKIA-fake-base-sdk-check",
+        f"get_credentials returned access_key={credentials.access_key!r}",
+    )
+    return "bedrock credential resolution works (boto3 ships with the base SDK)"
+
+
 CHECKS: tuple[tuple[str, Callable[[], str]], ...] = (
     ("environment is base-only", check_environment_is_base_only),
     ("import litellm", check_import),
+    ("optional MCP installation guidance", check_mcp_install_guidance),
     ("chat completion", check_completion),
     ("embedding", check_embedding),
     ("bundled model metadata", check_bundled_model_metadata),
     ("token counter", check_token_counter),
+    ("bedrock credential resolution", check_bedrock_credential_resolution),
 )
 
 

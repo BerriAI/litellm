@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Final
+from typing import ClassVar, Final
 
 from openai.types.chat.completion_create_params import (
     CompletionCreateParamsNonStreaming,
@@ -18,12 +18,13 @@ from openai.types.responses.response_create_params import (
 )
 
 from litellm._logging import verbose_logger
+from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.rerank import RerankRequest
 
 
 class ModelParamHelper:
     # Cached at class level — deterministic set built from static OpenAI type annotations
-    _relevant_logging_args: frozenset = frozenset()
+    relevant_logging_args: ClassVar[frozenset[str]] = frozenset()
 
     @staticmethod
     def get_standard_logging_model_parameters(
@@ -31,7 +32,7 @@ class ModelParamHelper:
     ) -> dict:
         """ """
         standard_logging_model_parameters: Final[dict] = {}
-        supported_model_parameters: Final = ModelParamHelper._relevant_logging_args
+        supported_model_parameters: Final = ModelParamHelper.relevant_logging_args
 
         for key, value in model_parameters.items():
             if key in supported_model_parameters:
@@ -40,23 +41,25 @@ class ModelParamHelper:
 
     @staticmethod
     def get_exclude_params_for_model_parameters() -> set[str]:
-        return set(["messages", "prompt", "input"])
+        return set(["messages", "prompt", "input", "system"])
 
     @staticmethod
-    def _get_relevant_args_to_use_for_logging() -> set[str]:
+    def get_relevant_args_to_use_for_logging() -> set[str]:
         """
         Gets all relevant llm api params besides the ones with prompt content
         """
-        all_openai_llm_api_params: Final = ModelParamHelper._get_all_llm_api_params()
+        all_openai_llm_api_params: Final = ModelParamHelper.get_all_llm_api_params()
         # Exclude parameters that contain prompt content
         combined_kwargs: Final = all_openai_llm_api_params.difference(
             set(ModelParamHelper.get_exclude_params_for_model_parameters())
         )
         return combined_kwargs
 
+    _get_relevant_args_to_use_for_logging = get_relevant_args_to_use_for_logging
+
     @staticmethod
     @lru_cache(maxsize=1)
-    def _get_all_llm_api_params() -> set[str]:
+    def get_all_llm_api_params() -> set[str]:
         """
         Gets the supported kwargs for each call type and combines them.
 
@@ -73,6 +76,7 @@ class ModelParamHelper:
         transcription_kwargs: Final = ModelParamHelper._get_litellm_supported_transcription_kwargs()
         rerank_kwargs: Final = ModelParamHelper._get_litellm_supported_rerank_kwargs()
         responses_api_kwargs: Final = ModelParamHelper._get_litellm_supported_responses_api_kwargs()
+        anthropic_messages_kwargs: Final = ModelParamHelper._get_litellm_supported_anthropic_messages_kwargs()
         exclude_kwargs: Final = ModelParamHelper._get_exclude_kwargs()
 
         combined_kwargs = chat_completion_kwargs.union(
@@ -81,9 +85,12 @@ class ModelParamHelper:
             transcription_kwargs,
             rerank_kwargs,
             responses_api_kwargs,
+            anthropic_messages_kwargs,
         )
         combined_kwargs = combined_kwargs.difference(exclude_kwargs)
         return combined_kwargs
+
+    _get_all_llm_api_params = get_all_llm_api_params
 
     @staticmethod
     def get_litellm_provider_specific_params_for_chat_params() -> set[str]:
@@ -168,11 +175,19 @@ class ModelParamHelper:
         return non_streaming_params.union(streaming_params)
 
     @staticmethod
+    def _get_litellm_supported_anthropic_messages_kwargs() -> frozenset[str]:
+        """
+        Get the litellm supported Anthropic /v1/messages kwargs
+        """
+        return frozenset(AnthropicMessagesRequest.__annotations__.keys())
+
+    @staticmethod
     def _get_exclude_kwargs() -> set[str]:
         """
         Get the kwargs to exclude from the cache key
         """
-        return set(["metadata"])
+        return set(["metadata", "litellm_metadata"])
 
 
-ModelParamHelper._relevant_logging_args = frozenset(ModelParamHelper._get_relevant_args_to_use_for_logging())
+ModelParamHelper.relevant_logging_args = frozenset(ModelParamHelper.get_relevant_args_to_use_for_logging())
+ModelParamHelper._relevant_logging_args = ModelParamHelper.relevant_logging_args

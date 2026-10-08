@@ -2,14 +2,10 @@ import asyncio
 import httpx
 import json
 import pytest
-import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -94,7 +90,7 @@ class BaseLLMRerankTest(ABC):
     @pytest.mark.asyncio()
     @pytest.mark.parametrize("sync_mode", [True, False])
     async def test_basic_rerank(self, sync_mode):
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
         rerank_call_args = self.get_base_rerank_call_args()

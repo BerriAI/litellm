@@ -1,6 +1,7 @@
 import json
 import os
-from typing import Any, Final
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -17,6 +18,9 @@ from ..common_utils import (
     get_copilot_default_headers,
 )
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
 
 class GithubCopilotConfig(OpenAIConfig):
     def __init__(
@@ -28,6 +32,14 @@ class GithubCopilotConfig(OpenAIConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
+    def api_base_without_login(self, api_base: str | None = None) -> str:
+        return (
+            api_base
+            or self.authenticator.get_api_base()
+            or os.getenv("GITHUB_COPILOT_API_BASE")
+            or DEFAULT_GITHUB_COPILOT_API_BASE
+        )
+
     def _get_openai_compatible_provider_info(
         self,
         model: str,
@@ -35,12 +47,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        dynamic_api_base: Final = (
-            api_base
-            or self.authenticator.get_api_base()
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
+        dynamic_api_base: Final = self.api_base_without_login(api_base)
         try:
             dynamic_api_key: Final = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -50,6 +57,15 @@ class GithubCopilotConfig(OpenAIConfig):
                 message=str(e),
             )
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
+
+    def get_openai_compatible_provider_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str,
+    ) -> tuple[str | None, str | None, str]:
+        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
 
     def _transform_messages(
         self,
@@ -171,8 +187,8 @@ class GithubCopilotConfig(OpenAIConfig):
 
     @staticmethod
     def _parse_anthropic_native_content(
-        content_blocks: list[Any],
-    ) -> tuple[str, list[ChatCompletionToolCallChunk], list[Any] | None]:
+        content_blocks: list[object],
+    ) -> tuple[str, list[ChatCompletionToolCallChunk], Sequence[object] | None]:
         """
         Parse Anthropic-native content blocks into OpenAI-compatible fields.
 
@@ -219,7 +235,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         content = ""
         tool_calls: list[ChatCompletionToolCallChunk] = []
-        thinking_blocks: list[Any] | None = None
+        thinking_blocks: Sequence[object] | None = None
         raw_content: Final = response_json.get("content")
         if isinstance(raw_content, list):
             content, tool_calls, thinking_blocks = cls._parse_anthropic_native_content(raw_content)
@@ -272,12 +288,12 @@ class GithubCopilotConfig(OpenAIConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: "ModelResponse",
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":

@@ -1,9 +1,11 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class HashicorpVaultConfig(BaseModel):
+class HashicorpVaultConfig(LiteLLMBaseModel):
     """Configuration for Hashicorp Vault secret manager integration."""
 
     vault_addr: str | None = Field(
@@ -40,7 +42,15 @@ class HashicorpVaultConfig(BaseModel):
     )
     vault_namespace: str | None = Field(
         default=None,
-        description="Vault namespace (for multi-tenant Vault, sent as X-Vault-Namespace header)",
+        description="Vault namespace used for both login and secret operations unless overridden below",
+    )
+    vault_login_namespace: str | None = Field(
+        default=None,
+        description="Namespace for AppRole and TLS cert login (X-Vault-Namespace header); falls back to vault_namespace",
+    )
+    vault_secret_namespace: str | None = Field(
+        default=None,
+        description="Namespace for secret reads and writes (URL path segment); falls back to vault_namespace",
     )
     vault_mount_name: str | None = Field(
         default=None,
@@ -52,7 +62,44 @@ class HashicorpVaultConfig(BaseModel):
     )
 
 
-class ConfigOverrideSettingsResponse(BaseModel):
+class CyberArkConfig(LiteLLMBaseModel):
+    """Configuration for CyberArk Conjur secret manager integration."""
+
+    cyberark_api_base: str | None = Field(
+        default=None,
+        description="The address of the CyberArk Conjur server (e.g., https://conjur.example.com)",
+    )
+    cyberark_account: str | None = Field(
+        default=None,
+        description="The Conjur organization account name",
+    )
+    cyberark_username: str | None = Field(
+        default=None,
+        description="The Conjur username (login) to authenticate as",
+    )
+    cyberark_api_key: str | None = Field(
+        default=None,
+        description="API key for Conjur API-key authentication",
+    )
+    client_cert: str | None = Field(
+        default=None,
+        description="Path to the client TLS certificate for certificate-based authentication",
+    )
+    client_key: str | None = Field(
+        default=None,
+        description="Path to the client TLS private key for certificate-based authentication",
+    )
+    ssl_verify: str | None = Field(
+        default=None,
+        description="Set to false to disable SSL verification (e.g., for self-signed certificates)",
+    )
+    refresh_interval: str | None = Field(
+        default=None,
+        description="Auth token cache TTL in seconds (default: 300)",
+    )
+
+
+class ConfigOverrideSettingsResponse(LiteLLMBaseModel):
     """Response model for config override settings GET endpoints."""
 
     config_type: str = Field(description="The type of config override")

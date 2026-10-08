@@ -1,8 +1,10 @@
 from collections.abc import Callable
-from typing import Any, Final
+from typing import Final
 
+import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 from litellm.utils import CustomStreamWrapper, ModelResponse, TextCompletionResponse
 
@@ -39,9 +41,9 @@ class AzureTextCompletion(BaseAzureLLM):
         azure_ad_token_provider: Callable | None,
         print_verbose: Callable,
         timeout,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params,
-        litellm_params,
+        litellm_params: dict[str, object],
         logger_fn,
         acompletion: bool = False,
         headers: dict | None = None,
@@ -178,7 +180,7 @@ class AzureTextCompletion(BaseAzureLLM):
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)
@@ -190,9 +192,9 @@ class AzureTextCompletion(BaseAzureLLM):
         model: str,
         api_base: str,
         data: dict,
-        timeout: Any,
+        timeout: float | httpx.Timeout | None,
         model_response: ModelResponse,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         max_retries: int,
         azure_ad_token: str | None = None,
         client=None,  # this is the AsyncAzureOpenAI
@@ -223,7 +225,7 @@ class AzureTextCompletion(BaseAzureLLM):
                 api_key=azure_client.api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
-                    "api_base": azure_client._base_url._uri_reference,
+                    "api_base": azure_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "acompletion": True,
                     "complete_input_dict": data,
                 },
@@ -239,20 +241,20 @@ class AzureTextCompletion(BaseAzureLLM):
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)
 
     def streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_base: str,
         api_key: str | None,
         api_version: str,
         data: dict,
         model: str,
-        timeout: Any,
+        timeout: float | httpx.Timeout | None,
         azure_ad_token: str | None = None,
         client=None,
         litellm_params: dict = {},
@@ -282,7 +284,7 @@ class AzureTextCompletion(BaseAzureLLM):
             api_key=azure_client.api_key,
             additional_args={
                 "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
-                "api_base": azure_client._base_url._uri_reference,
+                "api_base": azure_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                 "acompletion": True,
                 "complete_input_dict": data,
             },
@@ -299,13 +301,13 @@ class AzureTextCompletion(BaseAzureLLM):
 
     async def async_streaming(
         self,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         api_base: str,
         api_key: str | None,
         api_version: str,
         data: dict,
         model: str,
-        timeout: Any,
+        timeout: float | httpx.Timeout | None,
         azure_ad_token: str | None = None,
         client=None,
         litellm_params: dict = {},
@@ -332,7 +334,7 @@ class AzureTextCompletion(BaseAzureLLM):
                 api_key=azure_client.api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
-                    "api_base": azure_client._base_url._uri_reference,
+                    "api_base": azure_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "acompletion": True,
                     "complete_input_dict": data,
                 },
@@ -350,7 +352,7 @@ class AzureTextCompletion(BaseAzureLLM):
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             raise AzureOpenAIError(status_code=status_code, message=str(e), headers=error_headers)

@@ -12,14 +12,15 @@ import asyncio
 import os
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import Final, TypedDict
+from types import MappingProxyType
+from typing import Annotated, Final, NamedTuple, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from typing_extensions import Required
+from pydantic import ValidationError
+from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -32,20 +33,60 @@ from litellm.proxy.a2a.agent_card import (
     merge_agent_card,
     normalize_protocol_version,
 )
+from litellm.proxy.agent_endpoints.agent_registry import (
+    AgentIdWhere,
+    parse_agent_kill_switch,
+    parse_agent_litellm_params,
+    redact_sensitive_agent_litellm_params,
+)
+from litellm.proxy.agent_endpoints.agent_search import (
+    DEFAULT_AGENT_SEARCH_TOP_K,
+    AgentSearchEmbeddingFailed,
+    AgentSearchHits,
+    AgentSearchNotConfigured,
+    global_agent_search_index,
+    search_agents,
+)
+from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+    AgentRequestHandler,
+    UnrestrictedAgentAccess,
+    accessible_agents,
+)
+from litellm.proxy.agent_endpoints.identity import reject_legacy_identity
+from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+from litellm.proxy.agent_endpoints.kill_switch import (
+    KillSwitchAuditLogWriter,
+    KillSwitchHttpClient,
+    build_kill_switch_audit_log,
+    default_kill_switch_audit_log_writer,
+    default_kill_switch_http_client,
+    fire_kill_switch,
+    redact_kill_switch,
+)
+from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
-from litellm.proxy.utils import get_custom_url
+from litellm.proxy.utils import PrismaClient, get_custom_url
+from litellm.repositories.chunked_in import find_many_in
 from litellm.types.agents import (
     AgentCard,
     AgentConfig,
     AgentKeySummary,
+    AgentKillSwitchConfig,
+    AgentKillSwitchResult,
     AgentMakePublicResponse,
     AgentResponse,
     MakeAgentsPublicRequest,
     PatchAgentRequest,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.proxy.agent_identity import (
+    AgentIdentityBinding,
+    AgentIdentityFailure,
+    EntraIdentityConfig,
+    ManagedAgentIdentityStatus,
+)
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
@@ -129,25 +170,45 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
         agent.keys = matched_keys or None
 
 
+def _redact_agent_litellm_params_dict(
+    litellm_params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: AgentResponse.litellm_params is declared as a plain dict, not Mapping
+    """Type-narrowing wrapper: a dict in always yields a dict back from
+    ``redact_sensitive_agent_litellm_params``, which the function's general
+    (possible-JSON-string, possibly-None) signature can't express."""
+    return dict(parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params)))
+
+
 def _redact_sensitive_agent_fields(
     agents: Sequence[AgentResponse],
+    *,
+    is_admin: bool,
 ) -> list[AgentResponse]:
     """
-    Return copies of the given agents with sensitive configuration fields
-    redacted.  The original objects are not modified.
+    Return copies of the given agents with credential-bearing litellm_params
+    values and kill-switch auth secrets replaced by a fixed marker (never
+    returned to ANY caller, admin included) and, for non-admin callers,
+    virtual-key, header and kill-switch fields stripped entirely. The original
+    objects are not modified.
     """
+    from litellm.proxy.proxy_server import general_settings, jwt_handler
+
     redacted: Final[list[AgentResponse]] = []
     for agent in agents:
         copy = agent.model_copy(deep=True)
-        copy.static_headers = None
-        copy.extra_headers = None
-        copy.keys = None
+        copy.jwt_auth_configured = bool(
+            general_settings.get("enable_jwt_auth")
+            and (agent.identity is not None or jwt_handler.litellm_jwtauth.agent_id_jwt_field)
+        )
+        if not is_admin:
+            copy.static_headers = None
+            copy.extra_headers = None
+            copy.keys = None
+            copy.kill_switch = None
+            copy.identity = None
         if copy.litellm_params:
-            copy.litellm_params = _get_masked_values(
-                copy.litellm_params,
-                unmasked_length=4,
-                number_of_asterisks=4,
-            )
+            copy.litellm_params = _redact_agent_litellm_params_dict(copy.litellm_params)
+        copy.kill_switch = redact_kill_switch(copy.kill_switch)
         redacted.append(copy)
     return redacted
 
@@ -211,6 +272,109 @@ async def _check_agent_url_health(
         }
 
 
+class _AgentSearchErrorDetail(TypedDict):
+    error: ReadOnly[str]
+    message: ReadOnly[str]
+
+
+def _agent_search_error(status_code: int, error: str, message: str) -> HTTPException:
+    detail: Final[_AgentSearchErrorDetail] = {"error": error, "message": message}
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+async def _rank_agents_by_query(
+    query: str, agents: Sequence[AgentResponse], top_k: int, user_api_key_dict: UserAPIKeyAuth
+) -> tuple[AgentResponse, ...]:
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
+
+    outcome: Final = await search_agents(
+        query=query,
+        agents=agents,
+        top_k=top_k,
+        router=llm_router,
+        embedding_model=litellm.agent_search_embedding_model,
+        index=global_agent_search_index,
+        user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    match outcome:
+        case AgentSearchHits(hits):
+            return tuple(hit.agent.model_copy(update=MappingProxyType({"search_score": hit.score})) for hit in hits)
+        case AgentSearchNotConfigured(reason):
+            raise _agent_search_error(400, "agent_search_not_configured", reason)
+        case AgentSearchEmbeddingFailed(reason):
+            raise _agent_search_error(503, "agent_search_unavailable", reason)
+        case _:
+            assert_never(outcome)
+
+
+class _AgentDailyActivityScope(NamedTuple):
+    agent_ids: tuple[str, ...] | None
+    agent_metadata: Mapping[str, dict[str, object]]
+
+
+async def _owned_agent_ids(*, user_id: str | None, prisma_client: PrismaClient) -> frozenset[str]:
+    if user_id is None:
+        return frozenset()
+    owned_records: Final = await agents_table(prisma_client).find_many(where={"created_by": user_id})
+    return frozenset(agent.agent_id for agent in owned_records)
+
+
+async def _permitted_daily_activity_agent_ids(
+    *, user_api_key_dict: UserAPIKeyAuth, prisma_client: PrismaClient
+) -> frozenset[str]:
+    access: Final = await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_dict)
+    if isinstance(access, UnrestrictedAgentAccess):
+        return await _owned_agent_ids(user_id=user_api_key_dict.user_id, prisma_client=prisma_client)
+    return access.agent_ids
+
+
+async def _resolve_daily_activity_agent_ids(
+    *,
+    agent_ids: tuple[str, ...] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> tuple[str, ...] | None:
+    from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
+
+    if user_api_key_has_admin_view(user_api_key_dict):
+        return agent_ids
+    permitted_agent_ids: Final = await _permitted_daily_activity_agent_ids(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    return (
+        tuple(agent_id for agent_id in agent_ids if agent_id in permitted_agent_ids)
+        if agent_ids
+        else tuple(permitted_agent_ids)
+    )
+
+
+async def resolve_agent_daily_activity_scope(
+    *,
+    agent_ids: tuple[str, ...] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> _AgentDailyActivityScope:
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
+    resolved_agent_ids: Final = await _resolve_daily_activity_agent_ids(
+        agent_ids=agent_ids,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+
+    agent_records: Final = (
+        await agents_table(prisma_client).find_many(where={})
+        if resolved_agent_ids is None
+        else await find_many_in(agents_table(prisma_client), "agent_id", resolved_agent_ids)
+    )
+    agent_metadata: Final[Mapping[str, dict[str, object]]] = MappingProxyType(
+        {agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records}
+    )
+    return _AgentDailyActivityScope(resolved_agent_ids, agent_metadata)
+
+
 @router.get(
     "/v1/agents",
     tags=["[beta] A2A Agents"],
@@ -223,6 +387,17 @@ async def get_agents(
         False,
         description="When true, performs a GET request to each agent's URL. Agents with reachable URLs (HTTP status < 500) and agents without a URL are returned; unreachable agents are filtered out.",
     ),
+    query: Annotated[
+        str | None,
+        Query(
+            min_length=1,
+            description="Describe the task in natural language to rank the agents you can reach by semantic similarity over their name, description, and skills. Each result carries a search_score. Requires litellm_settings.agent_search_embedding_model.",
+        ),
+    ] = None,
+    top_k: Annotated[
+        int,
+        Query(ge=1, le=100, description="With query: the maximum number of ranked agents to return."),
+    ] = DEFAULT_AGENT_SEARCH_TOP_K,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
 ):
     """
@@ -240,37 +415,22 @@ async def get_agents(
       -H "Authorization: Bearer your-key" \
     ```
 
+    Pass `?query=<task>` to get the best matching agents ranked by semantic similarity:
+    ```
+    curl -X GET "http://localhost:4000/v1/agents?query=translate+a+PDF+document&top_k=5" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer your-key" \
+    ```
+
     Returns: List[AgentResponse]
 
     """
     await check_feature_access_for_user(user_api_key_dict, "agents")
 
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
-        AgentRequestHandler,
-        RestrictedAgentAccess,
-        UnrestrictedAgentAccess,
-    )
 
     try:
-        returned_agents: Sequence[AgentResponse] = ()
-
-        # Admin users get all agents
-        if (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-        ):
-            returned_agents = global_agent_registry.get_agent_list()
-        else:
-            # Get allowed agents from object_permission (key/team level)
-            agent_access: Final = await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_dict)
-            all_agents: Final = global_agent_registry.get_agent_list()
-
-            match agent_access:
-                case UnrestrictedAgentAccess():
-                    returned_agents = all_agents
-                case RestrictedAgentAccess(allowed_agent_ids):
-                    returned_agents = [agent for agent in all_agents if agent.agent_id in allowed_agent_ids]
+        returned_agents: Sequence[AgentResponse] = await accessible_agents(user_api_key_dict)
 
         # Fetch current spend from DB for all returned agents
         from litellm.proxy.proxy_server import prisma_client
@@ -304,13 +464,13 @@ async def get_agents(
                 global_agent_registry.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups)
             )
 
-        # Redact sensitive fields for non-admin users
+        # litellm_params secrets are always redacted; keys/headers stay
+        # admin-only.
         is_admin: Final = (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not is_admin:
-            returned_agents = _redact_sensitive_agent_fields(returned_agents)
+        returned_agents = _redact_sensitive_agent_fields(returned_agents, is_admin=is_admin)
 
         if health_check:
             agents_with_url: Final = [agent for agent in returned_agents if (agent.agent_card_params or {}).get("url")]
@@ -336,7 +496,9 @@ async def get_agents(
             healthy_ids: Final = {result["agent_id"] for result in health_results if result["healthy"]}
             returned_agents = [agent for agent in agents_with_url if agent.agent_id in healthy_ids] + agents_without_url
 
-        return returned_agents
+        if query is None:
+            return returned_agents
+        return await _rank_agents_by_query(query, returned_agents, top_k, user_api_key_dict)
     except HTTPException:
         raise
     except Exception as e:
@@ -352,6 +514,71 @@ from litellm.proxy.agent_endpoints.agent_registry import (
 from litellm.proxy.agent_endpoints.agent_registry import (
     global_agent_registry as AGENT_REGISTRY,
 )
+
+
+def _trusted_agent_issuers() -> tuple[str, ...]:
+    from litellm.proxy.proxy_server import general_settings, jwt_handler
+
+    if not general_settings.get("enable_jwt_auth"):
+        return ()
+    configured: Final = jwt_handler.litellm_jwtauth.issuers or ()
+    issuer: Final = os.getenv("JWT_ISSUER")
+    global_issuers: Final = (
+        (issuer,)
+        if issuer and os.getenv("JWT_AUDIENCE") and not any(item.issuer == issuer for item in configured)
+        else ()
+    )
+    return (
+        tuple(item.issuer for item in configured if item.audience and not item.disable_audience_validation)
+        + global_issuers
+    )
+
+
+def _validate_managed_identity_request(
+    request: AgentConfig | PatchAgentRequest, existing: AgentResponse | None = None
+) -> None:
+    raw: Final = request.get("identity") if "identity" in request else existing.identity if existing else None
+    if raw is None:
+        return
+    try:
+        identity: Final = raw if isinstance(raw, AgentIdentityBinding) else EntraIdentityConfig.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(400, "Invalid Entra identity configuration") from exc
+    if identity.issuer not in _trusted_agent_issuers():
+        raise HTTPException(400, "Configure trusted JWT issuer and audience validation for this Entra tenant first")
+    if request.get("execution_mode", existing.execution_mode if existing else "autonomous") != "autonomous":
+        if os.getenv("MICROSOFT_TENANT") != identity.tenant_id or not os.getenv("MICROSOFT_CLIENT_ID"):
+            raise HTTPException(400, "Delegated agents require Microsoft SSO for the same trusted tenant")
+
+
+@router.get("/v1/agents/identity/providers", response_model=tuple[str, ...], tags=("[beta] A2A Agents",))
+async def get_agent_identity_providers(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> tuple[str, ...]:
+    _check_agent_management_permission(user_api_key_dict)
+    return _trusted_agent_issuers()
+
+
+@router.get("/v1/agents/{agent_id}/identity", response_model=ManagedAgentIdentityStatus, tags=("[beta] A2A Agents",))
+async def get_agent_identity_status(
+    agent_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ManagedAgentIdentityStatus:
+    from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
+    agent: Final = await AgentIdentityStore.from_client(prisma_client).agent(agent_id)
+    if isinstance(agent, AgentIdentityFailure):
+        raise_identity_failure(agent)
+    if agent is None:
+        raise HTTPException(404, "Agent not found")
+    return ManagedAgentIdentityStatus(
+        identity=agent.identity,
+        identity_managed=agent.identity_managed,
+        enabled=agent.enabled,
+        execution_mode=agent.execution_mode,
+        last_authenticated_at=agent.identity.last_authenticated_at if agent.identity else None,
+    )
 
 
 @router.post(
@@ -415,6 +642,9 @@ async def create_agent(
         # Get the user ID from the API key auth
         created_by: Final = user_api_key_dict.user_id or "unknown"
 
+        _validate_managed_identity_request(request)
+        reject_legacy_identity(request.get("litellm_params"))
+
         # check for naming conflicts
         existing_agent: Final = AGENT_REGISTRY.get_agent_by_name(agent_name=request.get("agent_name"))
         if existing_agent is not None:
@@ -462,7 +692,9 @@ async def create_agent(
                 "Failed to register agent '%s' (ID: %s) in memory: %s", agent_name, agent_id, reg_error
             )
 
-        return result
+        # The caller is a proxy admin (enforced above); litellm_params
+        # secrets are still never echoed back in the response.
+        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
 
     except HTTPException:
         raise
@@ -514,7 +746,7 @@ async def get_agent_by_id(
         if agent is None:
             agent_row: Final = await agents_table(prisma_client).find_unique(
                 where={"agent_id": agent_id},
-                include={"object_permission": True},
+                include={"object_permission": True, "identity": True},
             )
             if agent_row is not None:
                 agent_dict: Final = agent_row.model_dump()
@@ -535,13 +767,13 @@ async def get_agent_by_id(
 
         await _attach_keys_to_agents([agent], prisma_client)
 
-        # Redact sensitive fields for non-admin users
+        # litellm_params secrets are always redacted; keys/headers stay
+        # admin-only.
         is_admin = (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not is_admin:
-            agent = _redact_sensitive_agent_fields([agent])[0]
+        agent = _redact_sensitive_agent_fields((agent,), is_admin=is_admin)[0]
 
         return agent
     except HTTPException:
@@ -603,12 +835,17 @@ async def update_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        existing_agent = await agents_table(prisma_client).find_unique(
+            where={"agent_id": agent_id}, include={"identity": True}
+        )
         if existing_agent is not None:
-            existing_agent = dict(existing_agent)
+            existing_agent = existing_agent.model_dump()
 
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+
+        _validate_managed_identity_request(request, AgentResponse.model_validate(existing_agent))
+        reject_legacy_identity(request.get("litellm_params"))
 
         # Get the user ID from the API key auth
         updated_by: Final = user_api_key_dict.user_id or "unknown"
@@ -645,7 +882,7 @@ async def update_agent(
             "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
-        return result
+        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
     except HTTPException:
         raise
     except Exception as e:
@@ -705,12 +942,17 @@ async def patch_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        existing_agent = await agents_table(prisma_client).find_unique(
+            where={"agent_id": agent_id}, include={"identity": True}
+        )
         if existing_agent is not None:
-            existing_agent = dict(existing_agent)
+            existing_agent = existing_agent.model_dump()
 
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+
+        _validate_managed_identity_request(request, AgentResponse.model_validate(existing_agent))
+        reject_legacy_identity(request.get("litellm_params"))
 
         # Get the user ID from the API key auth
         updated_by: Final = user_api_key_dict.user_id or "unknown"
@@ -748,7 +990,7 @@ async def patch_agent(
             "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
-        return result
+        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
     except HTTPException:
         raise
     except Exception as e:
@@ -792,7 +1034,9 @@ async def delete_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        existing_agent = await agents_table(prisma_client).find_unique(
+            where={"agent_id": agent_id}, include={"identity": True}
+        )
         if existing_agent is not None:
             existing_agent = dict[str, object](existing_agent)
 
@@ -809,6 +1053,74 @@ async def delete_agent(
     except Exception as e:
         verbose_proxy_logger.exception("Error deleting agent: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/v1/agents/{agent_id}/kill_switch",
+    tags=["[beta] A2A Agents"],
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=AgentKillSwitchResult,
+)
+async def trigger_agent_kill_switch(
+    agent_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    http_client: Annotated[KillSwitchHttpClient, Depends(default_kill_switch_http_client)],
+    audit_log_writer: Annotated[KillSwitchAuditLogWriter, Depends(default_kill_switch_audit_log_writer)],
+):
+    """
+    Fire the agent's configured kill switch webhook. Proxy admin only.
+
+    LiteLLM only makes the configured HTTP call and reports what came back; it
+    does not change the agent's state in LiteLLM. Returns 200 when the webhook
+    answered 2xx, 502 with the same result body otherwise. Every attempt is
+    written to the audit log as a `kill_switch_fired` row against the agent.
+
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000/kill_switch" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+    """
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+    _check_agent_management_permission(user_api_key_dict)
+
+    resolved: Final = await _resolve_agent_kill_switch(agent_id)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+    resolved_agent_id, config = resolved
+    if config is None:
+        raise HTTPException(status_code=400, detail=f"Agent with ID {agent_id} has no kill_switch configured")
+
+    result: Final = await fire_kill_switch(agent_id=resolved_agent_id, config=config, http_client=http_client)
+    await audit_log_writer(
+        build_kill_switch_audit_log(
+            result=result,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+    )
+    if not result.succeeded:
+        raise HTTPException(status_code=502, detail=result.model_dump())
+    return result
+
+
+async def _resolve_agent_kill_switch(agent_id: str) -> tuple[str, AgentKillSwitchConfig | None] | None:
+    """The DB row wins over this replica's in-memory registry so a trigger never fires a webhook another
+    replica has since changed; config.yaml agents have no row and fall back to the registry."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is not None:
+        where: Final[AgentIdWhere] = {"agent_id": agent_id}
+        row: Final = await agents_table(prisma_client).find_unique(where=where)
+        if row is not None:
+            return row.agent_id, parse_agent_kill_switch(row.kill_switch)
+
+    agent: Final = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
+    if agent is None:
+        return None
+    return agent.agent_id, agent.kill_switch
 
 
 @router.post(
@@ -879,35 +1191,32 @@ async def make_agent_public(
             if agent is None:
                 raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
-        if litellm.public_agent_groups is None:
-            litellm.public_agent_groups = []
-        # handle duplicates
-        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups):
+        config: Final = await proxy_config.get_config()
+
+        current_public_agent_groups: Final = list(litellm.public_agent_groups or [])
+        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(current_public_agent_groups):
             raise HTTPException(
                 status_code=400,
                 detail=f"Agent with name {agent.agent_name} already in public agent groups",
             )
-        litellm.public_agent_groups.append(agent.agent_id)
+        updated_public_agent_groups: Final = [*current_public_agent_groups, agent.agent_id]
 
-        # Load existing config
-        config: Final = await proxy_config.get_config()
-
-        # Update config with new settings
         if "litellm_settings" not in config or config["litellm_settings"] is None:
             config["litellm_settings"] = {}
 
-        config["litellm_settings"]["public_agent_groups"] = litellm.public_agent_groups
+        config["litellm_settings"]["public_agent_groups"] = updated_public_agent_groups
 
-        # Save the updated config
         await proxy_config.save_config(new_config=config)
 
+        litellm.public_agent_groups = updated_public_agent_groups
+
         verbose_proxy_logger.debug(
-            "Updated public agent groups to: %s by user: %s", litellm.public_agent_groups, user_api_key_dict.user_id
+            "Updated public agent groups to: %s by user: %s", updated_public_agent_groups, user_api_key_dict.user_id
         )
 
         return {
             "message": "Successfully updated public agent groups",
-            "public_agent_groups": litellm.public_agent_groups,
+            "public_agent_groups": updated_public_agent_groups,
             "updated_by": user_api_key_dict.user_id,
         }
     except HTTPException:
@@ -1051,82 +1360,39 @@ async def get_agent_daily_activity(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    agent_ids_list = agent_ids.split(",") if agent_ids else None
-    exclude_agent_ids_list: list[str] | None = None
-    if exclude_agent_ids:
-        exclude_agent_ids_list = exclude_agent_ids.split(",") if exclude_agent_ids else None
-
-    # Without scoping, an empty `agent_ids` query returned every agent's
-    # spend/token rows on the proxy. Restrict non-admin callers to the
-    # agents they're permitted to invoke (or that they created), and
-    # intersect their explicit `agent_ids` filter with the same allowlist.
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
-        AgentRequestHandler,
-        RestrictedAgentAccess,
-        UnrestrictedAgentAccess,
+    requested_agent_ids: Final = tuple(agent_ids.split(",")) if agent_ids else None
+    exclude_agent_ids_list: Final[list[str] | None] = exclude_agent_ids.split(",") if exclude_agent_ids else None
+    agent_scope: Final = await resolve_agent_daily_activity_scope(
+        agent_ids=requested_agent_ids,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
     )
-    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-
-    where_condition: Final[dict[str, object]] = {}
-    if not _user_has_admin_view(user_api_key_dict):
-        permitted_agent_ids: list[str] = []
-        # An unrestricted caller is not "see everything" for activity scoping. Fall
-        # back to the agents the caller created so they cannot enumerate other
-        # tenants' agents.
-        # Guard against `user_id is None`: a literal None in Prisma
-        # `where={"created_by": None}` resolves to ``created_by IS NULL``
-        # and would expose every ownerless agent's rows.
-        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_dict):
-            case RestrictedAgentAccess(allowed_agent_ids):
-                permitted_agent_ids = list(allowed_agent_ids)
-            case UnrestrictedAgentAccess():
-                if user_api_key_dict.user_id is not None:
-                    owned_records: Final = await agents_table(prisma_client).find_many(
-                        where={"created_by": user_api_key_dict.user_id}
-                    )
-                    permitted_agent_ids = [a.agent_id for a in owned_records]
-
-        if agent_ids_list:
-            permitted_agent_id_set: Final = set(permitted_agent_ids)
-            agent_ids_list = [aid for aid in agent_ids_list if aid in permitted_agent_id_set]
-        else:
-            agent_ids_list = list(permitted_agent_ids)
-
-        # No accessible agents → return an empty page without querying.
-        if not agent_ids_list:
-            return SpendAnalyticsPaginatedResponse(
-                results=[],
-                metadata=DailySpendMetadata(
-                    total_spend=0.0,
-                    total_prompt_tokens=0,
-                    total_completion_tokens=0,
-                    total_tokens=0,
-                    total_api_requests=0,
-                    total_successful_requests=0,
-                    total_failed_requests=0,
-                    total_cache_read_input_tokens=0,
-                    total_cache_creation_input_tokens=0,
-                    total_compression_saved_tokens=0,
-                    page=page,
-                    total_pages=0,
-                    has_more=False,
-                ),
-            )
-
-    if agent_ids_list:
-        where_condition["agent_id"] = {"in": list(agent_ids_list)}
-
-    agent_records: Final = await agents_table(prisma_client).find_many(where=where_condition)
-    agent_metadata: Final[Mapping[str, dict[str, object]]] = {
-        agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records
-    }
+    if agent_scope.agent_ids == ():
+        return SpendAnalyticsPaginatedResponse(
+            results=[],
+            metadata=DailySpendMetadata(
+                total_spend=0.0,
+                total_prompt_tokens=0,
+                total_completion_tokens=0,
+                total_tokens=0,
+                total_api_requests=0,
+                total_successful_requests=0,
+                total_failed_requests=0,
+                total_cache_read_input_tokens=0,
+                total_cache_creation_input_tokens=0,
+                total_compression_saved_tokens=0,
+                page=page,
+                total_pages=0,
+                has_more=False,
+            ),
+        )
 
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyagentspend",
         entity_id_field="agent_id",
-        entity_id=agent_ids_list,
-        entity_metadata_field=agent_metadata,
+        entity_id=None if agent_scope.agent_ids is None else list(agent_scope.agent_ids),
+        entity_metadata_field=agent_scope.agent_metadata,
         exclude_entity_ids=exclude_agent_ids_list,
         start_date=start_date,
         end_date=end_date,

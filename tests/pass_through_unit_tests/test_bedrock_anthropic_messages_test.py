@@ -1,6 +1,5 @@
 import json
 import os
-import sys
 from datetime import datetime
 from typing import AsyncIterator, Dict, Any
 import asyncio
@@ -9,9 +8,6 @@ from unittest.mock import MagicMock
 import pytest
 from litellm.router import Router
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from base_anthropic_unified_messages_test import BaseAnthropicMessagesTest
 
@@ -24,7 +20,7 @@ async def test_anthropic_messages_litellm_router_bedrock():
     Test the anthropic_messages with non-streaming request
     """
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     router = Router(
         model_list=[
             {

@@ -28,7 +28,7 @@ class TextStreamer:
     Fake streaming iterator for Vertex AI Model Garden calls
     """
 
-    def __init__(self, text):
+    def __init__(self, text: str):
         self.text = text.split()  # let's assume words as a streaming unit
         self.index = 0
 
@@ -64,7 +64,7 @@ def _get_client_from_cache(client_cache_key: str):
     return litellm.in_memory_llm_clients_cache.get_cache(client_cache_key)
 
 
-def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
+def _set_client_in_cache(client_cache_key: str, vertex_llm_model: object):
     litellm.in_memory_llm_clients_cache.set_cache(
         key=client_cache_key,
         value=vertex_llm_model,

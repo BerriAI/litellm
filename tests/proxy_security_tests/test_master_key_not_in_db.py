@@ -3,8 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 from litellm.proxy.proxy_server import app, ProxyLogging, hash_token
 from litellm.caching import DualCache
-
-MASTER_KEY = "sk-1234"
+from tests._master_key import MASTER_KEY
 
 
 @pytest.fixture(autouse=True)
@@ -20,8 +19,10 @@ def override_env_settings(monkeypatch):
 @pytest.fixture(scope="module")
 def test_client():
     """Starting the test client triggers FastAPI startup, where Prisma connects to the DB."""
-    with TestClient(app) as client:
-        yield client
+    with pytest.MonkeyPatch.context() as boot_env:
+        boot_env.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
+        with TestClient(app) as client:
+            yield client
 
 
 @pytest.mark.asyncio

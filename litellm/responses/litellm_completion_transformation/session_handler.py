@@ -1,9 +1,10 @@
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import SpendLogsPayload
+from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
@@ -15,6 +16,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
     from litellm.responses.litellm_completion_transformation.transformation import (
         ChatCompletionSession,
     )
@@ -26,6 +28,17 @@ else:
 ########################################################
 COLD_STORAGE_HANDLER: Final = ColdStorageHandler()
 ########################################################
+
+
+def _normalize_redacted_tool_call_arguments(message: Message) -> None:
+    """Redaction stores the bare sentinel (invalid JSON) in tool-call arguments;
+    normalize replayed history to "{}" so provider converters can parse it."""
+    for tool_call in message.tool_calls or []:
+        if (function := getattr(tool_call, "function", None)) is not None and function.arguments == REDACTED_BY_LITELLM:
+            function.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+    function_call: Final = message.function_call
+    if function_call is not None and function_call.arguments == REDACTED_BY_LITELLM:
+        function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 
 
 class ResponsesSessionHandler:
@@ -76,7 +89,7 @@ class ResponsesSessionHandler:
 
     @staticmethod
     async def extend_chat_completion_message_with_spend_log_payload(
-        spend_log: SpendLogsPayload,
+        spend_log: "SpendLogsPayload",
         chat_completion_message_history: list[
             AllMessageValues
             | GenericChatCompletionMessage
@@ -104,15 +117,19 @@ class ResponsesSessionHandler:
         if proxy_server_request_dict:
             _response_input_param: Final = proxy_server_request_dict.get("input", None)
             _messages = proxy_server_request_dict.get("messages", None)
-            if isinstance(_response_input_param, str):
+            if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
             elif isinstance(_response_input_param, dict):
-                response_input_param = cast(ResponseInputParam, _response_input_param)
+                response_input_param = cast(
+                    ResponseInputParam,
+                    [_response_input_param],
+                )
 
         if response_input_param:
             chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=response_input_param,
                 responses_api_request=proxy_server_request_dict or {},
+                replay_reasoning=True,
             )
             chat_completion_message_history.extend(chat_completion_messages)
 
@@ -125,6 +142,7 @@ class ResponsesSessionHandler:
             chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=_messages,
                 responses_api_request=proxy_server_request_dict or {},
+                replay_reasoning=True,
             )
             chat_completion_message_history.extend(chat_completion_messages)
 
@@ -137,12 +155,13 @@ class ResponsesSessionHandler:
             model_response: Final = ModelResponse(**_response_output)
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
-                    chat_completion_message_history.append(getattr(choice, "message"))
+                    _normalize_redacted_tool_call_arguments(choice.message)
+                    chat_completion_message_history.append(choice.message)
         return chat_completion_message_history
 
     @staticmethod
     async def get_proxy_server_request_from_spend_log(
-        spend_log: SpendLogsPayload,
+        spend_log: "SpendLogsPayload",
     ) -> dict | None:
         """
         Get the parsed proxy server request from the spend log
@@ -175,7 +194,7 @@ class ResponsesSessionHandler:
 
     @staticmethod
     def _get_cold_storage_object_key_from_spend_log(
-        spend_log: SpendLogsPayload,
+        spend_log: "SpendLogsPayload",
     ) -> str | None:
         """
         Extract the cold storage object key from spend log metadata.
@@ -189,7 +208,7 @@ class ResponsesSessionHandler:
         try:
             metadata_str: Final = spend_log.get("metadata", "{}")
             if isinstance(metadata_str, str):
-                metadata_dict: Final = json.loads(metadata_str)
+                metadata_dict: Final[SpendLogsMetadata] = json.loads(metadata_str)
                 return metadata_dict.get("cold_storage_object_key")
             elif isinstance(metadata_str, dict):
                 return metadata_str.get("cold_storage_object_key")
@@ -246,7 +265,7 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_all_spend_logs_for_previous_response_id(
         previous_response_id: str,
-    ) -> list[SpendLogsPayload]:
+    ) -> "list[SpendLogsPayload]":
         """
         Get all spend logs for a previous response id
 
@@ -254,13 +273,22 @@ class ResponsesSessionHandler:
         SQL query
 
         SELECT session_id FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id
+
+        A just-finished turn gets a short second chance: the worker that served it may
+        still be writing its spend log when the follow-up arrives, and an empty result
+        drops the whole conversation instead of erroring. Deployments that write no spend
+        logs at all have nothing to wait for, so they keep the single original query.
         """
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.constants import (
+            RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS,
+            RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL,
+        )
+        from litellm.proxy.proxy_server import disable_spend_logs, prisma_client
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
-        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
-        previous_response_id = decoded_response_id.get("response_id", previous_response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
+        response_id: Final = decoded_response_id.get("response_id", previous_response_id)
         if prisma_client is None:
             return []
 
@@ -276,12 +304,17 @@ class ResponsesSessionHandler:
             ORDER BY "endTime" ASC;
         """
 
-        spend_logs: Final = await prisma_client.db.query_raw(query, previous_response_id)
+        max_attempts: Final = 1 if disable_spend_logs else RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
+        for attempt in range(max_attempts):
+            if attempt:
+                await asyncio.sleep(RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL)
+            if spend_logs := await prisma_client.db.query_raw(query, response_id):
+                verbose_proxy_logger.debug(
+                    "Found the following spend logs for previous response id %s: %s",
+                    response_id,
+                    json.dumps(spend_logs, indent=4, default=str),
+                )
+                return spend_logs
 
-        verbose_proxy_logger.debug(
-            "Found the following spend logs for previous response id %s: %s",
-            previous_response_id,
-            json.dumps(spend_logs, indent=4, default=str),
-        )
-
-        return spend_logs
+        verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
+        return []

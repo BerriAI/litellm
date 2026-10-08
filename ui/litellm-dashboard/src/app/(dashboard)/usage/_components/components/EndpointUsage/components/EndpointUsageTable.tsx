@@ -1,6 +1,10 @@
 import React from "react";
-import { Table, Progress } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import type { ColumnDef } from "@tanstack/react-table";
+import { Route } from "lucide-react";
+import { cn } from "@/lib/cva.config";
+import { Panel } from "../../overview/Primitives";
+import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
+import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { MetricWithMetadata } from "@/components/UsagePage/types";
 
@@ -36,66 +40,61 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
     successRate: calculateSuccessRate(data.metrics.successful_requests, data.metrics.api_requests),
   }));
 
-  const columns: ColumnsType<EndpointRow> = [
+  const columns: ColumnDef<EndpointRow>[] = [
     {
-      title: "Endpoint",
-      dataIndex: "endpoint",
-      key: "endpoint",
-      render: (text: string) => <span className="font-medium">{text}</span>,
+      header: "Endpoint",
+      accessorKey: "endpoint",
+      cell: ({ row }) => <span className="font-mono text-xs text-foreground">{row.original.endpoint}</span>,
     },
     {
-      title: "Successful / Failed",
-      key: "requests",
-      render: (_: any, record: EndpointRow) => {
+      header: "Successful / Failed",
+      id: "requests",
+      cell: ({ row }) => {
+        const record = row.original;
         const successPercentage =
           record.api_requests > 0 ? (record.successful_requests / record.api_requests) * 100 : 0;
         const failurePercentage = record.api_requests > 0 ? (record.failed_requests / record.api_requests) * 100 : 0;
         const totalPercentage = successPercentage + failurePercentage;
 
-        const strokeColorConfig: Record<string, string> = {
-          "0%": "#22c55e",
-        };
-        if (successPercentage > 0 && successPercentage < 100) {
-          strokeColorConfig[`${successPercentage}%`] = "#22c55e";
-          strokeColorConfig[`${successPercentage + 0.01}%`] = "#ef4444";
-        }
-        strokeColorConfig["100%"] = failurePercentage > 0 ? "#ef4444" : "#22c55e";
-
         return (
-          <div className="flex items-center space-x-3">
-            <div className="flex-1 relative">
-              <Progress percent={totalPercentage} size="small" strokeColor={strokeColorConfig} showInfo={false} />
+          <div className="flex items-center gap-3">
+            <div className="relative min-w-16 flex-1">
+              <Meter value={successPercentage} max={totalPercentage || 100} aria-label="Successful requests">
+                <MeterTrack className={failurePercentage > 0 ? "h-1 bg-destructive/70" : "h-1"}>
+                  <MeterIndicator className="bg-[#2b3fd6]" />
+                </MeterTrack>
+              </Meter>
             </div>
-            <div className="flex items-center space-x-2 text-sm min-w-[100px]">
-              <span className="text-green-600 font-medium">{record.successful_requests.toLocaleString()}</span>
-              <span className="text-gray-400">/</span>
-              <span className="text-red-600 font-medium">{record.failed_requests.toLocaleString()}</span>
+            <div className="flex min-w-[100px] items-center gap-1.5 text-xs tabular-nums">
+              <span className="text-foreground">{record.successful_requests.toLocaleString()}</span>
+              <span className="text-muted-foreground">/</span>
+              <span className={record.failed_requests > 0 ? "text-destructive" : "text-muted-foreground"}>
+                {record.failed_requests.toLocaleString()}
+              </span>
             </div>
           </div>
         );
       },
     },
     {
-      title: "Total Request",
-      dataIndex: "api_requests",
-      key: "api_requests",
-      render: (value: number) => value.toLocaleString(),
+      header: "Total Request",
+      accessorKey: "api_requests",
+      meta: { numeric: true },
+      cell: ({ row }) => <span className="tabular-nums">{row.original.api_requests.toLocaleString()}</span>,
     },
     {
-      title: "Success Rate",
-      dataIndex: "successRate",
-      key: "successRate",
-      render: (value: number) => {
+      header: "Success Rate",
+      accessorKey: "successRate",
+      meta: { numeric: true },
+      cell: ({ row }) => {
+        const value = row.original.successRate;
         const successRateStr = value.toFixed(2);
         return (
           <span
-            className={
-              value >= 95
-                ? "text-green-600 font-medium"
-                : value >= 80
-                  ? "text-yellow-600 font-medium"
-                  : "text-red-600 font-medium"
-            }
+            className={cn(
+              "tabular-nums",
+              value >= 95 ? "text-foreground" : value >= 80 ? "text-warning" : "text-destructive",
+            )}
           >
             {successRateStr}%
           </span>
@@ -103,20 +102,38 @@ const EndpointUsageTable: React.FC<EndpointUsageTableProps> = ({ endpointData })
       },
     },
     {
-      title: "Total Tokens",
-      dataIndex: "total_tokens",
-      key: "total_tokens",
-      render: (value: number) => value.toLocaleString(),
+      header: "Total Tokens",
+      accessorKey: "total_tokens",
+      meta: { numeric: true },
+      cell: ({ row }) => <span className="tabular-nums">{row.original.total_tokens.toLocaleString()}</span>,
     },
     {
-      title: "Spend",
-      dataIndex: "spend",
-      key: "spend",
-      render: (value: number) => <MoneyCell value={value} decimals={2} />,
+      header: "Spend",
+      accessorKey: "spend",
+      meta: { numeric: true },
+      cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
     },
   ];
 
-  return <Table columns={columns} dataSource={dataSource} pagination={false} />;
+  return (
+    <Panel
+      icon={Route}
+      title="Endpoints"
+      action={
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {dataSource.length.toLocaleString()} {dataSource.length === 1 ? "endpoint" : "endpoints"}
+        </span>
+      }
+    >
+      <DataTable
+        columns={columns}
+        data={dataSource}
+        getRowId={(row) => row.key}
+        noDataMessage="No endpoint usage data"
+        size="compact"
+      />
+    </Panel>
+  );
 };
 
 export default EndpointUsageTable;

@@ -24,6 +24,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation
+from e2e_metadata import step
 from proxy_client import ProxyClient
 from e2e_http import (
     URL,
@@ -146,6 +147,29 @@ class LangfuseObservationList(BaseModel):
     data: list[LangfuseObservation] = []
 
 
+class LangfuseOtelMetadata(BaseModel):
+    """Langfuse stores every OTel span attribute under metadata.attributes."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    attributes: dict[str, str] = {}
+
+
+def otel_attributes(obs: LangfuseObservation) -> dict[str, str]:
+    try:
+        return LangfuseOtelMetadata.model_validate(obs.metadata).attributes
+    except ValidationError:
+        return {}
+
+
+def is_otel_v2_generation(obs: LangfuseObservation, *, key_alias: str) -> bool:
+    attributes = otel_attributes(obs)
+    return (
+        attributes.get("langfuse.observation.type") == "generation"
+        and attributes.get("litellm.metadata.user_api_key_alias") == key_alias
+    )
+
+
 class LangfuseListParams(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -187,6 +211,45 @@ class LangfuseCreds:
                 )
             ]
         )
+
+
+@dataclass(frozen=True, slots=True)
+class WeaveCreds:
+    """Weights & Biases Weave credentials for a key-scoped ``weave_otel`` callback.
+
+    The proxy still needs WANDB_API_KEY / WANDB_PROJECT_ID in its own environment:
+    the weave_otel logger is constructed from those before the per-key vars are
+    applied, so a key-scoped callback on a proxy without them never initializes.
+    The per-key vars are what direct THIS key's spans at this project.
+    """
+
+    api_key: str
+    project_id: str
+
+    def key_logging_metadata(self) -> KeyMetadata:
+        return KeyMetadata(
+            logging=[
+                KeyLoggingCallback(
+                    callback_name="weave_otel",
+                    callback_type="success_and_failure",
+                    callback_vars=KeyLoggingCallbackVars(
+                        wandb_api_key=self.api_key,
+                        weave_project_id=self.project_id,
+                    ),
+                )
+            ]
+        )
+
+
+def load_weave_creds() -> WeaveCreds:
+    api_key = os.getenv("WANDB_API_KEY")
+    project_id = (os.getenv("WEAVE_PROJECT_ID") or os.getenv("WANDB_PROJECT_ID") or "").strip()
+    if not (api_key and project_id):
+        pytest.fail(
+            "Weave e2e requires WANDB_API_KEY and WEAVE_PROJECT_ID (or WANDB_PROJECT_ID, "
+            "format <entity>/<project>); missing credentials is a hard failure, not a skip"
+        )
+    return WeaveCreds(api_key=api_key, project_id=project_id)
 
 
 def load_langfuse_creds() -> LangfuseCreds:
@@ -264,6 +327,7 @@ def observation_has_guardrail(obs: LangfuseObservation, *, guardrail_name: str) 
 class LoggingClient:
     proxy: ProxyClient
 
+    @step("Generate a virtual key named {alias} with models: {models}")
     def key_with_alias(
         self,
         alias: str,
@@ -285,9 +349,11 @@ class LoggingClient:
             )
         )
 
+    @step("Delete the virtual key")
     def delete_key(self, key: str) -> None:
         self.proxy.delete_key(key)
 
+    @step("Create the team {alias} with models: {models}")
     def create_team(
         self,
         alias: str,
@@ -308,6 +374,7 @@ class LoggingClient:
             )
         ).team_id
 
+    @step("Delete the team")
     def delete_team(self, team_id: str) -> None:
         _ = self.proxy.transport.post(
             "/team/delete",
@@ -316,6 +383,7 @@ class LoggingClient:
             response_type=NoBody,
         )
 
+    @step("Create the internal user {user_email}")
     def create_user(self, *, user_email: str, user_id: str | None = None) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -330,6 +398,7 @@ class LoggingClient:
             )
         ).user_id
 
+    @step("Delete the internal user")
     def delete_user(self, user_id: str) -> None:
         _ = self.proxy.transport.post(
             "/user/delete",
@@ -338,6 +407,7 @@ class LoggingClient:
             response_type=NoBody,
         )
 
+    @step("Create the organization {alias} with models: {models}")
     def create_org(self, alias: str, *, models: list[str]) -> str:
         return unwrap(
             self.proxy.transport.post(
@@ -348,6 +418,7 @@ class LoggingClient:
             )
         ).organization_id
 
+    @step("Delete the organization")
     def delete_org(self, organization_id: str) -> None:
         _ = self.proxy.transport.delete(
             "/organization/delete",
@@ -356,6 +427,7 @@ class LoggingClient:
             response_type=NoBody,
         )
 
+    @step("Add a Langfuse OTel logging callback for {callback_type} events to the team")
     def add_team_langfuse_callback(
         self,
         team_id: str,
@@ -379,6 +451,7 @@ class LoggingClient:
             f"POST /team/{team_id}/callback must return status=success; got {response.status!r}"
         )
 
+    @step("Create the tool_permission guardrail {name} that allows only the tool {allowed_tool}")
     def create_tool_permission_guardrail(self, name: str, *, allowed_tool: str) -> str:
         """Register a tool_permission guardrail that allows one tool and denies the rest."""
         response = unwrap(
@@ -412,6 +485,7 @@ class LoggingClient:
         settle_propagation(time.monotonic())
         return guardrail_id
 
+    @step("Delete the guardrail")
     def delete_guardrail(self, guardrail_id: str) -> None:
         _ = self.proxy.transport.delete(
             f"/guardrails/{guardrail_id}",
@@ -420,12 +494,15 @@ class LoggingClient:
             response_type=NoBody,
         )
 
+    @step("Add a deployment named {model_name} that calls {litellm_params.model}")
     def create_model(self, model_name: str, litellm_params: LiteLLMParamsBody) -> str:
         return self.proxy.create_model(model_name, litellm_params)
 
+    @step("Delete the deployment")
     def delete_model(self, model_id: str) -> None:
         self.proxy.delete_model(model_id)
 
+    @step('Send a /chat/completions request to {model} with the prompt "{text}"')
     def chat(self, key: str, model: str, text: str) -> ChatResponse:
         return unwrap(
             self.proxy.chat(
@@ -438,6 +515,7 @@ class LoggingClient:
             )
         )
 
+    @step('Send a /chat/completions request to {model} with stream={stream} and the prompt "{text}"')
     def chat_raw(
         self,
         key: str,
@@ -467,6 +545,7 @@ class LoggingClient:
             json=body,
         )
 
+    @step('Send a /v1/messages request to {model} with stream={stream} and the prompt "{text}"')
     def messages_raw(
         self, key: str, model: str, text: str, *, max_tokens: int = 16, stream: bool = False
     ) -> StreamingResponse:
@@ -480,13 +559,10 @@ class LoggingClient:
             stream=True if stream else None,
         )
         if stream:
-            return self.proxy.transport.stream(
-                "/v1/messages", headers=self.proxy.transport.bearer(key), json=body
-            )
-        return self.proxy.transport.send(
-            "/v1/messages", headers=self.proxy.transport.bearer(key), json=body
-        )
+            return self.proxy.transport.stream("/v1/messages", headers=self.proxy.transport.bearer(key), json=body)
+        return self.proxy.transport.send("/v1/messages", headers=self.proxy.transport.bearer(key), json=body)
 
+    @step('Send a /v1/responses request to {model} with stream={stream} and the prompt "{text}"')
     def responses_raw(
         self, key: str, model: str, text: str, *, max_output_tokens: int = 64, stream: bool = False
     ) -> StreamingResponse:
@@ -499,16 +575,14 @@ class LoggingClient:
             model=model, input=text, max_output_tokens=max_output_tokens, stream=True if stream else None
         )
         if stream:
-            return self.proxy.transport.stream(
-                "/v1/responses", headers=self.proxy.transport.bearer(key), json=body
-            )
-        return self.proxy.transport.send(
-            "/v1/responses", headers=self.proxy.transport.bearer(key), json=body
-        )
+            return self.proxy.transport.stream("/v1/responses", headers=self.proxy.transport.bearer(key), json=body)
+        return self.proxy.transport.send("/v1/responses", headers=self.proxy.transport.bearer(key), json=body)
 
+    @step("Scrape the Prometheus metrics from /metrics")
     def scrape_metrics(self) -> str:
         return self.proxy.probe("/metrics", params=NoBody()).body
 
+    @step("Wait for the key's spend log in /spend/logs")
     def poll_proxy_spend_for_key(
         self,
         key: str,
@@ -530,14 +604,13 @@ class LoggingClient:
                 return False
             return True
 
-        rows = self.proxy.poll_logs_for_key(
-            key, min_rows=1, predicate=lambda rs: any(_matches(r) for r in rs)
-        )
+        rows = self.proxy.poll_logs_for_key(key, min_rows=1, predicate=lambda rs: any(_matches(r) for r in rs))
         for row in rows:
             if _matches(row):
                 return row
         return None
 
+    @step("List observations from Langfuse")
     def list_langfuse_observations(
         self,
         creds: LangfuseCreds,
@@ -564,6 +637,7 @@ class LoggingClient:
             case _:
                 return []
 
+    @step("Look up the Langfuse generation for the key {key_alias}")
     def find_langfuse_observation(
         self,
         creds: LangfuseCreds,
@@ -582,6 +656,7 @@ class LoggingClient:
                 return obs
         return None
 
+    @step("Wait for the Langfuse generation for the key {key_alias}")
     def poll_langfuse_observation(
         self,
         creds: LangfuseCreds,
@@ -593,9 +668,7 @@ class LoggingClient:
         deadline = time.monotonic() + POLL_TIMEOUT
         last: LangfuseObservation | None = None
         while time.monotonic() < deadline:
-            last = self.find_langfuse_observation(
-                creds, key_alias=key_alias, prompt_marker=prompt_marker
-            )
+            last = self.find_langfuse_observation(creds, key_alias=key_alias, prompt_marker=prompt_marker)
             if last is not None:
                 cost = observation_spend(last)
                 if not require_positive_cost or (cost is not None and cost > 0):
@@ -603,6 +676,20 @@ class LoggingClient:
             time.sleep(POLL_INTERVAL)
         return last
 
+    @step("Wait for the OTel v2 Langfuse generation for the key {key_alias}")
+    def poll_langfuse_generation(
+        self, creds: LangfuseCreds, *, key_alias: str, from_start_time: str
+    ) -> LangfuseObservation | None:
+        """The OTel v2 generation the proxy exported for one key alias since from_start_time."""
+        deadline = time.monotonic() + POLL_TIMEOUT
+        while time.monotonic() < deadline:
+            for obs in self.list_langfuse_observations(creds, from_start_time=from_start_time):
+                if is_otel_v2_generation(obs, key_alias=key_alias):
+                    return obs
+            time.sleep(POLL_INTERVAL)
+        return None
+
+    @step("Wait for the Langfuse trace of the key {key_alias} and every observation in it")
     def poll_langfuse_trace_observations(
         self,
         creds: LangfuseCreds,
@@ -611,14 +698,13 @@ class LoggingClient:
         prompt_marker: str,
     ) -> list[LangfuseObservation]:
         """Generation plus any sibling/child observations (guardrail spans, etc.)."""
-        gen = self.poll_langfuse_observation(
-            creds, key_alias=key_alias, prompt_marker=prompt_marker
-        )
+        gen = self.poll_langfuse_observation(creds, key_alias=key_alias, prompt_marker=prompt_marker)
         if gen is None or not gen.trace_id:
             return [] if gen is None else [gen]
         return self.list_langfuse_observations(creds, trace_id=gen.trace_id) or [gen]
 
 
+@step("Retry the call until the fresh key stops answering 401")
 def first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> StreamingResponse:
     """First successful call on a fresh key. A fresh key may briefly 401 until
     the data plane's auth cache picks it up, so retry on 401 to a deadline; a
@@ -636,3 +722,16 @@ def first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> St
 
 def build_logging_client(proxy: ProxyClient) -> LoggingClient:
     return LoggingClient(proxy=proxy)
+
+
+@step("Read the proxy's callback list from /health/readiness/details")
+def readiness_details_body(client: LoggingClient) -> str:
+    """/health/readiness/details, tolerating the 503 it serves while the
+    ephemeral stack's DB leg blips: the recorded state the logging suites check
+    here is the callback list, which the body carries either way."""
+    result = client.proxy.probe("/health/readiness/details", params=NoBody())
+    db_blip = result.status_code == 503 and '"db":"disconnected"' in result.body
+    assert result.status_code == 200 or db_blip, (
+        f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
+    )
+    return result.body

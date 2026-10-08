@@ -42,18 +42,22 @@ describe("LicenseExpiryBannerView", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("shows a dismissible amber warning within 30 days", () => {
+  it("shows a dismissible warning within 30 days", () => {
     const { container } = render(<LicenseExpiryBannerView licenseInfo={licenseWith(daysFromNow(20))} />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-triangle-alert")).toBeInTheDocument();
     expect(screen.getByText(/expires in 20 days/)).toBeInTheDocument();
-    expect(container.querySelector(".ant-alert-warning")).toBeInTheDocument();
-    expect(screen.queryByRole("button")).toBeInTheDocument();
+    expect(screen.getByText(/Renew before it lapses to keep enterprise features/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /close/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "sales@berri.ai" })).toHaveAttribute("href", "mailto:sales@berri.ai");
   });
 
-  it("shows a non-dismissible red critical alert within 7 days", () => {
+  it("shows a non-dismissible critical alert within 7 days", () => {
     const { container } = render(<LicenseExpiryBannerView licenseInfo={licenseWith(daysFromNow(5))} />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-circle-alert")).toBeInTheDocument();
     expect(screen.getByText(/expires in 5 days/)).toBeInTheDocument();
-    expect(container.querySelector(".ant-alert-error")).toBeInTheDocument();
+    expect(screen.getByText(/Renew now to avoid losing enterprise features/)).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
@@ -62,18 +66,19 @@ describe("LicenseExpiryBannerView", () => {
     expect(screen.getByText(/expires today/)).toBeInTheDocument();
   });
 
-  it("shows a non-dismissible red expired alert stating features are disabled", () => {
+  it("shows a non-dismissible expired alert stating features are disabled", () => {
     const { container } = render(<LicenseExpiryBannerView licenseInfo={licenseWith(daysFromNow(-3))} />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(container.querySelector(".lucide-circle-alert")).toBeInTheDocument();
     expect(screen.getByText(/expired on/)).toBeInTheDocument();
     expect(screen.getByText(/features are now disabled/i)).toBeInTheDocument();
-    expect(container.querySelector(".ant-alert-error")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("hides the warning after dismissal and stays hidden within the session", () => {
     const expiration = daysFromNow(20);
     const { unmount } = render(<LicenseExpiryBannerView licenseInfo={licenseWith(expiration)} />);
-    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
     expect(screen.queryByText(/expires in 20 days/)).not.toBeInTheDocument();
 
     unmount();

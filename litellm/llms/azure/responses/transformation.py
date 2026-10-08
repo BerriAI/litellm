@@ -7,6 +7,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
@@ -33,6 +34,14 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.AZURE
 
+    @staticmethod
+    def _supports_reasoning_effort_none(model: str) -> bool:
+        return AzureOpenAIGPT5Config.supports_reasoning_effort_level(model, "none")
+
+    @staticmethod
+    def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
+        return AzureOpenAIGPT5Config.effort_resolves_to_none(model, effort)
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Azure Responses API does not support context_management (compaction).
@@ -41,15 +50,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return [param for param in base_supported_params if param not in self.AZURE_UNSUPPORTED_PARAMS]
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
-        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
+        return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_stripped_model_name(self, model: str) -> str:
-        # if "responses/" is in the model name, remove it
-        if "responses/" in model:
-            model = model.replace("responses/", "")
-        if "o_series" in model:
-            model = model.replace("o_series/", "")
-        return model
+        return model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
 
     def _handle_reasoning_item(self, item: dict[str, Any]) -> dict[str, Any]:
         """
@@ -155,7 +159,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if "tools" in response_api_optional_request_params and isinstance(
             response_api_optional_request_params["tools"], list
         ):
-            new_tools: Final[list[dict[str, Any]]] = []
+            new_tools: Final[list[dict[str, object]]] = []
             for tool in response_api_optional_request_params["tools"]:
                 if isinstance(tool, dict) and "function" in tool:
                     new_tool: dict[str, Any] = deepcopy(tool)
@@ -197,7 +201,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 
-        return BaseAzureLLM._get_base_azure_url(
+        return BaseAzureLLM.get_base_azure_url(
             api_base=api_base,
             litellm_params=litellm_params,
             route="/openai/responses",
@@ -323,7 +327,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         url: Final = self._construct_url_for_response_id_in_path(
             api_base=api_base, response_id=response_id, path_suffix="/input_items"
         )
-        params: Final[dict[str, Any]] = {}
+        params: Final[dict[str, str | int]] = {}
         if after is not None:
             params["after"] = after
         if before is not None:

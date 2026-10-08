@@ -1,6 +1,5 @@
 "use client";
 
-import { UploadProps } from "antd/es/upload";
 import { Plus } from "lucide-react";
 import { useState } from "react";
 
@@ -17,28 +16,12 @@ import { stripMaskedSecrets } from "@/utils/maskedSecretUtils";
 import { isProxyAdminRole } from "@/utils/roles";
 
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import CredentialModal from "./CredentialModal";
 import CredentialsTable from "./CredentialsTable";
+import { buildCredential, withoutRestrictedFields } from "./credential_form_helpers";
 
-interface CredentialsPanelProps {
-  uploadProps: UploadProps;
-}
-
-const restrictedFields = ["credential_name", "custom_llm_provider"];
-
-const buildCredential = (values: Record<string, unknown>, credentialValues: Record<string, unknown>) => ({
-  credential_name: values.credential_name as string,
-  credential_values: credentialValues,
-  credential_info: {
-    custom_llm_provider: values.custom_llm_provider as string,
-  },
-});
-
-const withoutRestrictedFields = (values: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(values).filter(([key]) => !restrictedFields.includes(key)));
-
-export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps) {
+export default function CredentialsPanel() {
   const { accessToken, userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see credentials, do not modify.
   const canModifyCredentials = isProxyAdminRole(userRole ?? "");
@@ -52,18 +35,21 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCredentialDeleting, setIsCredentialDeleting] = useState(false);
 
-  const handleUpdateCredential = async (values: Record<string, unknown>) => {
+  const handleUpdateCredential = async (values: Record<string, unknown>, valuesToDelete: readonly string[] = []) => {
     if (!accessToken) {
       return;
     }
     try {
       const newCredential = buildCredential(values, stripMaskedSecrets(withoutRestrictedFields(values)));
-      await credentialUpdateCall(accessToken, values.credential_name as string, newCredential);
-      NotificationsManager.success("Credential updated successfully");
+      await credentialUpdateCall(accessToken, values.credential_name as string, {
+        ...newCredential,
+        ...(valuesToDelete.length > 0 ? { credential_values_to_delete: valuesToDelete } : {}),
+      });
+      toast.success("Credential updated successfully");
       setIsUpdateModalOpen(false);
       await refetchCredentials();
     } catch (error) {
-      NotificationsManager.error("Failed to update credential");
+      toast.error("Failed to update credential");
     }
   };
 
@@ -74,11 +60,11 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
     try {
       const newCredential = buildCredential(values, withoutRestrictedFields(values));
       await credentialCreateCall(accessToken, newCredential);
-      NotificationsManager.success("Credential added successfully");
+      toast.success("Credential added successfully");
       setIsAddModalOpen(false);
       await refetchCredentials();
     } catch (error) {
-      NotificationsManager.error("Failed to add credential");
+      toast.error("Failed to add credential");
     }
   };
 
@@ -89,10 +75,10 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
     setIsCredentialDeleting(true);
     try {
       await credentialDeleteCall(accessToken, credentialToDelete.credential_name);
-      NotificationsManager.success("Credential deleted successfully");
+      toast.success("Credential deleted successfully");
       await refetchCredentials();
     } catch (error) {
-      NotificationsManager.error("Failed to delete credential");
+      toast.error("Failed to delete credential");
     } finally {
       setCredentialToDelete(null);
       setIsDeleteModalOpen(false);
@@ -143,7 +129,6 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
           onSubmit={handleAddCredential}
           open={isAddModalOpen}
           onCancel={() => setIsAddModalOpen(false)}
-          uploadProps={uploadProps}
         />
       )}
       {isUpdateModalOpen && (
@@ -152,7 +137,6 @@ export default function CredentialsPanel({ uploadProps }: CredentialsPanelProps)
           open={isUpdateModalOpen}
           existingCredential={selectedCredential}
           onSubmit={handleUpdateCredential}
-          uploadProps={uploadProps}
           onCancel={() => setIsUpdateModalOpen(false)}
         />
       )}

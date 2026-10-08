@@ -1,7 +1,9 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -11,14 +13,16 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
 )
-from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
+from litellm.llms.xai.cost_calculator import (
+    apply_server_side_tool_usage_details_to_usage,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     Choices,
     ModelResponse,
     ModelResponseStream,
-    PromptTokensDetailsWrapper,
     Usage,
 )
 
@@ -26,6 +30,15 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+
+_RESPONSE_BODY: Final = TypeAdapter(dict[object, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _usage_restated_from_xai_ticks(usage: Usage | None) -> Usage | None:
+    reported_cost: Final = xai_reported_cost_in_usd(getattr(usage, "cost_in_usd_ticks", None))
+    if usage is None or reported_cost is None:
+        return None
+    return usage.model_copy(update=MappingProxyType({"cost": reported_cost}))
 
 
 class XAIChatConfig(OpenAIGPTConfig):
@@ -39,6 +52,13 @@ class XAIChatConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def validate_environment(
         self,
@@ -108,6 +128,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         base_openai_params: Final = [
             "logit_bias",
             "logprobs",
+            "max_completion_tokens",
             "max_tokens",
             "n",
             "parallel_tool_calls",
@@ -153,6 +174,12 @@ class XAIChatConfig(OpenAIGPTConfig):
             return False
         return True
 
+    def supports_stop_reason(
+        self,
+        model: str,
+    ) -> bool:
+        return self._supports_stop_reason(model)
+
     def _supports_frequency_penalty(self, model: str) -> bool:
         """
         From manual testing grok-4 does not support `frequency_penalty`
@@ -194,7 +221,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "XAIChatCompletionStreamingHandler":
         return XAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -209,13 +236,17 @@ class XAIChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        """
-        Handle https://github.com/BerriAI/litellm/issues/9720
+        """Handle https://github.com/BerriAI/litellm/issues/9720"""
+        if "web_search_options" in optional_params:
+            verbose_logger.warning(
+                "XAI no longer supports web search on /chat/completions (Live Search is deprecated). "
+                "Dropping 'web_search_options'. Use the Responses API for XAI web search."
+            )
 
-        Filter out 'name' from messages
-        """
-        messages = strip_name_from_messages(messages)
-        return super().transform_request(model, messages, optional_params, litellm_params, headers)
+        chat_params: Final = {key: value for key, value in optional_params.items() if key != "web_search_options"}
+        return super().transform_request(
+            model, strip_name_from_messages(messages), chat_params, litellm_params, headers
+        )
 
     @staticmethod
     def _fix_choice_finish_reason_for_tool_calls(choice: Choices) -> None:
@@ -248,7 +279,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         XAI API returns empty string for finish_reason when using tools,
         so we need to fix this after the standard OpenAI transformation.
 
-        Also handles X.AI web search usage tracking by extracting num_sources_used.
+        Also handles X.AI web search usage tracking.
         """
 
         # First, let the parent class handle the standard transformation
@@ -274,17 +305,20 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         # Handle X.AI web search usage tracking
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _RESPONSE_BODY.validate_python(raw_response.json())
             self._enhance_usage_with_xai_web_search_fields(response, raw_response_json)
         except Exception as e:
             verbose_logger.debug("Error extracting X.AI web search usage: %s", e)
 
-        self._fold_reasoning_tokens_into_completion(response)
+        self.fold_reasoning_tokens_into_completion(response)
         self._normalize_openai_compatible_usage_totals(getattr(response, "usage", None))
+        restated_usage: Final = _usage_restated_from_xai_ticks(getattr(response, "usage", None))
+        if restated_usage is not None:
+            response.usage = restated_usage
         return response
 
     @staticmethod
-    def _fold_reasoning_tokens_into_completion(
+    def fold_reasoning_tokens_into_completion(
         target: ModelResponse | Usage | dict[str, Any] | None,
     ) -> None:
         """Reconcile xAI Usage to the OpenAI invariant.
@@ -351,25 +385,20 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     def _enhance_usage_with_xai_web_search_fields(self, model_response: ModelResponse, raw_response_json: dict) -> None:
         """
-        Extract num_sources_used from X.AI response and map it to web_search_requests.
+        Copy usage.server_side_tool_usage_details from the provider usage block
+        onto model_response.usage for tool cost calculation.
         """
         if not hasattr(model_response, "usage") or model_response.usage is None:
             return
 
         usage: Final[Usage] = model_response.usage
-        num_sources_used = None
-        response_usage: Final = raw_response_json.get("usage", {})
-        if isinstance(response_usage, dict) and "num_sources_used" in response_usage:
-            num_sources_used = response_usage.get("num_sources_used")
-
-        # Map num_sources_used to web_search_requests for cost detection
-        if num_sources_used is not None and num_sources_used > 0:
-            if usage.prompt_tokens_details is None:
-                usage.prompt_tokens_details = PromptTokensDetailsWrapper()
-
-            usage.prompt_tokens_details.web_search_requests = int(num_sources_used)
-            setattr(usage, "num_sources_used", int(num_sources_used))
-            verbose_logger.debug("X.AI web search sources used: %s", num_sources_used)
+        response_usage: Final = raw_response_json.get("usage")
+        if not isinstance(response_usage, dict):
+            return
+        details: Final = response_usage.get("server_side_tool_usage_details")
+        if isinstance(details, Mapping):
+            apply_server_side_tool_usage_details_to_usage(usage, details)
+            verbose_logger.debug("X.AI server_side_tool_usage_details: %s", details)
 
     @staticmethod
     def _normalize_openai_compatible_usage_totals(
@@ -389,6 +418,13 @@ class XAIChatConfig(OpenAIGPTConfig):
         expected_total = prompt_tokens + completion_tokens
         if int(usage.total_tokens or 0) < expected_total:
             usage.total_tokens = expected_total
+
+    @classmethod
+    def normalize_openai_compatible_usage_totals(
+        cls,
+        usage: Usage | dict[str, object] | None,  # mutable-ok: mirrors override contract
+    ) -> None:
+        return cls._normalize_openai_compatible_usage_totals(usage)
 
 
 class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
@@ -411,7 +447,11 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
             chunk["choices"] = [{"index": 0, "delta": {}, "finish_reason": None}]
 
         if "usage" in chunk and chunk["usage"] is not None:
-            XAIChatConfig._fold_reasoning_tokens_into_completion(chunk["usage"])
-            XAIChatConfig._normalize_openai_compatible_usage_totals(chunk["usage"])
+            XAIChatConfig.fold_reasoning_tokens_into_completion(chunk["usage"])
+            XAIChatConfig.normalize_openai_compatible_usage_totals(chunk["usage"])
 
-        return super().chunk_parser(chunk)
+        parsed_chunk: Final = super().chunk_parser(chunk)
+        restated_usage: Final = _usage_restated_from_xai_ticks(getattr(parsed_chunk, "usage", None))
+        if restated_usage is not None:
+            parsed_chunk.usage = restated_usage
+        return parsed_chunk

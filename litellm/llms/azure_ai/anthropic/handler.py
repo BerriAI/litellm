@@ -9,6 +9,7 @@ from typing import Final
 
 import httpx
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -40,7 +41,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
         print_verbose: Callable,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
@@ -176,9 +177,9 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+                    from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-                    client = _get_httpx_client(params={"timeout": timeout})
+                    client = get_httpx_client(params={"timeout": timeout})
                 else:
                     client = client
 
@@ -195,7 +196,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                     status_code: Final = getattr(e, "status_code", 500)
                     error_headers = getattr(e, "headers", None)
                     error_text = getattr(e, "text", str(e))
-                    error_response: Final = getattr(e, "response", None)
+                    error_response: Final[object] = getattr(e, "response", None)
                     if error_headers is None and error_response:
                         error_headers = getattr(error_response, "headers", None)
                     if error_response and hasattr(error_response, "text"):

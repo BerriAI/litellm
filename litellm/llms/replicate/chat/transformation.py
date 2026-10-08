@@ -1,6 +1,8 @@
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
@@ -20,10 +22,13 @@ from ..common_utils import ReplicateError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+_TEXTS: Final = TypeAdapter(Iterable[str], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class ReplicateConfig(BaseConfig):
@@ -235,7 +240,7 @@ class ReplicateConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -252,7 +257,7 @@ class ReplicateConfig(BaseConfig):
                 message=f"LiteLLM Error - prediction not succeeded - {raw_response_json}",
                 headers=raw_response.headers,
             )
-        outputs: Final = raw_response_json.get("output", [])
+        outputs: Final = _TEXTS.validate_python(raw_response_json.get("output", []))
         response_str = "".join(outputs)
         if len(response_str) == 0:  # edge case, where result from replicate is empty
             response_str = " "

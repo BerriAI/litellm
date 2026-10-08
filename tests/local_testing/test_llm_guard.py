@@ -9,12 +9,10 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
+from fastapi import HTTPException
+
 import litellm
 from litellm_enterprise.enterprise_callbacks.llm_guard import _ENTERPRISE_LLMGuard
 from litellm import Router, mock_completion
@@ -42,8 +40,8 @@ async def test_llm_guard_valid_response():
         mock_testing=True, mock_redacted_text=input_a_anonymizer_results
     )
 
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -81,7 +79,7 @@ async def test_llm_guard_sanitizes_multimodal_and_input():
             "scanners": {"Regex": 0.0},
         },
     )
-    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-12345"))
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
 
     image_part = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
     data = {
@@ -123,12 +121,12 @@ async def test_llm_guard_error_raising():
         mock_testing=True, mock_redacted_text=input_b_anonymizer_results
     )
 
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
-    try:
+    with pytest.raises(HTTPException) as exc_info:
         await llm_guard.async_moderation_hook(
             data={
                 "messages": [
@@ -141,9 +139,9 @@ async def test_llm_guard_error_raising():
             user_api_key_dict=user_api_key_dict,
             call_type="completion",
         )
-        pytest.fail(f"Should have failed - {str(e)}")
-    except Exception as e:
-        pass
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "Violated content safety policy"}
 
 
 def test_llm_guard_key_specific_mode():
@@ -154,7 +152,7 @@ def test_llm_guard_key_specific_mode():
 
     llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True)
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     # NOT ENABLED
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key,
@@ -189,7 +187,7 @@ def test_llm_guard_request_specific_mode():
 
     llm_guard = _ENTERPRISE_LLMGuard(mock_testing=True)
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     # NOT ENABLED
     user_api_key_dict = UserAPIKeyAuth(
         api_key=_api_key,

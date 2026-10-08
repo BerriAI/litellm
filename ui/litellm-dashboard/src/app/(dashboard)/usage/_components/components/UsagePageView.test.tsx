@@ -1,14 +1,46 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
+import { processActivityData } from "@/components/activity_metrics";
 import type { Organization } from "@/components/networking";
+import type { ModelActivityData } from "@/components/UsagePage/types";
 import * as networking from "@/components/networking";
+import { STACKED_USAGE_PALETTE } from "@/components/shared/charts";
+import { OTHER_COLOR } from "./overview/overviewData";
 import UsagePage from "./UsagePageView";
+
+// The Overview tab. The Key Activity tab stays mounted and carries its own spend-derived totals,
+// so assertions about the overview's request tiles are scoped here rather than to the whole page.
+const overview = () => within(screen.getByRole("tabpanel", { name: "Overview" }));
+
+// The Total Requests stat cell: its label, the count, and the "N ok / N failed" line beneath it.
+const totalRequestsCell = (): HTMLElement => {
+  const cell = overview().getByText("Total Requests").parentElement?.parentElement;
+  expect(cell).toBeTruthy();
+  return cell as HTMLElement;
+};
+
+const modelActivity = (label: string): ModelActivityData => ({
+  label,
+  total_requests: 1,
+  total_successful_requests: 1,
+  total_failed_requests: 0,
+  total_cache_read_input_tokens: 0,
+  total_cache_creation_input_tokens: 0,
+  total_tokens: 10,
+  prompt_tokens: 5,
+  completion_tokens: 5,
+  total_spend: 0.01,
+  top_models: [],
+  daily_data: [],
+});
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
@@ -23,18 +55,25 @@ beforeAll(() => {
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
-  userDailyActivityCall: vi.fn(),
-  userDailyActivityAggregatedCall: vi.fn(),
+  dailyActivityAggregatedCall: vi.fn(),
+  dailyActivityKeyPageCall: vi.fn(),
+  dailyActivityKeySearchCall: vi.fn(),
+  dailyActivityModelTopKeysCall: vi.fn(),
+  dailyActivityExportCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
 
 // Mock child components to simplify testing
 vi.mock("@/components/activity_metrics", () => ({
-  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: { __source?: string } }) => (
-    <div>{`activity-source:${modelMetrics?.__source ?? "none"}`}</div>
+  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: Record<string, { label: string }> }) => (
+    <div>
+      {Object.entries(modelMetrics ?? {}).map(([model, metrics]) => (
+        <span key={model}>{metrics.label}</span>
+      ))}
+    </div>
   ),
-  processActivityData: (_data: unknown, key: string) => ({ __source: key }),
+  processActivityData: vi.fn(),
 }));
 
 vi.mock("@/components/view_user_spend", () => ({
@@ -46,7 +85,11 @@ vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
 }));
 
 vi.mock("./EntityUsage/EntityUsage", () => ({
-  default: () => <div>Entity Usage</div>,
+  default: ({ entityType, entityList }: { entityType: string; entityList: unknown }) => (
+    <div data-testid="entity-usage" data-entity-type={entityType} data-entity-list={JSON.stringify(entityList ?? null)}>
+      Entity Usage
+    </div>
+  ),
   EntityList: [],
 }));
 
@@ -60,22 +103,32 @@ vi.mock("./EndpointUsage/EndpointUsage", () => ({
 
 vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
   const React = await import("react");
-  const UsageViewSelect = ({ value, onChange, canViewTagUsage = false }: any) => {
+  const UsageViewSelect = ({
+    value,
+    onChange,
+    canViewTagUsage = false,
+  }: {
+    value: string;
+    onChange?: (value: string) => void;
+    canViewTagUsage?: boolean;
+  }) => {
     const tagOption = canViewTagUsage ? React.createElement("option", { value: "tag" }, "Tag Usage") : null;
+    const selectProps = {
+      value,
+      onChange: (e: React.ChangeEvent<HTMLSelectElement>) => onChange?.(e.target.value),
+      role: "combobox",
+      "data-testid": "usage-view-select",
+    };
     return React.createElement(
       "select",
-      {
-        value,
-        onChange: (e: any) => onChange?.(e.target.value),
-        role: "combobox",
-        "data-testid": "usage-view-select",
-      },
+      selectProps,
       React.createElement("option", { value: "global" }, "Global Usage"),
       React.createElement("option", { value: "team" }, "Team Usage"),
       React.createElement("option", { value: "organization" }, "Organization Usage"),
       React.createElement("option", { value: "customer" }, "Customer Usage"),
       tagOption,
       React.createElement("option", { value: "agent" }, "Agent Usage"),
+      React.createElement("option", { value: "user" }, "User Usage"),
       React.createElement("option", { value: "user-agent-activity" }, "User Agent Activity"),
     );
   };
@@ -135,218 +188,24 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({
+  __esModule: true,
+  default: vi.fn(() => false),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
   useCurrentUser: vi.fn(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
   useInfiniteUsers: vi.fn(),
+  useUserLookup: vi.fn(() => ({ data: null })),
 }));
 
-vi.mock("antd", async (importOriginal) => {
-  const React = await import("react");
-  const actual = await importOriginal<typeof import("antd")>();
-
-  function Select(props: any) {
-    const { value, onChange, options, ...rest } = props;
-    return React.createElement(
-      "select",
-      {
-        ...rest,
-        value,
-        onChange: (e: any) => onChange?.(e.target.value),
-        role: "combobox",
-      },
-      options?.map((opt: any) => React.createElement("option", { key: opt.value, value: opt.value }, opt.label)),
-    );
-  }
-  (Select as any).displayName = "AntdSelect";
-
-  function Alert(props: any) {
-    const { message, description, type, closable, onClose, ...rest } = props;
-    return React.createElement(
-      "div",
-      { ...rest, "data-testid": "antd-alert", "data-type": type },
-      message && React.createElement("div", null, message),
-      description && React.createElement("div", null, description),
-      closable && React.createElement("button", { onClick: onClose, "aria-label": "Close" }, "×"),
-    );
-  }
-  (Alert as any).displayName = "AntdAlert";
-
-  function Badge(props: any) {
-    const { count, color, children, ...rest } = props;
-    return React.createElement(
-      "div",
-      { ...rest, "data-testid": "antd-badge", "data-color": color },
-      count && React.createElement("span", { "data-testid": "antd-badge-count" }, count),
-      children,
-    );
-  }
-  (Badge as any).displayName = "AntdBadge";
-
-  function Table({ columns, dataSource, ...rest }: any) {
-    return React.createElement(
-      "div",
-      { ...rest, "data-testid": "antd-table" },
-      columns?.map((col: any) =>
-        React.createElement("div", { key: col.key, "data-testid": `column-${col.key}` }, col.title),
-      ),
-      dataSource?.map((row: any) =>
-        React.createElement(
-          "div",
-          { key: row.key, "data-testid": `row-${row.key}` },
-          columns?.map((col: any) => {
-            const value = col.render ? col.render(row[col.dataIndex], row) : row[col.dataIndex];
-            return React.createElement("div", { key: col.key }, value);
-          }),
-        ),
-      ),
-    );
-  }
-  (Table as any).displayName = "Table";
-
-  function Segmented(props: any) {
-    const { value, onChange, options, ...rest } = props;
-    return React.createElement(
-      "div",
-      { ...rest, "data-testid": "antd-segmented" },
-      options?.map((opt: any) =>
-        React.createElement(
-          "button",
-          {
-            key: opt.value,
-            onClick: () => onChange?.(opt.value),
-            "data-selected": value === opt.value,
-          },
-          opt.label,
-        ),
-      ),
-    );
-  }
-  (Segmented as any).displayName = "AntdSegmented";
-
-  function Tooltip(props: any) {
-    const { title, children, ...rest } = props;
-    return React.createElement("div", { ...rest, "data-testid": "antd-tooltip", title }, children);
-  }
-  (Tooltip as any).displayName = "AntdTooltip";
-
-  return {
-    ...actual,
-    Select,
-    Alert,
-    Badge,
-    Table,
-    Segmented,
-    Tooltip,
-  };
-});
-
-vi.mock("@ant-design/icons", async () => {
-  const React = await import("react");
-
-  function Icon() {
-    return React.createElement("span");
-  }
-
-  function LoadingOutlined(props: any) {
-    return React.createElement("span", { "data-testid": "loading-icon", ...props });
-  }
-
-  return {
-    GlobalOutlined: Icon,
-    BankOutlined: Icon,
-    TeamOutlined: Icon,
-    ShoppingCartOutlined: Icon,
-    TagsOutlined: Icon,
-    RobotOutlined: Icon,
-    LineChartOutlined: Icon,
-    BarChartOutlined: Icon,
-    ClockCircleOutlined: Icon,
-    CalendarOutlined: Icon,
-    InfoCircleOutlined: Icon,
-    UserOutlined: Icon,
-    DownOutlined: Icon,
-    RightOutlined: Icon,
-    ExportOutlined: Icon,
-    LoadingOutlined,
-  };
-});
-
-// Mock Tremor components
-vi.mock("@tremor/react", async () => {
-  const React = await import("react");
-  const actual = await import("@tremor/react");
-
-  function TabGroup({ children }: any) {
-    return React.createElement("div", { "data-testid": "tremor-tab-group" }, children);
-  }
-
-  function TabList({ children }: any) {
-    return React.createElement("div", { "data-testid": "tremor-tab-list" }, children);
-  }
-
-  function Tab({ children, ...props }: any) {
-    return React.createElement("button", { ...props, "data-testid": "tremor-tab" }, children);
-  }
-
-  function TabPanels({ children }: any) {
-    return React.createElement("div", { "data-testid": "tremor-tab-panels" }, children);
-  }
-
-  function TabPanel({ children }: any) {
-    return React.createElement("div", { "data-testid": "tremor-tab-panel" }, children);
-  }
-
-  function Card({ children, ...props }: any) {
-    return React.createElement("div", { ...props, "data-testid": "tremor-card" }, children);
-  }
-
-  function Grid({ children, numItems, ...props }: any) {
-    return React.createElement("div", { ...props, "data-testid": "tremor-grid" }, children);
-  }
-
-  function Col({ children, numColSpan, ...props }: any) {
-    return React.createElement("div", { ...props, "data-testid": "tremor-col" }, children);
-  }
-
-  function Title({ children, ...props }: any) {
-    return React.createElement("h2", { ...props, "data-testid": "tremor-title" }, children);
-  }
-
-  function Text({ children, ...props }: any) {
-    return React.createElement("p", { ...props, "data-testid": "tremor-text" }, children);
-  }
-
-  function Button({ children, icon, onClick, ...props }: any) {
-    return React.createElement(
-      "button",
-      { ...props, onClick, "data-testid": "tremor-button" },
-      icon && React.createElement("span", { "data-testid": "tremor-button-icon" }),
-      children,
-    );
-  }
-
-  return {
-    ...actual,
-    TabGroup,
-    TabList,
-    Tab,
-    TabPanels,
-    TabPanel,
-    Card,
-    Grid,
-    Col,
-    Title,
-    Text,
-    Button,
-  };
-});
-
 describe("UsagePage", () => {
-  const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
-  const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
+  const mockUserDailyActivityAggregatedCall = vi.fn();
+  const mockDailyActivityAggregatedCall = vi.mocked(networking.dailyActivityAggregatedCall);
+  const mockDailyActivityKeyPageCall = vi.mocked(networking.dailyActivityKeyPageCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
   const mockUseCustomers = vi.mocked(useCustomers);
@@ -502,6 +361,8 @@ describe("UsagePage", () => {
     userId: "user-123",
     userEmail: "test@example.com",
     userRole: "Internal User",
+    userRoleLabel: "Internal User",
+    isViewOnly: false,
     premiumUser: true,
     disabledPersonalKeyCreation: false,
     showSSOBanner: false,
@@ -539,6 +400,10 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
+    vi.mocked(processActivityData).mockReset();
+    vi.mocked(processActivityData).mockImplementation((_data, key) => ({
+      [key]: modelActivity(`activity-source:${key}`),
+    }));
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
       isAuthorized: true,
@@ -560,7 +425,17 @@ describe("UsagePage", () => {
       error: null,
     } as any);
     mockUserDailyActivityAggregatedCall.mockClear();
-    mockUserDailyActivityCall.mockClear();
+    mockDailyActivityAggregatedCall.mockReset();
+    mockDailyActivityKeyPageCall.mockReset();
+    mockDailyActivityKeyPageCall.mockResolvedValue({
+      api_keys: [],
+      total_api_keys: 0,
+      offset: 0,
+      limit: 50,
+    });
+    mockDailyActivityAggregatedCall.mockImplementation((entity: string, request: unknown) =>
+      entity === "user" ? mockUserDailyActivityAggregatedCall(request) : Promise.resolve({ results: [], metadata: {} }),
+    );
     mockTagListCall.mockClear();
     mockGatewayDailyActivityCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
@@ -608,20 +483,19 @@ describe("UsagePage", () => {
     });
 
     // Check that key metrics are displayed
-    const totalRequestElements = screen.getAllByText("Total Requests");
+    const totalRequestElements = overview().getAllByText("Total Requests");
     expect(totalRequestElements.length).toBeGreaterThan(0);
-    expect(screen.getByText("1,500")).toBeInTheDocument();
-    const successfulRequestLabelElements = screen.getAllByText("Successful Requests");
-    expect(successfulRequestLabelElements.length).toBeGreaterThan(0);
-    // Successful and Failed Requests both read the gateway counter, not the
-    // spend-derived 1,450 / 50 that the same payload carries for the per-key and
-    // per-model breakdowns. They must share a source, or the tiles contradict the
-    // endpoint breakdown chart below them.
     await waitFor(() => {
-      expect(screen.getAllByText("424,242").length).toBeGreaterThan(0);
+      expect(overview().getAllByText("424,242").length).toBeGreaterThan(0);
     });
-    expect(screen.getAllByText("909").length).toBeGreaterThan(0);
-    expect(screen.queryByText("1,450")).not.toBeInTheDocument();
+    expect(overview().getAllByText("909").length).toBeGreaterThan(0);
+    expect(overview().getByText("425,151")).toBeInTheDocument();
+    // Successful and failed counts now sit under Total Requests rather than in their own tiles.
+    expect(totalRequestsCell()).toHaveTextContent("425,151");
+    expect(totalRequestsCell()).toHaveTextContent("424,242 ok");
+    expect(totalRequestsCell()).toHaveTextContent("909 failed");
+    expect(overview().queryByText("1,500")).not.toBeInTheDocument();
+    expect(overview().queryByText("1,450")).not.toBeInTheDocument();
   });
 
   it("should stop showing the previous range's totals while a new range is in flight", async () => {
@@ -639,9 +513,11 @@ describe("UsagePage", () => {
     );
 
     renderWithProviders(<UsagePage {...defaultProps} />);
+    // Total Tokens reads compact (75K); the exact count stays on hover.
     await waitFor(() => {
-      expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+      expect(overview().getAllByText("75K").length).toBeGreaterThan(0);
     });
+    expect(overview().getByTitle("75,000 tokens")).toHaveTextContent("75K");
 
     await act(async () => {
       fireEvent.click(screen.getByTestId("pick-a-different-range"));
@@ -650,14 +526,42 @@ describe("UsagePage", () => {
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
     });
-    expect(screen.queryByText("1,500")).not.toBeInTheDocument();
+    expect(overview().queryByText("75K")).not.toBeInTheDocument();
+    expect(overview().queryByText("$0.00")).not.toBeInTheDocument();
+    expect(overview().getByText("Total Tokens")).toBeInTheDocument();
+    expect(await overview().findByText("425,151")).toBeInTheDocument();
+    // The Total Tokens stat (label, value and hint) must hold no number while its range is in flight.
+    expect(overview().getByText("Total Tokens").parentElement).not.toHaveTextContent(/\d/);
+    expect(overview().queryByText("$0.0000")).not.toBeInTheDocument();
 
     await act(async () => {
       releaseSecondFetch();
     });
     await waitFor(() => {
-      expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
+      expect(overview().getAllByText("75K").length).toBeGreaterThan(0);
     });
+    expect(overview().getByText("Total Tokens")).toBeInTheDocument();
+    expect(overview().getByText("$0.0838")).toBeInTheDocument();
+  });
+
+  it("loads key pages separately from the aggregate and refreshes them when the range changes", async () => {
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+    fireEvent.click(screen.getByText("Key Activity"));
+    await waitFor(() => {
+      expect(mockDailyActivityKeyPageCall).toHaveBeenCalledWith("user", expect.any(Object), 0, 50);
+    });
+    expect(mockUserDailyActivityAggregatedCall.mock.lastCall?.[0]).not.toHaveProperty("apiKeyLimit");
+    const pageCallsBeforeRangeChange = mockDailyActivityKeyPageCall.mock.calls.length;
+    fireEvent.click(screen.getByTestId("pick-a-different-range"));
+
+    await waitFor(() => {
+      expect(mockDailyActivityKeyPageCall.mock.calls.length).toBeGreaterThan(pageCallsBeforeRangeChange);
+    });
+    expect(mockUserDailyActivityAggregatedCall.mock.lastCall?.[0]).not.toHaveProperty("apiKeyLimit");
   });
 
   it("should fall back to the spend-derived count when the gateway endpoint is unavailable", async () => {
@@ -669,10 +573,15 @@ describe("UsagePage", () => {
       expect(mockGatewayDailyActivityCall).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(screen.getAllByText("1,450").length).toBeGreaterThan(0);
+      expect(overview().getAllByText("1,450").length).toBeGreaterThan(0);
     });
+    expect(overview().getByText("1,500")).toBeInTheDocument();
+    expect(totalRequestsCell()).toHaveTextContent("1,500");
+    expect(totalRequestsCell()).toHaveTextContent("1,450 ok");
+    expect(totalRequestsCell()).toHaveTextContent("50 failed");
     expect(screen.queryByText("424,242")).not.toBeInTheDocument();
     expect(screen.queryByText("909")).not.toBeInTheDocument();
+    expect(screen.queryByText("425,151")).not.toBeInTheDocument();
     expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
   });
 
@@ -685,6 +594,9 @@ describe("UsagePage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
     expect(mockGatewayDailyActivityCall).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(totalRequestsCell()).toHaveTextContent("1,500");
+    });
     expect(screen.queryByText("424,242")).not.toBeInTheDocument();
     expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
   });
@@ -699,19 +611,20 @@ describe("UsagePage", () => {
     // Check for usage metrics cards
     const totalRequestElements = screen.getAllByText("Total Requests");
     expect(totalRequestElements.length).toBeGreaterThan(0);
-    const successfulRequestElements = screen.getAllByText("Successful Requests");
-    expect(successfulRequestElements.length).toBeGreaterThan(0);
-    const failedRequestElements = screen.getAllByText("Failed Requests");
-    expect(failedRequestElements.length).toBeGreaterThan(0);
+    // Successful and failed counts now sit under Total Requests rather than in their own tiles.
+    await waitFor(() => {
+      expect(totalRequestsCell()).toHaveTextContent(/\d+ ok/);
+    });
+    expect(totalRequestsCell()).toHaveTextContent(/\d+ failed/);
     const totalTokensElements = screen.getAllByText("Total Tokens");
     expect(totalTokensElements.length).toBeGreaterThan(0);
 
-    // Check for chart titles (these are in the Cost tab)
-    expect(screen.getByText("Daily Spend")).toBeInTheDocument();
+    // Check for chart titles (these are in the Overview tab)
+    expect(screen.getByText("Top models")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
 
-  it("should render the daily spend and top models charts with cyan bars", async () => {
+  it("should render the top models chart stacked in the shared usage palette", async () => {
     const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
@@ -727,14 +640,15 @@ describe("UsagePage", () => {
       );
     };
 
+    // One day stacked as the top model (gpt-4) over the "Other" remainder of that day's spend.
     await waitFor(() => {
       expect(spendBars()).toHaveLength(2);
     });
 
     const fills = new Set(spendBars().map((rect) => rect.getAttribute("fill")));
-    expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+    expect(fills).toEqual(new Set([STACKED_USAGE_PALETTE[0], OTHER_COLOR]));
 
-    expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Jan 1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
   });
 
@@ -746,7 +660,7 @@ describe("UsagePage", () => {
     });
 
     // Default view should show Global Usage (for admin)
-    expect(screen.getByText("Daily Spend")).toBeInTheDocument();
+    expect(screen.getByText("Top models")).toBeInTheDocument();
 
     // Switch to Team Usage view
     const usageSelect = screen.getByTestId("usage-view-select");
@@ -770,6 +684,66 @@ describe("UsagePage", () => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
+  });
+
+  it("should withhold the tag list until it resolves so no empty state is shown while loading", async () => {
+    let resolveTagList: (tags: Record<string, unknown>) => void = () => {};
+    mockTagListCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTagList = resolve;
+      }) as ReturnType<typeof networking.tagListCall>,
+    );
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "tag" } });
+    });
+
+    const entityUsage = await screen.findByTestId("entity-usage");
+    expect(entityUsage).toHaveAttribute("data-entity-list", "null");
+
+    await act(async () => {
+      resolveTagList({});
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
+  });
+
+  it("should drop the previous range's tags as soon as the range changes", async () => {
+    mockTagListCall.mockResolvedValue({ "old-range-tag": { name: "old-range-tag" } } as never);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "tag" } });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("entity-usage")).toHaveAttribute(
+        "data-entity-list",
+        JSON.stringify([{ label: "old-range-tag", value: "old-range-tag" }]),
+      );
+    });
+
+    let resolveNewRange: (tags: Record<string, unknown>) => void = () => {};
+    mockTagListCall.mockReturnValue(
+      new Promise((resolve) => {
+        resolveNewRange = resolve;
+      }) as ReturnType<typeof networking.tagListCall>,
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("pick-a-different-range"));
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "null");
+
+    await act(async () => {
+      resolveNewRange({});
+    });
+
+    expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-list", "[]");
   });
 
   it("should show tag usage selector option for internal users", async () => {
@@ -813,6 +787,49 @@ describe("UsagePage", () => {
     });
   });
 
+  // Org-admin membership comes from the server, so it can be revoked while the
+  // page is open. The Organization Usage option and its panel both disappear,
+  // and without a fallback the selector keeps a value it no longer offers,
+  // leaving the user on a blank trigger over a blank panel with nothing to
+  // click. An internal user is used because that is the session role an org
+  // admin actually carries.
+  it("should leave the organization view when org-admin membership is revoked mid-session", async () => {
+    const mockUseIsOrgAdmin = vi.mocked(useIsOrgAdmin);
+    mockUseIsOrgAdmin.mockReturnValue(true);
+    mockUseAuthorized.mockReturnValue({
+      isLoading: false,
+      isAuthorized: true,
+      token: "mock-token",
+      accessToken: "test-token",
+      userId: "user-123",
+      userEmail: "test@example.com",
+      userRole: "Internal User",
+      premiumUser: true,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    } as any);
+
+    const { rerender } = renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+
+    const usageSelect = screen.getByTestId("usage-view-select");
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "organization" } });
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText("Entity Usage").length).toBeGreaterThan(0);
+    });
+    expect((usageSelect as HTMLSelectElement).value).toBe("organization");
+
+    mockUseIsOrgAdmin.mockReturnValue(false);
+    act(() => {
+      rerender(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+    });
+
+    await waitFor(() => {
+      expect((screen.getByTestId("usage-view-select") as HTMLSelectElement).value).toBe("global");
+    });
+  });
+
   it("should show customer usage view for admins", async () => {
     mockUseCustomers.mockReturnValue({
       data: mockCustomers,
@@ -835,6 +852,19 @@ describe("UsagePage", () => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
+  });
+
+  it("should withhold the customer list while it is still loading", async () => {
+    mockUseCustomers.mockReturnValue({ data: undefined, isLoading: true, error: null } as any);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "customer" } });
+    });
+
+    const entityUsage = await screen.findByTestId("entity-usage");
+    expect(entityUsage).toHaveAttribute("data-entity-list", "null");
   });
 
   it("should show agent usage view for admins", async () => {
@@ -861,7 +891,45 @@ describe("UsagePage", () => {
     });
   });
 
+  it.each(["organization", "agent"])("should not render the %s usage view for an internal user", async (usageView) => {
+    mockUseAuthorized.mockReturnValue(nonAdminSession);
+    mockDailyActivityKeyPageCall.mockImplementation(() => new Promise(() => {}));
+    renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    const usageSelect = screen.getByTestId("usage-view-select");
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: "team" } });
+    });
+    expect(screen.getAllByText("Entity Usage").length).toBeGreaterThan(0);
+
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: usageView } });
+    });
+    expect(screen.queryByText("Entity Usage")).not.toBeInTheDocument();
+  });
+
   describe("admin user selector", () => {
+    // Anchored on the header dropdown's own test id, so it does not depend on which library draws
+    // the control.
+    const userSelectCombobox = (): HTMLElement => {
+      const combobox = screen.getByTestId("user-dropdown").querySelector('[role="combobox"]');
+      expect(combobox).not.toBeNull();
+      return combobox as HTMLElement;
+    };
+
+    const openUserSelect = async () => {
+      await userEvent.setup().click(userSelectCombobox());
+    };
+
+    // One library paints the prompt as its own text node and the other leaves it on the input's
+    // placeholder attribute, so either one means the user is being told what to type.
+    const promptsWith = (text: string) =>
+      screen.queryAllByText(text).length + screen.queryAllByPlaceholderText(text).length > 0;
+
     it("should render user selector for admin users in global view", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -869,10 +937,8 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      // Admin should see the user selector select element with the placeholder attribute
-      const userSelects = screen.getAllByRole("combobox");
-      const userSelect = userSelects.find((el) => el.getAttribute("placeholder") === "Select user to filter...");
-      expect(userSelect).toBeDefined();
+      expect(userSelectCombobox()).toBeInTheDocument();
+      expect(promptsWith("Search users by email…")).toBe(true);
     });
 
     it("should format user options with alias when available", async () => {
@@ -881,6 +947,8 @@ describe("UsagePage", () => {
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
+
+      await openUserSelect();
 
       // User with alias should show "alias (id)"
       expect(screen.getByText("Alice (user-001)")).toBeInTheDocument();
@@ -935,6 +1003,8 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
+      await openUserSelect();
+
       // Duplicate user should appear only once
       const dupElements = screen.getAllByText("DupUser (user-dup)");
       expect(dupElements).toHaveLength(1);
@@ -951,11 +1021,48 @@ describe("UsagePage", () => {
 
       // Initially called with null (global view for admin)
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
-        "test-token",
-        expect.any(Date),
-        expect.any(Date),
-        null,
+        expect.objectContaining({ accessToken: "test-token", entityIds: null }),
       );
+    });
+  });
+
+  describe("user usage view", () => {
+    it("should hand EntityUsage no user list so its own filter can search every user", async () => {
+      mockUseInfiniteUsers.mockReturnValue({
+        data: {
+          pages: [
+            {
+              users: Array.from({ length: 50 }, (_, index) => ({
+                user_id: `user-${index}`,
+                user_alias: null,
+                user_email: `user${index}@example.com`,
+              })),
+              page: 1,
+              total_pages: 4,
+              total_count: 200,
+            },
+          ],
+          pageParams: [1],
+        },
+        fetchNextPage: vi.fn(),
+        hasNextPage: true,
+        isFetchingNextPage: false,
+        isLoading: false,
+      } as unknown as ReturnType<typeof useInfiniteUsers>);
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "user" } });
+      });
+
+      const entityUsage = await screen.findByTestId("entity-usage");
+      expect(entityUsage).toHaveAttribute("data-entity-type", "user");
+      expect(entityUsage).toHaveAttribute("data-entity-list", "null");
     });
   });
 
@@ -980,10 +1087,9 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      // Non-admin should not see the user selector
-      const userSelects = screen.getAllByRole("combobox");
-      const userSelect = userSelects.find((el) => el.getAttribute("placeholder") === "Select user to filter...");
-      expect(userSelect).toBeUndefined();
+      // The admin case above proves this test id is rendered when the selector exists, so its
+      // absence here is a live assertion rather than a query that can never match.
+      expect(screen.queryByTestId("user-dropdown")).not.toBeInTheDocument();
     });
 
     it("should always pass own userId for non-admin users", async () => {
@@ -1004,127 +1110,23 @@ describe("UsagePage", () => {
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
-          "test-token",
-          expect.any(Date),
-          expect.any(Date),
-          "user-123",
+          expect.objectContaining({ accessToken: "test-token", entityIds: ["user-123"] }),
         );
       });
     });
   });
 
-  describe("aggregated endpoint fallback", () => {
-    it("should fall back to paginated calls when aggregated endpoint fails", async () => {
+  describe("aggregated endpoint failure", () => {
+    it("shows the failure alert instead of retrying other routes when the aggregated call fails", async () => {
       mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Aggregated endpoint not available"));
-      mockUserDailyActivityCall.mockResolvedValue({
-        ...mockSpendData,
-        metadata: {
-          ...mockSpendData.metadata,
-          total_pages: 1,
-          page: 1,
-        },
-      });
 
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
-        expect(mockUserDailyActivityCall).toHaveBeenCalled();
       });
-
-      // Should still render the data from the paginated fallback
-      expect(screen.getByText("1,500")).toBeInTheDocument();
-    });
-
-    it("should stop showing the previous range's paginated pages while a new range is in flight", async () => {
-      // Same rule as the aggregate, one fallback further down. The flag that
-      // decides whether these pages are read belongs to the range the failure
-      // happened on, or the previous range's pages reach the tile through it.
-      let releaseSecondAggregated: () => void = () => {};
-      mockUserDailyActivityAggregatedCall.mockReset();
-      mockUserDailyActivityAggregatedCall
-        .mockRejectedValueOnce(new Error("Aggregated endpoint not available"))
-        .mockImplementationOnce(
-          () =>
-            new Promise((_resolve, reject) => {
-              releaseSecondAggregated = () => reject(new Error("Aggregated endpoint not available"));
-            }),
-        );
-      mockUserDailyActivityCall.mockResolvedValue({
-        ...mockSpendData,
-        metadata: { ...mockSpendData.metadata, total_pages: 1, page: 1 },
-      });
-
-      renderWithProviders(<UsagePage {...defaultProps} />);
-      await waitFor(() => {
-        expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
-      });
-
-      await act(async () => {
-        fireEvent.click(screen.getByTestId("pick-a-different-range"));
-      });
-
-      await waitFor(() => {
-        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
-      });
-      expect(screen.queryByText("1,500")).not.toBeInTheDocument();
-
-      await act(async () => {
-        releaseSecondAggregated();
-      });
-      await waitFor(() => {
-        expect(screen.getAllByText("1,500").length).toBeGreaterThan(0);
-      });
-    });
-
-    it("should aggregate multiple pages when paginated endpoint has more than 1 page", async () => {
-      mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("Not available"));
-
-      const page1Data = {
-        results: [mockSpendData.results[0]],
-        metadata: {
-          total_spend: 60,
-          total_api_requests: 700,
-          total_successful_requests: 680,
-          total_failed_requests: 20,
-          total_tokens: 35000,
-          total_pages: 2,
-          page: 1,
-        },
-      };
-
-      const page2Data = {
-        results: [
-          {
-            ...mockSpendData.results[0],
-            date: "2025-01-02",
-          },
-        ],
-        metadata: {
-          total_spend: 65.75,
-          total_api_requests: 800,
-          total_successful_requests: 770,
-          total_failed_requests: 30,
-          total_tokens: 40000,
-          total_pages: 2,
-          page: 2,
-        },
-      };
-
-      mockUserDailyActivityCall.mockResolvedValueOnce(page1Data).mockResolvedValueOnce(page2Data);
-
-      renderWithProviders(<UsagePage {...defaultProps} />);
-
-      await waitFor(() => {
-        // Both pages should have been fetched
-        expect(mockUserDailyActivityCall).toHaveBeenCalledTimes(2);
-      });
-
-      // Verify first page call
-      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 1, null);
-
-      // Verify second page call
-      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 2, null);
+      expect(mockDailyActivityAggregatedCall.mock.calls.filter((c) => c[0] === "user")).toHaveLength(1);
+      expect(await screen.findByText(/Fetching spend data failed/)).toBeInTheDocument();
     });
   });
 
@@ -1204,8 +1206,8 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      // Default should be "groups" view showing "Top Public Model Names"
-      expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
+      // Default should be the "groups" view, which feeds Model Activity from model_groups
+      expect(screen.getByText("activity-source:model_groups")).toBeInTheDocument();
       expect(screen.getAllByText("Public Model Name").length).toBeGreaterThan(0);
       expect(screen.getAllByText("Litellm Model Name").length).toBeGreaterThan(0);
     });
@@ -1223,9 +1225,9 @@ describe("UsagePage", () => {
         fireEvent.click(litellmToggle);
       });
 
-      // Title should change to "Top Litellm Models"
+      // Model Activity should switch to the litellm models breakdown
       await waitFor(() => {
-        expect(screen.getByText("Top Litellm Models")).toBeInTheDocument();
+        expect(screen.getByText("activity-source:models")).toBeInTheDocument();
       });
     });
 
@@ -1243,7 +1245,7 @@ describe("UsagePage", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("Top Litellm Models")).toBeInTheDocument();
+        expect(screen.getByText("activity-source:models")).toBeInTheDocument();
       });
 
       // Switch back to groups
@@ -1253,8 +1255,9 @@ describe("UsagePage", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
+        expect(screen.getByText("activity-source:model_groups")).toBeInTheDocument();
       });
+      expect(screen.queryByText("activity-source:models")).not.toBeInTheDocument();
     });
 
     it("should feed the Model Activity tab from the model_groups breakdown by default", async () => {
@@ -1283,6 +1286,50 @@ describe("UsagePage", () => {
         expect(screen.getByText("activity-source:models")).toBeInTheDocument();
       });
       expect(screen.queryByText("activity-source:model_groups")).not.toBeInTheDocument();
+    });
+
+    it("filters Model Activity by model name and shows an empty state when there are no matches", async () => {
+      vi.mocked(processActivityData).mockReturnValue({
+        "openai/gpt-4o": modelActivity("GPT-4o"),
+        "anthropic/claude-3": modelActivity("Claude 3 Sonnet"),
+      });
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByRole("tab", { name: "Model Activity" }));
+
+      const modelActivityTab = screen.getByRole("tabpanel", { name: "Model Activity" });
+      const searchInput = within(modelActivityTab).getByRole("textbox", { name: "Search models" });
+      fireEvent.change(searchInput, { target: { value: "GPT-4o" } });
+
+      expect(within(modelActivityTab).getByText("GPT-4o")).toBeInTheDocument();
+      expect(within(modelActivityTab).queryByText("Claude 3 Sonnet")).not.toBeInTheDocument();
+
+      fireEvent.change(searchInput, { target: { value: "missing model" } });
+
+      expect(
+        within(modelActivityTab).getByText('No models match "missing model" in this date range'),
+      ).toBeInTheDocument();
+    });
+
+    it("does not show the no-match state when model data is empty", async () => {
+      vi.mocked(processActivityData).mockReturnValue({});
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByRole("tab", { name: "Model Activity" }));
+
+      const modelActivityTab = screen.getByRole("tabpanel", { name: "Model Activity" });
+      const searchInput = within(modelActivityTab).getByRole("textbox", { name: "Search models" });
+      fireEvent.change(searchInput, { target: { value: "missing model" } });
+
+      expect(
+        within(modelActivityTab).queryByText('No models match "missing model" in this date range'),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -1346,7 +1393,7 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByText("Cost")).toBeInTheDocument();
+      expect(screen.getByText("Overview")).toBeInTheDocument();
       expect(screen.getByText("Model Activity")).toBeInTheDocument();
       expect(screen.getByText("Key Activity")).toBeInTheDocument();
       expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();

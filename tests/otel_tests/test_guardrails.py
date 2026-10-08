@@ -1,3 +1,4 @@
+import os
 import pytest
 import asyncio
 import aiohttp, openai
@@ -51,7 +52,7 @@ async def generate_key(
     session, guardrails: Optional[List] = None, team_id: Optional[str] = None
 ):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {}
     if guardrails:
         data["guardrails"] = guardrails
@@ -72,63 +73,6 @@ async def generate_key(
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Aporia account disabled")
-async def test_llm_guard_triggered_safe_request():
-    """
-    - Tests a request where no content mod is triggered
-    - Assert that the guardrails applied are returned in the response headers
-    """
-    async with aiohttp.ClientSession() as session:
-        response, headers = await chat_completion(
-            session,
-            "sk-1234",
-            model="fake-openai-endpoint",
-            messages=[{"role": "user", "content": f"Hello what's the weather"}],
-            guardrails=[
-                "aporia-post-guard",
-                "aporia-pre-guard",
-            ],
-        )
-        await asyncio.sleep(3)
-
-        print("response=", response, "response headers", headers)
-
-        assert "x-litellm-applied-guardrails" in headers
-
-        assert (
-            headers["x-litellm-applied-guardrails"]
-            == "aporia-pre-guard,aporia-post-guard"
-        )
-
-
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="Aporia account disabled")
-async def test_llm_guard_triggered():
-    """
-    - Tests a request where no content mod is triggered
-    - Assert that the guardrails applied are returned in the response headers
-    """
-    async with aiohttp.ClientSession() as session:
-        try:
-            response, headers = await chat_completion(
-                session,
-                "sk-1234",
-                model="fake-openai-endpoint",
-                messages=[
-                    {"role": "user", "content": f"Hello my name is ishaan@berri.ai"}
-                ],
-                guardrails=[
-                    "aporia-post-guard",
-                    "aporia-pre-guard",
-                ],
-            )
-            pytest.fail("Should have thrown an exception")
-        except Exception as e:
-            print(e)
-            assert "Aporia detected and blocked PII" in str(e)
-
-
-@pytest.mark.asyncio
 async def test_no_llm_guard_triggered():
     """
     - Tests a request where no content mod is triggered
@@ -137,7 +81,7 @@ async def test_no_llm_guard_triggered():
     async with aiohttp.ClientSession() as session:
         response, headers = await chat_completion(
             session,
-            "sk-1234",
+            os.environ["LITELLM_MASTER_KEY"],
             model="fake-openai-endpoint",
             messages=[{"role": "user", "content": f"Hello what's the weather"}],
             guardrails=[],
@@ -203,18 +147,17 @@ async def test_bedrock_guardrail_triggered():
     - Assert that the guardrails applied are returned in the response headers
     """
     async with aiohttp.ClientSession() as session:
-        try:
+        with pytest.raises(Exception, match="Violated guardrail policy") as exc_info:
             response, headers = await chat_completion(
                 session,
-                "sk-1234",
+                os.environ["LITELLM_MASTER_KEY"],
                 model="fake-openai-endpoint",
                 messages=[{"role": "user", "content": "Hello do you like coffee?"}],
                 guardrails=["bedrock-pre-guard"],
             )
-            pytest.fail("Should have thrown an exception")
-        except Exception as e:
-            print(e)
-            assert "Violated guardrail policy" in str(e)
+        e = exc_info.value
+        print(e)
+        assert "Violated guardrail policy" in str(e)
 
 
 @pytest.mark.asyncio
@@ -224,23 +167,22 @@ async def test_custom_guardrail_during_call_triggered():
     - Assert that the guardrails applied are returned in the response headers
     """
     async with aiohttp.ClientSession() as session:
-        try:
+        with pytest.raises(Exception, match="Guardrail failed words - `litellm` detected") as exc_info:
             response, headers = await chat_completion(
                 session,
-                "sk-1234",
+                os.environ["LITELLM_MASTER_KEY"],
                 model="fake-openai-endpoint",
                 messages=[{"role": "user", "content": f"Hello do you like litellm?"}],
                 guardrails=["custom-during-guard"],
             )
-            pytest.fail("Should have thrown an exception")
-        except Exception as e:
-            print(e)
-            assert "Guardrail failed words - `litellm` detected" in str(e)
+        e = exc_info.value
+        print(e)
+        assert "Guardrail failed words - `litellm` detected" in str(e)
 
 
 async def create_team(session, guardrails: Optional[List] = None):
     url = "http://0.0.0.0:4000/team/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {"guardrails": guardrails}
 
     print("request data=", data)
@@ -320,7 +262,7 @@ async def test_guardrails_with_team_controls():
 async def get_guardrail_lb_counts(session):
     """Get the current guardrail load balancing call counts from the proxy."""
     url = "http://0.0.0.0:4000/guardrail/lb/counts"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
 
     async with session.get(url, headers=headers) as response:
         if response.status == 200:
@@ -344,7 +286,7 @@ async def test_guardrail_load_balancing():
         for i in range(num_requests):
             response, headers = await chat_completion(
                 session,
-                "sk-1234",
+                os.environ["LITELLM_MASTER_KEY"],
                 model="fake-openai-endpoint",
                 messages=[{"role": "user", "content": f"Hello request {i}"}],
                 guardrails=["lb-test-guard"],

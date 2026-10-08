@@ -3,16 +3,17 @@ Pydantic models for Memory management endpoints.
 """
 
 from datetime import datetime
-from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class LiteLLM_MemoryRow(BaseModel):
+class LiteLLM_MemoryRow(LiteLLMBaseModel):
     memory_id: str
     key: str
     value: str
-    metadata: Any | None = None
+    metadata: object | None = None
     user_id: str | None = None
     team_id: str | None = None
     created_at: datetime | None = None
@@ -21,10 +22,10 @@ class LiteLLM_MemoryRow(BaseModel):
     updated_by: str | None = None
 
 
-class MemoryCreateRequest(BaseModel):
+class MemoryCreateRequest(LiteLLMBaseModel):
     key: str = Field(..., description="Memory key (acts as the namespace in the URL).")
     value: str = Field(..., description="Memory content. Typically markdown/text for LLM context.")
-    metadata: Any | None = Field(
+    metadata: object | None = Field(
         default=None,
         description="Optional JSON metadata (tags, structured fields).",
     )
@@ -38,9 +39,9 @@ class MemoryCreateRequest(BaseModel):
     )
 
 
-class MemoryUpdateRequest(BaseModel):
+class MemoryUpdateRequest(LiteLLMBaseModel):
     value: str | None = None
-    metadata: Any | None = None
+    metadata: object | None = None
     # Only honored on create (when the row doesn't yet exist) and only for
     # PROXY_ADMIN callers — mirrors MemoryCreateRequest so admins can bootstrap
     # rows scoped to another user/team via PUT, not just POST.
@@ -48,11 +49,11 @@ class MemoryUpdateRequest(BaseModel):
     team_id: str | None = None
 
 
-class MemoryListResponse(BaseModel):
+class MemoryListResponse(LiteLLMBaseModel):
     memories: list[LiteLLM_MemoryRow]
     total: int
 
 
-class MemoryDeleteResponse(BaseModel):
+class MemoryDeleteResponse(LiteLLMBaseModel):
     key: str
     deleted: bool

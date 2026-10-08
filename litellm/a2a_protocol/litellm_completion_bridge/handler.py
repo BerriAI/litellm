@@ -10,11 +10,12 @@ A2A Streaming Events (in order):
 4. Status update (kind: "status-update") - Final status "completed" with final=true
 """
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.a2a_protocol.card_resolver import AGENT_CARD_PATH_PARAM
 from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
     A2ACompletionBridgeTransformation,
     A2AStreamingContext,
@@ -36,6 +37,7 @@ _AGENT_ONLY_PARAMS: Final = frozenset(
         "agent_name",
         "agent_id",
         "agent_card_params",
+        AGENT_CARD_PATH_PARAM,
         A2A_USER_API_KEY_HASH_PARAM,
     }
 )
@@ -54,7 +56,7 @@ class A2ACompletionBridgeHandler:
         agent_extra_headers: Mapping[str, str] | None,
         *,
         stream: bool,
-    ) -> Mapping[str, Any]:
+    ) -> Mapping[str, object]:
         # Extract message from params
         message: Final = params.get("message", {})
 
@@ -63,7 +65,7 @@ class A2ACompletionBridgeHandler:
 
         # Get completion params
         custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-        model: Final = litellm_params.get("model", "agent")
+        model: Final[str] = litellm_params.get("model", "agent")
 
         # Build full model string if provider specified
         # Skip prepending if model already starts with the provider prefix
@@ -109,13 +111,16 @@ class A2ACompletionBridgeHandler:
         return completion_params
 
     @staticmethod
-    async def _acompletion(completion_params: Mapping[str, Any]) -> ModelResponse | CustomStreamWrapper:
-        return await litellm.acompletion(**completion_params)
+    async def _acompletion(completion_params: Mapping[str, object]) -> ModelResponse | CustomStreamWrapper:
+        acompletion_fn: Final[Callable[..., Coroutine[object, object, ModelResponse | CustomStreamWrapper]]] = vars(
+            litellm
+        )["acompletion"]
+        return await acompletion_fn(**completion_params)
 
     @staticmethod
     async def handle_non_streaming(
         request_id: str,
-        params: dict[str, Any],
+        params: dict[str, object],
         litellm_params: dict[str, Any],
         api_base: str | None = None,
         agent_extra_headers: dict[str, str] | None = None,
@@ -296,8 +301,8 @@ class A2ACompletionBridgeHandler:
 # Convenience functions that delegate to the class methods
 async def handle_a2a_completion(
     request_id: str,
-    params: dict[str, Any],
-    litellm_params: dict[str, Any],
+    params: dict[str, object],
+    litellm_params: dict[str, object],
     api_base: str | None = None,
     agent_extra_headers: dict[str, str] | None = None,
 ) -> dict[str, object]:
@@ -313,8 +318,8 @@ async def handle_a2a_completion(
 
 async def handle_a2a_completion_streaming(
     request_id: str,
-    params: dict[str, Any],
-    litellm_params: dict[str, Any],
+    params: dict[str, object],
+    litellm_params: dict[str, object],
     api_base: str | None = None,
     agent_extra_headers: dict[str, str] | None = None,
 ) -> AsyncIterator[dict[str, object]]:

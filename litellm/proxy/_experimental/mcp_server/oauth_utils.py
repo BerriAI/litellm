@@ -3,7 +3,7 @@
 
 import os
 from ipaddress import ip_address
-from typing import TYPE_CHECKING, Any, Final, NoReturn
+from typing import TYPE_CHECKING, Final, NoReturn
 from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
@@ -16,6 +16,7 @@ from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     normalize_token_endpoint_auth_method,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.middleware.per_request_root_path_middleware import get_request_root_path
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -60,7 +61,7 @@ def _oauth_invalid_request(
     error_description: str,
     *,
     hint: str | None = None,
-    **extra: Any,
+    **extra: object,
 ) -> NoReturn:
     """Raise ``invalid_request`` (RFC 6749) with a debuggable description.
 
@@ -68,7 +69,7 @@ def _oauth_invalid_request(
     ``invalid_request``; ``error_description`` and ``hint`` explain what
     failed and how to fix it (e.g. reverse-proxy / PROXY_BASE_URL issues).
     """
-    detail: Final[dict[str, Any]] = {
+    detail: Final[dict[str, object]] = {
         "error": "invalid_request",
         "error_description": error_description,
     }
@@ -83,7 +84,7 @@ def _origin_label(scheme: str, netloc: str) -> str:
     return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
 
 
-def _redact_mcp_resource_url(url: str | None) -> str | None:
+def redact_mcp_resource_url(url: str | None) -> str | None:
     """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
 
     Everything else is dropped: userinfo (``user:pass@``), the query string, the
@@ -106,6 +107,9 @@ def _redact_mcp_resource_url(url: str | None) -> str | None:
     return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
+_redact_mcp_resource_url: Final = redact_mcp_resource_url
+
+
 def _resolve_proxy_base_url_env() -> str | None:
     global _warned_invalid_proxy_base_url
     configured: Final = os.environ.get("PROXY_BASE_URL", "").strip()
@@ -124,6 +128,14 @@ def _resolve_proxy_base_url_env() -> str | None:
         )
         _warned_invalid_proxy_base_url = configured
     return None
+
+
+BYOK_RESOURCE_METADATA_PATH: Final = "/v1/mcp/oauth/protected-resource"
+
+
+def get_byok_www_authenticate() -> str:
+    base_url: Final = _resolve_proxy_base_url_env() or get_request_root_path().rstrip("/")
+    return f'Bearer resource_metadata="{base_url}{BYOK_RESOURCE_METADATA_PATH}"'
 
 
 def get_request_base_url(request: Request) -> str:
@@ -180,6 +192,22 @@ def well_known_root_suffix() -> str:
     return "" if root == "/" else root
 
 
+def get_route_relative_request_path(scope: Scope) -> str:
+    """The request path the MCP route shapes are written against: the raw ASGI path with the
+    deployment's ``root_path`` removed.
+
+    ``scope["path"]`` and ``_original_path`` are both raw request-line paths, so on a sub-path
+    deployment they still carry the ``SERVER_ROOT_PATH`` prefix (``/litellm/{server}/mcp``) while
+    every route shape compared against them is root-relative. Mirrors the segment-boundary strip in
+    :func:`litellm.proxy.auth.auth_utils.get_request_route`, which the rest of the MCP auth path
+    already routes through, so ``/litellmfoo`` is not truncated under ``root_path=/litellm``."""
+    raw_path = str(scope.get("_original_path") or scope.get("path", "") or "")
+    root_path = str(scope.get("app_root_path") or scope.get("root_path") or "").rstrip("/")
+    if root_path and (raw_path == root_path or raw_path.startswith(f"{root_path}/")):
+        return raw_path[len(root_path) :]
+    return raw_path
+
+
 def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str:
     """The per-server protected-resource metadata URL matching the spelling the request
     arrived on, so a strict RFC 9728 client resolves the same route the proxy registered.
@@ -188,7 +216,7 @@ def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str
     the route decorators insert it (see :func:`well_known_root_suffix`)."""
     request: Final = Request(scope)
     base_url: Final = get_request_base_url(request)
-    _path: Final = scope.get("_original_path") or scope.get("path", "") or ""
+    _path: Final = get_route_relative_request_path(scope)
 
     if _path.startswith(f"/{server_name}/mcp"):
         return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/{server_name}/mcp"
@@ -633,7 +661,18 @@ def canonicalize_url_identity(url: str) -> str:
     return urlunparse((scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
 
 
-def _canonical_resource_uri(url: str) -> str | None:
+def oauth_client_registration_matches(
+    registered_issuer: str | None,
+    registered_url: str | None,
+    current_issuer: str | None,
+    current_url: str | None,
+) -> bool:
+    if registered_issuer and current_issuer:
+        return registered_issuer == current_issuer
+    return not registered_url or registered_url == current_url
+
+
+def canonical_resource_uri(url: str) -> str | None:
     """Canonicalize an upstream MCP server URL into an RFC 8707 resource identifier.
 
     Keeps only the scheme, host, port and path, which is the shape the MCP authorization spec's
@@ -693,7 +732,7 @@ def resolve_upstream_resource(mcp_server: "MCPServer") -> str | None:
             mcp_server.server_id,
         )
         return None
-    canonical: Final = _canonical_resource_uri(mcp_server.url)
+    canonical: Final = canonical_resource_uri(mcp_server.url)
     if canonical is None:
         verbose_logger.warning(
             "MCP server %s sets upstream_resource=auto but its url is not an absolute URI, so no "
