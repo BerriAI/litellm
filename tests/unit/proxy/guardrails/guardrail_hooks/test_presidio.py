@@ -8,12 +8,14 @@ import copy
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
+import aiohttp
 from aiohttp import web
+from aiohttp.client_proto import ResponseHandler
 from aiohttp.test_utils import TestServer
 import pytest
 
@@ -4600,45 +4602,109 @@ def _card_and_email_spans(text: str) -> tuple[Mapping[str, object], ...]:
     )
 
 
-def _card_and_email_presidio_app(analyzed: asyncio.Queue[Mapping[str, object]]) -> web.Application:
-    async def analyze(request: web.Request) -> web.Response:
-        payload: Final = await request.json()
-        analyzed.put_nowait(payload)
-        return web.json_response([dict(span) for span in _card_and_email_spans(payload["text"])])
+class _InMemoryPresidioTransport(asyncio.Transport):
+    def __init__(self, protocol: ResponseHandler, analyzed: asyncio.Queue[Mapping[str, object]]) -> None:
+        super().__init__()
+        self._protocol: Final = protocol
+        self._analyzed: Final = analyzed
+        self._received = b""
+        self._closing = False
 
-    async def anonymize(request: web.Request) -> web.Response:
-        payload: Final = await request.json()
-        return web.json_response({"text": payload["text"], "items": []})
+    def write(self, data: bytes | bytearray | memoryview) -> None:
+        self._received += bytes(data)
+        head, separator, body = self._received.partition(b"\r\n\r\n")
+        if not separator:
+            return
+        request_line, *header_lines = head.decode().split("\r\n")
+        headers: Final = {name.lower(): value.strip() for name, _, value in (line.partition(":") for line in header_lines)}
+        if len(body) < int(headers.get("content-length", "0")):
+            return
+        self._received = b""
+        reply: Final = json.dumps(self._reply(request_line.split(" ")[1], json.loads(body))).encode()
+        response: Final = (
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
+            + f"Content-Length: {len(reply)}\r\n\r\n".encode()
+            + reply
+        )
+        asyncio.get_running_loop().call_soon(self._protocol.data_received, response)
 
-    app: Final = web.Application()
-    app.router.add_post("/analyze", analyze)
-    app.router.add_post("/anonymize", anonymize)
-    return app
+    def _reply(self, path: str, payload: Mapping[str, object]) -> object:
+        text: Final = str(payload["text"])
+        if path == "/analyze":
+            self._analyzed.put_nowait(payload)
+            return [dict(span) for span in _card_and_email_spans(text)]
+        assert path == "/anonymize", path
+        return {"text": text, "items": []}
+
+    def writelines(self, list_of_data: Iterable[bytes | bytearray | memoryview]) -> None:
+        self.write(b"".join(bytes(chunk) for chunk in list_of_data))
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+    def close(self) -> None:
+        if not self._closing:
+            self._closing = True
+            asyncio.get_running_loop().call_soon(self._protocol.connection_lost, None)
+
+    def abort(self) -> None:
+        self.close()
+
+    def get_extra_info(self, name: str, default: object = None) -> object:
+        return default
+
+    def can_write_eof(self) -> bool:
+        return False
+
+    def get_write_buffer_size(self) -> int:
+        return 0
+
+    def pause_reading(self) -> None:
+        return None
+
+    def resume_reading(self) -> None:
+        return None
+
+
+class _InMemoryPresidioConnector(aiohttp.BaseConnector):
+    def __init__(self, analyzed: asyncio.Queue[Mapping[str, object]]) -> None:
+        super().__init__()
+        self._analyzed: Final = analyzed
+
+    async def _create_connection(  # pyright: ignore[reportImplicitOverride]  # aiohttp's connector extension point
+        self, req: aiohttp.ClientRequest, traces: Sequence[object], timeout: aiohttp.ClientTimeout
+    ) -> ResponseHandler:
+        protocol: Final = ResponseHandler(asyncio.get_running_loop())
+        protocol.connection_made(_InMemoryPresidioTransport(protocol, self._analyzed))
+        return protocol
 
 
 def _drain(analyzed: asyncio.Queue[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
     return tuple(analyzed.get_nowait() for _ in range(analyzed.qsize()))
 
 
-def _guardrail_for(server: TestServer) -> OPTIONAL_PresidioPIIMasking:
-    return OPTIONAL_PresidioPIIMasking(
+def _guardrail_with_in_memory_presidio(
+    analyzed: asyncio.Queue[Mapping[str, object]],
+) -> OPTIONAL_PresidioPIIMasking:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
         pii_entities_config=_BLOCK_CARD_MASK_EMAIL,
-        presidio_analyzer_api_base=str(server.make_url("/")),
-        presidio_anonymizer_api_base=str(server.make_url("/")),
+        presidio_analyzer_api_base="http://presidio-analyzer.test/",
+        presidio_anonymizer_api_base="http://presidio-anonymizer.test/",
     )
+    guardrail._http_session = aiohttp.ClientSession(connector=_InMemoryPresidioConnector(analyzed))
+    return guardrail
 
 
 @pytest.mark.asyncio
 async def test_check_pii_raises_blocked_entity_for_card() -> None:
     text: Final = f"My credit card number is {_CARD_NUMBER} and my email is {_EMAIL}"
     analyzed: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
-    async with TestServer(_card_and_email_presidio_app(analyzed)) as server:
-        guardrail: Final = _guardrail_for(server)
-        try:
-            with pytest.raises(BlockedPiiEntityError) as excinfo:
-                await guardrail.check_pii(text=text, output_parse_pii=True, presidio_config=None, request_data={})
-        finally:
-            await guardrail._close_http_session()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed)
+    try:
+        with pytest.raises(BlockedPiiEntityError) as excinfo:
+            await guardrail.check_pii(text=text, output_parse_pii=True, presidio_config=None, request_data={})
+    finally:
+        await guardrail._close_http_session()
 
     analyze_requests: Final = _drain(analyzed)
     assert len(analyze_requests) == 1
@@ -4654,26 +4720,27 @@ async def test_pre_call_hook_raises_blocked_entity_for_card_message(
 ) -> None:
     user_text: Final = f"My credit card is {_CARD_NUMBER} and my email is {_EMAIL}."
     analyzed: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
-    async with TestServer(_card_and_email_presidio_app(analyzed)) as server:
-        guardrail: Final = _guardrail_for(server)
-        try:
-            with pytest.raises(BlockedPiiEntityError) as excinfo:
-                await guardrail.async_pre_call_hook(
-                    user_api_key_dict=mock_user_api_key,
-                    cache=mock_cache,
-                    data={
-                        "messages": [
-                            {"role": "system", "content": "You are a helpful assistant."},
-                            {"role": "user", "content": user_text},
-                        ],
-                        "model": "gpt-5-mini",
-                    },
-                    call_type="completion",
-                )
-        finally:
-            await guardrail._close_http_session()
+    guardrail: Final = _guardrail_with_in_memory_presidio(analyzed)
+    try:
+        with pytest.raises(BlockedPiiEntityError) as excinfo:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key,
+                cache=mock_cache,
+                data={
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": user_text},
+                    ],
+                    "model": "gpt-5-mini",
+                },
+                call_type="completion",
+            )
+    finally:
+        await guardrail._close_http_session()
 
-    assert user_text in [payload["text"] for payload in _drain(analyzed)]
+    analyze_requests: Final = _drain(analyzed)
+    assert user_text in [payload["text"] for payload in analyze_requests]
+    assert all(set(payload["entities"]) == set(_BLOCK_CARD_MASK_EMAIL) for payload in analyze_requests)
     assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
     assert excinfo.value.guardrail_name == guardrail.guardrail_name
 
