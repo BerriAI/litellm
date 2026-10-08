@@ -14889,7 +14889,9 @@ export interface paths {
          *
          *     The group's team is deleted the way ``/team/delete`` deletes it, so the members'
          *     group entries, their membership rows and every key issued on the team go with it,
-         *     however many members the group has.
+         *     however many members the group has. The roles are recomputed again for every user
+         *     the delete detached, so a member a concurrent group write added after the roster
+         *     was read is demoted with the rest.
          */
         delete: operations["delete_group_scim_v2_Groups__group_id__delete"];
         options?: never;

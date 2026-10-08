@@ -13,7 +13,6 @@ from httpx import ASGITransport, AsyncClient
 from pytest_mock import MockerFixture
 
 from litellm.proxy._types import (
-    DeleteTeamRequest,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -54,6 +53,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     update_user,
     user_api_key_auth,
 )
+from litellm.proxy.management_endpoints.team_endpoints import DeletedTeams
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.proxy.management_helpers.team_roster_sync import (
     MembersMissing,
@@ -3068,14 +3068,22 @@ async def test_patch_group_recomputes_roles_for_changed_members(mocker):
 
 _SCIM_CALLER: Final = UserAPIKeyAuth(api_key="hashed-scim-token", user_id="idp-service-user")
 _ADMIN_GROUP: Final = "litellm-admins"
-_DEMOTED: Final = {"where": {"user_id": {"in": ["member-1"]}}, "data": {"user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY}}
+_DEMOTED: Final = {
+    "where": {"user_id": {"in": ["member-1"]}},
+    "data": {"user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY},
+}
 
 
 def _group_delete_mocks(
-    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, team: LiteLLM_TeamTable | None
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    team: LiteLLM_TeamTable | None,
+    *,
+    teammates: Sequence[tuple[str, Sequence[str]]] = (),
 ) -> tuple[MagicMock, AsyncMock]:
     """Prisma whose one user is admin only through the configured admin group and whose
-    group lookup answers ``team``, plus the patched team delete."""
+    group lookup answers ``team``, plus the patched team delete, which reports member-1
+    and every teammate as the users it detached."""
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
@@ -3083,14 +3091,21 @@ def _group_delete_mocks(
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
-    prisma: Final = _scim_admin_prisma(mocker, user_teams=[_ADMIN_GROUP])
+    prisma: Final = _scim_admin_prisma(mocker, user_teams=[_ADMIN_GROUP], teammates=teammates)
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=prisma),
     )
-    delete_team_mock: Final = mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.delete_team", AsyncMock())
+    delete_team_mock: Final = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.delete_validated_teams",
+        AsyncMock(return_value=_deleted_admin_group(*(user_id for user_id, _ in teammates))),
+    )
     return prisma, delete_team_mock
+
+
+def _deleted_admin_group(*detached_teammates: str) -> DeletedTeams:
+    return DeletedTeams(team_ids=(_ADMIN_GROUP,), member_user_ids=("member-1", *detached_teammates))
 
 
 def _admin_group_team() -> LiteLLM_TeamTable:
@@ -3101,17 +3116,17 @@ def _admin_group_team() -> LiteLLM_TeamTable:
 async def test_delete_group_deletes_the_whole_team_in_one_request_and_demotes_its_members(
     mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ):
-    """DELETE /Groups hands the team to /team/delete's bulk path as one request, never a
-    per-member pass, acting as a proxy admin with the SCIM caller's key and user as the
-    audit actor, and writes the non-admin role for a member who was admin only through
-    the deleted group."""
+    """DELETE /Groups hands the validated team to /team/delete's bulk path as one call,
+    never a per-member pass, acting as a proxy admin with the SCIM caller's key and user
+    as the audit actor, and writes the non-admin role for a member who was admin only
+    through the deleted group."""
     prisma, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
 
     response: Final = await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
 
     assert response.status_code == 204
     delete_team_mock.assert_awaited_once()
-    assert delete_team_mock.call_args.kwargs["data"] == DeleteTeamRequest(team_ids=[_ADMIN_GROUP])
+    assert [team.team_id for team in delete_team_mock.call_args.kwargs["teams"]] == [_ADMIN_GROUP]
     acting_as: Final = delete_team_mock.call_args.kwargs["user_api_key_dict"]
     assert acting_as.user_role == LitellmUserRoles.PROXY_ADMIN
     assert (acting_as.api_key, acting_as.user_id) == (_SCIM_CALLER.api_key, _SCIM_CALLER.user_id)
@@ -3128,10 +3143,11 @@ async def test_delete_group_demotes_again_after_the_team_delete_so_a_concurrent_
     recompute after the delete leaves them demoted whatever happened in between."""
     prisma, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
 
-    async def regrant_like_a_concurrent_put(**_: object) -> None:
+    async def regrant_like_a_concurrent_put(**_: object) -> DeletedTeams:
         await prisma.db.litellm_usertable.update_many(
             where={"user_id": {"in": ["member-1"]}}, data={"user_role": LitellmUserRoles.PROXY_ADMIN}
         )
+        return _deleted_admin_group()
 
     delete_team_mock.side_effect = regrant_like_a_concurrent_put
 
@@ -3139,6 +3155,27 @@ async def test_delete_group_demotes_again_after_the_team_delete_so_a_concurrent_
 
     assert response.status_code == 204
     assert prisma.db.litellm_usertable.update_many.await_args_list[-1] == call(**_DEMOTED)
+
+
+@pytest.mark.asyncio
+async def test_delete_group_demotes_a_member_a_concurrent_group_write_added_after_the_roster_was_read(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+):
+    """A member a concurrent PUT added to the admin group after this delete read the
+    roster is absent from the first recompute, so the second one runs over the users the
+    team delete reports as detached, which includes that late member."""
+    prisma, _ = _group_delete_mocks(mocker, monkeypatch, _admin_group_team(), teammates=(("member-2", ()),))
+
+    response: Final = await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
+
+    assert response.status_code == 204
+    assert prisma.db.litellm_usertable.update_many.await_args_list == [
+        call(**_DEMOTED),
+        call(
+            where={"user_id": {"in": ["member-1", "member-2"]}},
+            data={"user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY},
+        ),
+    ]
 
 
 @pytest.mark.asyncio

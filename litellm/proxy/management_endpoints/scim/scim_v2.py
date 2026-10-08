@@ -32,7 +32,6 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.user import SCIMPlaceholder
 from litellm.proxy._types import (
-    DeleteTeamRequest,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -62,7 +61,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
-    delete_team,
+    delete_validated_teams,
     new_team,
     team_member_add,
     team_member_delete,
@@ -2791,7 +2790,9 @@ async def delete_group(
 
     The group's team is deleted the way ``/team/delete`` deletes it, so the members'
     group entries, their membership rows and every key issued on the team go with it,
-    however many members the group has.
+    however many members the group has. The roles are recomputed again for every user
+    the delete detached, so a member a concurrent group write added after the roster
+    was read is demoted with the rest.
     """
     verbose_proxy_logger.debug("SCIM DELETE GROUP request for group_id=%s", group_id)
     try:
@@ -2800,9 +2801,9 @@ async def delete_group(
         member_ids: Final = await _get_team_member_user_ids_from_team(existing_team)
 
         await _recompute_scim_member_roles(prisma_client, member_ids, without_team_id=group_id)
-        await delete_team(
-            data=DeleteTeamRequest(team_ids=[group_id]),
-            http_request=Request(scope={"type": "http", "path": f"/scim/v2/Groups/{group_id}"}),
+        deleted: Final = await delete_validated_teams(
+            teams=(LiteLLM_TeamTable.model_validate(existing_team.model_dump()),),
+            prisma_client=prisma_client,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
                 api_key=user_api_key_dict.api_key,
@@ -2810,7 +2811,7 @@ async def delete_group(
             ),
             litellm_changed_by=None,
         )
-        await _recompute_scim_member_roles(prisma_client, member_ids, without_team_id=group_id)
+        await _recompute_scim_member_roles(prisma_client, deleted.member_user_ids, without_team_id=group_id)
 
         return Response(status_code=204)
 
