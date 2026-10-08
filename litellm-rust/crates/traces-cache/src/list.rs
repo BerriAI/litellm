@@ -162,10 +162,8 @@ async fn resolve_runs<S: TraceStore>(
             let spend =
                 spend_window(spans).map_or(&[][..], |window| spend_within(&spend_rows, window));
             resolve_trace(&row.trace_id, &row.trace_ref, spans, spend).map(|trace| {
-                ListedRun::Resolved(
-                    Box::new(trace.summary),
-                    Freshness::of(spans, true, snapshot_ms),
-                )
+                let freshness = Freshness::of(spans, &trace, snapshot_ms);
+                ListedRun::Resolved(Box::new(trace.summary), freshness)
             })
         })
         .collect())

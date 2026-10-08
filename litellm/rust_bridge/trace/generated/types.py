@@ -90,7 +90,17 @@ class TraceScope(typing_extensions.TypedDict):
     team_ids: ReadOnly[tuple[str, ...]]
 
 
-ReadQueryName: TypeAlias = Literal["trace_agents", "availability", "agents", "sample", "content", "evidence"]
+ReadQueryName: TypeAlias = Literal[
+    "trace_agents",
+    "availability",
+    "agents",
+    "sample",
+    "content",
+    "evidence",
+    "feedback_target",
+    "feedback",
+    "feedback_summary",
+]
 
 
 class UIFields(typing_extensions.TypedDict):
@@ -109,6 +119,7 @@ class RunSource(typing_extensions.TypedDict):
     type: ReadOnly[RunSourceType]
     url: ReadOnly[str]
     title: ReadOnly[str]
+    user: ReadOnly[NotRequired[str]]
 
 
 class Span(typing_extensions.TypedDict):

@@ -114,7 +114,6 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
-    ModelAccessDeniedProxyException,
     PassThroughGenericEndpoint,
     ProxyErrorTypes,
     ProxyException,
@@ -356,6 +355,7 @@ from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
+    log_model_access_denial,
     log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
 )
@@ -595,6 +595,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF10
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.lens.dataset_endpoints import router as lens_dataset_router
 from litellm.proxy.lens.endpoints import router as lens_router
+from litellm.proxy.lens.feedback_endpoints import router as lens_feedback_router
 from litellm.proxy.lens.repository import WriterDatabase
 from litellm.proxy.lens.signal_repository import SignalRepository
 from litellm.proxy.lens.signals import (
@@ -767,6 +768,7 @@ except ImportError:
     shutdown_billing_metrics_recorder = None
 from fastapi.exception_handlers import http_exception_handler
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.websockets import WebSocketState
 
 from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
@@ -2056,7 +2058,7 @@ class UserAPIKeyCacheTTLEnum(enum.Enum):
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
-    _log_model_access_denial(exc)
+    log_model_access_denial(exc)
     headers: Final = exc.headers
     error_dict: Final = with_call_id(
         JSON_OBJECT.validate_python(exc.to_dict()),
@@ -2075,18 +2077,32 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 @app.exception_handler(StarletteHTTPException)
-async def otlp_http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
-    response: Final = tracing_endpoints.otlp_error_response(request, exc.status_code, exc.headers)
+async def otlp_http_exception_handler(connection: Request | WebSocket, exc: StarletteHTTPException) -> Response | None:
+    if isinstance(connection, WebSocket):
+        return await _websocket_http_exception_response(connection, exc)
+    response: Final = tracing_endpoints.otlp_error_response(connection, exc.status_code, exc.headers)
     if response is not None:
-        _close_dangling_otel_server_span(request, exc.status_code, exc=exc)
+        _close_dangling_otel_server_span(connection, exc.status_code, exc=exc)
         return response
-    return await http_exception_handler(request, exc)
+    return await http_exception_handler(connection, exc)
 
 
-def _log_model_access_denial(exc: ProxyException) -> None:
-    if not isinstance(exc, ModelAccessDeniedProxyException):
-        return
-    verbose_proxy_logger.warning(exc.sanitized_internal_message())
+async def _websocket_http_exception_response(websocket: WebSocket, exc: StarletteHTTPException) -> Response | None:
+    state: Final = websocket.application_state
+    match state:
+        case WebSocketState.CONNECTING:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+        case WebSocketState.CONNECTED:
+            await websocket.close(code=_websocket_close_code(exc.status_code))
+            return None
+        case WebSocketState.RESPONSE | WebSocketState.DISCONNECTED:
+            return None
+        case _:
+            assert_never(state)
+
+
+def _websocket_close_code(status_code: int) -> int:
+    return status.WS_1011_INTERNAL_ERROR if status_code >= 500 else status.WS_1008_POLICY_VIOLATION
 
 
 def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Exception | None = None) -> None:
@@ -13246,7 +13262,7 @@ async def realtime_websocket_endpoint(
             llm_router=llm_router,
         )
     except ProxyException as e:
-        _log_model_access_denial(e)
+        log_model_access_denial(e)
         await _reject_realtime_session(websocket, user_api_key_dict, code=1008, reason=e.message[:120])
         return
     await websocket.accept(**accept_kwargs)
@@ -18522,6 +18538,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "mcp_client_id_header": "String",
         "mcp_trusted_proxy_ranges": "List",
         "mcp_xff_num_trusted_hops": "Integer",
+        "mcp_prefer_client_id_metadata_document": "Boolean",
         "always_include_stream_usage": "Boolean",
         "forward_client_headers_to_llm_api": "Boolean",
         "mcp_required_fields": "List",
@@ -20307,6 +20324,7 @@ app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(lens_dataset_router)
+app.include_router(lens_feedback_router)
 app.include_router(lens_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
