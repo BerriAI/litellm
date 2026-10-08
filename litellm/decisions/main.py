@@ -25,7 +25,6 @@ from litellm.llms.openrouter.decisions.transformation import OPENROUTER_DECISION
 from litellm.llms.perplexity.decisions.transformation import PERPLEXITY_DECISIONS_ENDPOINT
 from litellm.llms.strands_decider.decisions.transformation import STRANDS_DECIDER_DECISIONS_ENDPOINT
 from litellm.llms.typesafe.decisions.transformation import TYPESAFE_DECISIONS_ENDPOINT
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     DecisionQuestion,
     DecisionsIRRequest,
@@ -103,21 +102,16 @@ def _resolve_api_key(
 ) -> str | None:
     if api_key is not None:
         return api_key
-
-    server_api_key: Final = next(
-        (key for key in (get_secret_str(name) for name in endpoint.api_key_env) if key),
-        None,
+    configured_api_key: Final = endpoint.configured_api_key()
+    if configured_api_key:
+        return configured_api_key
+    if not endpoint.api_key_required:
+        return None
+    raise litellm.AuthenticationError(
+        message=f"Missing API key for Decisions provider '{provider}'",
+        model=model,
+        llm_provider=provider,
     )
-    if server_api_key is None:
-        if not endpoint.api_key_required:
-            return None
-        raise litellm.AuthenticationError(
-            message=f"Missing API key for Decisions provider '{provider}'",
-            model=model,
-            llm_provider=provider,
-        )
-
-    return server_api_key
 
 
 def _validate_request(
@@ -175,9 +169,7 @@ def _prepare_request(
         ) from error
 
     endpoint: Final = DECISIONS_ENDPOINTS[provider]
-    env_api_base: Final = get_secret_str(endpoint.api_base_env)
-    default_api_base: Final = endpoint.default_api_base()
-    resolved_api_base: Final = api_base or env_api_base or default_api_base
+    resolved_api_base: Final = api_base or endpoint.configured_api_base()
     if resolved_api_base is None:
         raise litellm.BadRequestError(
             message=endpoint.missing_api_base_message(provider),
