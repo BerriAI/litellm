@@ -655,7 +655,7 @@ async def test_arealtime_does_not_resolve_azure_ad_token_when_api_key_present(mo
 
 
 @pytest.mark.asyncio
-async def test_arealtime_prefers_deployment_api_key_over_global_azure_key(monkeypatch):
+async def test_arealtime_prefers_deployment_api_key_over_global_azure_key(monkeypatch: pytest.MonkeyPatch) -> None:
     import litellm
     from litellm.realtime_api import main as realtime_main
 
@@ -665,11 +665,11 @@ async def test_arealtime_prefers_deployment_api_key_over_global_azure_key(monkey
     monkeypatch.delenv("AZURE_API_KEY", raising=False)
 
     def fake_get_llm_provider(
-        model,
-        api_base=None,
-        api_key=None,
+        model: str,
+        api_base: str | None = None,
+        api_key: str | None = None,
         custom_llm_provider: str | None = None,
-    ):
+    ) -> tuple[str, str, str | None, str]:
         return (
             "gpt-realtime-whisper",
             "azure",
