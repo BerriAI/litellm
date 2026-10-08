@@ -65,6 +65,27 @@ class TestGetGuardrailsMessagesForCallType:
         assert messages is None
         assert data == {"input": [1, 2]}
 
+    @pytest.mark.parametrize("call_type", [CallTypes.embedding, CallTypes.aembedding])
+    @pytest.mark.parametrize("embedding_input", [None, 123, {"text": "hello"}], ids=["none", "number", "object"])
+    def test_embedding_unsupported_input_is_not_extracted(self, call_type: CallTypes, embedding_input: object) -> None:
+        guardrail: Final = CustomGuardrail(guardrail_name="embedding-extractor")
+        data: Final = {"input": embedding_input}
+
+        messages: Final = guardrail.get_guardrails_messages_for_call_type(call_type=call_type, data=data)
+
+        assert messages is None
+        assert data == {"input": embedding_input}
+
+    @pytest.mark.parametrize("call_type", [CallTypes.responses, CallTypes.aresponses])
+    def test_responses_missing_input_is_not_extracted(self, call_type: CallTypes) -> None:
+        guardrail: Final = CustomGuardrail(guardrail_name="responses-extractor")
+        data: Final = {"input": None}
+
+        messages: Final = guardrail.get_guardrails_messages_for_call_type(call_type=call_type, data=data)
+
+        assert messages is None
+        assert data == {"input": None}
+
 
 class TestCustomGuardrailDeploymentHook:
     @pytest.mark.asyncio
