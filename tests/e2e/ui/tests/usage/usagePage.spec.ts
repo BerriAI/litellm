@@ -13,7 +13,6 @@ import {
 
 /** Covers /ui/usage. The legacy /ui/old-usage view is deprecated and deliberately not covered. */
 
-/** Scoped to the panel with that exact heading; the page renders several other tables. */
 const topKeysCard = (page: PlaywrightPage): Locator =>
   page.locator("section").filter({ has: page.getByRole("heading", { name: "Top Virtual Keys", exact: true }) });
 
