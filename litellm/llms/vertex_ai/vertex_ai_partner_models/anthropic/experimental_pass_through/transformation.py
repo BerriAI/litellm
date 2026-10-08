@@ -1,6 +1,6 @@
 from typing import Any, Final
 
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, requires_native_compaction_beta
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
     messages_carry_output_config,
@@ -114,6 +114,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
+
+        if requires_native_compaction_beta("vertex_ai", optional_params, messages):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
 
         if beta_values:
             headers["anthropic-beta"] = ",".join(beta_values)

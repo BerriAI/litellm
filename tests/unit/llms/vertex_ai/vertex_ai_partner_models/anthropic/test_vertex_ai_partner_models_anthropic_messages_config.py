@@ -1,13 +1,18 @@
 import copy
 import json
 import os
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
+import litellm
+from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from litellm.types.router import GenericLiteLLMParams
 
@@ -126,7 +131,7 @@ def test_no_safeguards_leaves_dangerous_tool_use_beta_header_out():
     assert "dangerous-tool-use-2026-09-03" not in updated_headers.get("anthropic-beta", "")
 
 
-def _validate_vertex_headers(client_headers, messages):
+def _validate_vertex_headers(client_headers, messages, optional_params=None):
     config = VertexAIPartnerModelsAnthropicMessagesConfig()
     litellm_params = {
         "vertex_ai_project": "test-project",
@@ -142,7 +147,7 @@ def _validate_vertex_headers(client_headers, messages):
             headers=client_headers,
             model="claude-opus-5-5",
             messages=messages,
-            optional_params={"max_tokens": 64},
+            optional_params=optional_params or {"max_tokens": 64},
             litellm_params=litellm_params,
             api_base=None,
         )
@@ -726,3 +731,89 @@ def test_vertex_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_f
         and info.get("supports_mid_conversation_system") is not True
     ]
     assert missing == []
+
+
+_SIGNED_COMPACTION_BLOCK = {"type": "compaction", "content": "summary so far", "signature": "sig"}
+
+
+@pytest.mark.parametrize(
+    "client_headers",
+    [{"anthropic-beta": "compact-2026-09-04"}, {}],
+    ids=["client_sends_beta", "client_omits_beta"],
+)
+@pytest.mark.parametrize(
+    "optional_params,messages",
+    [
+        ({"max_tokens": 64, "compaction": {"type": "summarize"}}, [{"role": "user", "content": "Hello"}]),
+        (
+            {"max_tokens": 64},
+            [{"role": "assistant", "content": [_SIGNED_COMPACTION_BLOCK]}, {"role": "user", "content": "Go on"}],
+        ),
+    ],
+    ids=["compaction_param", "signed_compaction_block"],
+)
+def test_native_compaction_reaches_vertex_with_compact_2026_09_04_beta(
+    local_beta_headers_config, client_headers, optional_params, messages
+):
+    """Vertex serves on-demand compaction only behind compact-2026-09-04 (Google Cloud: beta on
+    https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand, read 2026-10-05)
+    and answers 400 "compaction: Extra inputs are not permitted" without it, so the beta rides
+    along with the `compaction` param or a signed compaction block exactly once, whether or not
+    the client sent it, and survives the Vertex beta filter."""
+    headers = _validate_vertex_headers(client_headers, messages, optional_params)
+
+    filtered = update_headers_with_filtered_beta(headers=headers, provider="vertex_ai")
+
+    assert filtered["anthropic-beta"].split(",").count("compact-2026-09-04") == 1
+
+
+def test_no_compaction_signal_leaves_compact_2026_09_04_beta_out():
+    headers = _validate_vertex_headers({}, [{"role": "user", "content": "Hello"}])
+
+    assert "compact-2026-09-04" not in headers.get("anthropic-beta", "")
+
+
+_VERTEX_MESSAGE_RESPONSE: Final = {
+    "id": "msg_vrtx_test",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-6",
+    "content": [{"type": "text", "text": "pong"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 5, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+async def test_vertex_messages_request_sends_compact_2026_09_04_beta_on_the_wire(local_beta_headers_config):
+    """A /v1/messages compaction request to a Vertex Claude deployment reaches Vertex with the beta in the
+    anthropic-beta request header and never in the body, the shape Vertex accepts (live, 2026-10-05)."""
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = json.dumps(_VERTEX_MESSAGE_RESPONSE)
+    mock_response.headers = httpx.Headers({})
+    mock_response.json.return_value = _VERTEX_MESSAGE_RESPONSE
+
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token",
+        return_value=("token", "test-project"),
+    ):
+        await litellm.anthropic.messages.acreate(
+            model="vertex_ai/claude-sonnet-4-6",
+            max_tokens=64,
+            messages=[{"role": "user", "content": "Reply with the single word: pong"}],
+            compaction={"type": "summarize"},
+            vertex_project="test-project",
+            vertex_location="us-east5",
+            client=client,
+        )
+
+    sent: Final = client.post.call_args.kwargs
+    sent_body: Final = sent["json"] if "json" in sent else json.loads(sent["data"])
+    assert sent["headers"]["anthropic-beta"].split(",").count("compact-2026-09-04") == 1
+    assert sent_body["compaction"] == {"type": "summarize"}
+    assert "anthropic_beta" not in sent_body

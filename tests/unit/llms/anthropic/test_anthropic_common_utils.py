@@ -4211,3 +4211,44 @@ def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal
     error: Final = anthropic_error_frame_exception("overloaded_error", "Overloaded", 503, "claude-sonnet-4-5")
 
     assert type(error) is litellm.InternalServerError
+
+
+_SIGNED_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "summary so far", "signature": "sig"}
+
+
+@pytest.mark.parametrize(
+    "provider,expected",
+    [("anthropic", True), ("vertex_ai", True), ("azure_ai", False), ("bedrock", False), ("bedrock_converse", False)],
+)
+@pytest.mark.parametrize(
+    "optional_params,messages",
+    [
+        ({"compaction": {"type": "summarize"}}, [{"role": "user", "content": "hi"}]),
+        ({}, [{"role": "assistant", "content": [_SIGNED_COMPACTION_BLOCK]}, {"role": "user", "content": "go on"}]),
+    ],
+    ids=["compaction_param", "signed_compaction_block"],
+)
+def test_requires_native_compaction_beta_per_provider(
+    provider: str, expected: bool, optional_params: dict[str, object], messages: list[object]
+) -> None:
+    from litellm.llms.anthropic.common_utils import requires_native_compaction_beta
+
+    assert requires_native_compaction_beta(provider, optional_params, messages) is expected
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
+@pytest.mark.parametrize(
+    "optional_params,messages",
+    [
+        ({"max_tokens": 64}, [{"role": "user", "content": "hi"}]),
+        ({}, [{"role": "assistant", "content": [{"type": "compaction", "content": "unsigned"}]}]),
+        ({"compaction": None}, [{"role": "user", "content": "hi"}]),
+    ],
+    ids=["no_signal", "unsigned_block", "compaction_none"],
+)
+def test_requires_native_compaction_beta_is_false_without_a_signal(
+    provider: str, optional_params: dict[str, object], messages: list[object]
+) -> None:
+    from litellm.llms.anthropic.common_utils import requires_native_compaction_beta
+
+    assert requires_native_compaction_beta(provider, optional_params, messages) is False

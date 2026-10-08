@@ -7,14 +7,31 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
+from ....anthropic.common_utils import AnthropicError, requires_native_compaction_beta
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_VERTEX_HEADER_ONLY_BETAS: Final = frozenset({ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value})
+
+
+def _beta_names(value: object) -> frozenset[str]:
+    if value is None:
+        return frozenset()
+    if isinstance(value, str):
+        return frozenset(beta.strip() for beta in value.split(",") if beta.strip())
+    if isinstance(value, (list, tuple)) and all(isinstance(beta, str) for beta in value):
+        return frozenset(beta.strip() for beta in value if beta.strip())
+    raise AnthropicError(
+        status_code=400,
+        message=f"anthropic_beta must be a string or a list of strings, got {type(value).__name__}",
+    )
 
 
 class VertexAIError(Exception):
@@ -131,21 +148,27 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         if context_management:
             self._add_context_management_beta_headers(beta_set, context_management)
 
+        compaction_betas: Final = (
+            frozenset({ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value})
+            if requires_native_compaction_beta("vertex_ai", optional_params, data["messages"])
+            else frozenset()
+        )
         extra_headers: Final = optional_params.get("extra_headers") or {}
-        anthropic_beta_value: Final = extra_headers.get("anthropic-beta", "")
-        if isinstance(anthropic_beta_value, str) and anthropic_beta_value:
-            for beta in anthropic_beta_value.split(","):
-                beta = beta.strip()
-                if beta:
-                    beta_set.add(beta)
-        elif isinstance(anthropic_beta_value, list):
-            beta_set.update(anthropic_beta_value)
-
         data.pop("extra_headers", None)
+        injected_betas: Final = frozenset(beta_set) | _beta_names(extra_headers.get("anthropic-beta"))
+        client_body_betas: Final = _beta_names(data.pop("anthropic_beta", None))
 
-        if beta_set:
-            data["anthropic_beta"] = list(beta_set)
-            headers["anthropic-beta"] = ",".join(beta_set)
+        body_betas: Final = (injected_betas | client_body_betas) - _VERTEX_HEADER_ONLY_BETAS
+        if body_betas:
+            data["anthropic_beta"] = sorted(body_betas)
+        header_betas: Final = (
+            injected_betas
+            | compaction_betas
+            | (client_body_betas & _VERTEX_HEADER_ONLY_BETAS)
+            | _beta_names(headers.get("anthropic-beta"))
+        )
+        if header_betas:
+            headers["anthropic-beta"] = ",".join(sorted(header_betas))
 
         return data
 
