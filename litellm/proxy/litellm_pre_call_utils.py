@@ -286,7 +286,6 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "weights",
     "_router_weights",
     "fallback_depth",
-    "max_fallbacks",
     "_target_order",
     "attempted_targets",
     "proxy_server_request",
