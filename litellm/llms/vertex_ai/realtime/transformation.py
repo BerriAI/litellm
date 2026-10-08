@@ -17,7 +17,7 @@ Auth: OAuth2 Bearer token (not an API key).
 """
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 
 from litellm import verbose_logger
@@ -235,7 +235,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
                     "Vertex AI in non-deferred mode."
                 )
             else:
-                self._warn_session_update_dropped(json_message.get("session") or {}, provider="Vertex AI Realtime")
+                # Annotated rather than passed straight from json.loads, whose Any
+                # would reach the helper's Mapping parameter as an unknown type.
+                dropped_session: Mapping[str, object] = json_message.get("session") or {}
+                self._warn_session_update_dropped(dropped_session, provider="Vertex AI Realtime")
             return []
 
         return super().transform_realtime_request(message, model, session_configuration_request)
