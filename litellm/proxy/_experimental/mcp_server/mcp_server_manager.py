@@ -29,7 +29,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import chain, groupby
 from types import EllipsisType, MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeAlias, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
 from urllib.parse import ParseResult, urlparse
 
 import anyio
@@ -45,15 +45,18 @@ from mcp.types import (
     GetPromptResult,
     InputRequiredResult,
     ListPromptsRequest,
+    ListPromptsResult,
     ListResourcesRequest,
+    ListResourcesResult,
     ListResourceTemplatesRequest,
+    ListResourceTemplatesResult,
     ListToolsResult,
     PaginatedRequestParams,
     Prompt,
     ResourceTemplate,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, BaseModel, Field, TypeAdapter
+from pydantic import AnyUrl, Field, TypeAdapter
 from typing_extensions import ReadOnly, assert_never
 
 import litellm
@@ -78,6 +81,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPServerAccess,
     _is_mcp_admitted_user_subject,
 )
+from litellm.proxy._experimental.mcp_server.catalog import _configuration_identity, _DiscoveryCache, _DiscoveryKey
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
@@ -1757,90 +1761,6 @@ def _record_mcp_guardrail_evaluations(
         verbose_logger.warning("Failed to record MCP guardrail evaluation for logging: %s", e)
 
 
-_DiscoveryItem = TypeVar("_DiscoveryItem", bound=BaseModel)
-_DiscoveryKey: TypeAlias = tuple[str, str | None]
-_DISCOVERY_CACHE_LIMIT: Final = 1024
-
-
-class _DiscoveryCache(Generic[_DiscoveryItem]):
-    def __init__(
-        self, ttl: float, clock: Callable[[], float], adapter: TypeAdapter[tuple[_DiscoveryItem, ...]]
-    ) -> None:
-        self._ttl = ttl
-        self._adapter = adapter
-        self._entries = InMemoryCache(max_size_in_memory=_DISCOVERY_CACHE_LIMIT, max_size_per_item=64, clock=clock)
-        self._pending: dict[_DiscoveryKey, asyncio.Task[list[_DiscoveryItem]]] = {}
-        self._waiters: dict[asyncio.Task[list[_DiscoveryItem]], int] = {}  # mutable-ok: constant-time waiter accounting
-
-    def invalidate(self, server_id: str) -> None:
-        prefix: Final = f"[{json.dumps(server_id)},"
-        keys: Final = cast(  # cast-ok: private cache contains only JSON string keys
-            "tuple[str, ...]", tuple(self._entries.cache_dict)
-        )
-        for entry_key in keys:
-            if entry_key.startswith(prefix):
-                self._entries.delete_cache(entry_key)
-        for key in tuple(self._pending):
-            if key[0] == server_id:
-                self._pending.pop(key)
-
-    @staticmethod
-    def _observe_completion(task: asyncio.Task[list[_DiscoveryItem]]) -> None:
-        if not task.cancelled():
-            task.exception()
-
-    async def get(
-        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[list[_DiscoveryItem]]]
-    ) -> tuple[_DiscoveryItem, ...]:
-        if self._ttl <= 0:
-            return tuple(await fetch())
-        entry: Final[object] = self._entries.get_cache(json.dumps(key))
-        if entry is not None:
-            return self._adapter.validate_python(entry)
-        pending: Final = self._pending.get(key)
-        if pending is not None:
-            return await self._await_fetch(key, pending)
-        if len(self._pending) >= _DISCOVERY_CACHE_LIMIT:
-            return tuple(await fetch())
-        task: Final = asyncio.create_task(self._fetch(key, fetch))
-        self._pending[key] = task
-        task.add_done_callback(self._observe_completion)
-        return await self._await_fetch(key, task)
-
-    async def _await_fetch(
-        self, key: _DiscoveryKey, task: asyncio.Task[list[_DiscoveryItem]]
-    ) -> tuple[_DiscoveryItem, ...]:
-        self._waiters[task] = self._waiters.get(task, 0) + 1
-        try:
-            return tuple(item.model_copy(deep=True) for item in await asyncio.shield(task))
-        finally:
-            remaining: Final = self._waiters[task] - 1
-            if remaining:
-                self._waiters[task] = remaining
-            else:
-                self._waiters.pop(task)
-                if self._pending.get(key) is task:
-                    self._pending.pop(key)
-                if not task.done():
-                    task.cancel()
-
-    async def _fetch(
-        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[list[_DiscoveryItem]]]
-    ) -> list[_DiscoveryItem]:
-        try:
-            items: Final = await fetch()
-            if self._pending.get(key) is asyncio.current_task():
-                self._entries.set_cache(
-                    json.dumps(key),
-                    self._adapter.dump_json(tuple(items)),
-                    ttl=self._ttl,
-                )
-            return items
-        finally:
-            if self._pending.get(key) is asyncio.current_task():
-                self._pending.pop(key)
-
-
 def _mcp_discovery_cache_ttl() -> float:
     raw: Final = os.environ.get("LITELLM_MCP_DISCOVERY_CACHE_TTL", "60")
     try:
@@ -1981,14 +1901,14 @@ class MCPServerManager:
             token_exchanger=build_token_exchanger(),
         )
         discovery_ttl: Final = _mcp_discovery_cache_ttl()
-        self._prompt_discovery_cache = _DiscoveryCache[Prompt](
-            discovery_ttl, discovery_clock, TypeAdapter(tuple[Prompt, ...])
+        self._prompt_discovery_cache = _DiscoveryCache[ListPromptsResult](
+            discovery_ttl, discovery_clock, TypeAdapter(ListPromptsResult)
         )
-        self._resource_discovery_cache = _DiscoveryCache[Resource](
-            discovery_ttl, discovery_clock, TypeAdapter(tuple[Resource, ...])
+        self._resource_discovery_cache = _DiscoveryCache[ListResourcesResult](
+            discovery_ttl, discovery_clock, TypeAdapter(ListResourcesResult)
         )
-        self._template_discovery_cache = _DiscoveryCache[ResourceTemplate](
-            discovery_ttl, discovery_clock, TypeAdapter(tuple[ResourceTemplate, ...])
+        self._template_discovery_cache = _DiscoveryCache[ListResourceTemplatesResult](
+            discovery_ttl, discovery_clock, TypeAdapter(ListResourceTemplatesResult)
         )
         from litellm.proxy._experimental.mcp_server.catalog import CatalogSnapshots
 
@@ -4624,24 +4544,34 @@ class MCPServerManager:
         stdio_env: dict[str, str] | None,
         subject_token: str | None,
         credential_fingerprint: str | None = None,
-        per_caller: bool = False,
+        raw_headers: Mapping[str, str] | None = None,
     ) -> _DiscoveryKey:
-        per_user: Final = (
-            per_caller
-            or server.requires_per_user_auth
-            or self._references_per_user_env_var(server)
-            or server.delegate_auth_to_upstream
-            or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
-        )
-        if not (per_user or mcp_auth_header or extra_headers or stdio_env or subject_token):
-            return server.server_id, None
         identity: Final = (
-            (user_api_key_auth.user_id, user_api_key_auth.api_key)
-            if per_user and user_api_key_auth is not None
+            user_api_key_auth.model_dump(
+                include={
+                    "end_user_id",
+                    "user_role",
+                    "object_permission_id",
+                    "team_object_permission_id",
+                    "team_object_permission",
+                    "end_user_object_permission",
+                },
+                mode="json",
+            )
+            if user_api_key_auth is not None
             else None
         )
         material: Final = json.dumps(
-            (identity, mcp_auth_header, extra_headers, stdio_env, subject_token, credential_fingerprint),
+            (
+                _configuration_identity(server),
+                _admission_identity(user_api_key_auth, raw_headers) if user_api_key_auth is not None else None,
+                identity,
+                mcp_auth_header,
+                extra_headers,
+                stdio_env,
+                subject_token,
+                credential_fingerprint,
+            ),
             sort_keys=True,
             separators=(",", ":"),
         )
@@ -4757,14 +4687,21 @@ class MCPServerManager:
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
+                server,
+                user_api_key_auth,
+                mcp_auth_header,
+                headers,
+                stdio_env,
+                subject_token,
+                credential_fingerprint,
+                raw_headers=raw_headers,
             )
 
-            async def fetch() -> list[Prompt]:
-                return await client.list_prompts(raise_on_error=True)
+            async def fetch() -> ListPromptsResult:
+                return await client.list_prompts_result(raise_on_error=True)
 
             items: Final = await self._prompt_discovery_cache.get(key, fetch)
-            return self._create_prefixed_prompts(items, server, add_prefix=add_prefix)
+            return self._create_prefixed_prompts(items.prompts, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get prompts from server %s: %s", server.name, error)
             return []
@@ -4805,14 +4742,21 @@ class MCPServerManager:
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
+                server,
+                user_api_key_auth,
+                mcp_auth_header,
+                headers,
+                stdio_env,
+                subject_token,
+                credential_fingerprint,
+                raw_headers=raw_headers,
             )
 
-            async def fetch() -> list[Resource]:
-                return await client.list_resources(raise_on_error=True)
+            async def fetch() -> ListResourcesResult:
+                return await client.list_resources_result(raise_on_error=True)
 
             items: Final = await self._resource_discovery_cache.get(key, fetch)
-            return self._create_prefixed_resources(items, server, add_prefix=add_prefix)
+            return self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
             return []
@@ -4853,14 +4797,21 @@ class MCPServerManager:
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
+                server,
+                user_api_key_auth,
+                mcp_auth_header,
+                headers,
+                stdio_env,
+                subject_token,
+                credential_fingerprint,
+                raw_headers=raw_headers,
             )
 
-            async def fetch() -> list[ResourceTemplate]:
-                return await client.list_resource_templates(raise_on_error=True)
+            async def fetch() -> ListResourceTemplatesResult:
+                return await client.list_resource_templates_result(raise_on_error=True)
 
             items: Final = await self._template_discovery_cache.get(key, fetch)
-            return self._create_prefixed_resource_templates(items, server, add_prefix=add_prefix)
+            return self._create_prefixed_resource_templates(items.resource_templates, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get resource_templates from server %s: %s", server.name, error)
             return []
