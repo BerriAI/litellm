@@ -31,7 +31,7 @@ def test_metadata_and_backup(model):
     info = litellm.get_model_info(model)
     assert info["litellm_provider"] == "mistral"
     assert info["mode"] == "chat"
-    assert info["max_input_tokens"] == 524288
+    assert info["max_input_tokens"] == 1048576
     assert info["input_cost_per_token"] == 6.8e-07
     assert info["output_cost_per_token"] == 2.09e-06
     assert info["cache_read_input_token_cost"] == 6.8e-08
