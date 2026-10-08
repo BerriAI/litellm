@@ -710,12 +710,20 @@ async fn failed_reads_are_not_cached() {
 }
 
 #[rstest]
-#[case::claude_code("claude-code")]
-#[case::claude_agent_sdk("claude-agent-sdk")]
+#[case::claude_code_active("claude-code", 0, 2)]
+#[case::claude_code_idle("claude-code", 10 * 60, 1)]
+#[case::claude_agent_sdk_active("claude-agent-sdk", 0, 2)]
+#[case::claude_agent_sdk_idle("claude-agent-sdk", 10 * 60, 1)]
+#[case::other_idle("", 10 * 60, 1)]
 #[tokio::test]
-async fn resumed_native_sessions_refresh_after_live_ttl(#[case] framework: &str) {
+async fn traces_refresh_while_active_and_stay_cached_once_quiet(
+    #[case] framework: &str,
+    #[case] idle_secs: i64,
+    #[case] expected_reads: usize,
+) {
     let original = TraceSpansRow {
         framework: framework.into(),
+        start_ns: now_ns() - idle_secs * 1_000_000_000,
         ..span(0)
     };
     let store = FakeStore::with_spans("ref", vec![original.clone()]);
@@ -747,14 +755,225 @@ async fn resumed_native_sessions_refresh_after_live_ttl(#[case] framework: &str)
     assert_eq!(store.calls(Operation::TraceSpans), 1);
 
     tokio::time::sleep(LIVE_TTL + Duration::from_millis(200)).await;
-    let resumed = reader
+    let later = reader
         .get_trace(&store, &access, "trace", "ref")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(resumed.spans.len(), 2);
-    assert_eq!(store.calls(Operation::TraceSpans), 2);
-    assert_eq!(first.spans.len(), 1);
+    assert_eq!(store.calls(Operation::TraceSpans), expected_reads);
+    assert_eq!(later.spans.len(), expected_reads);
+}
+
+fn detail(span_id: &str, output: &str) -> SpanDetailRow {
+    SpanDetailRow {
+        span_id: span_id.into(),
+        input: "question".into(),
+        output: output.into(),
+        attributes: Default::default(),
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn settled_span_details_are_read_once() {
+    let store = FakeStore::with_spans("ref", vec![span(0)]);
+    store.state.lock().unwrap().span_detail = Some(detail("span-0", "answer"));
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    let (left, right) = tokio::join!(
+        reader.get_span(&store, &access, "trace", "span-0", "ref"),
+        reader.get_span(&store, &access, "trace", "span-0", "ref"),
+    );
+    store.state.lock().unwrap().span_detail = Some(detail("span-0", "changed"));
+    tokio::time::sleep(LIVE_TTL + Duration::from_millis(200)).await;
+    let again = reader
+        .get_span(&store, &access, "trace", "span-0", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(left.unwrap().unwrap().output, "answer");
+    assert_eq!(right.unwrap().unwrap().output, "answer");
+    assert_eq!(again.output, "answer");
+    assert_eq!(store.calls(Operation::SpanDetail), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn span_details_are_cached_per_span_scope_and_snapshot() {
+    let store = FakeStore::with_spans("ref", vec![span(0)]);
+    store.state.lock().unwrap().span_detail = Some(detail("span-0", "answer"));
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    let other_scope = ReadAccessParams {
+        all_teams: false,
+        user_id: "user".into(),
+        team_ids: Vec::new(),
+    };
+    reader
+        .get_span(&store, &access, "trace", "span-0", "ref")
+        .await
+        .unwrap();
+    reader
+        .get_span(&store, &access, "trace", "span-1", "ref")
+        .await
+        .unwrap();
+    reader
+        .get_span(&store, &other_scope, "trace", "span-0", "ref")
+        .await
+        .unwrap();
+    reader
+        .get_span(&store, &access, "trace", "span-0", "other-ref")
+        .await
+        .unwrap();
+    assert_eq!(store.calls(Operation::SpanDetail), 4);
+
+    reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    reader
+        .get_span(&store, &access, "trace", "span-0", "ref")
+        .await
+        .unwrap();
+    reader
+        .get_span(&store, &access, "trace", "span-0", "ref")
+        .await
+        .unwrap();
+    assert_eq!(store.calls(Operation::SpanDetail), 5);
+}
+
+#[rstest]
+#[tokio::test]
+async fn live_span_details_refresh_after_live_ttl() {
+    let store = FakeStore::with_spans(
+        "ref",
+        vec![TraceSpansRow {
+            start_ns: now_ns(),
+            ..span(0)
+        }],
+    );
+    store.state.lock().unwrap().span_detail = Some(detail("span-0", "partial"));
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    let first = reader
+        .get_span(&store, &access, "trace", "span-0", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    store.state.lock().unwrap().span_detail = Some(detail("span-0", "final"));
+    tokio::time::sleep(LIVE_TTL + Duration::from_millis(200)).await;
+    let later = reader
+        .get_span(&store, &access, "trace", "span-0", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.output, "partial");
+    assert_eq!(later.output, "final");
+    assert_eq!(store.calls(Operation::SpanDetail), 2);
+}
+
+#[rstest]
+#[tokio::test]
+async fn missing_and_failed_span_reads_are_not_cached() {
+    let store = FakeStore::default();
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    assert_eq!(
+        reader
+            .get_span(&store, &access, "trace", "span-0", "ref")
+            .await
+            .unwrap(),
+        None
+    );
+    store.set_failure(Operation::SpanDetail, Failure::Failed);
+    assert!(matches!(
+        reader
+            .get_span(&store, &access, "trace", "span-0", "ref")
+            .await,
+        Err(ReadError::Store(_))
+    ));
+    store.state.lock().unwrap().failures.clear();
+    store.state.lock().unwrap().span_detail = Some(detail("span-0", "answer"));
+    let found = reader
+        .get_span(&store, &access, "trace", "span-0", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.output, "answer");
+    assert_eq!(store.calls(Operation::SpanDetail), 3);
+}
+
+#[rstest]
+#[tokio::test]
+async fn resolved_trace_references_are_read_once_per_scope() {
+    let store = FakeStore::with_spans("ref-only", vec![span(0)]);
+    store.set_trace_refs(vec!["ref-only".into()]);
+    store.state.lock().unwrap().span_detail = Some(detail("span-0", "answer"));
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    let other_scope = ReadAccessParams {
+        all_teams: false,
+        user_id: "user".into(),
+        team_ids: Vec::new(),
+    };
+    let trace = reader
+        .get_trace(&store, &access, "trace", "")
+        .await
+        .unwrap()
+        .unwrap();
+    reader
+        .get_span(&store, &access, "trace", "span-0", "")
+        .await
+        .unwrap()
+        .unwrap();
+    reader
+        .get_trace_page(&store, &access, "trace", "", None, 10)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(trace.summary.trace_ref, "ref-only");
+    assert_eq!(store.calls(Operation::TraceRefs), 1);
+
+    reader
+        .get_trace(&store, &other_scope, "trace", "")
+        .await
+        .unwrap();
+    reader
+        .get_trace(&store, &access, "other-trace", "")
+        .await
+        .unwrap();
+    assert_eq!(store.calls(Operation::TraceRefs), 3);
+}
+
+#[rstest]
+#[case::absent(Vec::new())]
+#[case::ambiguous(vec!["ref-a".into(), "ref-b".into()])]
+#[tokio::test]
+async fn unresolved_trace_references_are_not_cached(#[case] refs: Vec<String>) {
+    let store = FakeStore::with_spans("ref-only", vec![span(0)]);
+    store.set_trace_refs(refs);
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    let _ = reader.get_trace(&store, &access, "trace", "").await;
+    store.set_trace_refs(vec!["ref-only".into()]);
+    let trace = reader
+        .get_trace(&store, &access, "trace", "")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(trace.summary.trace_ref, "ref-only");
+    assert_eq!(store.calls(Operation::TraceRefs), 2);
 }
 
 #[rstest]
