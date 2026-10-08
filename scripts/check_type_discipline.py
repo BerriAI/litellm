@@ -1118,7 +1118,7 @@ def _worker_count(path_count: int) -> int:
 def scan_paths(paths: Sequence[Path]) -> tuple[Violation, ...]:
     """check_file over every path. Pure per-file work, so it fans out across
     processes; callers sort, which is what keeps output order stable."""
-    workers = _worker_count(len(paths))
+    workers: Final = _worker_count(len(paths))
     if workers == 1:
         return tuple(v for path in paths for v in check_file(path))
     with Pool(workers) as pool:
@@ -1126,13 +1126,13 @@ def scan_paths(paths: Sequence[Path]) -> tuple[Violation, ...]:
 
 
 def main(argv: Sequence[str]) -> int:
-    paths = tuple(a for a in argv if not a.startswith("-"))
+    paths: Final = tuple(a for a in argv if not a.startswith("-"))
     if not paths:
         print("usage: check_type_discipline.py <files-or-dirs>...", file=sys.stderr)
         return 2
 
-    targets = tuple(collect_paths(paths))
-    violations = sorted(scan_paths(targets))
+    targets: Final = tuple(collect_paths(paths))
+    violations: Final = sorted(scan_paths(targets))
     for v in violations:
         print(v.render())
 
