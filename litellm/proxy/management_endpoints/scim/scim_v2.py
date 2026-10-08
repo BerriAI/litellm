@@ -472,12 +472,16 @@ async def _scim_groups_from_team_ids(prisma_client: PrismaClient, team_ids: list
     ]
 
 
-async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: Iterable[str]) -> None:
+async def _recompute_scim_member_roles(
+    prisma_client: PrismaClient, user_ids: Iterable[str], *, without_team_id: str | None = None
+) -> None:
     """
     Recompute and persist each user's global proxy role from their resulting team
     membership. No-op unless scim_admin_group is configured, so a SCIM group write
     that drops a member from the admin group demotes them just like the user
     endpoints do, and the role is left untouched when the feature is off.
+    ``without_team_id`` resolves the roles as if that team were already gone, so a
+    group delete demotes its members before the team row goes away.
     """
     admin_group: Final = await _get_scim_admin_group()
     if admin_group is None:
@@ -488,7 +492,10 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
         return
     users: Final = _table(UserRepository(prisma_client))
     rows: Final = await users.find_many(where={"user_id": {"in": list(ids)}})
-    team_ids: Final = tuple(dict.fromkeys(chain.from_iterable(row.teams or [] for row in rows)))
+    memberships: Final = tuple(
+        (row.user_id, tuple(team_id for team_id in row.teams or [] if team_id != without_team_id)) for row in rows
+    )
+    team_ids: Final = tuple(dict.fromkeys(chain.from_iterable(member_teams for _, member_teams in memberships)))
     teams: Final = (
         await _table(TeamRepository(prisma_client)).find_many(where={"team_id": {"in": list(team_ids)}})
         if team_ids
@@ -498,14 +505,14 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
     default_role: Final = _default_scim_user_role()
     resolved: Final = tuple(
         (
-            row.user_id,
+            user_id,
             _resolve_scim_user_role(
-                [SCIMUserGroup(value=team_id, display=alias_of.get(team_id)) for team_id in row.teams or []],
+                [SCIMUserGroup(value=team_id, display=alias_of.get(team_id)) for team_id in member_teams],
                 admin_group,
                 default_role,
             ),
         )
-        for row in rows
+        for user_id, member_teams in memberships
     )
     for role in dict.fromkeys(role for _, role in resolved):
         await users.update_many(
@@ -2763,6 +2770,7 @@ async def delete_group(
         existing_team: Final = await _check_team_exists(group_id)
         member_ids: Final = await _get_team_member_user_ids_from_team(existing_team)
 
+        await _recompute_scim_member_roles(prisma_client, member_ids, without_team_id=group_id)
         await delete_team(
             data=DeleteTeamRequest(team_ids=[group_id]),
             http_request=Request(scope={"type": "http", "path": f"/scim/v2/Groups/{group_id}"}),
@@ -2773,7 +2781,6 @@ async def delete_group(
             ),
             litellm_changed_by=None,
         )
-        await _recompute_scim_member_roles(prisma_client, member_ids)
 
         return Response(status_code=204)
 

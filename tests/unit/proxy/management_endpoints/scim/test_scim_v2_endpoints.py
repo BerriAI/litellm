@@ -3023,73 +3023,108 @@ async def test_patch_group_recomputes_roles_for_changed_members(mocker):
 
 
 _SCIM_CALLER: Final = UserAPIKeyAuth(api_key="hashed-scim-token", user_id="idp-service-user")
+_ADMIN_GROUP: Final = "litellm-admins"
+_DEMOTED: Final = {"where": {"user_id": {"in": ["member-1"]}}, "data": {"user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY}}
 
 
-def _group_delete_mocks(mocker: MockerFixture, team: LiteLLM_TeamTable | None) -> tuple[AsyncMock, AsyncMock]:
-    """Prisma answering ``team`` for the group's row, plus the patched team delete and role recompute."""
-    prisma = mocker.MagicMock()
+def _group_delete_mocks(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, team: LiteLLM_TeamTable | None
+) -> tuple[MagicMock, AsyncMock]:
+    """Prisma whose one user is admin only through the configured admin group and whose
+    group lookup answers ``team``, plus the patched team delete."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": _ADMIN_GROUP}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+    prisma: Final = _scim_admin_prisma(mocker, user_teams=[_ADMIN_GROUP])
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=prisma),
     )
-    delete_team_mock = mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.delete_team", AsyncMock())
-    recompute_mock = mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles", AsyncMock()
-    )
-    return delete_team_mock, recompute_mock
+    delete_team_mock: Final = mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.delete_team", AsyncMock())
+    return prisma, delete_team_mock
+
+
+def _admin_group_team() -> LiteLLM_TeamTable:
+    return LiteLLM_TeamTable(team_id=_ADMIN_GROUP, members_with_roles=[Member(user_id="member-1", role="user")])
 
 
 @pytest.mark.asyncio
-async def test_delete_group_deletes_the_whole_team_in_one_request_and_recomputes_member_roles(mocker):
+async def test_delete_group_deletes_the_whole_team_in_one_request_and_demotes_its_members(mocker, monkeypatch):
     """DELETE /Groups hands the team to /team/delete's bulk path as one request, never a
     per-member pass, acting as a proxy admin with the SCIM caller's key and user as the
-    audit actor, and recomputes the global role of every member it had, so deleting the
-    admin group demotes everyone who was only admin through it."""
-    team = LiteLLM_TeamTable(
-        team_id="test-team-123",
-        members_with_roles=[Member(user_id="user1", role="user"), Member(user_id="user2", role="user")],
-    )
-    delete_team_mock, recompute_mock = _group_delete_mocks(mocker, team)
+    audit actor, and writes the non-admin role for a member who was admin only through
+    the deleted group."""
+    prisma, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
 
-    response = await delete_group(group_id="test-team-123", user_api_key_dict=_SCIM_CALLER)
+    response: Final = await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
 
     assert response.status_code == 204
     delete_team_mock.assert_awaited_once()
-    assert delete_team_mock.call_args.kwargs["data"] == DeleteTeamRequest(team_ids=["test-team-123"])
-    acting_as = delete_team_mock.call_args.kwargs["user_api_key_dict"]
+    assert delete_team_mock.call_args.kwargs["data"] == DeleteTeamRequest(team_ids=[_ADMIN_GROUP])
+    acting_as: Final = delete_team_mock.call_args.kwargs["user_api_key_dict"]
     assert acting_as.user_role == LitellmUserRoles.PROXY_ADMIN
     assert (acting_as.api_key, acting_as.user_id) == (_SCIM_CALLER.api_key, _SCIM_CALLER.user_id)
     assert delete_team_mock.call_args.kwargs["litellm_changed_by"] is None
-    recompute_mock.assert_awaited_once()
-    assert list(recompute_mock.call_args[0][1]) == ["user1", "user2"]
+    prisma.db.litellm_usertable.update_many.assert_awaited_once_with(**_DEMOTED)
 
 
 @pytest.mark.asyncio
-async def test_delete_group_answers_404_when_the_team_vanished_before_the_delete(mocker):
+async def test_delete_group_demotes_members_before_the_team_delete_so_a_failed_delete_retries(mocker, monkeypatch):
+    """A team delete that fails leaves the members already demoted and the group still
+    there, so the IdP's retry finds it instead of a 404 and nobody keeps PROXY_ADMIN
+    through a group that is on its way out."""
+    prisma, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
+    delete_team_mock.side_effect = HTTPException(status_code=500, detail={"error": "database unavailable"})
+
+    with pytest.raises(ProxyException) as raised:
+        await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
+
+    assert raised.value.code == "500"
+    prisma.db.litellm_usertable.update_many.assert_awaited_once_with(**_DEMOTED)
+
+
+@pytest.mark.asyncio
+async def test_delete_group_keeps_the_team_when_the_role_writes_fail(mocker, monkeypatch):
+    """When the role writes fail the team is not deleted, so the retry runs the whole
+    delete again instead of answering 404 with the roles never recomputed."""
+    prisma, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
+    prisma.db.litellm_usertable.update_many.side_effect = RuntimeError("database unavailable")
+
+    with pytest.raises(ProxyException) as raised:
+        await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
+
+    assert raised.value.code == "500"
+    delete_team_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_group_answers_404_when_the_team_vanished_before_the_delete(mocker, monkeypatch):
     """A group deleted by a concurrent request between the lookup and the team delete
-    answers 404, the same as a group that never existed, and recomputes no roles."""
-    team = LiteLLM_TeamTable(team_id="test-team-123", members_with_roles=[Member(user_id="user1", role="user")])
-    delete_team_mock, recompute_mock = _group_delete_mocks(mocker, team)
+    answers 404, the same as a group that never existed."""
+    _, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
     delete_team_mock.side_effect = HTTPException(status_code=404, detail={"error": "Team not found"})
 
     with pytest.raises(ProxyException) as raised:
-        await delete_group(group_id="test-team-123", user_api_key_dict=_SCIM_CALLER)
+        await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
 
     assert raised.value.code == "404"
-    recompute_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_delete_group_of_an_unknown_group_answers_404_without_deleting(mocker):
-    delete_team_mock, recompute_mock = _group_delete_mocks(mocker, None)
+async def test_delete_group_of_an_unknown_group_answers_404_without_deleting_or_touching_roles(mocker, monkeypatch):
+    prisma, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, None)
 
     with pytest.raises(ProxyException) as raised:
         await delete_group(group_id="missing-team", user_api_key_dict=_SCIM_CALLER)
 
     assert raised.value.code == "404"
     delete_team_mock.assert_not_awaited()
-    recompute_mock.assert_not_awaited()
+    prisma.db.litellm_usertable.update_many.assert_not_called()
 
 
 @pytest.mark.asyncio
