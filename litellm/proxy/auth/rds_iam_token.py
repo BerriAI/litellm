@@ -164,7 +164,7 @@ def rds_region_from_hostname(db_host: str) -> str | None:
     return match.group("region").lower()
 
 
-def generate_iam_auth_token(db_host, db_port, db_user, client: Any | None = None) -> str:
+def generate_iam_auth_token(db_host, db_port, db_user, client: Any | None = None, *, region: str | None = None) -> str:
     from urllib.parse import quote
 
     if client is None:
@@ -184,7 +184,7 @@ def generate_iam_auth_token(db_host, db_port, db_user, client: Any | None = None
         DBHostname=db_host,
         Port=db_port,
         DBUsername=db_user,
-        Region=rds_region_from_hostname(db_host),
+        Region=region or rds_region_from_hostname(db_host),
     )
     cleaned_token: Final = quote(token, safe="")
 

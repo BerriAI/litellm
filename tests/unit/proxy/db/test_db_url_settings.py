@@ -194,7 +194,29 @@ def test_reader_url_assembled_when_host_set_and_url_unset(monkeypatch):
     )
 
 
-def test_writer_and_reader_urls_sign_in_their_endpoint_regions(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("writer_override", "reader_override", "writer_region", "reader_region"),
+    [
+        (None, None, "us-east-1", "ap-northeast-1"),
+        ("eu-west-1", "us-west-2", "eu-west-1", "us-west-2"),
+        ("eu-west-1", None, "eu-west-1", "ap-northeast-1"),
+        (None, "us-west-2", "us-east-1", "us-west-2"),
+        ("  ", "", "us-east-1", "ap-northeast-1"),
+        (" eu-west-1 ", " us-west-2 ", "eu-west-1", "us-west-2"),
+    ],
+)
+def test_writer_and_reader_urls_sign_in_their_endpoint_regions(
+    monkeypatch: pytest.MonkeyPatch,
+    writer_override: str | None,
+    reader_override: str | None,
+    writer_region: str,
+    reader_region: str,
+) -> None:
+    for key, value in (("AWS_RDS_REGION", writer_override), ("AWS_RDS_READ_REPLICA_REGION", reader_override)):
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
     monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
     monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
@@ -233,8 +255,8 @@ def test_writer_and_reader_urls_sign_in_their_endpoint_regions(monkeypatch: pyte
     writer_credential: Final = urllib.parse.parse_qs(writer_query)["X-Amz-Credential"][0]
     reader_credential: Final = urllib.parse.parse_qs(reader_query)["X-Amz-Credential"][0]
 
-    assert writer_credential.split("/")[2] == "us-east-1"
-    assert reader_credential.split("/")[2] == "ap-northeast-1"
+    assert writer_credential.split("/")[2] == writer_region
+    assert reader_credential.split("/")[2] == reader_region
 
 
 def test_reader_url_not_clobbered_when_already_set(monkeypatch):

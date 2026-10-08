@@ -70,6 +70,7 @@ def test_rds_mint_delegates_to_the_sigv4_token_generator():
         db_host="writer.aurora.local",
         db_port="5432",
         db_user="litellm_rds",
+        region=None,
     )
 
 
