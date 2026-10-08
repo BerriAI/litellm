@@ -34158,7 +34158,8 @@
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
-            "/v1/responses"
+            "/v1/responses",
+            "/v1/decisions"
         ],
         "supported_modalities": [
             "text",
@@ -79714,5 +79715,55 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "cloudflare/clef": {
+        "input_cost_per_token": 2.4e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+    },
+    "cloudflare/clef-flash": {
+        "input_cost_per_token": 9e-08,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+    },
+    "cloudflare/@cf/cloudflare/clef": {
+        "input_cost_per_token": 2.4e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+    },
+    "cloudflare/@cf/cloudflare/clef-flash": {
+        "input_cost_per_token": 9e-08,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+    },
+    "perplexity/pplx-decider-v1-27b": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "perplexity",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.perplexity.ai/api-reference/decisions-post"
+    },
+    "strands_decider/strands-decider-2B-hobson-v19": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "strands_decider",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://huggingface.co/StrandsAgents/strands-decider-2B-hobson-v19",
+        "metadata": {
+            "notes": "Self-hosted decision model; infrastructure costs are paid separately"
+        }
     }
 }
