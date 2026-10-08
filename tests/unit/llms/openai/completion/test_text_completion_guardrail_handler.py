@@ -2,7 +2,7 @@
 Unit tests for OpenAI Text Completion Guardrail Translation Handler
 """
 
-from typing import List, Optional, Tuple
+from typing import Final, List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pytest
@@ -114,10 +114,10 @@ class TestInputProcessing:
         """A list mixing strings and token IDs raises instead of partially inspecting"""
         from litellm.exceptions import GuardrailRaisedException
 
-        handler = OpenAITextCompletionHandler()
-        guardrail = MockGuardrail(guardrail_name="test")
+        handler: Final = OpenAITextCompletionHandler()
+        guardrail: Final = MockGuardrail(guardrail_name="test")
 
-        data = {
+        data: Final = {
             "model": "gpt-3.5-turbo-instruct",
             "prompt": ["String prompt", [1, 2, 3], "Another string"],
             "max_tokens": 50,
@@ -347,10 +347,10 @@ class TestTokenIdPromptRejection:
         """A list[int] prompt raises instead of skipping the guardrail"""
         from litellm.exceptions import GuardrailRaisedException
 
-        handler = OpenAITextCompletionHandler()
-        guardrail = MockGuardrail(guardrail_name="test")
+        handler: Final = OpenAITextCompletionHandler()
+        guardrail: Final = MockGuardrail(guardrail_name="test")
 
-        data = {
+        data: Final = {
             "model": "hosted_vllm/Qwen/Qwen3-8B",
             "prompt": [151644, 872, 198, 14990, 151645],
             "max_tokens": 4,
@@ -364,10 +364,10 @@ class TestTokenIdPromptRejection:
         """A list[list[int]] prompt raises instead of skipping the guardrail"""
         from litellm.exceptions import GuardrailRaisedException
 
-        handler = OpenAITextCompletionHandler()
-        guardrail = MockGuardrail(guardrail_name="test")
+        handler: Final = OpenAITextCompletionHandler()
+        guardrail: Final = MockGuardrail(guardrail_name="test")
 
-        data = {
+        data: Final = {
             "model": "hosted_vllm/Qwen/Qwen3-8B",
             "prompt": [[151644, 872, 198], [151644, 14990, 151645]],
             "max_tokens": 4,
