@@ -22,6 +22,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_route_for_request,
     bedrock_runtime_chat_completions_is_default,
     get_bedrock_chat_config,
+    split_bedrock_region_path,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -708,6 +709,59 @@ def test_map_openai_params_keeps_reasoning_effort_none_for_gpt56():
         drop_params=False,
     )
     assert mapped["reasoning_effort"] == "none"
+
+
+@pytest.mark.parametrize(
+    "model, effort",
+    [
+        ("global.openai.gpt-5.6-sol", "minimal"),
+        ("bedrock/us-east-1/us.openai.gpt-5.6-luna", "minimal"),
+        ("us.openai.gpt-6.1-sol", "none"),
+    ],
+)
+def test_map_openai_params_refuses_an_effort_the_model_map_disables_without_drop_params(local_cost_map, model, effort):
+    assert litellm.model_cost[split_bedrock_region_path(model)[1]][f"supports_{effort}_reasoning_effort"] is False
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params") as refused:
+        AmazonBedrockRuntimeChatCompletionsConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort, "max_tokens": 64},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    assert refused.value.status_code == 400
+    assert f"reasoning_effort={effort}" in str(refused.value)
+
+
+@pytest.mark.parametrize("drop_params_via", ["request", "litellm.drop_params"])
+def test_map_openai_params_drops_an_effort_the_model_map_disables_under_drop_params(
+    local_cost_map, monkeypatch, drop_params_via
+):
+    monkeypatch.setattr(litellm, "drop_params", drop_params_via == "litellm.drop_params")
+    mapped = AmazonBedrockRuntimeChatCompletionsConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "minimal", "max_tokens": 64},
+        optional_params={},
+        model="global.openai.gpt-5.6-sol",
+        drop_params=drop_params_via == "request",
+    )
+    assert "reasoning_effort" not in mapped
+    assert mapped["max_completion_tokens"] == 64
+
+
+@pytest.mark.parametrize("effort, sent", [("minimal", None), ("low", "low")])
+def test_completion_on_the_default_route_leaves_out_an_effort_the_model_map_disables(
+    local_cost_map, fake_aws_env, effort, sent
+):
+    requests, client = _recording_client(json=_chat_completion_json("ok", "us.openai.gpt-5.6-luna"))
+    litellm.completion(
+        model="bedrock/us.openai.gpt-5.6-luna",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=effort,
+        drop_params=True,
+        client=client,
+    )
+
+    assert [request.url.raw_path for request in requests] == [b"/openai/v1/chat/completions"]
+    assert json.loads(requests[0].content).get("reasoning_effort") == sent
 
 
 def test_reasoning_efforts_refused_for_is_empty_outside_xai():
