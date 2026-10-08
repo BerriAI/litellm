@@ -611,14 +611,37 @@ def test_shared_frozen_configdict_constant_is_clean(tmp_path):
     assert "LIT015" not in _codes(tmp_path, src)
 
 
-def test_last_shared_non_frozen_configdict_assignment_is_flagged(tmp_path):
+def test_mutable_config_before_class_is_not_hidden_by_frozen_reassignment(tmp_path):
     src: Final = (
         "from pydantic import BaseModel, ConfigDict\n"
-        "_RESPONSE_CONFIG = ConfigDict(frozen=True)\n"
         "_RESPONSE_CONFIG = ConfigDict(frozen=False)\n"
         "class Foo(BaseModel):\n"
         "    model_config = _RESPONSE_CONFIG\n"
         "    x: int\n"
+        "_RESPONSE_CONFIG = ConfigDict(frozen=True)\n"
+    )
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_frozen_config_before_class_survives_mutable_reassignment(tmp_path):
+    src: Final = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "_RESPONSE_CONFIG = ConfigDict(frozen=True)\n"
+        "class Foo(BaseModel):\n"
+        "    model_config = _RESPONSE_CONFIG\n"
+        "    x: int\n"
+        "_RESPONSE_CONFIG = ConfigDict(frozen=False)\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_config_assigned_only_after_class_is_unresolved(tmp_path):
+    src: Final = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class Foo(BaseModel):\n"
+        "    model_config = _RESPONSE_CONFIG\n"
+        "    x: int\n"
+        "_RESPONSE_CONFIG = ConfigDict(frozen=True)\n"
     )
     assert "LIT015" in _codes(tmp_path, src)
 
