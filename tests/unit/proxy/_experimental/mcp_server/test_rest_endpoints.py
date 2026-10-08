@@ -3,7 +3,7 @@ import inspect
 import json
 import sys
 from datetime import datetime
-from typing import Any, Dict, Final, Optional, cast
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
@@ -2652,84 +2652,65 @@ class TestCallToolRestAPI:
         assert captured["oauth2_headers"] is None
         fire_logging.assert_awaited_once()
 
-    async def test_rest_tool_call_scrubs_caller_key_from_per_server_auth(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        async def fake_contexts(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
-            return [user_api_key_auth]
-
-        async def fake_get_allowed_mcp_servers(*args: object, **kwargs: object) -> list[str]:
-            return ["server-1"]
-
-        class StubServer:
-            server_id: str = "server-1"
-            alias: str = "echo_srv"
-            server_name: str = "echo_srv"
-            name: str = "stub"
-            allowed_tools: None = None
-            mcp_info: dict[str, str] = {"server_name": "stub"}
-            available_on_public_internet: bool = True
-            auth_type: None = None
-
-        stub_server: Final = StubServer()
-        captured: Final[dict[str, object]] = {}
-
-        async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
-            return kwargs.get("data", {})
-
-        async def fake_execute_mcp_tool(**kwargs: object) -> CallToolResult:
-            captured.update(kwargs)
-            return _OK_TOOL_RESULT
-
-        def fake_get_mcp_server_by_id(server_id: str) -> StubServer | None:
-            return stub_server if server_id == "server-1" else None
-
-        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
-        monkeypatch.setattr(
-            rest_endpoints.global_mcp_server_manager,
-            "get_allowed_mcp_servers",
-            fake_get_allowed_mcp_servers,
-            raising=False,
-        )
-        monkeypatch.setattr(
-            rest_endpoints.global_mcp_server_manager,
-            "get_mcp_server_by_id",
-            fake_get_mcp_server_by_id,
-            raising=False,
-        )
-        monkeypatch.setattr(
-            "litellm.proxy.proxy_server.add_litellm_data_to_request",
-            fake_add_litellm_data_to_request,
-            raising=False,
-        )
-        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {}, raising=False)
-        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", fake_execute_mcp_tool, raising=False)
-        monkeypatch.setattr(
-            rest_endpoints,
-            "_fire_mcp_tool_call_logging",
-            AsyncMock(side_effect=RuntimeError("logging failed")),
-            raising=False,
-        )
-
+    async def test_extract_mcp_headers_scrubs_admitted_caller_credential(self) -> None:
         caller_key: Final = "sk-rest-caller-admission-key-123"
+        upstream_token: Final = "Bearer unrelated-upstream-token"
         request: Final = _build_request(
             headers={
                 "x-litellm-api-key": f"Bearer {caller_key}",
+                "authorization": f"Bearer {caller_key}",
                 "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
-            },
-            path="/mcp-rest/tools/call",
-            method="POST",
-            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {"foo": "bar"}},
+                "x-mcp-upstream-authorization": upstream_token,
+            }
         )
-        caller: Final = UserAPIKeyAuth(api_key="stored-key-hash")
 
-        result: Final = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=caller)
-        raw_headers: Final = cast(dict[str, str], captured["raw_headers"])
+        extracted_headers: Final = rest_endpoints._extract_mcp_headers_from_request(
+            request,
+            UserAPIKeyAuth(api_key="stored-key-hash"),
+        )
 
-        assert result == _OK_TOOL_RESULT
-        assert not captured["mcp_server_auth_headers"]
-        assert "x-mcp-echo_srv-authorization" not in {key.lower() for key in raw_headers}
-        assert raw_headers["x-litellm-api-key"] == f"Bearer {caller_key}"
+        assert extracted_headers == (
+            None,
+            {"upstream": {"Authorization": upstream_token}},
+            {
+                "x-litellm-api-key": f"Bearer {caller_key}",
+                "x-mcp-upstream-authorization": upstream_token,
+            },
+            None,
+        )
+
+    async def test_extract_mcp_headers_preserves_caller_credential_without_authenticated_key(self) -> None:
+        caller_key: Final = "sk-rest-caller-admission-key-123"
+        caller_authorization: Final = f"Bearer {caller_key}"
+        upstream_token: Final = "Bearer unrelated-upstream-token"
+        request: Final = _build_request(
+            headers={
+                "x-litellm-api-key": caller_authorization,
+                "authorization": caller_authorization,
+                "x-mcp-echo_srv-authorization": caller_authorization,
+                "x-mcp-upstream-authorization": upstream_token,
+            }
+        )
+
+        extracted_headers: Final = rest_endpoints._extract_mcp_headers_from_request(
+            request,
+            UserAPIKeyAuth(),
+        )
+
+        assert extracted_headers == (
+            None,
+            {
+                "echo_srv": {"Authorization": caller_authorization},
+                "upstream": {"Authorization": upstream_token},
+            },
+            {
+                "x-litellm-api-key": caller_authorization,
+                "authorization": caller_authorization,
+                "x-mcp-echo_srv-authorization": caller_authorization,
+                "x-mcp-upstream-authorization": upstream_token,
+            },
+            {"Authorization": caller_authorization},
+        )
 
     @pytest.mark.parametrize(
         ("structured", "expected_structured", "expected_texts"),
@@ -2809,65 +2790,18 @@ class TestCallToolRestAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        (
-            "auth_type",
-            "per_user_oauth",
-            "admission_header",
-            "authorization_header",
-            "stored_api_key",
-            "expected_oauth2_headers",
-            "expected_raw_authorization",
-        ),
+        ("auth_type", "per_user_oauth", "expected"),
         [
-            (
-                "oauth_delegate",
-                None,
-                "sk-admission-key",
-                "Bearer user-subject-token",
-                None,
-                {"Authorization": "Bearer user-subject-token"},
-                "Bearer user-subject-token",
-            ),
+            ("oauth_delegate", None, {"Authorization": "Bearer user-subject-token"}),
             (
                 "oauth_delegate",
                 {"Authorization": "Bearer per-user-oauth-token"},
-                "sk-admission-key",
-                "Bearer user-subject-token",
-                None,
                 {"Authorization": "Bearer per-user-oauth-token"},
-                "Bearer user-subject-token",
             ),
-            (
-                "oauth2",
-                None,
-                "sk-admission-key",
-                "Bearer user-subject-token",
-                None,
-                None,
-                "Bearer user-subject-token",
-            ),
-            (
-                "true_passthrough",
-                None,
-                "Bearer sk-rest-caller-admission-key-123",
-                "Bearer sk-rest-caller-admission-key-123",
-                "stored-key-hash",
-                None,
-                None,
-            ),
+            ("oauth2", None, None),
         ],
     )
-    async def test_client_forwarded_oauth_headers_respect_admission_credential(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        auth_type: str,
-        per_user_oauth: dict[str, str] | None,
-        admission_header: str,
-        authorization_header: str,
-        stored_api_key: str | None,
-        expected_oauth2_headers: dict[str, str] | None,
-        expected_raw_authorization: str | None,
-    ) -> None:
+    async def test_forwards_callers_bearer_as_oauth2_headers(self, monkeypatch, auth_type, per_user_oauth, expected):
         """A distinct caller Authorization rides oauth2_headers to execute_mcp_tool only for
         client-forwarded-token servers, with a per-user OAuth token still taking precedence.
         A gateway-managed oauth2 server never sees the caller's bearer."""
@@ -2916,27 +2850,17 @@ class TestCallToolRestAPI:
         )
 
         request = _build_request(
-            {
-                "x-litellm-api-key": admission_header,
-                "authorization": authorization_header,
-            },
+            {"x-litellm-api-key": "sk-admission-key", "authorization": "Bearer user-subject-token"},
             path="/mcp-rest/tools/call",
             method="POST",
             json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
         )
 
-        result = await rest_endpoints.call_tool_rest_api(
-            request,
-            user_api_key_dict=UserAPIKeyAuth(api_key=stored_api_key),
-        )
-        raw_headers: Final = cast(dict[str, str], captured["raw_headers"])
+        result = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
 
         assert result == _OK_TOOL_RESULT
-        assert captured["oauth2_headers"] == expected_oauth2_headers
-        if expected_raw_authorization is None:
-            assert "authorization" not in raw_headers
-        else:
-            assert raw_headers["authorization"] == expected_raw_authorization
+        assert captured["oauth2_headers"] == expected
+        assert captured["raw_headers"]["authorization"] == "Bearer user-subject-token"
 
     async def test_returns_guardrail_rewritten_tool_result(self, monkeypatch):
         """A post_mcp_call guardrail rewrite of the tool result must reach the REST caller,

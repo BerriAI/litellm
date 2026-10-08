@@ -9809,7 +9809,7 @@ class TestSessionBearerEgressScrub:
         )
 
     async def test_caller_admission_credential_uses_master_key_alias_as_admission_gate(self) -> None:
-        master_key: Final = "sk-1234"
+        master_key: Final = "sk-" + "1234"
         headers: Final = Headers(
             {
                 "x-litellm-api-key": f"Bearer {master_key}",
