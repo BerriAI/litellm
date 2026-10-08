@@ -221,6 +221,7 @@ from litellm.router_utils.fallback_event_handlers import (
     check_non_standard_fallback_format,
     clear_pre_routing_selection,
     committed_retry_budget_for_request,
+    discard_superseded_attempt_usage,
     fallback_lookup_groups,
     fallbacks_disabled_for_request,
     get_fallback_model_group_for_lookup_groups,
@@ -5965,6 +5966,7 @@ class Router:
             verbose_router_logger.debug(
                 "Retrying anthropic_messages stream dropped before content, attempt %s of %s", attempt + 1, budget
             )
+            discard_superseded_attempt_usage(retry_kwargs)
             try:
                 response = await self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt(**retry_kwargs)
             except Exception as retry_error:  # noqa: BLE001  # every failure of a retry before its stream opens is the fallback chain's to judge

@@ -1,13 +1,16 @@
 import json
 import os
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, Literal
 
 import anthropic
 import httpx
 import pytest
+import yaml
 from integration._support.anthropic_sse import (
     LIFECYCLE,
     Attempts,
@@ -27,6 +30,7 @@ from integration._support.anthropic_sse import (
 )
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 from redis import Redis
@@ -461,6 +465,87 @@ def test_retried_stream_spend_row_records_the_attempt_count(gateway: Gateway) ->
             (_served_id(prompt, 2),),
         )
         assert rows == [{"attempted": "1", "budget": "1"}], rows
+
+
+def _proxy_with_callback_sink(gateway: Gateway, tmp_path: Path, sink: Wire) -> AbstractContextManager[Gateway]:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["litellm_settings"].update({"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1})
+    path: Final = tmp_path / "callbacks.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return owned_proxy(
+        gateway,
+        tmp_path,
+        {"GENERIC_LOGGER_ENDPOINT": sink.url, "GENERIC_LOGGER_HEADERS": "Authorization=Bearer synthetic-sink-secret"},
+        config=path,
+    )
+
+
+def _sink_events(batches: Sequence[Request]) -> Iterator[dict[str, JsonValue]]:
+    for batch in batches:
+        yield from json.loads(batch.body)
+
+
+class _SinkReader:
+    """Reads the callback sink across polls: drain() consumes the sink's queue, so earlier batches are kept here."""
+
+    def __init__(self, sink: Wire, model: str) -> None:
+        self._sink: Final = sink
+        self._model: Final = model
+        self._batches: tuple[Request, ...] = ()
+
+    def delivered_usage(self) -> tuple[tuple[str, int, int], ...]:
+        self._batches = (*self._batches, *self._sink.drain())
+        return tuple(
+            (str(event["status"]), int(event["prompt_tokens"]), int(event["completion_tokens"]))
+            for event in _sink_events(self._batches)
+            if event.get("model_group") == self._model
+        )
+
+
+def _request_rows(model: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE model=%s', (model,)
+    )
+
+
+def test_dropped_attempt_and_its_retry_each_log_their_own_usage(gateway: Gateway, tmp_path: Path) -> None:
+    prompt: Final = _prompt()
+    attempts: Final = Attempts()
+    with (
+        wire_server(_upstream(prompt, _Failure("drop_after_message_start"), attempts)) as wire,
+        wire_server(lambda request: Reply()) as sink,
+        _proxy_with_callback_sink(gateway, tmp_path, sink) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
+        status, events = _stream(candidate, _body(model, prompt, "deployment"))
+        _assert_completed_by_retry(status, events, prompt, model, wire)
+        delivered: Final = eventually(
+            _SinkReader(sink, model).delivered_usage, lambda values: len(values) >= 2, seconds=20
+        )
+        assert sorted(delivered) == [("failure", 5, 1), ("success", 5, 3)], delivered
+
+
+def test_every_dropped_attempt_logs_its_own_failure_and_the_request_row_still_bills_the_dropped_usage(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    prompt: Final = _prompt()
+    attempts: Final = Attempts()
+    with (
+        wire_server(_upstream(prompt, _Failure("drop_after_message_start"), attempts, failing_attempts=99)) as wire,
+        wire_server(lambda request: Reply()) as sink,
+        _proxy_with_callback_sink(gateway, tmp_path, sink) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
+        status, events = _stream(candidate, _body(model, prompt, "deployment"))
+        _assert_stream_failed_after_message_start(status, events, wire, attempts=2)
+        delivered: Final = eventually(
+            _SinkReader(sink, model).delivered_usage, lambda values: len(values) >= 2, seconds=20
+        )
+        assert delivered == (("failure", 5, 1), ("failure", 5, 1)), delivered
+        rows: Final = eventually(lambda: _request_rows(model), lambda values: len(values) >= 1, seconds=70)
+        assert rows == [{"status": "failure", "prompt_tokens": 5, "completion_tokens": 1}], rows
 
 
 def _string_values(cache: Redis) -> tuple[bytes, ...]:

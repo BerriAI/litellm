@@ -9,7 +9,10 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils import get_llm_provider_logic
-from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments, mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import(
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
@@ -127,6 +130,128 @@ class RecordingRouter:
     async def async_function_with_fallbacks(self, *args, **kwargs):
         self.received_kwargs = kwargs
         return StreamingWrapper()
+
+
+def _request_logging_obj() -> Logging:
+    return Logging(
+        model="primary-model",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="fallback-hop",
+        function_id="fallback-hop",
+    )
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: list[tuple[int, float]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        payload = kwargs["standard_logging_object"]
+        self.logged.append((payload["completion_tokens"], payload["response_cost"]))
+
+
+class HopLoggingItsOwnSuccessRouter(FakeRouter):
+    async def async_function_with_fallbacks(self, *args, **kwargs):
+        hop_response = ModelResponse(
+            id="chatcmpl-hop",
+            model="gpt-4o-mini",
+            choices=[Choices(index=0, message=Message(role="assistant", content="served by the hop"))],
+            usage=Usage(prompt_tokens=52, completion_tokens=7, total_tokens=59),
+        )
+        now = datetime.now()
+        await kwargs["litellm_logging_obj"].async_success_handler(result=hop_response, start_time=now, end_time=now)
+        return StreamingWrapper()
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_partial_usage():
+    """A stream the failed attempt dropped stashed the usage it consumed on the request's logging object. The
+    hop that replaces it logs its own usage, so the integrations see the hop's tokens and cost, not the stash."""
+    recorder = _SuccessRecorder()
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="fallback-hop-success",
+        function_id="fallback-hop-success",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    logging_obj.model_call_details["litellm_params"] = {"acompletion": True}
+    logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+    logging_obj.record_partial_usage_for_failure(Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53), 0.01)
+
+    await run_async_fallback(
+        litellm_router=HopLoggingItsOwnSuccessRouter(),
+        fallback_model_group=["fallback-model"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("stream dropped before content"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert [tokens for tokens, _ in recorder.logged] == [7]
+    assert recorder.logged[0][1] != 0.01
+
+
+class _RateLimitedHop(Exception):
+    def __init__(self) -> None:
+        super().__init__("fallback deployment rate limited")
+        self.status_code = 429
+        self.failed_deployment_id = "fallback-dep-1"
+
+
+def _two_deployment_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+                "model_info": {"id": f"fallback-dep-{index}"},
+            }
+            for index in (1, 2)
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_already_logged", [False, True])
+async def test_run_async_fallback_cools_down_a_failed_hop_once(failure_already_logged: bool):
+    """The manual cooldown stands in for the failure callbacks the logging object blocks once a failure has
+    been logged. A hop whose own failure was the first one logged already ran them, so only a hop that failed
+    with the flag already set gets the manual cooldown."""
+    router = _two_deployment_router()
+    logging_obj = _request_logging_obj()
+    if failure_already_logged:
+        logging_obj.model_call_details["has_logged_async_failure"] = True
+
+    async def rate_limited_hop(*args, **kwargs):
+        kwargs["litellm_logging_obj"].model_call_details["has_logged_async_failure"] = True
+        raise _RateLimitedHop()
+
+    with pytest.raises(_RateLimitedHop):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["fallback-model"],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("stream dropped before content"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            litellm_logging_obj=logging_obj,
+            original_function=rate_limited_hop,
+            metadata={},
+        )
+
+    cooled_down = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    assert cooled_down == (["fallback-dep-1"] if failure_already_logged else [])
 
 
 @pytest.mark.asyncio

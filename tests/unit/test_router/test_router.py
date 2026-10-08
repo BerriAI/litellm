@@ -76,7 +76,7 @@ from litellm.llms.base_llm.vector_store.transformation import(
     LiteLLMVectorStoreEmbeddingExecutor,
     RouterVectorStoreEmbeddingExecutor,
 )
-from litellm.types.utils import CallTypes, CredentialItem
+from litellm.types.utils import CallTypes, CredentialItem, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -15429,6 +15429,38 @@ async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_o
 
     assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
     assert superseded_closed_when_retry_opened == [True]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_partial_usage():
+    """The dropped attempt stashes the usage it consumed on the request's logging object, for its own failure
+    log and for the failure row of a request that runs out of retries. The router discards it before the retry
+    opens, so a retry that completes bills its own usage instead of the dropped attempt's."""
+    router = _anthropic_messages_retry_router(num_retries=1)
+    logging_obj = LiteLLMLogging(
+        model="glm",
+        messages=[{"role": "user", "content": "ping"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="retry-own-usage",
+        function_id="retry-own-usage",
+    )
+    logging_obj.record_partial_usage_for_failure(Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53), 0.01)
+    stash_when_retry_opened: list[object] = []
+
+    def retry_stream():
+        stash_when_retry_opened.append(logging_obj.model_call_details.get("combined_usage_object"))
+        return _anthropic_messages_retried_stream()
+
+    provider = _AnthropicMessagesScriptedProvider(_anthropic_messages_dropped_before_content, retry_stream)
+
+    stream = await _anthropic_messages_stream_through_router(router, provider, litellm_logging_obj=logging_obj)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert stash_when_retry_opened == [None]
+    assert "response_cost" not in logging_obj.model_call_details
 
 
 @pytest.mark.asyncio

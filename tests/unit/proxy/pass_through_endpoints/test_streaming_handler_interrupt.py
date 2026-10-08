@@ -787,9 +787,9 @@ def _anthropic_completed_stream_tail() -> tuple[bytes, ...]:
     )
 
 
-async def _settle(recorded: list) -> None:
+async def _settle(recorded: list, count: int = 1) -> None:
     for _ in range(300):
-        if recorded:
+        if len(recorded) >= count:
             return
         await asyncio.sleep(0.01)
 
@@ -1001,6 +1001,108 @@ async def test_retry_success_log_carries_its_own_usage_after_a_provider_error_fr
     success_payload = recorder.success_kwargs[0]["standard_logging_object"]
     assert success_payload["status"] == "success"
     assert (success_payload["prompt_tokens"], success_payload["completion_tokens"]) == (7, 3)
+
+
+def _anthropic_stream_dropping_after(frames: tuple[bytes, ...]):
+    mock = MagicMock(spec=httpx.Response)
+    mock.status_code = 200
+
+    async def _aiter_bytes():
+        for frame in frames:
+            yield frame
+        raise httpx.ReadError("upstream closed the connection")
+
+    mock.aiter_bytes = _aiter_bytes
+    return mock
+
+
+def _anthropic_messages_attempt(logging_obj: LiteLLMLoggingObj, response):
+    return PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-sonnet-5", "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+    )
+
+
+def _anthropic_messages_logging_obj(recorder: _EventRecorder, call_id: str) -> LiteLLMLoggingObj:
+    return LiteLLMLoggingObj(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id=call_id,
+        function_id=call_id,
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+
+
+async def _drop_after_message_start(logging_obj: LiteLLMLoggingObj, message_id: str, input_tokens: int) -> None:
+    dropped = _anthropic_messages_attempt(
+        logging_obj, _anthropic_stream_dropping_after((_anthropic_message_start_frame(message_id, input_tokens),))
+    )
+    with pytest.raises(httpx.ReadError):
+        async for _ in dropped:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_dropped_attempt_logs_its_failure_without_claiming_the_shared_logging_object():
+    """The router retries a /v1/messages stream the provider drops after message_start on the same logging
+    object. The dropped attempt's failure log bills its own usage and leaves the shared object free: the
+    retry's success log carries the retry's usage and no stale exception, while the stash stays for the
+    failure row of a request that runs out of retries until the router opens the next attempt."""
+    recorder = _EventRecorder()
+    logging_obj = _anthropic_messages_logging_obj(recorder, "test-dropped-attempt")
+
+    await _drop_after_message_start(logging_obj, "msg_a1", 52)
+    await _settle(recorder.failure_kwargs)
+
+    assert recorder.failure_kwargs[0]["standard_logging_object"]["prompt_tokens"] == 52
+    assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadError)
+    assert logging_obj.model_call_details.get("has_logged_async_failure") is not True
+    assert "exception" not in logging_obj.model_call_details
+    stashed = logging_obj.model_call_details.get("combined_usage_object")
+    assert isinstance(stashed, litellm.Usage) and stashed.prompt_tokens == 52
+
+    logging_obj.discard_partial_usage_for_failure()
+    retry = _anthropic_messages_attempt(
+        logging_obj, _anthropic_stream_of((_anthropic_message_start_frame("msg_a2", 7), *_anthropic_completed_stream_tail()))
+    )
+    async for _ in retry:
+        pass
+    await _settle(recorder.success_kwargs)
+
+    success_payload = recorder.success_kwargs[0]["standard_logging_object"]
+    assert success_payload["status"] == "success"
+    assert (success_payload["prompt_tokens"], success_payload["completion_tokens"]) == (7, 3)
+    assert recorder.success_kwargs[0].get("exception") is None
+    assert len(recorder.failure_kwargs) == 1
+
+
+@pytest.mark.asyncio
+async def test_every_dropped_attempt_logs_its_own_failure():
+    """Two attempts of one /v1/messages request dropped in a row each log a failure billing their own usage;
+    the first attempt's log must not swallow the second's, and the shared object ends up holding the last
+    attempt's usage for the request's failure row."""
+    recorder = _EventRecorder()
+    logging_obj = _anthropic_messages_logging_obj(recorder, "test-every-dropped-attempt")
+
+    await _drop_after_message_start(logging_obj, "msg_a1", 52)
+    await _settle(recorder.failure_kwargs)
+    logging_obj.discard_partial_usage_for_failure()
+    await _drop_after_message_start(logging_obj, "msg_a2", 9)
+    await _settle(recorder.failure_kwargs, count=2)
+
+    assert [kwargs["standard_logging_object"]["prompt_tokens"] for kwargs in recorder.failure_kwargs] == [52, 9]
+    assert all(isinstance(kwargs["exception"], httpx.ReadError) for kwargs in recorder.failure_kwargs)
+    stashed = logging_obj.model_call_details.get("combined_usage_object")
+    assert isinstance(stashed, litellm.Usage) and stashed.prompt_tokens == 9
 
 
 def _google_sse(prompt_tokens: int, completion_tokens: int, text: str) -> bytes:
