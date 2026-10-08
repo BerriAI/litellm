@@ -147,7 +147,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   };
   return (
     <OnboardingProvider value={onboarding}>
-      <main className="flex h-full w-full min-w-0 flex-1 flex-col px-3 pt-3 pb-3 sm:px-4 sm:pb-4">
+      <main className="flex h-full w-full min-w-0 flex-1 flex-col px-4 pt-3 pb-4 sm:px-6 sm:pb-6">
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
@@ -156,7 +156,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
           }}
           className="@container/lens-frame min-h-0 flex-1 gap-0"
         >
-          <header className="grid shrink-0 grid-cols-[1fr_auto] items-center gap-x-4 gap-y-2 border-b pb-2 @min-[42rem]/lens-frame:grid-cols-[auto_1fr_auto]">
+          <header className="mb-3 grid shrink-0 grid-cols-[1fr_auto] items-center gap-x-4 gap-y-2 border-b pb-2 @min-[42rem]/lens-frame:grid-cols-[auto_1fr_auto]">
             <div className="flex min-w-0 items-center gap-2">
               <h1 className="flex items-center gap-1.5 text-sm font-semibold">
                 <Aperture aria-hidden="true" className="size-4" strokeWidth={2} />
@@ -180,7 +180,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
               <DemoToggle demo={demo} onChange={toggleDemo} />
             </div>
           </header>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {showSetup ? (
               <TabsContent value={activeTab} keepMounted className={cn(PANEL, "p-3 sm:p-5")}>
                 {setupState.loading ? (
@@ -226,7 +226,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
               </>
             )}
             {workers && list && (
-              <TabsContent value="settings" keepMounted className={cn(PANEL, "p-3 sm:p-5")}>
+              <TabsContent value="settings" keepMounted className={cn(PANEL, "pt-3 pb-6")}>
                 <LensSettings
                   list={list}
                   workerReadyAction={
