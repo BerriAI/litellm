@@ -8,14 +8,15 @@ from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import BaseModel
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 import litellm.constants as litellm_constants
 import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -5809,32 +5810,73 @@ def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_
     assert payload["billing_agent_id"] == billing_agent
 
 
-class _OcrUsageInfo(BaseModel, frozen=True):
-    pages_processed: int
-    doc_size_bytes: int | None = None
+class _OcrUsageInfoDict(TypedDict, total=False):
+    pages_processed: ReadOnly[int]
+    doc_size_bytes: ReadOnly[int]
 
 
-class _OcrResponse(BaseModel, frozen=True):
-    id: str
-    object: str
-    model: str
-    usage_info: _OcrUsageInfo
+class _OcrResponseDict(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    model: ReadOnly[str]
+    usage_info: ReadOnly[NotRequired[_OcrUsageInfoDict]]
 
 
+class _TokenUsageDict(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class _CompletionResponseDict(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    model: ReadOnly[str]
+    usage: ReadOnly[_TokenUsageDict]
+
+
+class _LoggingMetadata(TypedDict, total=False):
+    user_api_key_user_id: ReadOnly[str]
+    user_api_key_team_id: ReadOnly[str]
+
+
+class _LoggingLitellmParams(TypedDict, total=False):
+    metadata: ReadOnly[_LoggingMetadata]
+
+
+class _LoggingKwargs(TypedDict):
+    model: ReadOnly[str]
+    call_type: ReadOnly[str]
+    litellm_params: ReadOnly[_LoggingLitellmParams]
+    response_cost: ReadOnly[float]
+
+
+class _AdditionalUsageValues(TypedDict, total=False):
+    pages_processed: ReadOnly[int | None]
+    doc_size_bytes: ReadOnly[int | None]
+
+
+class _SpendLogMetadata(TypedDict):
+    additional_usage_values: ReadOnly[_AdditionalUsageValues]
+
+
+_SPEND_LOG_METADATA: Final = TypeAdapter(_SpendLogMetadata)
 _OCR_LOGGED_AT: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
 _OCR_RESPONSE_COST: Final = 0.05
 
 
-def _ocr_logging_kwargs(call_type: str = "ocr", metadata: Mapping[str, str] | None = None) -> Mapping[str, object]:
-    return MappingProxyType({
-        "model": "test-ocr-model",
-        "call_type": call_type,
-        "litellm_params": {} if metadata is None else {"metadata": dict(metadata)},
-        "response_cost": _OCR_RESPONSE_COST,
-    })
+def _ocr_logging_kwargs(call_type: str = "ocr", metadata: _LoggingMetadata | None = None) -> _LoggingKwargs:
+    return _LoggingKwargs(
+        model="test-ocr-model",
+        call_type=call_type,
+        litellm_params=_LoggingLitellmParams() if metadata is None else _LoggingLitellmParams(metadata=metadata),
+        response_cost=_OCR_RESPONSE_COST,
+    )
 
 
-def _ocr_payload(kwargs: Mapping[str, object], response_obj: object) -> SpendLogsPayload:
+def _ocr_payload(
+    kwargs: _LoggingKwargs, response_obj: _OcrResponseDict | _CompletionResponseDict | OCRResponse
+) -> SpendLogsPayload:
     return get_logging_payload(
         kwargs=dict(kwargs),
         response_obj=response_obj,
@@ -5843,25 +5885,23 @@ def _ocr_payload(kwargs: Mapping[str, object], response_obj: object) -> SpendLog
     )
 
 
-def _additional_usage_values(payload: SpendLogsPayload) -> Mapping[str, object]:
-    metadata: Final = json.loads(payload["metadata"])
-    return metadata["additional_usage_values"]
+def _additional_usage_values(payload: SpendLogsPayload) -> _AdditionalUsageValues:
+    return _SPEND_LOG_METADATA.validate_json(payload["metadata"])["additional_usage_values"]
 
 
 class TestExtractUsageForOCRCall:
     def test_extract_usage_from_dict(self) -> None:
-        response_obj_dict: Final = {"usage_info": {"pages_processed": 5}}
+        response_obj_dict: Final = {"usage_info": _OcrUsageInfoDict(pages_processed=5)}
 
         usage: Final = _extract_usage_for_ocr_call(response_obj_dict, response_obj_dict)
 
         assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "pages_processed": 5}
 
     def test_extract_usage_from_pydantic_model(self) -> None:
-        response_obj: Final = _OcrResponse(
-            id="ocr-123",
-            object="ocr",
+        response_obj: Final = OCRResponse(
+            pages=[],
             model="test-ocr-model",
-            usage_info=_OcrUsageInfo(pages_processed=10, doc_size_bytes=1024),
+            usage_info=OCRUsageInfo(pages_processed=10, doc_size_bytes=1024),
         )
 
         usage: Final = _extract_usage_for_ocr_call(response_obj, response_obj.model_dump())
@@ -5918,12 +5958,7 @@ class TestGetLoggingPayloadOCR:
     def test_aocr_call_with_pydantic_response(self) -> None:
         payload: Final = _ocr_payload(
             _ocr_logging_kwargs(call_type="aocr"),
-            _OcrResponse(
-                id="aocr-test-456",
-                object="ocr",
-                model="test-ocr-model",
-                usage_info=_OcrUsageInfo(pages_processed=12),
-            ),
+            OCRResponse(pages=[], model="test-ocr-model", usage_info=OCRUsageInfo(pages_processed=12)),
         )
 
         assert payload["call_type"] == "aocr"
@@ -5966,12 +6001,9 @@ class TestGetLoggingPayloadOCR:
 
     def test_non_ocr_call_uses_token_based_usage(self) -> None:
         payload: Final = _ocr_payload(
-            {
-                "model": "gpt-5.5",
-                "call_type": "completion",
-                "litellm_params": {},
-                "response_cost": 0.02,
-            },
+            _LoggingKwargs(
+                model="gpt-5.5", call_type="completion", litellm_params=_LoggingLitellmParams(), response_cost=0.02
+            ),
             {
                 "id": "completion-test-123",
                 "object": "chat.completion",
@@ -5989,7 +6021,9 @@ class TestGetLoggingPayloadOCR:
 
     def test_ocr_with_metadata(self) -> None:
         payload: Final = _ocr_payload(
-            _ocr_logging_kwargs(metadata={"user_api_key_user_id": "test-user", "user_api_key_team_id": "test-team"}),
+            _ocr_logging_kwargs(
+                metadata=_LoggingMetadata(user_api_key_user_id="test-user", user_api_key_team_id="test-team")
+            ),
             {
                 "id": "ocr-metadata-test",
                 "object": "ocr",

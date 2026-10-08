@@ -8,7 +8,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from contextlib import asynccontextmanager
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
@@ -18,6 +18,8 @@ from aiohttp import web
 from aiohttp.client_proto import ResponseHandler
 from aiohttp.test_utils import TestServer
 import pytest
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 
 import litellm
@@ -30,6 +32,7 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 )
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
+from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
 from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
 from litellm.exceptions import BlockedPiiEntityError
 
@@ -4588,22 +4591,35 @@ _BLOCK_CARD_MASK_EMAIL: Final = {
 }
 
 
-def _card_and_email_spans(text: str) -> tuple[Mapping[str, object], ...]:
+class _PresidioAnonymizeRequest(TypedDict):
+    text: ReadOnly[str]
+
+
+class _PresidioAnonymizeReply(TypedDict):
+    text: ReadOnly[str]
+    items: ReadOnly[tuple[()]]
+
+
+_ANALYZE_REQUEST: Final = TypeAdapter(PresidioAnalyzeRequest)
+_ANONYMIZE_REQUEST: Final = TypeAdapter(_PresidioAnonymizeRequest)
+
+
+def _card_and_email_spans(text: str) -> tuple[PresidioAnalyzeResponseItem, ...]:
     return tuple(
-        {
-            "entity_type": entity_type,
-            "start": text.index(value),
-            "end": text.index(value) + len(value),
-            "score": 1.0,
-            "analysis_explanation": None,
-        }
+        PresidioAnalyzeResponseItem(
+            entity_type=entity_type,
+            start=text.index(value),
+            end=text.index(value) + len(value),
+            score=1.0,
+            analysis_explanation=None,
+        )
         for entity_type, value in (("CREDIT_CARD", _CARD_NUMBER), ("EMAIL_ADDRESS", _EMAIL))
         if value in text
     )
 
 
 class _InMemoryPresidioTransport(asyncio.Transport):
-    def __init__(self, protocol: ResponseHandler, analyzed: asyncio.Queue[Mapping[str, object]]) -> None:
+    def __init__(self, protocol: ResponseHandler, analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> None:
         super().__init__()
         self._protocol: Final = protocol
         self._analyzed: Final = analyzed
@@ -4620,7 +4636,7 @@ class _InMemoryPresidioTransport(asyncio.Transport):
         if len(body) < int(headers.get("content-length", "0")):
             return
         self._received = b""
-        reply: Final = json.dumps(self._reply(request_line.split(" ")[1], json.loads(body))).encode()
+        reply: Final = json.dumps(self._reply(request_line.split(" ")[1], body)).encode()
         response: Final = (
             b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
             + f"Content-Length: {len(reply)}\r\n\r\n".encode()
@@ -4628,13 +4644,13 @@ class _InMemoryPresidioTransport(asyncio.Transport):
         )
         asyncio.get_running_loop().call_soon(self._protocol.data_received, response)
 
-    def _reply(self, path: str, payload: Mapping[str, object]) -> object:
-        text: Final = str(payload["text"])
+    def _reply(self, path: str, body: bytes) -> tuple[PresidioAnalyzeResponseItem, ...] | _PresidioAnonymizeReply:
         if path == "/analyze":
-            self._analyzed.put_nowait(payload)
-            return [dict(span) for span in _card_and_email_spans(text)]
+            analyze_request: Final = _ANALYZE_REQUEST.validate_json(body)
+            self._analyzed.put_nowait(analyze_request)
+            return _card_and_email_spans(analyze_request.get("text") or "")
         assert path == "/anonymize", path
-        return {"text": text, "items": []}
+        return _PresidioAnonymizeReply(text=_ANONYMIZE_REQUEST.validate_json(body)["text"], items=())
 
     def writelines(self, list_of_data: Iterable[bytes | bytearray | memoryview]) -> None:
         self.write(b"".join(bytes(chunk) for chunk in list_of_data))
@@ -4667,7 +4683,7 @@ class _InMemoryPresidioTransport(asyncio.Transport):
 
 
 class _InMemoryPresidioConnector(aiohttp.BaseConnector):
-    def __init__(self, analyzed: asyncio.Queue[Mapping[str, object]]) -> None:
+    def __init__(self, analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> None:
         super().__init__()
         self._analyzed: Final = analyzed
 
@@ -4679,12 +4695,12 @@ class _InMemoryPresidioConnector(aiohttp.BaseConnector):
         return protocol
 
 
-def _drain(analyzed: asyncio.Queue[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+def _drain(analyzed: asyncio.Queue[PresidioAnalyzeRequest]) -> tuple[PresidioAnalyzeRequest, ...]:
     return tuple(analyzed.get_nowait() for _ in range(analyzed.qsize()))
 
 
 def _guardrail_with_in_memory_presidio(
-    analyzed: asyncio.Queue[Mapping[str, object]],
+    analyzed: asyncio.Queue[PresidioAnalyzeRequest],
 ) -> OPTIONAL_PresidioPIIMasking:
     guardrail: Final = OPTIONAL_PresidioPIIMasking(
         pii_entities_config=_BLOCK_CARD_MASK_EMAIL,
@@ -4698,7 +4714,7 @@ def _guardrail_with_in_memory_presidio(
 @pytest.mark.asyncio
 async def test_check_pii_raises_blocked_entity_for_card() -> None:
     text: Final = f"My credit card number is {_CARD_NUMBER} and my email is {_EMAIL}"
-    analyzed: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
     guardrail: Final = _guardrail_with_in_memory_presidio(analyzed)
     try:
         with pytest.raises(BlockedPiiEntityError) as excinfo:
@@ -4708,8 +4724,8 @@ async def test_check_pii_raises_blocked_entity_for_card() -> None:
 
     analyze_requests: Final = _drain(analyzed)
     assert len(analyze_requests) == 1
-    assert analyze_requests[0]["text"] == text
-    assert set(analyze_requests[0]["entities"]) == set(_BLOCK_CARD_MASK_EMAIL)
+    assert analyze_requests[0].get("text") == text
+    assert set(analyze_requests[0].get("entities") or ()) == set(_BLOCK_CARD_MASK_EMAIL)
     assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
     assert excinfo.value.guardrail_name == guardrail.guardrail_name
 
@@ -4719,7 +4735,7 @@ async def test_pre_call_hook_raises_blocked_entity_for_card_message(
     mock_user_api_key: UserAPIKeyAuth, mock_cache: DualCache
 ) -> None:
     user_text: Final = f"My credit card is {_CARD_NUMBER} and my email is {_EMAIL}."
-    analyzed: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
     guardrail: Final = _guardrail_with_in_memory_presidio(analyzed)
     try:
         with pytest.raises(BlockedPiiEntityError) as excinfo:
@@ -4739,14 +4755,14 @@ async def test_pre_call_hook_raises_blocked_entity_for_card_message(
         await guardrail._close_http_session()
 
     analyze_requests: Final = _drain(analyzed)
-    assert user_text in [payload["text"] for payload in analyze_requests]
-    assert all(set(payload["entities"]) == set(_BLOCK_CARD_MASK_EMAIL) for payload in analyze_requests)
+    assert user_text in [payload.get("text") for payload in analyze_requests]
+    assert all(set(payload.get("entities") or ()) == set(_BLOCK_CARD_MASK_EMAIL) for payload in analyze_requests)
     assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
     assert excinfo.value.guardrail_name == guardrail.guardrail_name
 
 
 @pytest.mark.asyncio
-async def test_legacy_pii_masking_config_registers_logging_only_guardrail(monkeypatch):
+async def test_legacy_pii_masking_config_registers_logging_only_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PRESIDIO_ANALYZER_API_BASE", "http://localhost:5002")
     monkeypatch.setenv("PRESIDIO_ANONYMIZER_API_BASE", "http://localhost:5001")
     monkeypatch.setattr(litellm, "guardrail_name_config_map", {})

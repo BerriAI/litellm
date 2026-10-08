@@ -1,15 +1,18 @@
 import asyncio
 import io
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from datetime import datetime
 from typing import Final
 
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict, override
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import ImageResponse, StandardLoggingPayload
+from litellm.types.utils import ImageResponse
 
 _PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
 _FIRST_IMAGE: Final = _PNG_SIGNATURE + b"first-reference-image"
@@ -32,14 +35,26 @@ _EDIT_RESPONSE: Final = {
 }
 
 
+class _LoggedImageEdit(TypedDict):
+    model: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str]
+    response_cost: ReadOnly[float]
+
+
+_LOGGED_IMAGE_EDIT: Final = TypeAdapter(_LoggedImageEdit)
+
+
 class _SuccessLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.payload: StandardLoggingPayload | None = None
+        self.payload: _LoggedImageEdit | None = None
         self.logged: Final = asyncio.Event()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):  # pyright: ignore[reportMissingParameterType, reportImplicitOverride]  # CustomLogger hook signature is untyped
-        self.payload = kwargs.get("standard_logging_object")
+    @override
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.payload = _LOGGED_IMAGE_EDIT.validate_python(kwargs.get("standard_logging_object"))
         self.logged.set()
 
 
