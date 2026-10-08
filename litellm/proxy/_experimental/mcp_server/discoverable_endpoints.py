@@ -693,7 +693,7 @@ async def _store_per_user_token_server_side(
 
     refresh_token: Final[str | None] = token_response.get("refresh_token") or None
     raw_scope: Final = token_response.get("scope", requested_scope)
-    scopes: Final[list | None] = raw_scope.split() if isinstance(raw_scope, str) and raw_scope else None
+    scopes: Final[list | None] = raw_scope.split() if isinstance(raw_scope, str) else None
 
     try:
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Cannot store per-user OAuth token.")
@@ -1548,7 +1548,8 @@ async def exchange_token_with_server(
         result["expires_in"] = token_response["expires_in"]
     if token_response.get("refresh_token"):
         result["refresh_token"] = token_response["refresh_token"]
-    effective_scope: Final = token_response.get("scope", requested_scope)
+    token_fields: Final = TypeAdapter[dict[str, object]](dict[str, object]).validate_python(token_response)
+    effective_scope: Final = token_fields.get("scope", requested_scope)
     if effective_scope is not None:
         result["scope"] = effective_scope
 

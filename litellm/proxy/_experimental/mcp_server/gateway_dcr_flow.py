@@ -879,9 +879,12 @@ async def _describe_opened_flow(
             "server_id": server.server_id,
             "server_name": server.server_name or server.alias or server.name,
             "connected": credential == "present",
-            **({"requested_scopes": flow.requested_scopes} if flow.requested_scopes else {}),
         }
-        return interactive_description
+        return (
+            {**interactive_description, "requested_scopes": flow.requested_scopes}
+            if flow.requested_scopes
+            else interactive_description
+        )
     described: Final[ConnectFlowDescription] = {
         "state": state,
         "client_origin": _origin_only(flow.redirect_uri),

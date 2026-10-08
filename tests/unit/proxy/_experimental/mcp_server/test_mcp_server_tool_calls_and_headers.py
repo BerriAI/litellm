@@ -264,11 +264,17 @@ async def test_mcp_server_tool_call_strips_custom_litellm_key_header(_mcp_reques
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_request_ctx):
-    """The MCP session manager serializes handler exceptions as JSON-RPC errors, so a mid-session
-    tool call cannot emit a raw 401 the way the REST path does. mcp_server_tool_call must turn an
-    upstream MCPUpstreamAuthError into an explicit isError result naming the status, not a masked
-    500 or a raw traceback, so the client still learns it must re-authenticate upstream."""
+@pytest.mark.parametrize("required_scope, http_transport", [(None, False), (None, True), ("tools.write", True)])
+async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_request_ctx, required_scope, http_transport):
+    from starlette.requests import Request
+
+    from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+
+    status_code = 403 if required_scope is not None else 401
+    send = AsyncMock()
+    response = OAuthScopeResponse(send, "https://gateway.example", "/mcp/pt")
+    request = Request({"type": "http", SCOPE_RESPONSE_KEY: response})
+    await response({"type": "http.response.start", "status": 200, "headers": []})
     try:
         from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
         from litellm.proxy._experimental.mcp_server.server import (
@@ -284,7 +290,7 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_r
         return data
 
     async def mock_call_mcp_tool(*args, **kwargs):
-        raise MCPUpstreamAuthError(status_code=401, www_authenticate="Bearer", server_name="pt")
+        raise MCPUpstreamAuthError(status_code=status_code, www_authenticate=None, server_name="pt", required_scope=required_scope)
 
     mock_logger = MagicMock()
     with patch(
@@ -298,20 +304,27 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_r
             with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
                 with patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger):
                     result = await mcp_server_tool_call(
-                        _mcp_request_ctx(), _call_tool_params("test_tool", {"param": "value"})
+                        _mcp_request_ctx(request=request if http_transport else None), _call_tool_params("test_tool", {"param": "value"})
                     )
 
     assert result.is_error is True
     # The dedicated MCPUpstreamAuthError branch (not the generic Exception fallthrough) produces this
     # specific message and logs at info, never a traceback via verbose_logger.exception.
     assert "upstream authentication required" in result.content[0].text
-    assert "401" in result.content[0].text
+    assert str(status_code) in result.content[0].text
     exception_calls = [str(c.args[0]) for c in mock_logger.exception.call_args_list if c.args]
     assert not any("mcp_server_tool_call" in m for m in exception_calls), (
         "must not log a traceback for the expected re-auth"
     )
     info_calls = [str(c.args[0]) for c in mock_logger.info.call_args_list if c.args]
     assert any("Upstream auth failure" in m for m in info_calls)
+    response.allow()
+    await response({"type": "http.response.body", "body": b"tool error"})
+    start = send.await_args_list[0].args[0]
+    assert start["status"] == (403 if required_scope is not None else 200)
+    if required_scope is not None:
+        assert b'error="insufficient_scope"' in dict(start["headers"])[b"www-authenticate"]
+
 
 
 def test_prepare_mcp_server_headers_case_insensitive_extra_headers():
@@ -2464,9 +2477,12 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
     (("é", 0), ("é", 1), ("中", 1), ("中", 2), ("😀", 1), ("😀", 2), ("😀", 3)),
 )
 async def test_mcp_routing_peek_survives_multibyte_char_split_at_cap(
-    method: str, chunked: bool, character: str, bytes_before_cap: int
+    method: str, chunked: bool, character: str, bytes_before_cap: int, _mcp_request_ctx
 ) -> None:
+    from starlette.requests import Request
+
     from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._experimental.mcp_server.scope_challenge import finish_scope_response
 
     params: Final = (
         {
@@ -2490,9 +2506,14 @@ async def test_mcp_routing_peek_survives_multibyte_char_split_at_cap(
     send: Final = AsyncMock()
     received: Final[asyncio.Future[bytes]] = asyncio.get_running_loop().create_future()
 
-    async def handle_request(_: Scope, downstream_receive: Receive, outgoing: Send) -> None:
+    async def handle_request(incoming: Scope, downstream_receive: Receive, outgoing: Send) -> None:
         assert receive.await_count == (2 if chunked else 1)
         received.set_result(await _drain_body(downstream_receive))
+
+        async def dispatch(context):
+            return CallToolResult(content=[])
+
+        await finish_scope_response(_mcp_request_ctx(request=Request(incoming)), dispatch)
         await outgoing({"type": "http.response.start", "status": 200, "headers": []})
         await outgoing({"type": "http.response.body", "body": b"{}"})
 

@@ -7274,6 +7274,47 @@ class TestMCPServerManager:
         return UserAPIKeyAuth(api_key="sk-test")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("managed", [False, True])
+    async def test_tool_response_waits_only_for_managed_user_oauth_authorization(self, managed):
+        import asyncio
+
+        from mcp.server.context import ServerRequestContext
+        from starlette.requests import Request
+
+        from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+        from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+
+        auth = self._unrestricted_auth()
+        manager, logging = self._manager_ready_for_call_tool(
+            [MCPTool(name="test_tool", inputSchema={"type": "object"})],
+            caller=ListedToolsCaller(user_api_key_auth=auth),
+        )
+        if managed:
+            manager.registry["test-server"] = manager.registry["test-server"].model_copy(update={
+                "auth_type": MCPAuth.oauth2, "oauth2_flow": "authorization_code",
+            })
+        send = AsyncMock()
+        gate = OAuthScopeResponse(send, "https://gateway.example", "/mcp/test-server")
+        context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}))
+        token = active_mcp_request_ctx_var.set(context)
+        await gate({"type": "http.response.start", "status": 200, "headers": []})
+        progress = asyncio.create_task(gate({"type": "http.response.body", "body": b"progress", "more_body": True}))
+
+        async def upstream_call(*args, **kwargs):
+            await asyncio.sleep(0)
+            assert send.await_count == (0 if managed else 2)
+            return CallToolResult(content=[], is_error=False)
+
+        manager.create_mcp_client.return_value.call_tool.side_effect = upstream_call
+        try:
+            result = await manager.call_tool(server_name="test-server", name="test_tool", arguments={}, user_api_key_auth=auth, proxy_logging_obj=logging)
+            assert not result.is_error
+        finally:
+            gate.allow()
+            await asyncio.wait_for(progress, 1)
+            active_mcp_request_ctx_var.reset(token)
+
+    @pytest.mark.asyncio
     async def test_call_tool_hands_listed_tool_description_and_schema_to_pre_call_hooks(self):
         schema = {"type": "object", "properties": {"param": {"type": "string"}}, "required": ["param"]}
         listed = [MCPTool(name="test_tool", description="Runs the test tool", inputSchema=schema)]

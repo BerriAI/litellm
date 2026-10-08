@@ -649,6 +649,6 @@ def test_managed_scope_step_up_preserves_read_and_write_without_retry(gateway: G
             result: Final = caller.call(f"{alias}-{operation}_op", {}, identity)
             assert result.ok and result.text == f"{operation} completed", result.raw
         forbidden: Final = caller.call(f"{alias}-forbid_op", {}, identity)
-        assert forbidden.status_code == 200 and not forbidden.ok, forbidden.raw
+        assert forbidden.status == 200 and not forbidden.ok, forbidden.raw
         unauthorized: Final = McpCaller(gateway, stranger, entry, alias).call(f"{alias}-read_op", {}, identity)
-        assert unauthorized.status_code == 401, unauthorized.raw
+        assert unauthorized.status == 401, unauthorized.raw

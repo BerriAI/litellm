@@ -79,6 +79,7 @@ from litellm.constants import (
 )
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.proxy._experimental.mcp_server.legacy_callbacks import record_upstream_tool_authorization
 from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.proxy._experimental.mcp_server.result_conversion import (
     age_freshness,
@@ -832,7 +833,10 @@ class MCPClient:
                 verify=ssl_config,
                 follow_redirects=True,
                 event_hooks=MappingProxyType(
-                    {"response": [capture_upstream_error_response], "request": [guard] if guard else []}
+                    {
+                        "response": [record_upstream_tool_authorization, capture_upstream_error_response],
+                        "request": [guard] if guard else [],
+                    }
                 ),
             )
 

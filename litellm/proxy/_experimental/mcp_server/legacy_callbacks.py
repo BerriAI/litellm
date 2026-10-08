@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Final, Protocol
 
+import httpx2
 from mcp.client.session import ClientRequestContext
 from mcp.types import (
     CreateMessageRequestParams,
@@ -14,6 +15,11 @@ from mcp.types import (
 from litellm.constants import MCP_CLIENT_TIMEOUT
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
 from litellm.proxy._experimental.mcp_server.mcp_context import get_active_mcp_request_ctx
+from litellm.proxy._experimental.mcp_server.scope_challenge import (
+    OAuthScopeResponse,
+    is_tool_call_request,
+    scope_response_from_request,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 
 
@@ -96,3 +102,20 @@ def create_elicitation_callback(timeout: float | None = None) -> ElicitationCall
         )
 
     return callback
+
+
+def get_scope_response() -> OAuthScopeResponse | None:
+    context: Final = get_active_mcp_request_ctx()
+    return scope_response_from_request(context.request) if context is not None else None
+
+
+async def record_upstream_tool_authorization(response: httpx2.Response) -> None:
+    pending: Final = get_scope_response()
+    if pending is None or not pending.pending or not response.is_success or response.request.method != "POST":
+        return
+    try:
+        is_tool_call: Final = is_tool_call_request(response.request.content)
+    except httpx2.RequestNotRead:
+        return
+    if is_tool_call:
+        pending.allow()

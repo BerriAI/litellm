@@ -68,6 +68,9 @@ const getStorage = (key: string): string | null => {
   return getSecureItem(key);
 };
 
+const grantedScopes = (scope: unknown, requested: string[] | undefined): string[] | undefined =>
+  typeof scope === "string" ? scope.split(" ").filter(Boolean) : requested;
+
 export const useUserMcpOAuthFlow = ({
   accessToken,
   serverId,
@@ -216,7 +219,7 @@ export const useUserMcpOAuthFlow = ({
         access_token: token.access_token,
         refresh_token: token.refresh_token,
         expires_in: token.expires_in,
-        scopes: typeof token.scope === "string" ? token.scope.split(" ").filter(Boolean) : flowState.scopes,
+        scopes: grantedScopes(token.scope, flowState.scopes),
       });
 
       setStatus("success");

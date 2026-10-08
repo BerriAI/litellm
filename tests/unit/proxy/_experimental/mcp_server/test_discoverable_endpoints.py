@@ -13811,7 +13811,7 @@ async def test_managed_authorize_retains_the_callers_previous_grant(jwt_oauth_id
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("returned_scope, expected", [(None, ["tools.read", "tools.write"]), ("tools.read", ["tools.read"]), ("", None)])
+@pytest.mark.parametrize("returned_scope, expected", [(None, ["tools.read", "tools.write"]), ("tools.read", ["tools.read"]), ("", [])])
 async def test_managed_code_exchange_preserves_requested_scope_only_when_omitted(
     jwt_oauth_identity, monkeypatch, respx_mock, returned_scope, expected,
 ):
@@ -13904,7 +13904,7 @@ async def test_managed_scope_code_cannot_cross_oauth_boundaries(jwt_oauth_identi
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scope, expected", [(None, ["tools.read", "tools.write"]), ("tools.read", ["tools.read"]), ("", None)])
+@pytest.mark.parametrize("scope, expected", [(None, ["tools.read", "tools.write"]), ("tools.read", ["tools.read"]), ("", [])])
 async def test_managed_refresh_retains_only_the_actual_grant(jwt_oauth_identity, monkeypatch, respx_mock, scope, expected):
     from types import SimpleNamespace
 

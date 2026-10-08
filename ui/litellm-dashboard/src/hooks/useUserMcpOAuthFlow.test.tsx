@@ -18,16 +18,14 @@ describe("user OAuth granted scopes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
-    setSecureItem(
-      "litellm-user-mcp-oauth-flow-state",
-      JSON.stringify({
-        state: "callback-state",
-        codeVerifier: "verifier",
-        serverId: "server-1",
-        redirectUri: "https://app.example/callback",
-        scopes: ["tools.write"],
-      }),
-    );
+    const flowState = {
+      state: "callback-state",
+      codeVerifier: "verifier",
+      serverId: "server-1",
+      redirectUri: "https://app.example/callback",
+      scopes: ["tools.write"],
+    };
+    setSecureItem("litellm-user-mcp-oauth-flow-state", JSON.stringify(flowState));
     setSecureItem(
       "litellm-user-mcp-oauth-result",
       JSON.stringify({
@@ -57,12 +55,17 @@ describe("user OAuth granted scopes", () => {
       }),
     );
     await waitFor(() => expect(result.current.status).toBe("success"));
-    expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalledExactlyOnceWith("caller", "server-1", {
+    const expectedCredential = {
       access_token: "vendor-token",
       refresh_token: "vendor-refresh",
       expires_in: undefined,
       scopes: expected,
-    });
+    };
+    expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalledExactlyOnceWith(
+      "caller",
+      "server-1",
+      expectedCredential,
+    );
     expect(onSuccess).toHaveBeenCalledOnce();
   });
 });

@@ -94,6 +94,7 @@ from litellm.proxy._experimental.mcp_server.interactions import (
     seal_continuation,
     target_digest,
 )
+from litellm.proxy._experimental.mcp_server.legacy_callbacks import get_scope_response
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401  # legacy module exports
     MCPServerManager,
     _caller_authorization_fans_out,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -3009,11 +3010,12 @@ async def _execute_mcp_server_tool_call(
             is_error=True,
         )
     except MCPUpstreamAuthError as e:
-        # The MCP session manager serializes handler exceptions as JSON-RPC errors, so a
-        # mid-session tool call cannot emit a raw 401 + WWW-Authenticate the way the REST
-        # call path and the connect-time preemptive check do. Return an explicit isError
-        # naming the upstream status (at info level, not a traceback) so the client still
-        # learns it must re-authenticate upstream and expected pass-through 401s don't spam.
+        scope_response: Final = get_scope_response()
+        if scope_response is not None:
+            scope_response.deny(e)
+        # The request-owned response adapter relays managed scope challenges before
+        # Streamable HTTP headers commit. Other auth failures retain the existing
+        # explicit tool error, including failures after streaming has begun.
         verbose_logger.info("Upstream auth failure calling MCP tool: HTTP %s", e.status_code)
         return CallToolResult(
             content=[

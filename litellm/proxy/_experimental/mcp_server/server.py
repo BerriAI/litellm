@@ -72,6 +72,12 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     redact_mcp_resource_url,
     well_known_root_suffix,
 )
+from litellm.proxy._experimental.mcp_server.scope_challenge import (
+    SCOPE_RESPONSE_KEY,
+    OAuthScopeResponse,
+    finish_scope_response,
+    is_tool_call_request,
+)
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     ActingUser,
     GrantedToolsetIds,
@@ -604,7 +610,7 @@ if MCP_AVAILABLE:
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
     )
-    server.middleware.append(GatewayVersionPolicy())
+    server.middleware.extend((finish_scope_response, GatewayVersionPolicy()))
     server.create_initialization_options = types.MethodType(_gateway_create_initialization_options, server)
     sse: Final[SseServerTransport] = SseServerTransport("/sse/messages")
 
@@ -2346,6 +2352,18 @@ if MCP_AVAILABLE:
                     await rejection(scope, receive, send)
                     return
 
+            scope_response: Final = (
+                OAuthScopeResponse(
+                    send,
+                    get_request_base_url(StarletteRequest(scope)),
+                    scope.get("_original_path") or scope.get("path"),
+                )
+                if is_tool_call_request(body) or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                else None
+            )
+            if scope_response is not None:
+                scope[SCOPE_RESPONSE_KEY] = scope_response
+
             use_stateful: Final = bool(session_id or is_initialize)
             target_manager: Final = session_manager_stateful if use_stateful else session_manager_stateless
 
@@ -2463,7 +2481,7 @@ if MCP_AVAILABLE:
                     touch_last_seen=(scope.get("method") or "").upper() != "DELETE",
                     copy_existing_session_auth_context=is_initialize,
                 )
-                local_send = send
+                local_send = scope_response or send
                 if use_stateful and is_initialize:
                     local_send = _wrap_send_with_stateful_session_auth_context(
                         local_send,
