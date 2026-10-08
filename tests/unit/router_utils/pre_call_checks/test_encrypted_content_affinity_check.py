@@ -2337,11 +2337,20 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
 
 
 def _router_without_the_origin():
-    from unittest.mock import MagicMock
-
-    router = MagicMock()
-    router.get_deployment.return_value = None
-    return router
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "openai-key",
+                },
+                "model_info": {"id": "target-order-2"},
+            }
+        ],
+        num_retries=0,
+    )
 
 
 @pytest.mark.parametrize("router", [None, _router_without_the_origin()], ids=["no router", "origin removed"])
