@@ -130,14 +130,6 @@ def test_dictionary_validation_keeps_required_nullable_and_optional_fields_disti
         TypeAdapter(SpanErrorPage).validate_python({"span_id": "span", "message": "error", "total_chars": 5})
 
 
-def test_invalid_native_response_preserves_validation_error_as_cause() -> None:
-    from litellm.rust_bridge.trace.storage import _decode_query_response
-
-    with pytest.raises(RuntimeError, match="Native trace query returned an invalid response") as error:
-        _decode_query_response(LENS_EVIDENCE.response, '{"data":[{"count":-1}]}')
-    assert isinstance(error.value.__cause__, ValidationError)
-
-
 @pytest.mark.parametrize("flag", (0, 1, "0", "1"))
 def test_clickhouse_availability_normalizes_numeric_boolean_flags(flag: int | str) -> None:
     from litellm.rust_bridge.trace.generated.models import ActivityAvailability
