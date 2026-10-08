@@ -203,15 +203,16 @@ def test_base_counts_cached_keeps_each_checker_apart(tmp_path: Path) -> None:
     ) == {"reportAny": 4}
 
 
-def test_an_empty_base_pass_fails_the_gate_instead_of_blaming_the_change(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    with pytest.raises(SystemExit) as exit_info:
-        counts.base_counts_cached(
-            _CHECKER, "abc123def4567", lambda ref: {}, cache_dir=tmp_path, fetch=lambda checker, base_point: {}
-        )
-    assert exit_info.value.code == 1
-    assert f"FAIL: {_CHECKER.name} produced no violations for the base tree at abc123def456," in capsys.readouterr().out
+def test_an_empty_base_pass_is_never_cached(tmp_path: Path) -> None:
+    calls: Final[list[str]] = []
+
+    def crashed(ref: str) -> counts.Counts:
+        calls.append(ref)
+        return {}
+
+    assert counts.base_counts_cached(_CHECKER, "abc123", crashed, cache_dir=tmp_path, fetch=_no_fetch) == {}
+    assert counts.base_counts_cached(_CHECKER, "abc123", crashed, cache_dir=tmp_path, fetch=_no_fetch) == {}
+    assert calls == ["abc123", "abc123"]
     assert list(tmp_path.iterdir()) == []
 
 
