@@ -32,7 +32,7 @@ export function CommandPaletteResultRow({
       aria-selected={active}
       tabIndex={-1}
       className={cn(
-        "flex h-10 w-full items-center gap-3 rounded-lg px-2 text-left transition-colors",
+        "flex h-11 w-full items-center gap-3 rounded-lg px-2 text-left transition-colors",
         active ? "bg-accent text-accent-foreground" : "hover:bg-muted/70",
       )}
       onMouseDown={(event) => event.preventDefault()}
