@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+import re
 import ssl
 import threading
 import time
@@ -17,10 +18,12 @@ from typing import Final, TypeVar
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import psutil
 import pytest
 import websockets
 from integration._support.client import Gateway, eventually, gateway_from_environment
-from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.database import read_rows, scratch_database
+from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy, owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.upstream import (
     JsonResponse,
@@ -30,9 +33,11 @@ from integration._support.upstream import (
 )
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from websockets.asyncio.server import ServerConnection, serve
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidStatus
+from websockets.typing import Subprotocol
 
-pytestmark: Final = pytest.mark.timeout(360)
+OWNED_PROXY_CELL_SECONDS: Final = 2 * graceful_stop_seconds() + 180
+pytestmark: Final = pytest.mark.timeout(max(360.0, OWNED_PROXY_CELL_SECONDS))
 
 PROVIDER_MODEL: Final = "ws-peer-model"
 STALL_PROVIDER_MODEL: Final = "ws-stall-peer-model"
@@ -42,6 +47,18 @@ DEAF_READ_PAUSE_SECONDS: Final = 20
 PEER_TEXT: Final = "responses websocket peer"
 TERMINAL: Final = frozenset({"response.completed", "response.failed", "error"})
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+SESSION_LIMIT_FIELD: Final = "responses_websocket_session_limit_seconds"
+LIMIT_CLOSE_REASON: Final = "Session duration limit reached"
+RELOAD_INTERVAL_SECONDS: Final = 3
+WORKER_SYNC_SECONDS: Final = RELOAD_INTERVAL_SECONDS + 7
+CAP_SECONDS: Final = 60
+RESTORED_IDLE_SECONDS: Final = 75
+CAPPED_SOCKETS: Final = ("/v1/responses",) * 4 + ("/responses",) * 4
+KILLED_POOL_SIZE: Final = 8
+SUBPROTOCOLS: Final = (Subprotocol("litellm-responses-first"), Subprotocol("litellm-responses-second"))
+STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
+WORKER_PIDS: Final = TypeAdapter(tuple[int, ...])
+CLIENT_ADDRESS: Final = TypeAdapter(tuple[str, int])
 T = TypeVar("T")
 
 
@@ -84,9 +101,25 @@ class SessionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class HandshakeResult:
+    status_code: int | None
+    error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SubprotocolResult:
+    text: str
+    negotiated: str | None
+    events: tuple[dict[str, JsonValue], ...]
+    error: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class DefaultResults:
     pool: tuple[SessionResult, ...]
     query: SessionResult
+    rejected: HandshakeResult
+    subprotocol: SubprotocolResult
     provider: tuple[PeerSnapshot, ...]
 
 
@@ -154,10 +187,59 @@ class InvalidResult:
 
 
 @dataclass(frozen=True, slots=True)
+class UpdateResult:
+    status_code: int
+    body: str
+
+
+@dataclass(frozen=True, slots=True)
+class CappedSocket:
+    path: str
+    worker_pid: int | None
+    close: CloseResult
+
+
+@dataclass(frozen=True, slots=True)
+class HeldResult:
+    held_seconds: float
+    events: tuple[dict[str, JsonValue], ...]
+    error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class OverrideResults:
+    workers: frozenset[int]
+    updates: tuple[UpdateResult, ...]
+    stored_after_updates: JsonValue
+    capped: tuple[CappedSocket, ...]
+    earlier: HeldResult
+    delete: UpdateResult
+    stored_after_delete: dict[str, JsonValue] | None
+    restored: SessionResult
+
+
+@dataclass(frozen=True, slots=True)
+class TurnOutcome:
+    events: tuple[dict[str, JsonValue], ...]
+    error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class KillResults:
+    held_by: Mapping[int, int]
+    victim: int
+    victim_closes: tuple[ReceiveResult, ...]
+    survivor_turns: tuple[TurnOutcome, ...]
+    health_status: int
+    fresh_completed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ChaosResults:
     burst: tuple[BurstResult, ...]
     health_status: int
     websocket_completed: bool
+    kill: KillResults
 
 
 def _object(value: JsonValue) -> dict[str, JsonValue]:
@@ -364,6 +446,7 @@ async def _idle_turn(
     text: str,
     *,
     query_model: bool = False,
+    idle_seconds: float = 35,
 ) -> SessionResult:
     query: Final = f"?model={model}" if query_model else ""
     try:
@@ -372,7 +455,7 @@ async def _idle_turn(
             additional_headers={"Authorization": f"Bearer {key}"},
             open_timeout=10,
         ) as connection:
-            idle: Final = await _receive(connection, 35)
+            idle: Final = await _receive(connection, idle_seconds)
             try:
                 events: Final = await _turn(connection, _create(model, text, include_model=not query_model))
             except (ConnectionClosed, asyncio.TimeoutError) as error:
@@ -390,15 +473,46 @@ async def _pool_workload(candidate: Gateway, key: str, model: str) -> tuple[Sess
     )
 
 
+async def _rejected_handshake(proxy: str) -> HandshakeResult:
+    try:
+        async with websockets.connect(
+            f"{proxy}/v1/responses",
+            additional_headers={"Authorization": f"Bearer sk-rejected-{uuid.uuid4().hex}"},
+            open_timeout=10,
+        ):
+            return HandshakeResult(None, "handshake accepted")
+    except InvalidStatus as error:
+        return HandshakeResult(error.response.status_code, None)
+    except (ConnectionClosed, asyncio.TimeoutError, OSError) as error:
+        return HandshakeResult(None, f"{type(error).__name__}: {error}")
+
+
+async def _subprotocol_turn(proxy: str, key: str, model: str) -> SubprotocolResult:
+    text: Final = f"subprotocol-{uuid.uuid4().hex}"
+    try:
+        async with websockets.connect(
+            f"{proxy}/v1/responses",
+            additional_headers={"Authorization": f"Bearer {key}"},
+            subprotocols=SUBPROTOCOLS,
+            open_timeout=10,
+        ) as connection:
+            events, error = await _turn_result(connection, _create(model, text))
+            return SubprotocolResult(text, connection.subprotocol, events, error)
+    except (ConnectionClosed, asyncio.TimeoutError, InvalidStatus) as error:
+        return SubprotocolResult(text, None, (), f"{type(error).__name__}: {error}")
+
+
 async def _default_workload(
     candidate: Gateway, key: str, model: str
-) -> tuple[tuple[SessionResult, ...], SessionResult]:
+) -> tuple[tuple[SessionResult, ...], SessionResult, HandshakeResult, SubprotocolResult]:
     proxy: Final = _proxy_ws_url(candidate, "")
-    pool, query = await asyncio.gather(
+    pool, query, rejected, negotiated = await asyncio.gather(
         _pool_workload(candidate, key, model),
         _idle_turn(proxy, key, model, "/v1/responses", f"query-{uuid.uuid4().hex}", query_model=True),
+        _rejected_handshake(proxy),
+        _subprotocol_turn(proxy, key, model),
     )
-    return pool, query
+    return pool, query, rejected, negotiated
 
 
 def _snapshot(record: PeerConnection) -> PeerSnapshot:
@@ -406,11 +520,13 @@ def _snapshot(record: PeerConnection) -> PeerSnapshot:
 
 
 def _snapshots(peer: ResponsesPeer, count: int) -> tuple[PeerSnapshot, ...]:
-    records: Final = tuple(peer.connections.get(timeout=15) for _ in range(count))
+    eventually(lambda: peer.connections.qsize(), lambda size: size >= count, seconds=15, return_last_on_timeout=True)
+    records: Final = _drain(peer.connections)
     eventually(
         lambda: tuple(record.closed.qsize() for record in records),
         lambda counts: all(count > 0 for count in counts),
         seconds=10,
+        return_last_on_timeout=True,
     )
     return tuple(_snapshot(record) for record in records)
 
@@ -684,6 +800,196 @@ def _session_config(path: Path, seconds: int) -> Path:
     return path
 
 
+def _worker_pids(log: Path) -> frozenset[int]:
+    return frozenset(
+        eventually(
+            lambda: WORKER_PIDS.validate_python(STARTED_WORKER.findall(log.read_text())),
+            lambda pids: len(pids) == 2,
+            seconds=30,
+        )
+    )
+
+
+def _client_port(connection: websockets.ClientConnection) -> int:
+    return CLIENT_ADDRESS.validate_python(connection.transport.get_extra_info("sockname"))[1]
+
+
+def _holding_worker(workers: frozenset[int], client_port: int) -> int | None:
+    def holds(pid: int) -> bool:
+        return any(
+            connection.status == psutil.CONN_ESTABLISHED and connection.raddr and connection.raddr.port == client_port
+            for connection in psutil.Process(pid).net_connections(kind="tcp")
+        )
+
+    return next((pid for pid in sorted(workers) if holds(pid)), None)
+
+
+def _settled_on_every_worker(written_at: float) -> None:
+    eventually(
+        lambda: time.monotonic() - written_at,
+        lambda elapsed: elapsed >= WORKER_SYNC_SECONDS,
+        seconds=WORKER_SYNC_SECONDS + 5,
+    )
+
+
+def _config_field(candidate: Gateway, action: str, body: Mapping[str, JsonValue]) -> UpdateResult:
+    response: Final = candidate.request("POST", f"/config/field/{action}", body)
+    return UpdateResult(response.status_code, response.text)
+
+
+def _update_limit(candidate: Gateway, value: JsonValue) -> UpdateResult:
+    return _config_field(
+        candidate,
+        "update",
+        {"field_name": SESSION_LIMIT_FIELD, "field_value": value, "config_type": "general_settings"},
+    )
+
+
+def _delete_limit(candidate: Gateway) -> UpdateResult:
+    return _config_field(candidate, "delete", {"field_name": SESSION_LIMIT_FIELD, "config_type": "general_settings"})
+
+
+def _general_settings_row(database_url: str | None) -> dict[str, JsonValue] | None:
+    rows: Final = read_rows(
+        'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s',
+        ("general_settings",),
+        database_url=database_url,
+    )
+    return _object(rows[0]["param_value"]) if rows else None
+
+
+def _stored_limit(database_url: str) -> JsonValue:
+    row: Final = _general_settings_row(database_url)
+    return None if row is None else row.get(SESSION_LIMIT_FIELD)
+
+
+def _health_status(candidate: Gateway) -> int:
+    try:
+        return candidate.request("GET", "/health/liveliness").status_code
+    except httpx.HTTPError:
+        return 0
+
+
+async def _update_sequence(candidate: Gateway, values: tuple[int, ...]) -> tuple[UpdateResult, ...]:
+    if not values:
+        return ()
+    first: Final = await asyncio.to_thread(_update_limit, candidate, values[0])
+    return (first, *await _update_sequence(candidate, values[1:]))
+
+
+async def _capped_socket(proxy: str, key: str, path: str, workers: frozenset[int]) -> CappedSocket:
+    started: Final = time.monotonic()
+    try:
+        async with websockets.connect(
+            f"{proxy}{path}",
+            additional_headers={"Authorization": f"Bearer {key}"},
+            open_timeout=10,
+        ) as connection:
+            holder: Final = await asyncio.to_thread(_holding_worker, workers, _client_port(connection))
+            outcome: Final = await _wait_for_close(connection, CAP_SECONDS + 15)
+            return CappedSocket(path, holder, CloseResult(outcome, time.monotonic() - started))
+    except (ConnectionClosed, asyncio.TimeoutError, InvalidStatus) as error:
+        code, reason = _auth_close(error) if isinstance(error, ConnectionClosed) else (None, None)
+        failed: Final = ReceiveResult(False, True, None, code, reason)
+        return CappedSocket(path, None, CloseResult(failed, time.monotonic() - started))
+
+
+async def _held_turn(connection: websockets.ClientConnection, model: str, accepted_at: float) -> HeldResult:
+    events, error = await _turn_result(connection, _create(model, f"earlier-{uuid.uuid4().hex}"))
+    return HeldResult(time.monotonic() - accepted_at, events, error)
+
+
+async def _override_workload(owned: OwnedProxy, key: str, model: str, database_url: str) -> OverrideResults:
+    candidate: Final = owned.gateway
+    proxy: Final = _proxy_ws_url(candidate, "")
+    workers: Final = await asyncio.to_thread(_worker_pids, owned.log)
+    async with websockets.connect(
+        f"{proxy}/v1/responses",
+        additional_headers={"Authorization": f"Bearer {key}"},
+        open_timeout=10,
+    ) as earlier:
+        accepted_at: Final = time.monotonic()
+        updates: Final = await _update_sequence(candidate, (7200, CAP_SECONDS, CAP_SECONDS))
+        written_at: Final = time.monotonic()
+        stored_after_updates: Final = await asyncio.to_thread(_stored_limit, database_url)
+        await asyncio.to_thread(_settled_on_every_worker, written_at)
+        capped: Final = await asyncio.gather(
+            *tuple(_capped_socket(proxy, key, path, workers) for path in CAPPED_SOCKETS)
+        )
+        earlier_result: Final = await _held_turn(earlier, model, accepted_at)
+    delete: Final = await asyncio.to_thread(_delete_limit, candidate)
+    deleted_at: Final = time.monotonic()
+    stored_after_delete: Final = await asyncio.to_thread(_general_settings_row, database_url)
+    await asyncio.to_thread(_settled_on_every_worker, deleted_at)
+    restored: Final = await _idle_turn(
+        proxy,
+        key,
+        model,
+        "/v1/responses",
+        f"restored-{uuid.uuid4().hex}",
+        idle_seconds=RESTORED_IDLE_SECONDS,
+    )
+    return OverrideResults(
+        workers,
+        updates,
+        stored_after_updates,
+        tuple(capped),
+        earlier_result,
+        delete,
+        stored_after_delete,
+        restored,
+    )
+
+
+async def _kill_workload(owned: OwnedProxy, key: str, model: str) -> KillResults:
+    candidate: Final = owned.gateway
+    workers: Final = await asyncio.to_thread(_worker_pids, owned.log)
+    connections: Final = await asyncio.gather(
+        *tuple(
+            websockets.connect(
+                _proxy_ws_url(candidate, "/v1/responses"),
+                additional_headers={"Authorization": f"Bearer {key}"},
+                open_timeout=10,
+            )
+            for _ in range(KILLED_POOL_SIZE)
+        )
+    )
+    holders: Final = await asyncio.gather(
+        *tuple(asyncio.to_thread(_holding_worker, workers, _client_port(connection)) for connection in connections)
+    )
+    held_by: Final = MappingProxyType({pid: holders.count(pid) for pid in sorted(workers)})
+    victim: Final = max(sorted(workers), key=held_by.__getitem__)
+    psutil.Process(victim).kill()
+    victims: Final = tuple(
+        connection for connection, holder in zip(connections, holders, strict=True) if holder == victim
+    )
+    survivors: Final = tuple(
+        connection for connection, holder in zip(connections, holders, strict=True) if holder != victim
+    )
+    victim_closes, survivor_turns = await asyncio.gather(
+        asyncio.gather(*tuple(_wait_for_close(connection, 30) for connection in victims)),
+        asyncio.gather(
+            *tuple(_turn_result(connection, _create(model, f"survivor-{uuid.uuid4().hex}")) for connection in survivors)
+        ),
+    )
+    health: Final = await asyncio.to_thread(
+        eventually,
+        lambda: _health_status(candidate),
+        lambda status_code: status_code == 200,
+        30,
+    )
+    fresh: Final = await _chaos_turn(candidate, key, model)
+    await asyncio.gather(*tuple(connection.close() for connection in survivors))
+    return KillResults(
+        held_by,
+        victim,
+        tuple(victim_closes),
+        tuple(TurnOutcome(events, error) for events, error in survivor_turns),
+        health,
+        fresh,
+    )
+
+
 def _responses_body(model: str) -> JsonResponse:
     message: Final[dict[str, JsonValue]] = {
         "type": "message",
@@ -755,11 +1061,12 @@ async def _burst_request(
 
 
 async def _chaos_workload(
-    candidate: Gateway,
+    owned: OwnedProxy,
     key: str,
     scripted_model: str,
     peer_model: str,
 ) -> ChaosResults:
+    candidate: Final = owned.gateway
     base: Final = str(candidate.client.base_url)
     specs: Final = tuple(
         _responses_spec(scripted_model) if index % 2 == 0 else _chat_spec(scripted_model) for index in range(20)
@@ -779,7 +1086,8 @@ async def _chaos_workload(
     tuple(connection.transport.abort() for connection in connections)
     health: Final = candidate.request("GET", "/health/liveliness").status_code
     websocket_completed: Final = await _chaos_turn(candidate, key, peer_model)
-    return ChaosResults(tuple(results), health, websocket_completed)
+    kill: Final = await _kill_workload(owned, key, peer_model)
+    return ChaosResults(tuple(results), health, websocket_completed, kill)
 
 
 async def _chaos_turn(candidate: Gateway, key: str, model: str) -> bool:
@@ -814,9 +1122,9 @@ def default_results(
         ):
             model: Final = scenario.model(model=f"openai/{PROVIDER_MODEL}", api_base=peer.url)
             key: Final = scenario.key(models=[model])
-            pool, query = asyncio.run(_default_workload(candidate, key, model))
-            provider: Final = _snapshots(peer, 9)
-            yield DefaultResults(pool, query, provider)
+            pool, query, rejected, negotiated = asyncio.run(_default_workload(candidate, key, model))
+            provider: Final = _snapshots(peer, 10)
+            yield DefaultResults(pool, query, rejected, negotiated, provider)
 
 
 @pytest.fixture(scope="module")
@@ -882,13 +1190,13 @@ def chaos_results(
 ) -> Iterator[ChaosResults]:
     with responses_peer(cert) as peer, gateway_from_environment() as base:
         with (
-            owned_proxy(
+            owned_proxy_process(
                 base,
                 tmp_path_factory.mktemp("responses-ws-chaos"),
                 {"SSL_CERT_FILE": str(cert[0])},
                 workers=2,
-            ) as candidate,
-            candidate.scenario() as scenario,
+            ) as owned,
+            owned.gateway.scenario() as scenario,
         ):
             scenario_id: Final = f"responses-chaos-{uuid.uuid4().hex}"
             scripted: Final = register_scenario(
@@ -900,7 +1208,7 @@ def chaos_results(
                         "POST /chat/completions": _chat_body("scripted-chat-model"),
                     },
                 ),
-                control_url=candidate.upstream_url,
+                control_url=owned.gateway.upstream_url,
             )
             scenario.cleanups.callback(delete_scenario, scripted)
             scripted_model: Final = scenario.model(
@@ -909,7 +1217,30 @@ def chaos_results(
             )
             peer_model: Final = scenario.model(model=f"openai/{PROVIDER_MODEL}", api_base=peer.url)
             key: Final = scenario.key(models=[scripted_model, peer_model])
-            yield asyncio.run(_chaos_workload(candidate, key, scripted_model, peer_model))
+            yield asyncio.run(_chaos_workload(owned, key, scripted_model, peer_model))
+
+
+@pytest.fixture(scope="module")
+def override_results(
+    cert: tuple[Path, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[OverrideResults]:
+    with responses_peer(cert) as peer, gateway_from_environment() as base, scratch_database() as database_url:
+        with owned_proxy_process(
+            base,
+            tmp_path_factory.mktemp("responses-ws-override"),
+            {
+                "SSL_CERT_FILE": str(cert[0]),
+                "DATABASE_URL": database_url,
+                "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": str(RELOAD_INTERVAL_SECONDS),
+            },
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+            workers=2,
+        ) as owned:
+            with owned.gateway.scenario() as scenario:
+                model: Final = scenario.model(model=f"openai/{PROVIDER_MODEL}", api_base=peer.url)
+                key: Final = scenario.key(models=[model])
+                yield asyncio.run(_override_workload(owned, key, model, database_url))
 
 
 def test_default_config_idle_pool_stays_open_and_completes(default_results: DefaultResults) -> None:
@@ -918,10 +1249,11 @@ def test_default_config_idle_pool_stays_open_and_completes(default_results: Defa
     assert all(_completed_text(result.events) == PEER_TEXT for result in default_results.pool)
     texts: Final = frozenset(result.text for result in default_results.pool)
     provider: Final = tuple(snapshot for snapshot in default_results.provider if snapshot.frames)
-    assert len(provider) == 9, default_results.provider
+    assert len(provider) == 10, default_results.provider
     assert all(snapshot.path == f"/v1/responses?model={PROVIDER_MODEL}" for snapshot in provider)
     frames: Final = tuple(snapshot.frames[0] for snapshot in provider)
-    assert frozenset(_frame_text(frame) for frame in frames) == texts | {default_results.query.text}
+    expected_texts: Final = texts | {default_results.query.text, default_results.subprotocol.text}
+    assert frozenset(_frame_text(frame) for frame in frames) == expected_texts
     assert all(frame.get("model") == PROVIDER_MODEL for frame in frames)
 
 
@@ -1043,3 +1375,79 @@ def test_aborted_idle_pool_preserves_http_health_and_new_websocket(chaos_results
     assert all(_matches_scripted_body(result) for result in results), results
     assert chaos_results.health_status == 200
     assert chaos_results.websocket_completed
+
+
+def test_rejected_key_fails_the_handshake_with_403(default_results: DefaultResults) -> None:
+    assert default_results.rejected == HandshakeResult(403, None), default_results.rejected
+
+
+def test_requested_subprotocol_is_accepted_and_the_turn_completes(default_results: DefaultResults) -> None:
+    negotiated: Final = default_results.subprotocol
+    assert negotiated.error is None, negotiated
+    assert negotiated.negotiated == SUBPROTOCOLS[0], negotiated
+    assert _completed_text(negotiated.events) == PEER_TEXT
+
+
+def test_db_override_caps_new_sessions_on_every_worker_without_restart(override_results: OverrideResults) -> None:
+    assert len(override_results.workers) == 2, override_results.workers
+    capped: Final = override_results.capped
+    assert tuple(socket.path for socket in capped) == CAPPED_SOCKETS
+    assert all(socket.close.outcome.closed and socket.close.outcome.close_code == 1000 for socket in capped), capped
+    assert all(socket.close.outcome.close_reason == LIMIT_CLOSE_REASON for socket in capped), capped
+    assert all(CAP_SECONDS - 1 <= socket.close.elapsed <= CAP_SECONDS + 15 for socket in capped), capped
+    assert frozenset(socket.worker_pid for socket in capped) == override_results.workers, capped
+
+
+def test_db_override_leaves_sessions_accepted_before_it_alone(override_results: OverrideResults) -> None:
+    earlier: Final = override_results.earlier
+    assert earlier.error is None, earlier
+    assert earlier.held_seconds > CAP_SECONDS, earlier
+    assert _completed_text(earlier.events) == PEER_TEXT
+
+
+def test_db_override_accepts_the_range_bounds_and_repeats(override_results: OverrideResults) -> None:
+    updates: Final = override_results.updates
+    assert tuple(update.status_code for update in updates) == (200, 200, 200), updates
+    assert override_results.stored_after_updates == CAP_SECONDS
+
+
+def test_deleting_the_db_override_restores_the_default(override_results: OverrideResults) -> None:
+    assert override_results.delete.status_code == 200, override_results.delete
+    assert override_results.stored_after_delete is not None
+    assert SESSION_LIMIT_FIELD not in override_results.stored_after_delete
+    restored: Final = override_results.restored
+    assert restored.idle.timed_out, restored
+    assert restored.error is None, restored
+    assert _completed_text(restored.events) == PEER_TEXT
+
+
+@pytest.mark.parametrize(
+    ("value", "kind"),
+    (
+        pytest.param(30, "int", id="below-minimum"),
+        pytest.param(7201, "int", id="above-maximum"),
+        pytest.param("abc", "str", id="text"),
+        pytest.param("", "str", id="empty-string"),
+        pytest.param("x" * 5000, "str", id="five-kilobyte-string"),
+        pytest.param([], "list", id="list"),
+        pytest.param({}, "dict", id="object"),
+        pytest.param(None, "NoneType", id="null"),
+    ),
+)
+def test_out_of_range_or_wrong_type_update_is_refused(gateway: Gateway, value: JsonValue, kind: str) -> None:
+    before: Final = _general_settings_row(None)
+    refused: Final = _update_limit(gateway, value)
+    assert refused.status_code == 400, refused
+    assert json.loads(refused.body) == {"detail": {"error": f"Invalid type of field value=<class '{kind}'> passed in."}}
+    assert _general_settings_row(None) == before
+
+
+def test_killing_one_worker_drops_only_its_sockets_and_the_proxy_keeps_serving(chaos_results: ChaosResults) -> None:
+    kill: Final = chaos_results.kill
+    assert sum(kill.held_by.values()) == KILLED_POOL_SIZE, kill.held_by
+    assert len(kill.victim_closes) == kill.held_by[kill.victim] >= 1, kill
+    assert all(close.closed and close.close_code is None for close in kill.victim_closes), kill.victim_closes
+    assert all(turn.error is None for turn in kill.survivor_turns), kill.survivor_turns
+    assert all(_completed_text(turn.events) == PEER_TEXT for turn in kill.survivor_turns), kill.survivor_turns
+    assert kill.health_status == 200
+    assert kill.fresh_completed
