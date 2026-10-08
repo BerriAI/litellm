@@ -18,6 +18,8 @@ from starlette.datastructures import Headers
 import litellm
 from litellm.constants import (
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+    SERVER_STREAMING_CLASSIFICATION_KEY,
+    SERVER_STREAMING_CLASSIFICATION_MARKER,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
 )
@@ -1104,6 +1106,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "messages": [{"role": "user", "content": "hello"}],
         "mock_response": "free response",
         "mock_tool_calls": [{"id": "call_1"}],
+        "is_streaming_request": "caller-value",
         "disable_global_guardrails": True,
         "enable_prompt_caching": True,
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
@@ -1129,6 +1132,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "enable_prompt_caching" not in updated
     assert "routing_decision" not in updated
     assert "litellm_gateway_injected_cache" not in updated
+    assert updated["is_streaming_request"] == "caller-value"
     assert "weights" not in updated
     assert "_router_weights" not in updated
     assert "weights" not in updated["proxy_server_request"]["body"]
@@ -8881,6 +8885,54 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
     assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
 
 
+def test_body_snapshot_excludes_the_server_streaming_marker() -> None:
+    from litellm.constants import SERVER_STREAMING_CLASSIFICATION_KEY, SERVER_STREAMING_CLASSIFICATION_MARKER
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    proxy_request: Final = {"body": {}}
+    data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: SERVER_STREAMING_CLASSIFICATION_MARKER,
+        "proxy_server_request": proxy_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert proxy_request == {"body": {"messages": [{"role": "user", "content": "hi"}]}}
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        SERVER_STREAMING_CLASSIFICATION_MARKER,
+        json.loads(json.dumps(SERVER_STREAMING_CLASSIFICATION_MARKER)),
+    ],
+    ids=["enum", "json-string"],
+)
+def test_body_snapshot_drops_only_the_marker_and_keeps_caller_value(marker: str) -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    marker_request: Final = {"body": {}}
+    marker_data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: marker,
+        "proxy_server_request": marker_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(marker_data)
+
+    assert SERVER_STREAMING_CLASSIFICATION_KEY not in marker_request["body"], marker_request
+
+    caller_request: Final = {"body": {}}
+    caller_data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: "caller-value",
+        "proxy_server_request": caller_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(caller_data)
+
+    assert caller_request["body"][SERVER_STREAMING_CLASSIFICATION_KEY] == "caller-value", caller_request
 def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations

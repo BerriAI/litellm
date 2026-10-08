@@ -475,8 +475,12 @@ def _per_user_credential_names() -> tuple[str, ...]:
     return tuple(
         credential.credential_name
         for credential in litellm.credential_list
-        if isinstance(credential.credential_values, Mapping)
-        and credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        if cast(  # cast-ok: credential_values is a plain dict at runtime
+            Mapping[object, object], credential.credential_values
+        ).get(
+            GITHUB_COPILOT_AUTH_TYPE_KEY
+        )
+        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
     )
 
 
@@ -850,11 +854,10 @@ async def update_credential(
         # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
         _sync_in_memory_credential(patch, credential_name, merged_credential.credential_name)
 
-        merged_values: Final = merged_credential.credential_values
-        still_per_user: Final = (
-            isinstance(merged_values, Mapping)
-            and merged_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        merged_values: Final = cast(  # cast-ok: credential_values is a plain dict at runtime
+            Mapping[object, object], merged_credential.credential_values
         )
+        still_per_user: Final = merged_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
         if credential.credential_name != credential_name or not still_per_user:
             await _purge_user_connections_for_credential(credential_name)
 

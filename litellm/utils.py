@@ -2567,7 +2567,7 @@ def token_counter(
     model: str = "",
     custom_tokenizer: Mapping[str, object] | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: Sequence[AllMessageValues] | None = None,
+    messages: Sequence[AllMessageValues | BaseModel | Mapping[str, object]] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
@@ -8275,31 +8275,30 @@ from litellm.types.llms.openai import (
 )
 
 
-def convert_to_dict(message: BaseModel | dict) -> dict:
+def convert_to_dict(message: BaseModel | Mapping[str, object]) -> dict[str, object]:
     """
-    Converts a message to a dictionary if it's a Pydantic model.
+    Converts a Pydantic model or mapping into a dictionary.
 
     Args:
-        message: The message, which may be a Pydantic model or a dictionary.
+        message: The message, which may be a Pydantic model or mapping.
 
     Returns:
         dict: The converted message.
     """
     if isinstance(message, BaseModel):
         return message.model_dump(exclude_none=True)
-    elif isinstance(message, dict):
-        return message
-    else:
-        raise TypeError(f"Invalid message type: {type(message)}. Expected dict or Pydantic model.")
+    return dict(message)
 
 
-def convert_list_message_to_dict(messages: Sequence):
-    new_messages: Final = []
-    for message in messages:
-        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
-        cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
-        new_messages.append(cleaned_message)
-    return new_messages
+def convert_list_message_to_dict(
+    messages: Sequence[BaseModel | Mapping[str, object]],
+) -> list[dict[str, object]]:
+    return [
+        dict(
+            cleanup_none_field_in_message(message=cast(AllMessageValues, convert_to_dict(message)))  # cast-ok: message dicts satisfy the TypedDict shape
+        )
+        for message in messages
+    ]
 
 
 def validate_and_fix_openai_messages(messages: list):
@@ -8315,7 +8314,9 @@ def validate_and_fix_openai_messages(messages: list):
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 
-        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
+        convert_msg_to_dict = cast(  # cast-ok: message dicts satisfy the TypedDict shape
+            AllMessageValues, convert_to_dict(message)
+        )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)

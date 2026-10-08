@@ -20,6 +20,7 @@ from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
 from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -102,6 +103,30 @@ class _TCPConnectorKwargs(TypedDict, total=False):
     limit: int
     limit_per_host: int
     socket_factory: Callable[[_AddrInfo], socket.socket]
+
+
+class _AsyncHTTPHandlerParams(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    timeout: float | httpx.Timeout | None = None
+    event_hooks: Mapping[str, list[Callable[..., object]]] | None = None
+    client_alias: str | None = None
+    ssl_verify: VerifyTypes | None = None
+    shared_session: ClientSession | None = None
+    transport: httpx.AsyncBaseTransport | None = None
+    follow_redirects: bool = True
+    concurrent_limit: int | None = None
+
+
+class _HTTPHandlerParams(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    timeout: float | httpx.Timeout | None = None
+    client: httpx.Client | None = None
+    ssl_verify: bool | str | None = None
+    disable_default_headers: bool | None = False
+    follow_redirects: bool = True
+    concurrent_limit: int | None = None
 
 
 def build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.socket] | None:
@@ -1771,9 +1796,19 @@ def get_async_httpx_client(
 
     if params is not None:
         # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
-        handler_params: Final = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
-        handler_params["shared_session"] = shared_session
-        _new_client = AsyncHTTPHandler(**handler_params)
+        handler_params: Final = _AsyncHTTPHandlerParams.model_validate(
+            {**{k: v for k, v in params.items() if k != "disable_aiohttp_transport"}, "shared_session": shared_session}
+        )
+        _new_client = AsyncHTTPHandler(
+            timeout=handler_params.timeout,
+            event_hooks=handler_params.event_hooks,
+            concurrent_limit=handler_params.concurrent_limit,
+            client_alias=handler_params.client_alias,
+            ssl_verify=handler_params.ssl_verify,
+            shared_session=handler_params.shared_session,
+            transport=handler_params.transport,
+            follow_redirects=handler_params.follow_redirects,
+        )
     else:
         _new_client = AsyncHTTPHandler(
             timeout=_default_cached_client_timeout(),
@@ -1821,8 +1856,17 @@ def get_httpx_client(params: Mapping[str, object] | None = None) -> HTTPHandler:
 
     if params is not None:
         # Filter out params that are only used for cache key, not for HTTPHandler.__init__
-        handler_params: Final = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
-        _new_client = HTTPHandler(**handler_params)
+        handler_params: Final = _HTTPHandlerParams.model_validate(
+            {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        )
+        _new_client = HTTPHandler(
+            timeout=handler_params.timeout,
+            concurrent_limit=handler_params.concurrent_limit,
+            client=handler_params.client,
+            ssl_verify=handler_params.ssl_verify,
+            disable_default_headers=handler_params.disable_default_headers,
+            follow_redirects=handler_params.follow_redirects,
+        )
     else:
         _new_client = HTTPHandler(timeout=_default_cached_client_timeout())
 

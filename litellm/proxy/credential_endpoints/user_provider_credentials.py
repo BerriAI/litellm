@@ -9,7 +9,12 @@ negative marker so an unconnected user does not hit the DB per request.
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # casts pin the untyped DualCache to the local _TokenCache Protocol
+)
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -35,6 +40,16 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 _NOT_CONNECTED: Final = USER_PROVIDER_CREDENTIAL_NOT_CONNECTED
+
+
+class _TokenCache(Protocol):
+    async def async_get_cache(self, key: str) -> object: ...
+
+    async def async_set_cache(
+        self, key: str, value: object, local_only: bool = False, ttl: float | None = None
+    ) -> object: ...
+
+    async def async_delete_cache(self, key: str) -> object: ...
 
 
 class GithubCopilotUserConnectionPayload(BaseModel):
@@ -154,7 +169,10 @@ async def invalidate_user_provider_credential_cache(
     user_id: str,
     credential_name: str,
 ) -> None:
-    await cache.async_delete_cache(_cache_key(user_id, credential_name))
+    token_cache: Final = cast(  # cast-ok: pins the untyped DualCache to the local _TokenCache Protocol
+        _TokenCache, cache
+    )
+    await token_cache.async_delete_cache(_cache_key(user_id, credential_name))
 
 
 @with_service_target("user_provider_connections")
@@ -168,13 +186,16 @@ async def aget_user_provider_tokens(
 
     Cached values are the stored ciphertext or the ``_NOT_CONNECTED`` marker;
     plaintext tokens only ever live in the returned dict."""
+    token_cache: Final = cast(  # cast-ok: pins the untyped DualCache to the local _TokenCache Protocol
+        _TokenCache, cache
+    )
     names: Final = tuple(dict.fromkeys(credential_names))
     if not names:
         return {}
     cached: Final[dict[str, str]] = {}  # mutable-ok: accumulates hits and DB reads
     misses: Final[list[str]] = []  # mutable-ok: accumulates cache misses
     for name in names:
-        value = await cache.async_get_cache(_cache_key(user_id, name))
+        value = await token_cache.async_get_cache(_cache_key(user_id, name))
         if value == _NOT_CONNECTED:
             continue
         if isinstance(value, str) and value:
@@ -200,7 +221,7 @@ async def aget_user_provider_tokens(
         return {}
     found: Final = {row.credential_name: row.credential_b64 for row in rows}
     for name in misses:
-        await cache.async_set_cache(
+        await token_cache.async_set_cache(
             _cache_key(user_id, name),
             found.get(name, _NOT_CONNECTED),
             ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,

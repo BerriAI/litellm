@@ -203,16 +203,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
         default_headers: Final = get_copilot_default_headers(user_session.token) if user_session is not None else None
         try:
-            if default_headers is None:
-                # Get GitHub Copilot API key via OAuth
-                api_key: Final = self.authenticator.get_api_key()
-
-                if not api_key:
-                    raise AuthenticationError(
-                        model=model,
-                        llm_provider="github_copilot",
-                        message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
-                    )
+            # Get GitHub Copilot API key via OAuth
+            api_key: Final = self.authenticator.get_api_key() if default_headers is None else ""
+            if default_headers is None and not api_key:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider="github_copilot",
+                    message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
+                )
 
             # Get default headers (from copilot-api configuration)
             copilot_headers: Final = default_headers or get_copilot_default_headers(api_key)
@@ -346,19 +344,15 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return "user"
 
         # If input is a list, analyze items
-        if isinstance(input_param, list):
-            for item in input_param:
-                if not isinstance(item, dict):
-                    continue
+        for item in input_param:
+            # Check if item has no role (agent-initiated)
+            if "role" not in item or not item.get("role"):
+                return "agent"
 
-                # Check if item has no role (agent-initiated)
-                if "role" not in item or not item.get("role"):
-                    return "agent"
-
-                # Check if role is assistant (agent-initiated)
-                role = item.get("role")
-                if isinstance(role, str) and role.lower() == "assistant":
-                    return "agent"
+            # Check if role is assistant (agent-initiated)
+            role = item.get("role")
+            if role.lower() == "assistant":
+                return "agent"
 
         # Default to user-initiated
         return "user"
