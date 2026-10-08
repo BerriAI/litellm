@@ -12,7 +12,6 @@ This test suite verifies:
 """
 
 from base_llm_unit_tests import BaseLLMChatTest
-import json
 
 import litellm
 
@@ -37,23 +36,3 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
         return {
             "model": "bedrock/invoke/moonshot.kimi-k2-thinking",
         }
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly."""
-        pass
-
-
-class TestBedrockMoonshotToolCalling:
-    """Unit tests for tool calling functionality."""
-
-    def test_tool_response_message_format(self):
-        """Test that tool response messages are formatted correctly."""
-        tool_response_message = {
-            "role": "tool",
-            "tool_call_id": "call_123",
-            "content": json.dumps({"temperature": 72, "condition": "sunny"}),
-        }
-
-        assert tool_response_message["role"] == "tool"
-        assert "tool_call_id" in tool_response_message
-        assert "content" in tool_response_message

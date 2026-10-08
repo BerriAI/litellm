@@ -358,6 +358,76 @@ async def test_heartbeat_never_restores_revoked_access(lens_db: Prisma) -> None:
 
 
 @pytest.mark.asyncio
+async def test_managed_registration_is_atomic_and_keeps_the_original_worker_id(lens_db: Prisma) -> None:
+    now: Final = datetime.now(timezone.utc)
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    token_hash: Final = uuid4().hex
+    workers: Final = tuple(
+        Worker(id=uuid4().hex, name="Managed Lens", scope=Scope(all_teams=True), last_seen=now) for _ in range(8)
+    )
+    try:
+        registered: Final = await asyncio.gather(*(repo.configure_service_worker(w, token_hash) for w in workers))
+        assert len(frozenset(w.id for w in registered)) == 1
+        assert await repo.worker(token_hash) == registered[0]
+        await repo.revoke_worker(registered[0].id)
+        restored: Final = await repo.configure_service_worker(workers[-1], token_hash)
+        assert restored.id == registered[0].id
+        assert restored.revoked is False
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_LensWorker" WHERE token_hash=$1', token_hash)
+
+
+@pytest.mark.asyncio
+async def test_claim_pages_only_yield_work_the_worker_can_claim(lens_db: Prisma) -> None:
+    now: Final = datetime.now(timezone.utc)
+    scope: Final = Scope(team_id=uuid4().hex)
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    prefix: Final = uuid4().hex
+    base: Final = Lens(
+        id=prefix,
+        scope=scope,
+        settings=LensSettings(
+            name="Candidate pagination", model="test", enabled=False, context="Find repeated failures"
+        ),
+        created_at=now,
+        next_run_at=now + timedelta(days=1),
+        budget_month=now.strftime("%Y-%m"),
+    )
+    queued: Final = tuple(
+        queue_job(base.model_copy(update={"id": f"{prefix}-{i:03d}"}), now, uuid4().hex) for i in range(52)
+    )
+    other_scope: Final = queued[0].model_copy(update={"id": f"{prefix}-other", "scope": Scope(team_id=uuid4().hex)})
+    due: Final = base.model_copy(
+        update={
+            "id": f"{prefix}-due",
+            "settings": base.settings.model_copy(update={"enabled": True}),
+            "next_run_at": now,
+        }
+    )
+    live: Final = claim_job(queued[0], Worker(id=prefix, name="worker", scope=scope, last_seen=now), now)
+    expired: Final = live.model_copy(
+        update={
+            "id": f"{prefix}-expired",
+            "jobs": (live.jobs[0].model_copy(update={"lease_until": now - timedelta(seconds=1)}),),
+        }
+    )
+    rows: Final = (*queued[1:], live, base, due, expired, other_scope)
+    try:
+        for row in rows:
+            await repo.create(row)
+        first: Final = await repo.due(scope, now, 50)
+        second: Final = await repo.due(scope, now, 50, first[-1])
+        assert len(first) == 50
+        found: Final = tuple(candidate.lens for candidate in (*first, *second))
+        assert frozenset(candidate.id for candidate in found) == frozenset(
+            candidate.id for candidate in (*queued[1:], due, expired)
+        )
+        assert len(found) == 53
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id LIKE $1', prefix + "%")
+
+
+@pytest.mark.asyncio
 async def test_trace_findings_include_archived_assessments_without_counting_retries_or_counterexamples(
     lens_db: Prisma,
     monkeypatch: pytest.MonkeyPatch,
