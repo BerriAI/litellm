@@ -218,6 +218,7 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
     logging_obj.model_call_details = {"model": model, "stream": True}
     logging_obj.litellm_params = {}
     logging_obj.get_router_model_id.return_value = None
+    logging_obj.attempt_scoped_copy.return_value = logging_obj
     logging_obj.dispatch_failure_handlers = AsyncMock()
 
     _, took, lags = await timed_with_loop_lags(

@@ -485,17 +485,27 @@ def _sink_events(batches: Sequence[Request]) -> Iterator[dict[str, JsonValue]]:
         yield from json.loads(batch.body)
 
 
-def _delivered_usage(sink: Wire, batches: list[Request], model: str) -> tuple[tuple[str, int, int], ...]:
-    batches.extend(sink.drain())
-    return tuple(
-        (str(event["status"]), int(event["prompt_tokens"]), int(event["completion_tokens"]))
-        for event in _sink_events(batches)
-        if event.get("model_group") == model
-    )
+class _SinkReader:
+    """Reads the callback sink across polls: drain() consumes the sink's queue, so earlier batches are kept here."""
+
+    def __init__(self, sink: Wire, model: str) -> None:
+        self._sink: Final = sink
+        self._model: Final = model
+        self._batches: tuple[Request, ...] = ()
+
+    def delivered_usage(self) -> tuple[tuple[str, int, int], ...]:
+        self._batches = (*self._batches, *self._sink.drain())
+        return tuple(
+            (str(event["status"]), int(event["prompt_tokens"]), int(event["completion_tokens"]))
+            for event in _sink_events(self._batches)
+            if event.get("model_group") == self._model
+        )
 
 
 def _request_rows(model: str) -> list[dict[str, JsonValue]]:
-    return read_rows('SELECT status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE model=%s', (model,))
+    return read_rows(
+        'SELECT status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE model=%s', (model,)
+    )
 
 
 def test_dropped_attempt_and_its_retry_each_log_their_own_usage(gateway: Gateway, tmp_path: Path) -> None:
@@ -510,9 +520,8 @@ def test_dropped_attempt_and_its_retry_each_log_their_own_usage(gateway: Gateway
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         status, events = _stream(candidate, _body(model, prompt, "deployment"))
         _assert_completed_by_retry(status, events, prompt, model, wire)
-        batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
         delivered: Final = eventually(
-            lambda: _delivered_usage(sink, batches, model), lambda values: len(values) >= 2, seconds=20
+            _SinkReader(sink, model).delivered_usage, lambda values: len(values) >= 2, seconds=20
         )
         assert sorted(delivered) == [("failure", 5, 1), ("success", 5, 3)], delivered
 
@@ -531,9 +540,8 @@ def test_every_dropped_attempt_logs_its_own_failure_and_the_request_row_still_bi
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         status, events = _stream(candidate, _body(model, prompt, "deployment"))
         _assert_stream_failed_after_message_start(status, events, wire, attempts=2)
-        batches: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
         delivered: Final = eventually(
-            lambda: _delivered_usage(sink, batches, model), lambda values: len(values) >= 2, seconds=20
+            _SinkReader(sink, model).delivered_usage, lambda values: len(values) >= 2, seconds=20
         )
         assert delivered == (("failure", 5, 1), ("failure", 5, 1)), delivered
         rows: Final = eventually(lambda: _request_rows(model), lambda values: len(values) >= 1, seconds=70)
