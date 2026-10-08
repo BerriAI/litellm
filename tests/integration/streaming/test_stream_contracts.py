@@ -668,3 +668,52 @@ def test_client_cancellation_releases_the_actual_provider_connection() -> None:
                 gate.set()
         assert wire.disconnected.get(timeout=5) == "/v1/chat/completions"
         assert len(wire.drain()) == 1
+
+
+def tool_then_reasoning_stream(identity: str) -> tuple[bytes, ...]:
+    tool_call: Final = {
+        "index": 0,
+        "id": "call_weather_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city":"Reykjavik"}'},
+    }
+    return (
+        frame(identity, {"role": "assistant", "content": None, "tool_calls": [tool_call]}),
+        frame(identity, {"reasoning_content": "I called the weather tool; now I weigh the answer."}),
+        frame(identity, {"content": "Reykjavik is cool today."}),
+        frame(identity, {}, finish="stop"),
+        b"data: [DONE]\n\n",
+    )
+
+
+def test_responses_stream_announces_a_reasoning_item_that_starts_after_a_tool_call(gateway: Gateway) -> None:
+    identity: Final = "responses-reasoning-after-tool-" + uuid.uuid4().hex
+    frames: Final = tool_then_reasoning_stream(identity)
+    with (
+        wire_server(lambda request: Reply(content_type="text/event-stream", chunks=frames)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="deepseek/gpt-4o-mini", api_base=wire.url + "/v1")
+        with OpenAI(api_key=gateway.key, base_url=f"{gateway.client.base_url}/v1", timeout=15, max_retries=0) as client:
+            with client.responses.stream(
+                model=model,
+                input=identity,
+                tools=[{"type": "function", "name": "get_weather", "parameters": {"type": "object"}}],
+            ) as stream:
+                events: Final = tuple(stream)
+                final: Final = stream.get_final_response()
+    announced: Final = tuple(
+        (event.item.id, event.output_index) for event in events if event.type == "response.output_item.added"
+    )
+    reasoning_deltas: Final = tuple(
+        (event.item_id, event.output_index) for event in events if event.type == "response.reasoning_summary_text.delta"
+    )
+    assert reasoning_deltas, f"observed events: {[event.type for event in events]!r}"
+    for delta in reasoning_deltas:
+        assert delta in announced, f"reasoning delta {delta!r} was never announced; announced: {announced!r}"
+    closed: Final = tuple(
+        (event.item.id, event.output_index) for event in events if event.type == "response.output_item.done"
+    )
+    assert reasoning_deltas[0] in closed, f"reasoning item never closed; closed: {closed!r}"
+    assert [item.type for item in final.output] == ["function_call", "reasoning", "message"]
+    assert [item.id for item in final.output] == [item_id for item_id, _ in announced]

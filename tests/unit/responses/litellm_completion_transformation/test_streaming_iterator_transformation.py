@@ -34,9 +34,7 @@ from litellm.types.utils import (
 )
 
 CHAT_COMPLETION_ID = "chatcmpl-77d33d09-effa-4cd2-9c0d-c742d4358256"
-RESPONSE_ID_EVENT_TYPES = frozenset(
-    {"response.created", "response.in_progress", "response.completed"}
-)
+RESPONSE_ID_EVENT_TYPES = frozenset({"response.created", "response.in_progress", "response.completed"})
 
 
 def _chunk(content: str, finish_reason: str | None = None) -> ModelResponseStream:
@@ -89,11 +87,7 @@ def _build_iterator(chunks) -> LiteLLMCompletionStreamingIterator:
 
 
 def _response_ids(events) -> list[str]:
-    return [
-        event.response.id
-        for event in events
-        if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES
-    ]
+    return [event.response.id for event in events if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES]
 
 
 def test_tool_call_delta_is_emitted_as_responses_events():
@@ -224,9 +218,7 @@ async def test_web_search_stream_preserves_hosted_and_client_calls(sync_mode, to
             content=None,
             provider_specific_fields={
                 "web_search_results": [first_result],
-                "web_search_calls": [
-                    build_web_search_call(call_ids[0], {"query": "one"}, first_result)
-                ]
+                "web_search_calls": [build_web_search_call(call_ids[0], {"query": "one"}, first_result)]
                 if tool_type != "function" and first_result["type"] == "web_search_tool_result"
                 else [],
             },
@@ -325,9 +317,7 @@ async def test_web_search_stream_preserves_hosted_and_client_calls(sync_mode, to
         assert {event["output_index"] for event in search_events} == {completed_indexes[item["id"]]}
         assert search_events[0]["item"]["status"] == "in_progress"
         assert search_events[-1]["item"] == item
-        assert item["status"] == (
-            "failed" if result_kind == "error" and call_id.endswith("01Search") else "completed"
-        )
+        assert item["status"] == ("failed" if result_kind == "error" and call_id.endswith("01Search") else "completed")
         assert item["action"]["type"] == "search"
         assert item["action"]["query"] == ("one" if call_id.endswith("01Search") else "two")
         assert item["action"]["queries"] == [item["action"]["query"]]
@@ -436,9 +426,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     )
 
     # Create a chunk with a large arguments string that should be split
-    large_arguments = (
-        '{"param1": "value1", "param2": "value2", "param3": "value3"}'  # 67 chars
-    )
+    large_arguments = '{"param1": "value1", "param2": "value2", "param3": "value3"}'  # 67 chars
     chunk = ModelResponseStream(
         id="chunk-1",
         created=123,
@@ -493,9 +481,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
 
     # Keep draining pending events (expected: ceil(67 / 10) = 7 delta events)
     while iterator._pending_tool_events:
-        evt = iterator._transform_chat_completion_chunk_to_response_api_chunk(
-            empty_chunk
-        )
+        evt = iterator._transform_chat_completion_chunk_to_response_api_chunk(empty_chunk)
         if evt and evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA:
             delta_events.append(evt)
 
@@ -548,20 +534,12 @@ def test_tool_call_delta_without_id_uses_index_mapping():
     while iterator._pending_tool_events:
         all_events.append(iterator._pending_tool_events.pop(0))
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    ]
+    delta_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
     streamed_arguments = "".join(evt.delta for evt in delta_events)
 
     assert streamed_arguments == '{"location": "New York"}'
 
-    output_item_added_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    ]
+    output_item_added_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     assert len(output_item_added_events) == 1
     assert output_item_added_events[0].item.id == "fc_call_abc123"
     assert output_item_added_events[0].item.call_id == "call_abc123"
@@ -602,18 +580,10 @@ def test_parallel_tool_calls_without_ids_use_index_mapping():
     while iterator._pending_tool_events:
         all_events.append(iterator._pending_tool_events.pop(0))
 
-    output_item_added_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    ]
+    output_item_added_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     assert len(output_item_added_events) == 2
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    ]
+    delta_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
     arguments_by_call_id = {}
     for evt in delta_events:
         arguments_by_call_id.setdefault(evt.item_id, "")
@@ -666,11 +636,7 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
     while iterator._pending_tool_events:
         all_events.append(iterator._pending_tool_events.pop(0))
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    ]
+    delta_events = [evt for evt in all_events if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
     arguments_by_call_id = {}
     for evt in delta_events:
         arguments_by_call_id.setdefault(evt.item_id, "")
@@ -710,22 +676,17 @@ def test_sync_streaming_events_share_the_chat_completion_response_id():
     assert len(response_ids) == 3
     assert len(set(response_ids)) == 1
     assert (
-        ResponsesAPIRequestUtils.decode_responses_api_response_id(response_ids[0])["response_id"]
-        == CHAT_COMPLETION_ID
+        ResponsesAPIRequestUtils.decode_responses_api_response_id(response_ids[0])["response_id"] == CHAT_COMPLETION_ID
     )
 
 
 @pytest.mark.asyncio
 async def test_streaming_emits_every_chunk_after_priming_the_response_id():
-    iterator = _build_iterator(
-        [_chunk("Hel"), _chunk("lo"), _chunk("!", finish_reason="stop")]
-    )
+    iterator = _build_iterator([_chunk("Hel"), _chunk("lo"), _chunk("!", finish_reason="stop")])
 
     events = [event async for event in iterator]
 
-    deltas = "".join(
-        event.delta for event in events if getattr(event, "type", None) == "response.output_text.delta"
-    )
+    deltas = "".join(event.delta for event in events if getattr(event, "type", None) == "response.output_text.delta")
     assert deltas == "Hello!"
 
 
@@ -771,7 +732,9 @@ async def test_leading_empty_choices_chunk_does_not_kill_the_stream():
 
     event_types = [getattr(event, "type", None) for event in events]
     assert event_types.count(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED) == 1
-    assert "".join(event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
+    assert (
+        "".join(event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
+    )
     assert event_types[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
 
 
@@ -955,9 +918,7 @@ def test_streamed_unrecognized_tool_choice_is_echoed_as_auto() -> None:
         litellm_metadata={},
     )
 
-    response_events: Final = [
-        event for event in iterator if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES
-    ]
+    response_events: Final = [event for event in iterator if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES]
 
     assert [event.response.tool_choice for event in response_events] == ["auto", "auto", "auto"]
 
@@ -1171,14 +1132,20 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(syn
         elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _is_message_item(event):
             assert event.item.id in announced_message_ids
     assert saw_text_delta
-    assert "".join(
-        event.delta for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
-    ) == "Hello!"
+    assert (
+        "".join(
+            event.delta
+            for event in events
+            if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+        )
+        == "Hello!"
+    )
     assert announced_indexes_by_item_type["message"] != announced_indexes_by_item_type["reasoning"]
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_reasoning_item_closes_before_message_item_opens():
+async def test_reasoning_item_closes_before_message_item_opens(sync_mode: bool):
     iterator: Final = _build_iterator(
         [
             _reasoning_chunk("let me think"),
@@ -1187,7 +1154,7 @@ async def test_reasoning_item_closes_before_message_item_opens():
         ]
     )
 
-    events: Final = await _collect_events(iterator, sync_mode=False)
+    events: Final = await _collect_events(iterator, sync_mode)
 
     item_lifecycle: Final = [
         (event.type, event.item.type)
@@ -1326,3 +1293,142 @@ async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: b
             ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         ):
             assert event.item_id == message_item_adds[0].item.id
+
+
+def _item_lifecycle(events: list[BaseLiteLLMOpenAIResponseObject]) -> list[tuple[object, str, int, str]]:
+    return [
+        (event.type, event.item.type, event.output_index, event.item.id)
+        for event in events
+        if getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+
+
+def _announced_before_each_reasoning_delta(events: list[BaseLiteLLMOpenAIResponseObject]) -> bool:
+    announced: set[tuple[str, int]] = set()
+    for event in events:
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
+            announced.add((event.item.id, event.output_index))
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA:
+            if (event.item_id, event.output_index) not in announced:
+                return False
+    return True
+
+
+def _completed_output(events: list[BaseLiteLLMOpenAIResponseObject]) -> list:
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    return list(completed.response.output)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_after_a_tool_call_is_announced_before_its_first_delta(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [
+            _tool_call_chunk(),
+            _reasoning_chunk("weighing the tool result"),
+            _chunk("Hello"),
+            _chunk("!", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    assert _announced_before_each_reasoning_delta(events)
+    reasoning_delta: Final = next(
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
+    )
+    lifecycle: Final = _item_lifecycle(events)
+    assert lifecycle[:4] == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "function_call", 0, "fc_call_pwd"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "reasoning", 1, reasoning_delta.item_id),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "reasoning", 1, reasoning_delta.item_id),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "message", 2, lifecycle[3][3]),
+    ]
+    assert [(item.type, item.id) for item in _completed_output(events)] == [
+        (event.item.type, event.item.id)
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_tool_reasoning_announces_two_reasoning_items_in_order(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_chunk("first"),
+            _signature_only_thinking_chunk("sig_first"),
+            _tool_call_chunk(),
+            _reasoning_chunk("second"),
+            _signature_only_thinking_chunk("sig_second"),
+            _chunk("Hello"),
+            _chunk("!", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    assert _announced_before_each_reasoning_delta(events)
+    reasoning_deltas: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
+    ]
+    first_id, second_id = (event.item_id for event in reasoning_deltas)
+    assert first_id != second_id
+    assert [event.output_index for event in reasoning_deltas] == [0, 2]
+    reasoning_text_done: Final = [
+        (event.item_id, event.output_index, event.text)
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE
+    ]
+    assert reasoning_text_done == [(first_id, 0, "first"), (second_id, 2, "second")]
+    lifecycle: Final = _item_lifecycle(events)
+    assert [entry for entry in lifecycle if entry[1] != "message"][:6] == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "reasoning", 0, first_id),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "reasoning", 0, first_id),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "function_call", 1, "fc_call_pwd"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "reasoning", 2, second_id),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "reasoning", 2, second_id),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "function_call", 1, "fc_call_pwd"),
+    ]
+    output: Final = _completed_output(events)
+    assert [item.type for item in output] == ["reasoning", "function_call", "reasoning", "message"]
+    assert [item.id for item in output if item.type == "reasoning"] == [first_id, second_id]
+    assert [[part.text for part in item.content] for item in output if item.type == "reasoning"] == [
+        ["first"],
+        ["second"],
+    ]
+    assert [
+        [block["signature"] for block in json.loads(item.encrypted_content)]
+        for item in output
+        if item.type == "reasoning"
+    ] == [["sig_first"], ["sig_second"]]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_after_text_is_announced_and_closed(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [
+            _chunk("Let me think. "),
+            _reasoning_chunk("reasoning after visible text"),
+            _chunk("Done.", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    assert _announced_before_each_reasoning_delta(events)
+    reasoning_entries: Final = [entry for entry in _item_lifecycle(events) if entry[1] == "reasoning"]
+    reasoning_id: Final = reasoning_entries[0][3]
+    assert reasoning_entries == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "reasoning", 1, reasoning_id),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "reasoning", 1, reasoning_id),
+    ]
+    assert [(item.type, item.id) for item in _completed_output(events)][1] == ("reasoning", reasoning_id)
