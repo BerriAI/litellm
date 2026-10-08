@@ -1654,3 +1654,37 @@ async def test_async_get_cache_or_raise_reports_a_failed_read_before_raising(
 
     assert service_logger.mock_testing_async_failure_hook == 1
     assert service_logger.mock_testing_async_success_hook == 0
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_reports_an_undecodable_value_as_a_failed_read(
+    get_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+):
+    """A value neither JSON nor a Python literal is swallowed into a miss, and the service hooks
+    must say the read failed, as they did before the GET and its decode shared one helper."""
+    cache, service_logger = get_cache_with_service_logger
+    client = MagicMock()
+    client.get = AsyncMock(return_value=b"not json and not a literal")
+
+    with patch.object(cache, "init_async_client", return_value=client):
+        assert await cache.async_get_cache("lit9316") is None
+    await asyncio.sleep(0.05)
+
+    assert service_logger.mock_testing_async_failure_hook == 1
+    assert service_logger.mock_testing_async_success_hook == 0
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_or_raise_reports_an_undecodable_value_as_a_failed_read(
+    get_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+):
+    cache, service_logger = get_cache_with_service_logger
+    client = MagicMock()
+    client.get = AsyncMock(return_value=b"not json and not a literal")
+
+    with patch.object(cache, "init_async_client", return_value=client), pytest.raises((SyntaxError, ValueError)):
+        await cache.async_get_cache_or_raise("lit9316")
+    await asyncio.sleep(0.05)
+
+    assert service_logger.mock_testing_async_failure_hook == 1
+    assert service_logger.mock_testing_async_success_hook == 0
