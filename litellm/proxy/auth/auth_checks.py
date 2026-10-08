@@ -1200,6 +1200,7 @@ async def common_checks(
     )
     team_trace_id_gate_applies: Final = (
         team_object is not None
+        and _team_metadata_requires_trace_id(team_object)
         and request.method not in ("GET", "HEAD", "OPTIONS")
         and (RouteChecks.is_llm_api_route(route=route) or pass_through_route)
         and not RouteChecks.check_route_access(
@@ -1211,7 +1212,7 @@ async def common_checks(
         _TRACE_ID_METADATA_ADAPTER.validate_python(
             team_object.metadata  # pyright: ignore[reportUnknownMemberType]  # validate the narrowed untyped field
         )
-        if team_trace_id_gate_applies and team_object is not None and _team_metadata_requires_trace_id(team_object)
+        if team_trace_id_gate_applies and team_object is not None
         else None
     )
     if (
