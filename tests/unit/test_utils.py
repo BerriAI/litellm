@@ -325,6 +325,25 @@ def test_supports_function_calling_unknown_github_alias_returns_false():
     assert litellm.utils.supports_function_calling(model="github/non-existent-model-for-capability-check") is False
 
 
+@pytest.mark.parametrize(("audio_input", "audio_output"), [(True, False), (False, True)])
+def test_supports_audio_output_reads_its_own_cost_map_flag(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, audio_input: bool, audio_output: bool
+) -> None:
+    model: Final = "openai/audio-flags-disagree-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_audio_input": audio_input,
+            "supports_audio_output": audio_output,
+        },
+    )
+    assert litellm.supports_audio_input(model) is audio_input
+    assert litellm.supports_audio_output(model) is audio_output
+
+
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
