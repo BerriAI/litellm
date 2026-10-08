@@ -183,13 +183,32 @@ def _without_inline_data(value: object) -> object:
     Images and files a Responses `input` carries inline are priced by the
     provider per image or file, not per character, so tokenizing their base64
     as text inflates the count by orders of magnitude: one screenshot alone is
-    hundreds of thousands of "tokens". The Rust counter cuts the same strings."""
-    if isinstance(value, str):
-        if value.startswith(_DATA_URL_PREFIX) and (marker := value.find(_BASE64_MARKER)) != -1:
+    hundreds of thousands of "tokens". The Rust counter cuts the same strings.
+    Walks with an explicit stack: a request body's nesting is client-controlled."""
+    if not isinstance(value, (dict, list)):
+        return _without_inline_payload(value)
+    root: Final[dict | list] = {} if isinstance(value, dict) else []
+    stack: Final[list[tuple[dict | list, dict | list]]] = [(value, root)]
+    while stack:
+        source, target = stack.pop()
+        for key, item in source.items() if isinstance(source, dict) else enumerate(source):
+            copied: object
+            if isinstance(item, (dict, list)):
+                child: dict | list = {} if isinstance(item, dict) else []
+                stack.append((item, child))
+                copied = child
+            else:
+                copied = _without_inline_payload(item)
+            if isinstance(target, dict):
+                target[key] = copied
+            else:
+                target.append(copied)
+    return root
+
+
+def _without_inline_payload(value: object) -> object:
+    if isinstance(value, str) and value.startswith(_DATA_URL_PREFIX):
+        marker: Final = value.find(_BASE64_MARKER)
+        if marker != -1:
             return value[: marker + len(_BASE64_MARKER)]
-        return value
-    if isinstance(value, dict):
-        return {key: _without_inline_data(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_without_inline_data(item) for item in value]
     return value
