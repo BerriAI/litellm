@@ -540,16 +540,6 @@ async def acompletion(
     )
     from litellm.types.llms.openai import AllMessageValues
 
-    messages = list(  # rebind-ok: the client's cache marks are rewritten in the deployment's dialect
-        AnthropicCacheControlHook.translate_client_cache_control(
-            cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
-            None,
-            model,
-            cast(str | None, custom_llm_provider),  # cast-ok: read from untyped kwargs
-            kwargs.get("api_base") or base_url,
-            kwargs,
-        )[0]
-    )
     AnthropicCacheControlHook.maybe_seed_default_injection_points(
         non_default_params=kwargs,
         messages=cast(list[AllMessageValues], messages),  # cast-ok: acompletion types messages as a bare List
@@ -5431,16 +5421,6 @@ def completion(
     )
     from litellm.types.llms.openai import AllMessageValues
 
-    messages = list(  # rebind-ok: the client's cache marks are rewritten in the deployment's dialect
-        AnthropicCacheControlHook.translate_client_cache_control(
-            cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
-            None,
-            model,
-            cast(str | None, kwargs.get("custom_llm_provider")),  # cast-ok: untyped kwargs
-            kwargs.get("api_base") or base_url,
-            non_default_params,
-        )[0]
-    )
     AnthropicCacheControlHook.maybe_seed_default_injection_points(
         non_default_params=non_default_params,
         messages=cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
@@ -5534,6 +5514,16 @@ def completion(
 
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
+        messages = list(  # rebind-ok: the client's cache marks are rewritten in the deployment's dialect
+            AnthropicCacheControlHook.translate_client_cache_control(
+                cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
+                None,
+                model,
+                custom_llm_provider,
+                api_base,
+                non_default_params,
+            )[0]
+        )
 
         if provider_specific_header is not None:
             headers.update(
