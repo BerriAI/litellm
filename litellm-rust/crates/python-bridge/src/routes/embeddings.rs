@@ -1,17 +1,17 @@
 use pyo3::prelude::*;
 
+use super::NativeCall;
 use crate::errors::RustBridgeDeclined;
 
 #[pyfunction]
-pub(crate) fn embedding(call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    drop(super::NativeCall::extract(&call)?);
+pub(crate) fn embedding(_call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
     Err(RustBridgeDeclined::new_err(
         "native embeddings route is not implemented",
     ))
 }
 
 #[pyfunction]
-pub(crate) fn aembedding(call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn aembedding(call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
     embedding(call)
 }
 
@@ -36,7 +36,8 @@ call = SimpleNamespace(args=(), kwargs={}, bound={'model':'test-model','input':'
                 Some(&locals),
             )
             .unwrap();
-            let call = locals.get_item("call").unwrap().unwrap();
+            let call: super::NativeCall<'_> =
+                locals.get_item("call").unwrap().unwrap().extract().unwrap();
             let error = if asynchronous {
                 super::aembedding(call)
             } else {
