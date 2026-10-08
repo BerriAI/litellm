@@ -1,5 +1,6 @@
 suite: custom server root path
 templates:
+  - gateway/configmap.yaml
   - gateway/deployment.yaml
   - backend/deployment.yaml
   - ui/deployment.yaml
