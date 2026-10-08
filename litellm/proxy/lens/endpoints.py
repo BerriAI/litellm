@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypeAlias
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AwareDatetime, Field
 
@@ -20,6 +20,17 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.lens.billing import validate_key
 from litellm.proxy.lens.inference import Deployment, deployment_prices
+from litellm.proxy.lens.ingestion import (
+    IngestionCredential,
+    IngestionKey,
+    IngestionKeyCreated,
+    IngestionKeyRequest,
+    IngestionSnapshot,
+    InvalidExpiry,
+    ServiceConnection,
+    ServiceStatus,
+    new_key,
+)
 from litellm.proxy.lens.models import (
     ActivitySelection,
     Claim,
@@ -72,6 +83,7 @@ from litellm.proxy.lens.state import (
 )
 from litellm.proxy.tracing_runtime import provide_storage
 from litellm.router import Router
+from litellm.tracing.remote import LensConnection, bounded_response
 from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"])
@@ -116,7 +128,7 @@ def source_reader(storage: Storage | None) -> SourceReader:
     if storage is None:
         raise HTTPException(
             status_code=501,
-            detail="Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL.",
+            detail="Agent tracing is not enabled. Configure the Lens service and LITELLM_LENS_URL.",
         )
     return SourceReader(storage)
 
@@ -158,9 +170,103 @@ async def worker_auth(credentials: Annotated[HTTPAuthorizationCredentials, Depen
 
 
 WorkerAuth: TypeAlias = Annotated[Worker, Depends(worker_auth)]
+Attempt: TypeAlias = Annotated[int, Header(alias="X-LiteLLM-Lens-Attempt", ge=1)]
 
 
-async def assigned(lens_id: str, job_id: str, worker: Worker) -> tuple[Lens, Job]:
+async def service_auth(credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer)]) -> None:
+    try:
+        connection: Final = LensConnection.from_env()
+    except ValueError as error:
+        raise HTTPException(503, "Configure the Lens service connection") from error
+    if not secrets.compare_digest(credentials.credentials, connection.token):
+        raise HTTPException(401, "Invalid Lens service credential")
+
+
+ServiceAuth: TypeAlias = Annotated[None, Depends(service_auth)]
+
+
+@router.get("/service", response_model=ServiceConnection)
+async def service_connection(auth: Auth) -> ServiceConnection:
+    import os
+
+    import httpx
+
+    public_url: Final = os.environ.get("LITELLM_LENS_PUBLIC_URL", "").rstrip("/")
+    try:
+        connection: Final = LensConnection.from_env()
+        client: Final = connection.control_client()
+        async with client.stream(
+            "GET", connection.endpoint("/internal/status"), headers=connection.headers, timeout=2
+        ) as response:
+            if response.status_code == 200:
+                status: Final = ServiceStatus.model_validate_json(await bounded_response(response, 16 * 1024))
+                return ServiceConnection(url=public_url, connected=True, status=status)
+    except (ValueError, RuntimeError, httpx.HTTPError):
+        pass
+    return ServiceConnection(url=public_url, connected=False, status=ServiceStatus())
+
+
+async def credential_snapshot() -> IngestionSnapshot:
+    now: Final = int(datetime.now(timezone.utc).timestamp())
+    keys: Final = await repository().ingestion_keys()
+    return IngestionSnapshot(
+        issued_at=now,
+        keys=tuple(
+            IngestionCredential(token_hash=key.tenant.api_key_hash, tenant=key.tenant, expires_at=key.expires_at)
+            for key in keys
+            if key.expires_at is None or key.expires_at > now
+        ),
+    )
+
+
+async def publish_credentials() -> bool:
+    import httpx
+
+    try:
+        connection: Final = LensConnection.from_env()
+        snapshot: Final = await credential_snapshot()
+        response: Final = await connection.control_client().post(
+            connection.endpoint("/internal/credentials"),
+            headers=connection.headers,
+            json=snapshot.model_dump(mode="json"),
+            timeout=2,
+        )
+        return response.status_code == 204
+    except (ValueError, httpx.HTTPError):
+        return False
+
+
+@router.post("/tracing/keys", response_model=IngestionKeyCreated)
+async def create_ingestion_key(body: IngestionKeyRequest, auth: Auth) -> IngestionKeyCreated:
+    user_scope(auth, write=True)
+    created: Final = new_key(body, auth.user_id or "")
+    if isinstance(created, InvalidExpiry):
+        raise HTTPException(422, "Choose an expiry in the future")
+    await repository().save_ingestion_key(created.record)
+    return created.model_copy(update={"active": await publish_credentials()})
+
+
+@router.get("/tracing/keys", response_model=tuple[IngestionKey, ...])
+async def list_ingestion_keys(auth: Auth) -> tuple[IngestionKey, ...]:
+    user_scope(auth)
+    return await repository().ingestion_keys()
+
+
+@router.delete("/tracing/keys/{key_id}")
+async def revoke_ingestion_key(key_id: str, auth: Auth) -> bool:
+    user_scope(auth, write=True)
+    await repository().revoke_ingestion_key(key_id)
+    await publish_credentials()
+    return True
+
+
+@router.get("/internal/ingestion-credentials", response_model=IngestionSnapshot)
+async def ingestion_credentials(service: ServiceAuth, response: Response) -> IngestionSnapshot:
+    response.headers["Cache-Control"] = "no-store"
+    return await credential_snapshot()
+
+
+async def assigned(lens_id: str, job_id: str, worker: Worker, attempt: int = 1) -> tuple[Lens, Job]:
     lens: Final = await get_lens(lens_id, worker.scope)
     job: Final = current_job(lens)
     if (
@@ -168,6 +274,7 @@ async def assigned(lens_id: str, job_id: str, worker: Worker) -> tuple[Lens, Job
         or job.id != job_id
         or job.status != "running"
         or job.worker_id != worker.id
+        or job.attempts != attempt
         or job.lease_until is None
         or job.lease_until <= datetime.now(timezone.utc)
     ):
@@ -510,6 +617,7 @@ class WorkerBilling(LiteLLMBaseModel):
 
 class WorkerName(WorkerBilling):
     name: str = Field(default="Lens worker", min_length=1)
+    managed: bool = False
 
 
 def configured_worker_image() -> str:
@@ -527,7 +635,11 @@ async def register_worker(body: WorkerName, auth: Auth) -> WorkerCreated:
     scope: Final = user_scope(auth, write=True)
     image: Final = configured_worker_image()
     await validate_key(body.analysis_key_id)
-    token: Final = "lens-" + secrets.token_urlsafe(40)
+    try:
+        token: Final = LensConnection.from_env().token if body.managed else "lens-" + secrets.token_urlsafe(40)
+    except ValueError as error:
+        raise HTTPException(503, "Configure the Lens service before enabling investigations") from error
+    token_hash: Final = hashlib.sha256(token.encode()).hexdigest()
     worker: Final = Worker(
         id=str(uuid4()),
         name=body.name,
@@ -535,7 +647,10 @@ async def register_worker(body: WorkerName, auth: Auth) -> WorkerCreated:
         analysis_key_id=body.analysis_key_id,
         last_seen=datetime(1970, 1, 1, tzinfo=timezone.utc),
     )
-    await repository().save_worker(worker, hashlib.sha256(token.encode()).hexdigest())
+    if body.managed:
+        managed: Final = await repository().configure_service_worker(worker, token_hash)
+        return WorkerCreated(worker=managed, token="", image=image, managed=True)
+    await repository().save_worker(worker, token_hash)
     return WorkerCreated(worker=worker, token=token, image=image)
 
 
@@ -574,7 +689,7 @@ async def claim(worker: WorkerAuth, protocol_version: int = 1, worker_release: s
     if protocol_version != PROTOCOL_VERSION or worker_release != expected:
         raise HTTPException(409, f"Upgrade the Lens worker to {image} and retry")
     if worker.analysis_key_id is None:
-        raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
+        return None
     now: Final = datetime.now(timezone.utc)
     lens_repository: Final = repository()
     await lens_repository.heartbeat(worker.id, now.isoformat())
@@ -602,8 +717,8 @@ async def claim_due(
 
 
 @router.post("/worker/{lens_id}/{job_id}/progress", response_model=bool)
-async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth) -> bool:
-    _, assigned_job = await assigned(lens_id, job_id, worker)
+async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth, attempt: Attempt = 1) -> bool:
+    _, assigned_job = await assigned(lens_id, job_id, worker, attempt)
     if body.review is not None:
         if assigned_job.sample is None or body.review.execution_id not in frozenset(
             execution.id for execution in assigned_job.sample.executions
@@ -621,14 +736,14 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
 
 
 @router.get("/worker/{lens_id}/{job_id}/reviews", response_model=tuple[Review, ...])
-async def cached_reviews(lens_id: str, job_id: str, worker: WorkerAuth) -> tuple[Review, ...]:
-    _, job = await assigned(lens_id, job_id, worker)
+async def cached_reviews(lens_id: str, job_id: str, worker: WorkerAuth, attempt: Attempt = 1) -> tuple[Review, ...]:
+    _, job = await assigned(lens_id, job_id, worker, attempt)
     return await repository().reviews(lens_id, job)
 
 
 @router.get("/worker/{lens_id}/{job_id}/sample", response_model=Sample)
-async def sample(lens_id: str, job_id: str, worker: WorkerAuth, storage: StorageDep) -> Sample:
-    lens, job = await assigned(lens_id, job_id, worker)
+async def sample(lens_id: str, job_id: str, worker: WorkerAuth, storage: StorageDep, attempt: Attempt = 1) -> Sample:
+    lens, job = await assigned(lens_id, job_id, worker, attempt)
     if job.sample is not None:
         return job.sample
 
@@ -665,7 +780,15 @@ async def sample(lens_id: str, job_id: str, worker: WorkerAuth, storage: Storage
 
     def freeze(e: Lens) -> Lens:
         active: Final = current_job(e)
-        if active is None or active.id != job_id or active.worker_id != worker.id:
+        if (
+            active is None
+            or active.id != job_id
+            or active.worker_id != worker.id
+            or active.attempts != attempt
+            or active.status != "running"
+            or active.lease_until is None
+            or active.lease_until <= datetime.now(timezone.utc)
+        ):
             raise HTTPException(409, "Job was cancelled or reassigned")
         return (
             replace_job(e, active.model_copy(update=MappingProxyType({"sample": selected})))
@@ -689,8 +812,9 @@ async def content(
     storage: StorageDep,
     cursor: str = "",
     offset: int = Query(default=0, ge=0),
+    attempt: Attempt = 1,
 ) -> ExecutionContent:
-    lens, job = await assigned(lens_id, job_id, worker)
+    lens, job = await assigned(lens_id, job_id, worker, attempt)
     selected: Final = job.sample or Sample(executions=(), eligible=0)
     execution: Final = next((e for e in selected.executions if e.id == execution_id), None)
     if execution is None:
@@ -711,11 +835,17 @@ def model_failure(error: HTTPException | ProxyException) -> HTTPException:
 
 @router.post("/worker/{lens_id}/{job_id}/model", response_model=ModelResult)
 async def model(
-    lens_id: str, job_id: str, body: ModelRequest, worker: WorkerAuth, request: Request, response: Response
+    lens_id: str,
+    job_id: str,
+    body: ModelRequest,
+    worker: WorkerAuth,
+    request: Request,
+    response: Response,
+    attempt: Attempt = 1,
 ) -> ModelResult:
     from litellm.proxy.lens.inference import analyze
 
-    lens, job = await assigned(lens_id, job_id, worker)
+    lens, job = await assigned(lens_id, job_id, worker, attempt)
     try:
         completion: Final = await analyze(repository(), lens, job, worker, body, request)
     except (ProxyException, HTTPException) as error:
@@ -726,14 +856,16 @@ async def model(
 
 
 @router.post("/worker/{lens_id}/{job_id}/result", response_model=Lens)
-async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, storage: StorageDep) -> Lens:
+async def result(
+    lens_id: str, job_id: str, body: Result, worker: WorkerAuth, storage: StorageDep, attempt: Attempt = 1
+) -> Lens:
     lens: Final = await get_lens(lens_id, worker.scope)
     old: Final = next((j for j in lens.jobs if j.id == job_id), None)
-    if old and old.status in ("completed", "failed") and old.worker_id == worker.id:
+    if old and old.status in ("completed", "failed") and old.worker_id == worker.id and old.attempts == attempt:
         if old.review_versions and old.status == "completed":
             await repository().complete_reviews(lens_id, old, old.review_versions)
         return lens
-    _, job = await assigned(lens_id, job_id, worker)
+    _, job = await assigned(lens_id, job_id, worker, attempt)
     now: Final = datetime.now(timezone.utc)
     selected: Final = job.sample or Sample(executions=(), eligible=0)
     allowed: Final = frozenset(e.id for e in selected.executions)
@@ -762,7 +894,15 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
 
     def finish(e: Lens) -> Lens:
         active: Final = current_job(e)
-        if active is None or active.id != job_id or active.worker_id != worker.id:
+        if (
+            active is None
+            or active.id != job_id
+            or active.worker_id != worker.id
+            or active.attempts != attempt
+            or active.status != "running"
+            or active.lease_until is None
+            or active.lease_until <= datetime.now(timezone.utc)
+        ):
             return e
         restored: Final = e.model_copy(
             update=MappingProxyType(
@@ -829,7 +969,10 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
         )
 
     finished: Final = required(await repository().update(lens_id, finish))
-    if body.review_versions and any(j.id == job_id and j.status == "completed" for j in finished.jobs):
+    if body.review_versions and any(
+        j.id == job_id and j.status == "completed" and j.attempts == attempt and j.worker_id == worker.id
+        for j in finished.jobs
+    ):
         await repository().complete_reviews(lens_id, job, body.review_versions)
     return finished
 
@@ -852,8 +995,8 @@ def merge_results(lens: Lens, result: Result, revision: int, now: datetime, job_
 
 
 @router.post("/worker/{lens_id}/{job_id}/heartbeat", response_model=bool)
-async def heartbeat(lens_id: str, job_id: str, worker: WorkerAuth) -> bool:
-    return await progress(lens_id, job_id, Progress(), worker)
+async def heartbeat(lens_id: str, job_id: str, worker: WorkerAuth, attempt: Attempt = 1) -> bool:
+    return await progress(lens_id, job_id, Progress(), worker, attempt)
 
 
 async def claim_candidate(

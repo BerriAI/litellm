@@ -22,6 +22,8 @@ from .generated.models import (
     LensFeedbackTargetParams,
     LensSampleParams,
     PartRow,
+    TraceAgentRow,
+    TraceAgentsParams,
     TraceQueryColumn,
 )
 from .generated.types import ReadQueryName
@@ -60,6 +62,9 @@ class ReadQuery(Generic[ParamsT, RowT]):
     response: TypeAdapter[QueryResponse[RowT]]
 
 
+TRACE_AGENTS: Final[ReadQuery[TraceAgentsParams, TraceAgentRow]] = ReadQuery(
+    "trace_agents", TraceAgentsParams, TypeAdapter(QueryResponse[TraceAgentRow])
+)
 LENS_AVAILABILITY: Final[ReadQuery[LensAccessParams, ActivityAvailability]] = ReadQuery(
     "availability", LensAccessParams, TypeAdapter(QueryResponse[ActivityAvailability])
 )

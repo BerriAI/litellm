@@ -17,6 +17,7 @@ pub async fn execute_named_read(
 ) -> Result<String, Error> {
     match query {
         ReadQuery::ListTraces => named_json::<ListTraces>(client, connection, parameters).await,
+        ReadQuery::TraceAgents => named_json::<TraceAgents>(client, connection, parameters).await,
         ReadQuery::TraceIdentity => {
             named_json::<TraceIdentity>(client, connection, parameters).await
         }

@@ -840,12 +840,12 @@ async def test_ahealth_check_without_mode_reports_the_real_failure(
 
 def test_update_litellm_params_for_health_check():
     """
-    Test if _update_litellm_params_for_health_check correctly:
+    Test if update_litellm_params_for_health_check correctly:
     1. Updates messages with a random message
     2. Updates model name when health_check_model is provided
     3. Updates voice when health_check_voice is provided for audio_speech mode
     """
-    from litellm.proxy.health_check import _update_litellm_params_for_health_check
+    from litellm.proxy.health_check import update_litellm_params_for_health_check
 
     model_info = {"health_check_model": "gpt-5-mini"}
     litellm_params = {
@@ -853,7 +853,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
 
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert "messages" in updated_params
     assert isinstance(updated_params["messages"], list)
@@ -865,7 +865,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
 
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert "messages" in updated_params
     assert isinstance(updated_params["messages"], list)
@@ -876,7 +876,7 @@ def test_update_litellm_params_for_health_check():
         "model": "gpt-5.5",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" in updated_params
     assert updated_params["voice"] == "en-US-JennyNeural"
 
@@ -885,7 +885,7 @@ def test_update_litellm_params_for_health_check():
         "model": "gpt-5.5",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" in updated_params
     assert updated_params["voice"] == "alloy"
 
@@ -894,7 +894,7 @@ def test_update_litellm_params_for_health_check():
         "model": "gpt-5.5",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" not in updated_params
 
     model_info = {}
@@ -902,28 +902,28 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
     litellm_params = {
         "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     litellm_params = {
         "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     litellm_params = {
         "model": "openai/gpt-5.5",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "openai/gpt-5.5"
 
     cris_prefixes = ["us.", "eu.", "apac.", "jp.", "au.", "us-gov.", "global."]
@@ -932,7 +932,7 @@ def test_update_litellm_params_for_health_check():
             "model": f"bedrock/{prefix}anthropic.claude-3-haiku-20240307-v1:0",
             "api_key": "fake_key",
         }
-        updated_params = _update_litellm_params_for_health_check(
+        updated_params = update_litellm_params_for_health_check(
             model_info, litellm_params
         )
         assert (
@@ -943,21 +943,21 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
 
     litellm_params = {
         "model": "bedrock/us-gov-east-1/anthropic.claude-instant-v1",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "anthropic.claude-instant-v1"
 
     litellm_params = {
         "model": "bedrock/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
         == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
@@ -967,7 +967,7 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
         == "deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz"
@@ -977,7 +977,7 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
         == "converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -987,14 +987,14 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/invoke/us-west-2/anthropic.claude-instant-v1",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "invoke/anthropic.claude-instant-v1"
 
     litellm_params = {
         "model": "bedrock/arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
         == "arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc"
@@ -1004,7 +1004,7 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/us-west-2/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
         == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
@@ -1014,7 +1014,7 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/converse/us-west-2/eu.anthropic.claude-3-sonnet-20240229-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"] == "converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
     )

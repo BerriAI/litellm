@@ -1,5 +1,5 @@
 use litellm_auth::ResolvedCredential;
-use litellm_host_python::{InvokeError, PythonBinding, missing_state, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, missing_state};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 use litellm_inference_ocr::route::{Ocr, OcrCall, OcrOp};
 use litellm_llms::base_llm::ocr::error::Error;
@@ -15,6 +15,7 @@ use super::{
     errors::to_pyerr as ocr_error_to_pyerr,
     project::{OcrHostHandles, project_request},
 };
+use crate::marshal::public_response;
 
 enum OcrHostData {
     Unprojected,
@@ -104,10 +105,7 @@ impl PythonBinding for OcrPythonHost {
         py: Python<'_>,
         response: LiteLLMOcrResponse,
     ) -> PyResult<Py<PyAny>> {
-        py.import("litellm.rust_bridge.ocr.route_host")?
-            .getattr("response")?
-            .call1((to_py(py, &response)?,))
-            .map(Bound::unbind)
+        public_response(py, "litellm.rust_bridge.ocr.route_host", &response)
     }
 
     fn encode_stream_head(

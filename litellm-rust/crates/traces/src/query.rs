@@ -5,6 +5,7 @@ pub mod named;
 #[strum(serialize_all = "snake_case")]
 pub enum ReadQuery {
     ListTraces,
+    TraceAgents,
     TraceSpans,
     TracePageSpans,
     TraceIdentity,

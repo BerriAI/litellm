@@ -28,6 +28,7 @@ import litellm
 from litellm._internal_context import in_post_response_phase
 from litellm._logging import session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
+from litellm.caching.caching import DualCache
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
@@ -42,8 +43,10 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
-from litellm.proxy.hooks.max_iterations_limiter import _PROXY_MaxIterationsHandler
+from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
+from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandler
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.utils import InternalUsageCache
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
@@ -3714,11 +3717,11 @@ def test_get_usage_as_dict():
 
     # Test case 1: None response_obj returns empty usage dict
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=None)
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {}
 
     # Test case 2: Empty response_obj returns empty usage dict
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={})
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {}
 
     # Test case 3: combined_usage_object takes priority
     combined = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
@@ -3738,7 +3741,35 @@ def test_get_usage_as_dict():
 
     # Test case 5: response_obj with no usage key returns empty
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={"id": "resp-1", "choices": []})
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {}
+
+
+@pytest.mark.parametrize(
+    "usage, include_usage",
+    [(None, False), (None, True), ({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, True)],
+)
+def test_logging_preserves_missing_usage_without_accepting_request_metadata(
+    logging_obj: Logging, usage: dict[str, int] | None, include_usage: bool
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import convert_to_model_response_object
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    response: Final[ModelResponse] = convert_to_model_response_object(
+        response_object={"id": "usage-coverage", "choices": [], **({"usage": usage} if include_usage else {})},
+        model_response_object=ModelResponse(),
+    )
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"litellm_params": {"metadata": {"usage_object": {"prompt_tokens": 99, "completion_tokens": 99}}}},
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["metadata"]["usage_object"] == (response.usage.model_dump() if usage is not None else {})
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (0, 0, 0)
 
 
 def test_append_system_prompt_messages():
@@ -11046,6 +11077,24 @@ def test_litellm_logging_no_log_param(monkeypatch, disable_no_log_param):
     else:
         assert should_run is False
 
+    proxy_callback = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    should_run_proxy_callback = litellm_logging_obj.should_run_callback(
+        callback=proxy_callback,
+        litellm_params={"no-log": True},
+        event_hook="success_handler",
+    )
+    assert should_run_proxy_callback is True
+
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+
+    managed_files_callback = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock())
+    should_run_managed_files_callback = litellm_logging_obj.should_run_callback(
+        callback=managed_files_callback,
+        litellm_params={"no-log": True},
+        event_hook="success_handler",
+    )
+    assert should_run_managed_files_callback is True
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_get_callback_name():
@@ -11080,7 +11129,7 @@ def test_is_internal_litellm_proxy_callback():
     """
     logging = setup_logging()
 
-    assert logging._is_internal_litellm_proxy_callback(_PROXY_MaxIterationsHandler) == True
+    assert logging._is_internal_litellm_proxy_callback(PROXY_MaxIterationsHandler) == True
 
     # Test non-internal callbacks
     def regular_callback():
@@ -11113,7 +11162,7 @@ def test_should_run_sync_callbacks_for_async_calls():
     assert logging._should_run_sync_callbacks_for_async_calls() == True
 
     # Test with internal callback only
-    litellm.success_callback = [_PROXY_MaxIterationsHandler]
+    litellm.success_callback = [PROXY_MaxIterationsHandler]
     assert logging._should_run_sync_callbacks_for_async_calls() == False
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
@@ -11125,8 +11174,8 @@ def test_remove_internal_litellm_callbacks():
 
     callbacks = [
         regular_callback,
-        _PROXY_MaxIterationsHandler,
-        _PROXY_CacheControlCheck,
+        PROXY_MaxIterationsHandler,
+        PROXY_CacheControlCheck,
         "string_callback",
     ]
 
@@ -11134,8 +11183,8 @@ def test_remove_internal_litellm_callbacks():
     assert len(filtered) == 2  # Should only keep regular_callback and string_callback
     assert regular_callback in filtered
     assert "string_callback" in filtered
-    assert _PROXY_MaxIterationsHandler not in filtered
-    assert _PROXY_CacheControlCheck not in filtered
+    assert PROXY_MaxIterationsHandler not in filtered
+    assert PROXY_CacheControlCheck not in filtered
 
 @pytest.mark.asyncio
 async def test_background_interaction_completion_logs_while_in_progress_handler_is_parked(monkeypatch):
