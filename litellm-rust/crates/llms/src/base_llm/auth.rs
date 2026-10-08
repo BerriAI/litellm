@@ -45,8 +45,7 @@ pub struct ValidatedEnvironment {
 }
 
 impl ValidatedEnvironment {
-    /// An accepted caller credential header is sent as is or rejected when the policy says so.
-    /// Otherwise, a non-blank `api_key` uses the policy's static placement, and its absence is `missing`.
+    /// Forwards an accepted caller credential header, else places a non-blank `api_key`, else `missing`.
     pub fn with_api_key(
         policy: &ProviderAuthPolicy,
         headers: Headers,

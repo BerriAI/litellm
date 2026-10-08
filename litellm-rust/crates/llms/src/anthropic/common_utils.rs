@@ -113,8 +113,6 @@ pub fn get_auth_token(env_lookup: &dyn Fn(&str) -> Option<String>) -> Option<Str
     resolve_non_empty(None, env_lookup, &[ANTHROPIC_AUTH_TOKEN_ENV])
 }
 
-/// The bearer Anthropic sends instead of `x-api-key`: an OAuth key, or
-/// `ANTHROPIC_AUTH_TOKEN` when no key is set.
 pub fn get_bearer_auth(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
