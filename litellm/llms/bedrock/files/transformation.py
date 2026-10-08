@@ -79,8 +79,22 @@ LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 LIST_FILES_LOCATION_PARAM: Final = "_s3_list_files_location"
 
 
+def _is_empty_s3_object_range_error(raw_response: Response) -> bool:
+    if raw_response.status_code != 416:
+        return False
+    if raw_response.headers.get("Content-Range") == "bytes */0":
+        return True
+    try:
+        error_xml: Final = ET.fromstring(raw_response.content)
+    except ET.ParseError:
+        return False
+    return error_xml.findtext("ActualObjectSize") == "0"
+
+
 def _retrieved_s3_file_size(raw_response: Response) -> int:
     status_code: Final = raw_response.status_code
+    if _is_empty_s3_object_range_error(raw_response):
+        return 0
     if status_code == 206:
         content_range: Final = raw_response.headers.get("Content-Range", "")
         range_parts: Final = content_range.removeprefix("bytes 0-0/")
@@ -438,6 +452,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK
+
+    def is_retrieve_file_response_successful(self, response: httpx.Response) -> bool:
+        return not httpx.codes.is_error(response.status_code) or _is_empty_s3_object_range_error(response)
 
     @property
     def file_upload_http_method(self) -> str:

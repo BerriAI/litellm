@@ -2276,7 +2276,33 @@ class TestBedrockFileContentTransformation:
         assert response.status == "processed"
         assert response.object == "file"
 
-    def test_transform_retrieve_file_response_raises_for_empty_object(self, monkeypatch):
+    def test_transform_retrieve_file_response_accepts_verified_empty_object(self, monkeypatch):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+        BedrockFilesConfig().transform_retrieve_file_request(
+            file_id=self.S3_URI,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        response = BedrockFilesConfig().transform_retrieve_file_response(
+            raw_response=httpx.Response(
+                416,
+                content=b"<Error><Code>InvalidRange</Code><ActualObjectSize>0</ActualObjectSize></Error>",
+                request=httpx.Request("GET", self.S3_URI),
+            ),
+            logging_obj=MagicMock(),
+            litellm_params=litellm_params,
+        )
+
+        assert response.bytes == 0
+        assert response.filename == "input.jsonl.out"
+        assert response.purpose == "batch_output"
+
+    def test_transform_retrieve_file_response_rejects_unverified_empty_object(self, monkeypatch):
         import httpx
 
         from litellm.llms.bedrock.common_utils import BedrockError
@@ -2293,7 +2319,7 @@ class TestBedrockFileContentTransformation:
             BedrockFilesConfig().transform_retrieve_file_response(
                 raw_response=httpx.Response(
                     416,
-                    headers={"Content-Range": "bytes */0"},
+                    content=b"<Error><Code>InvalidRange</Code></Error>",
                     request=httpx.Request("GET", self.S3_URI),
                 ),
                 logging_obj=MagicMock(),
