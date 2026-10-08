@@ -1284,6 +1284,17 @@ class TestLegacyRefsFailClosedWithoutIds:
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN_FILE", str(tmp_path / "token"))
         assert resolve_anthropic_wif_params({"anthropic_federation_rule_id": "fdrl_1"}) is None
 
+    def test_environment_ids_complete_a_token_file_param(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_env")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-env")
+        token_file: Final = tmp_path / "token"
+
+        params: Final = resolve_anthropic_wif_params({"anthropic_identity_token_file": str(token_file)})
+
+        assert params is not None
+        assert (params.federation_rule_id, params.organization_id) == ("fdrl_env", "org-env")
+        assert params.assertion_ref == f"oidc/file/{token_file}"
+
     def test_disabling_federation_wins_over_the_gate(self, tmp_path: Path):
         litellm_params: Final = {
             "anthropic_disable_workload_identity_federation": True,
