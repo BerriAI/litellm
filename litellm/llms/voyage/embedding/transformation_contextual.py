@@ -11,7 +11,7 @@ import httpx
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
@@ -58,7 +58,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             if not api_base.endswith("/contextualizedembeddings"):
                 api_base = f"{api_base}/contextualizedembeddings"
             return api_base
-        return "https://api.voyageai.com/v1/contextualizedembeddings"
+        return f"{get_default_base_url(api_key)}/contextualizedembeddings"
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class signature
         return ["encoding_format", "dimensions"]
@@ -91,14 +91,8 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_key is None:
-            api_key = (
-                get_secret_str("VOYAGE_API_KEY")
-                or get_secret_str("VOYAGE_AI_API_KEY")
-                or get_secret_str("VOYAGE_AI_TOKEN")
-            )
         return {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {get_voyage_api_key(api_key)}",
         }
 
     AUTO_CHUNK_SIZE: Final = 32000
