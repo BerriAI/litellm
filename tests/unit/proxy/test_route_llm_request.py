@@ -1728,3 +1728,37 @@ async def test_route_request_without_model_on_model_routed_endpoint_is_a_400():
 
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "model"
+
+
+@pytest.mark.asyncio
+async def test_route_request_router_settings_override_skips_null_fields():
+    """
+    A key or team saved from the dashboard stores every unset router setting as null. Those nulls
+    must not reach the router as explicit per-request values, or they switch the router-level
+    fallbacks and retries off for that key.
+    """
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "stream": True,
+        "router_settings_override": {
+            "fallbacks": None,
+            "context_window_fallbacks": None,
+            "num_retries": None,
+            "model_group_retry_policy": None,
+            "timeout": 600,
+        },
+    }
+
+    llm_router: Final = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response: Final = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs: Final = llm_router.acompletion.call_args[1]
+    assert call_kwargs["timeout"] == 600
+    assert "fallbacks" not in call_kwargs
+    assert "context_window_fallbacks" not in call_kwargs
+    assert "num_retries" not in call_kwargs
+    assert "model_group_retry_policy" not in call_kwargs

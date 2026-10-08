@@ -199,28 +199,23 @@ def test_router_retries_configured(client: str) -> None:
         assert _deployments_hit(wire) == ("primary", "backup")
 
 
-@dataclass(frozen=True, slots=True)
-class _Outcome:
-    text: str | None
-    error: str | None
-    hit: tuple[str, ...]
-
-
-def _outcome(client: str, wire: Wire, router: Router, **request: object) -> _Outcome:
-    try:
-        streamed: Final = _stream(client, router, **request)
-    except litellm.APIConnectionError as error:
-        return _Outcome(text=None, error=type(error).__name__, hit=_deployments_hit(wire))
-    return _Outcome(text=streamed.text, error=None, hit=_deployments_hit(wire))
-
-
-def test_per_request_fallback_list_behaves_like_the_async_twin() -> None:
+@pytest.mark.parametrize("client", _CLIENTS)
+def test_per_request_fallback_list(client: str) -> None:
     with wire_server(_peer(_PRIMARY_DIES)) as wire:
         router: Final = _router(wire, ("primary", "backup"))
-        twin: Final = _outcome("async", wire, router, fallbacks=_PRIMARY_TO_BACKUP)
-        observed: Final = _outcome("sync", wire, router, fallbacks=_PRIMARY_TO_BACKUP)
-        assert observed == twin, (observed, twin)
-        assert observed.hit[:1] == ("primary",), observed
+        streamed: Final = _stream(client, router, fallbacks=_PRIMARY_TO_BACKUP)
+        assert streamed.text == "answered by the backup", streamed
+        assert streamed.attempted_fallbacks == 1, streamed
+        assert _deployments_hit(wire) == ("primary", "backup")
+
+
+@pytest.mark.parametrize("client", _CLIENTS)
+def test_per_request_fallbacks_none_turns_the_router_list_off(client: str) -> None:
+    with wire_server(_peer(_PRIMARY_DIES)) as wire:
+        router: Final = _router(wire, ("primary", "backup"), fallbacks=_PRIMARY_TO_BACKUP)
+        with pytest.raises(litellm.APIConnectionError, match="overloaded"):
+            _stream(client, router, fallbacks=None)
+        assert _deployments_hit(wire) == ("primary",)
 
 
 @pytest.mark.parametrize("client", _CLIENTS)
