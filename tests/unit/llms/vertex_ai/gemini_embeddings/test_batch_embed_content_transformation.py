@@ -8,6 +8,7 @@ Covers:
 - Response processing with correct indices
 """
 
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -70,13 +71,13 @@ class TestIsMultimodalInput:
         """Nested list with text is not multimodal."""
         assert _is_multimodal_input([["text_a", "text_b"]]) is False
 
-    def test_file_content_block_is_multimodal(self):
+    def test_file_content_block_is_multimodal(self) -> None:
         assert _is_multimodal_input([_file_block(file_data=VIDEO_DATA_URI)]) is True
 
     def test_nested_list_with_image_is_multimodal(self):
         assert _is_multimodal_input([["a red shoe", IMAGE_DATA_URI]]) is True
 
-    def test_single_object_input_answers_400(self):
+    def test_single_object_input_answers_400(self) -> None:
         with pytest.raises(BadRequestError, match="string or a list"):
             _is_multimodal_input(_file_block(file_data=VIDEO_DATA_URI))
 
@@ -106,7 +107,7 @@ class TestBuildPartForInput:
         assert part["file_data"] is not None
         assert part["file_data"]["mime_type"] == "image/jpeg"
 
-    def test_file_reference_unresolved_answers_400_naming_the_gemini_provider(self):
+    def test_file_reference_unresolved_answers_400_naming_the_gemini_provider(self) -> None:
         with pytest.raises(BadRequestError, match="gemini/ provider"):
             _build_part_for_input("files/abc")
 
@@ -418,12 +419,12 @@ class TestProcessEmbedContentResponseUsage:
 
 
 class TestFileContentBlocks:
-    MODEL = "gemini-embedding-2-preview"
-    CLIP_METADATA = {"fps": 2, "start_offset": "3s", "end_offset": "6s"}
-    CLIP_PART = {"fps": 2.0, "startOffset": "3s", "endOffset": "6s"}
+    MODEL: Final = "gemini-embedding-2-preview"
+    CLIP_METADATA: Final = {"fps": 2, "start_offset": "3s", "end_offset": "6s"}
+    CLIP_PART: Final = {"fps": 2.0, "startOffset": "3s", "endOffset": "6s"}
 
-    def test_data_uri_block_forwards_format_and_video_metadata(self):
-        part = _build_part_for_input(
+    def test_data_uri_block_forwards_format_and_video_metadata(self) -> None:
+        part: Final = _build_part_for_input(
             _file_block(
                 file_data="data:application/octet-stream;base64,QUJD",
                 format="video/mp4",
@@ -435,8 +436,8 @@ class TestFileContentBlocks:
             "video_metadata": self.CLIP_PART,
         }
 
-    def test_gcs_block_infers_mime_type_and_forwards_video_metadata(self):
-        part = _build_part_for_input(
+    def test_gcs_block_infers_mime_type_and_forwards_video_metadata(self) -> None:
+        part: Final = _build_part_for_input(
             _file_block(file_id="gs://my-bucket/clip.mp4", video_metadata={"start_offset": "0s", "end_offset": "3s"})
         )
         assert part == {
@@ -444,9 +445,9 @@ class TestFileContentBlocks:
             "video_metadata": {"startOffset": "0s", "endOffset": "3s"},
         }
 
-    def test_file_reference_block_uses_the_resolved_file(self):
-        resolved_files = {"files/clip123": {"mime_type": "video/mp4", "uri": FILES_URI}}
-        part = _build_part_for_input(
+    def test_file_reference_block_uses_the_resolved_file(self) -> None:
+        resolved_files: Final = {"files/clip123": {"mime_type": "video/mp4", "uri": FILES_URI}}
+        part: Final = _build_part_for_input(
             _file_block(file_id="files/clip123", video_metadata={"fps": 1}),
             resolved_files=resolved_files,
         )
@@ -455,7 +456,7 @@ class TestFileContentBlocks:
             "video_metadata": {"fps": 1.0},
         }
 
-    def test_files_api_uri_block_uses_the_resolved_file(self):
+    def test_files_api_uri_block_uses_the_resolved_file(self) -> None:
         resolved_files: Final = {FILES_URI: {"mime_type": "video/mp4", "uri": FILES_URI}}
         part: Final = _build_part_for_input(
             _file_block(file_id=FILES_URI, video_metadata={"start_offset": "0s", "end_offset": "3s"}),
@@ -470,16 +471,16 @@ class TestFileContentBlocks:
     def test_file_reference_name_is_the_files_name_for_both_forms(self, reference: str) -> None:
         assert file_reference_name(reference) == "files/clip123"
 
-    def test_block_without_video_metadata_sends_no_video_metadata_key(self):
-        part = _build_part_for_input(_file_block(file_data=IMAGE_DATA_URI, filename="dot.png"))
+    def test_block_without_video_metadata_sends_no_video_metadata_key(self) -> None:
+        part: Final = _build_part_for_input(_file_block(file_data=IMAGE_DATA_URI, filename="dot.png"))
         assert part == {"inline_data": {"mime_type": "image/png", "data": IMAGE_DATA_URI.split(",", 1)[1]}}
 
-    def test_block_with_empty_video_metadata_sends_no_video_metadata_key(self):
-        part = _build_part_for_input(_file_block(file_data=VIDEO_DATA_URI, video_metadata={}))
+    def test_block_with_empty_video_metadata_sends_no_video_metadata_key(self) -> None:
+        part: Final = _build_part_for_input(_file_block(file_data=VIDEO_DATA_URI, video_metadata={}))
         assert part == {"inline_data": {"mime_type": "video/mp4", "data": VIDEO_DATA_URI.split(",", 1)[1]}}
 
-    def test_batch_path_nested_block_and_text_share_one_request(self):
-        result = transform_openai_input_gemini_content(
+    def test_batch_path_nested_block_and_text_share_one_request(self) -> None:
+        result: Final = transform_openai_input_gemini_content(
             input=[[_file_block(file_data=VIDEO_DATA_URI, video_metadata=self.CLIP_METADATA), "a solid color clip"]],
             model=self.MODEL,
             optional_params={"dimensions": 768},
@@ -494,8 +495,8 @@ class TestFileContentBlocks:
             {"text": "a solid color clip"},
         ]
 
-    def test_batch_path_flat_block_and_text_are_separate_requests(self):
-        result = transform_openai_input_gemini_content(
+    def test_batch_path_flat_block_and_text_are_separate_requests(self) -> None:
+        result: Final = transform_openai_input_gemini_content(
             input=[_file_block(file_data=VIDEO_DATA_URI, video_metadata=self.CLIP_METADATA), "a solid color clip"],
             model=self.MODEL,
             optional_params={},
@@ -504,17 +505,17 @@ class TestFileContentBlocks:
         assert result["requests"][0]["content"]["parts"][0]["video_metadata"] == self.CLIP_PART
         assert result["requests"][1]["content"]["parts"] == [{"text": "a solid color clip"}]
 
-    def test_embed_content_path_accepts_flat_block_and_text(self):
-        result = transform_openai_input_gemini_embed_content(
+    def test_embed_content_path_accepts_flat_block_and_text(self) -> None:
+        result: Final = transform_openai_input_gemini_embed_content(
             input=[_file_block(file_data=VIDEO_DATA_URI, video_metadata=self.CLIP_METADATA), "a solid color clip"],
             model=self.MODEL,
             optional_params={},
         )
-        parts = result["content"]["parts"]
+        parts: Final = result["content"]["parts"]
         assert parts[0]["video_metadata"] == self.CLIP_PART
         assert parts[1] == {"text": "a solid color clip"}
 
-    def test_embed_content_path_still_rejects_nested_lists(self):
+    def test_embed_content_path_still_rejects_nested_lists(self) -> None:
         with pytest.raises(ValueError, match="Nested"):
             transform_openai_input_gemini_embed_content(
                 input=[[_file_block(file_data=VIDEO_DATA_URI), "a solid color clip"]],
@@ -544,37 +545,39 @@ class TestFileContentBlocks:
             ({"type": "image_url", "image_url": {"url": IMAGE_DATA_URI}}, "Input should be 'file'"),
         ],
     )
-    def test_malformed_block_answers_400_naming_the_field(self, block, named_in_error):
+    def test_malformed_block_answers_400_naming_the_field(
+        self, block: dict[str, object], named_in_error: str
+    ) -> None:
         with pytest.raises(BadRequestError, match=named_in_error):
             _build_part_for_input(block)
 
-    def test_drop_params_drops_the_block_keys_this_surface_does_not_take(self):
-        block = _file_block(
+    def test_drop_params_drops_the_block_keys_this_surface_does_not_take(self) -> None:
+        block: Final = _file_block(
             file_data=VIDEO_DATA_URI,
             detail="high",
             video_metadata={"fps": 1, "start_offset": "1s", "resolution": "low"},
         )
-        part = _build_part_for_input({**block, "cache_control": {"type": "ephemeral"}}, drop_params=True)
+        part: Final = _build_part_for_input({**block, "cache_control": {"type": "ephemeral"}}, drop_params=True)
         assert part["inline_data"]["mime_type"] == "video/mp4"
         assert part["video_metadata"] == {"fps": 1.0, "startOffset": "1s"}
 
-    def test_drop_params_still_answers_400_for_a_malformed_value(self):
-        block = _file_block(file_data=VIDEO_DATA_URI, detail="high", video_metadata={"fps": "fast"})
+    def test_drop_params_still_answers_400_for_a_malformed_value(self) -> None:
+        block: Final = _file_block(file_data=VIDEO_DATA_URI, detail="high", video_metadata={"fps": "fast"})
         with pytest.raises(BadRequestError, match=r"video_metadata\.fps"):
             _build_part_for_input(block, drop_params=True)
 
     @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
     )
-    def test_transforms_forward_drop_params_to_every_block(self, transform):
-        block = _file_block(file_data=VIDEO_DATA_URI, detail="high")
+    def test_transforms_forward_drop_params_to_every_block(self, transform: Callable[..., object]) -> None:
+        block: Final = _file_block(file_data=VIDEO_DATA_URI, detail="high")
         with pytest.raises(BadRequestError, match=r"file\.detail"):
             transform(input=[block], model="gemini-embedding-2-preview", optional_params={})
         transform(input=[block], model="gemini-embedding-2-preview", optional_params={}, drop_params=True)
 
-    def test_batch_path_forwards_drop_params_into_nested_lists(self):
-        block = _file_block(file_data=VIDEO_DATA_URI, detail="high")
-        body = transform_openai_input_gemini_content(
+    def test_batch_path_forwards_drop_params_into_nested_lists(self) -> None:
+        block: Final = _file_block(file_data=VIDEO_DATA_URI, detail="high")
+        body: Final = transform_openai_input_gemini_content(
             input=[[block, "a caption"]], model="gemini-embedding-2-preview", optional_params={}, drop_params=True
         )
         assert len(body["requests"][0]["content"]["parts"]) == 2
@@ -582,21 +585,21 @@ class TestFileContentBlocks:
     @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
     )
-    def test_single_object_input_answers_400(self, transform):
+    def test_single_object_input_answers_400(self, transform: Callable[..., object]) -> None:
         with pytest.raises(BadRequestError, match="string or a list"):
             transform(
                 input=_file_block(file_data=VIDEO_DATA_URI), model="gemini-embedding-2-preview", optional_params={}
             )
 
-    def test_process_response_counts_only_the_text_tokens_next_to_a_block(self):
-        text = "a solid color clip"
-        with_block = process_response(
+    def test_process_response_counts_only_the_text_tokens_next_to_a_block(self) -> None:
+        text: Final = "a solid color clip"
+        with_block: Final = process_response(
             input=[_file_block(file_data=VIDEO_DATA_URI, video_metadata=self.CLIP_METADATA), text],
             model_response=EmbeddingResponse(),
             model=self.MODEL,
             _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}]},
         )
-        text_only = process_response(
+        text_only: Final = process_response(
             input=[text],
             model_response=EmbeddingResponse(),
             model=self.MODEL,
@@ -604,8 +607,8 @@ class TestFileContentBlocks:
         )
         assert with_block.usage.prompt_tokens == text_only.usage.prompt_tokens > 0
 
-    def test_embed_content_usage_fallback_with_a_block_does_not_estimate(self):
-        result = process_embed_content_response(
+    def test_embed_content_usage_fallback_with_a_block_does_not_estimate(self) -> None:
+        result: Final = process_embed_content_response(
             input=[_file_block(file_data=VIDEO_DATA_URI, video_metadata=self.CLIP_METADATA)],
             model_response=EmbeddingResponse(),
             model=self.MODEL,
@@ -613,8 +616,8 @@ class TestFileContentBlocks:
         )
         assert result.usage.prompt_tokens == 0
 
-    def test_image_block_counts_as_image_only_input(self):
-        result = process_embed_content_response(
+    def test_image_block_counts_as_image_only_input(self) -> None:
+        result: Final = process_embed_content_response(
             input=[_file_block(file_data=IMAGE_DATA_URI)],
             model_response=EmbeddingResponse(),
             model=self.MODEL,

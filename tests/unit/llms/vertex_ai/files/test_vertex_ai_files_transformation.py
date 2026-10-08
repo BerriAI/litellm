@@ -1289,7 +1289,7 @@ class TestVertexEmbeddingsBatchInputTranslation:
 
         assert set(row["request"]) == {"content"}
 
-    def test_should_translate_a_file_block_with_video_metadata(self):
+    def test_should_translate_a_file_block_with_video_metadata(self) -> None:
         (row,) = _wrap_entries(
             [
                 _embeddings_entry(
