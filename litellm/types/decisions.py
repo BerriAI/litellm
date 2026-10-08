@@ -1,4 +1,6 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, Field, PrivateAttr, model_validator, with_config
@@ -110,17 +112,13 @@ DecisionAnswer: TypeAlias = Annotated[
 class DecisionsUsage(LiteLLMPydanticObjectBase):
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_tokens: Annotated[int, Field(exclude=True)] = 0
+    cache_write_tokens: Annotated[int, Field(exclude=True)] = 0
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
-class DecisionsResponse(LiteLLMPydanticObjectBase):
-    model: str | None = None
-    answers: Mapping[str, DecisionAnswer]
-    usage: DecisionsUsage | None = None
-
-    model_config = ConfigDict(extra="allow", frozen=True)
-
+class _HiddenParamsResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @property
@@ -131,6 +129,14 @@ class DecisionsResponse(LiteLLMPydanticObjectBase):
         self._hidden_params.update(params)
 
 
+class DecisionsResponse(_HiddenParamsResponse):
+    model: str | None = None
+    answers: Mapping[str, DecisionAnswer]
+    usage: DecisionsUsage | None = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
 class OpenAIDecisionInputText(LiteLLMPydanticObjectBase):
     type: Literal["input_text"]
     text: str
@@ -138,12 +144,29 @@ class OpenAIDecisionInputText(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class OpenAIDecisionInputImage(LiteLLMPydanticObjectBase):
+    type: Literal["input_image"]
+    image_url: str
+    detail: str | None = None
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+OpenAIDecisionContentPart: TypeAlias = Annotated[
+    OpenAIDecisionInputText | OpenAIDecisionInputImage,
+    Field(discriminator="type"),
+]
+
+
 class OpenAIDecisionInputMessage(LiteLLMPydanticObjectBase):
     role: Literal["user"] = "user"
     type: Literal["message"] = "message"
-    content: str | Sequence[OpenAIDecisionInputText]
+    content: str | Sequence[OpenAIDecisionContentPart]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+OpenAIDecisionInput: TypeAlias = str | Sequence[OpenAIDecisionInputMessage]
 
 
 class OpenAIPredicateQuestion(LiteLLMPydanticObjectBase):
@@ -206,7 +229,7 @@ OpenAIDecisionQuestion: TypeAlias = Annotated[
 
 
 class OpenAIDecisionRequestBody(LiteLLMPydanticObjectBase):
-    input: str | Sequence[OpenAIDecisionInputMessage]
+    input: OpenAIDecisionInput
     questions: Annotated[Sequence[OpenAIDecisionQuestion], Field(min_length=1, max_length=MAX_DECISION_QUESTIONS)]
     safety_identifier: str | None = None
 
@@ -263,7 +286,10 @@ class OpenAIRefusalAnswer(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(frozen=True)
 
 
-OpenAIDecisionAnswer: TypeAlias = OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIRefusalAnswer
+OpenAIDecisionAnswer: TypeAlias = Annotated[
+    OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIRefusalAnswer,
+    Field(discriminator="type"),
+]
 
 
 class OpenAIDecisionInputTokensDetails(LiteLLMPydanticObjectBase):
@@ -289,9 +315,136 @@ class OpenAIDecisionUsage(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(frozen=True)
 
 
-class OpenAIDecisionResponse(LiteLLMPydanticObjectBase):
+class OpenAIDecisionResponse(_HiddenParamsResponse):
     model: str
     answers: tuple[OpenAIDecisionAnswer, ...]
     usage: OpenAIDecisionUsage
 
     model_config = ConfigDict(extra="allow", frozen=True)
+
+
+_NO_EXTRA: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRState:
+    state: DecisionsJSON
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRMessages:
+    messages: tuple[OpenAIDecisionInputMessage, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRPredicateQuestion:
+    name: str | None
+    instructions: DecisionsJSON | None
+    criteria: NoulCriteria | None = None
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRChoiceOption:
+    value: str | bool
+    description: DecisionsJSON | None
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRChoiceQuestion:
+    name: str | None
+    instructions: DecisionsJSON | None
+    choices: tuple[DecisionsIRChoiceOption, ...]
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRScoreLevel:
+    label: DecisionsJSON
+    description: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRScoreQuestion:
+    name: str | None
+    instructions: DecisionsJSON | None
+    levels: tuple[DecisionsIRScoreLevel, ...]
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+DecisionsIRQuestion: TypeAlias = DecisionsIRPredicateQuestion | DecisionsIRChoiceQuestion | DecisionsIRScoreQuestion
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRRequest:
+    input: DecisionsIRState | DecisionsIRMessages
+    questions: tuple[DecisionsIRQuestion, ...]
+    safety_identifier: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRPredicateAnswer:
+    probability: float
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRChoiceProbability:
+    value: str | bool
+    probability: float
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRChoiceAnswer:
+    choice: str | bool
+    confidence: float
+    probabilities: tuple[DecisionsIRChoiceProbability, ...]
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRScoreProbability:
+    value: int
+    label: DecisionsJSON
+    probability: float
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRScoreAnswer:
+    score: float
+    confidence: float
+    probabilities: tuple[DecisionsIRScoreProbability, ...]
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRRefusal:
+    pass
+
+
+DecisionsIRAnswer: TypeAlias = (
+    DecisionsIRPredicateAnswer | DecisionsIRChoiceAnswer | DecisionsIRScoreAnswer | DecisionsIRRefusal
+)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsIRResponse:
+    model: str | None
+    answers: tuple[DecisionsIRAnswer, ...]
+    usage: DecisionsIRUsage
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+@dataclass(frozen=True, slots=True)
+class UnsupportedDecisionsRequest:
+    reason: str
