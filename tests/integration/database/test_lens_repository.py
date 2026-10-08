@@ -1,6 +1,7 @@
 import asyncio
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from fastapi import HTTPException
 from prisma import Prisma
 from psycopg import sql
 from pydantic import TypeAdapter
+from typing_extensions import LiteralString
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.db.prisma_client import PrismaWrapper
@@ -35,7 +37,7 @@ from litellm.proxy.lens.models import (
     TraceIdentity,
     Worker,
 )
-from litellm.proxy.lens.repository import LensRepository, WriterDatabase
+from litellm.proxy.lens.repository import Database, LensRepository, WriterDatabase
 from litellm.proxy.lens.state import cancel_job, claim_job, current_job, due_at, end_job, queue_job, replace_job
 
 
@@ -768,6 +770,124 @@ async def test_delayed_progress_cannot_replace_a_newer_checkpoint(lens_db: Prism
         assert stored is not None and stored.jobs == (next_owner,)
     finally:
         await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', claimed.id)
+
+
+class ProgressInterleavingDatabase:
+    def __init__(self, database: WriterDatabase, lens_id: str, job: Job) -> None:
+        self.database: Final = database
+        self.lens_id: Final = lens_id
+        self.job: Final = job
+        self.committed: Final = asyncio.Event()
+
+    async def query_raw(self, query: LiteralString, *args: object) -> object:
+        rows: Final = await self.database.query_raw(query, *args)
+        if query.startswith('SELECT data FROM "LiteLLM_Lens" WHERE id='):
+            updated: Final = await LensRepository(self.database).progress(self.lens_id, self.job, Progress())
+            assert updated is not None
+        return rows
+
+    async def execute_raw(self, query: LiteralString, *args: object) -> int:
+        return await self.database.execute_raw(query, *args)
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncGenerator[Database]:
+        async with self.database.transaction() as database:
+            yield database
+        self.committed.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("renewing", (False, True))
+async def test_budget_reservation_survives_competing_progress(lens_db: Prisma, renewing: bool) -> None:
+    from litellm.proxy.lens.inference import (
+        BUDGET_LEASE,
+        renew_budget_reservation,
+        reserve_attempt,
+        wait_for_reservation,
+    )
+    from litellm.proxy.lens.models import BudgetReservation
+    from tests.unit.proxy.lens.test_state import lens, worker
+
+    now: Final = datetime.now(timezone.utc)
+    claimed: Final = claim_job(queue_job(lens(), now, uuid4().hex), worker(), now).model_copy(
+        update={"id": uuid4().hex, "budget_month": now.strftime("%Y-%m")}
+    )
+    job: Final = claimed.jobs[0]
+    hold: Final = BudgetReservation(
+        id=uuid4().hex, job_id=job.id, amount=1, month=claimed.budget_month, expires_at=now + BUDGET_LEASE
+    )
+    database: Final = WriterDatabase(PrismaWrapper(lens_db))
+    repo: Final = LensRepository(database)
+    competing: Final = ProgressInterleavingDatabase(database, claimed.id, job)
+    await repo.create(claimed.model_copy(update={"reservations": (hold,) if renewing else ()}))
+    admitted: Final = asyncio.Event()
+    admitted.set()
+    operation: Final = asyncio.create_task(
+        renew_budget_reservation(LensRepository(competing), claimed.id, hold.id, admitted)
+        if renewing
+        else wait_for_reservation(
+            LensRepository(competing),
+            claimed.id,
+            hold.id,
+            lambda current: reserve_attempt(current, job, worker().id, hold, now),
+        )
+    )
+    committed: Final = asyncio.create_task(competing.committed.wait())
+    try:
+        async with asyncio.timeout(45):
+            await asyncio.wait((operation, committed), return_when=asyncio.FIRST_COMPLETED)
+            if operation.done():
+                await operation
+        stored: Final = await repo.get(claimed.id)
+        assert stored is not None
+        assert tuple(reservation.id for reservation in stored.reservations) == (hold.id,)
+        assert stored.spent == claimed.spent
+        assert stored.jobs[0].cost == 0
+        if renewing:
+            assert stored.reservations[0].expires_at is not None
+            assert stored.reservations[0].expires_at > now + BUDGET_LEASE
+    finally:
+        operation.cancel()
+        committed.cancel()
+        await asyncio.gather(operation, committed, return_exceptions=True)
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', claimed.id)
+
+
+@pytest.mark.asyncio
+async def test_parallel_reservations_release_the_lock_while_waiting_for_budget(lens_db: Prisma) -> None:
+    from litellm.proxy.lens.inference import reserve_amount, settle_amount, wait_for_reservation
+    from litellm.proxy.lens.models import BudgetReservation
+    from tests.unit.proxy.lens.test_state import lens
+
+    now: Final = datetime.now(timezone.utc)
+    original: Final = lens()
+    queued: Final = queue_job(original, now, uuid4().hex).model_copy(
+        update={"id": uuid4().hex, "settings": original.settings.model_copy(update={"monthly_budget": 2})}
+    )
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    holds: Final = tuple(
+        BudgetReservation(id=uuid4().hex, job_id=queued.jobs[0].id, amount=1, month=queued.budget_month)
+        for _ in range(8)
+    )
+    await repo.create(queued)
+    try:
+
+        async def analyze(hold: BudgetReservation) -> None:
+            await wait_for_reservation(repo, queued.id, hold.id, lambda current: reserve_amount(current, hold))
+            stored: Final = await repo.get(queued.id)
+            assert stored is not None and hold in stored.reservations
+            assert stored.spent + sum(reservation.amount for reservation in stored.reservations) <= 2
+            assert await repo.update_locked(queued.id, lambda current: settle_amount(current, hold.id, 0.125, None))
+
+        async with asyncio.timeout(15):
+            await asyncio.gather(*(analyze(hold) for hold in holds))
+        stored: Final = await repo.get(queued.id)
+        assert stored is not None
+        assert stored.spent == 1
+        assert stored.jobs[0].cost == 1
+        assert stored.reservations == ()
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', queued.id)
 
 
 @pytest.mark.asyncio
