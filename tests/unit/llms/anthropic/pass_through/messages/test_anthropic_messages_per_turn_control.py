@@ -95,14 +95,14 @@ def test_added_per_turn_control_beta_survives_the_anthropic_allowlist():
     assert PER_TURN_CONTROL in _betas(filtered)
 
 
-@pytest.mark.parametrize("provider", ["bedrock", "bedrock_converse", "databricks"])
+@pytest.mark.parametrize("provider", ["bedrock_converse", "databricks"])
 def test_per_turn_control_beta_is_dropped_for_providers_without_it(provider):
     filtered = update_headers_with_filtered_beta(headers={"anthropic-beta": PER_TURN_CONTROL}, provider=provider)
 
     assert "anthropic-beta" not in filtered
 
 
-@pytest.mark.parametrize("provider", ["azure_ai", "vertex_ai"])
+@pytest.mark.parametrize("provider", ["azure_ai", "bedrock", "vertex_ai"])
 def test_per_turn_control_beta_is_forwarded_for_providers_with_it(provider):
     filtered = update_headers_with_filtered_beta(headers={"anthropic-beta": PER_TURN_CONTROL}, provider=provider)
 
