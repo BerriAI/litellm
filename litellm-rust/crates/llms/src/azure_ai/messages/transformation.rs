@@ -30,9 +30,6 @@ use crate::{
     },
 };
 
-#[cfg(test)]
-use crate::azure_ai::common_utils::resolve_azure_api_key;
-
 const AUTH_POLICY: ProviderAuthPolicy = ProviderAuthPolicy {
     rules: &[CredentialRule {
         kind: CredentialPlanKind::Static,
@@ -186,6 +183,7 @@ mod tests {
     use litellm_auth::CredentialPlacement;
 
     use super::*;
+    use crate::azure_ai::common_utils::resolve_azure_api_key;
     use crate::base_llm::messages::context::MessagesModelCapabilities;
 
     fn request_from(value: serde_json::Value) -> MessagesRequest {
