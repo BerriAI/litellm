@@ -2136,11 +2136,15 @@ mod tests {
         crate::initialize_python();
         Python::attach(|py| {
             let (_, entries) = decoded_argument(py, "model", &call_base(py));
-            let prepared = entries.iter().position(|entry| entry == "prepared:model");
-            let resolved = entries
-                .iter()
-                .position(|entry| entry == "resolved:api_key,messages,model,timeout");
-            let project = entries.iter().position(|entry| entry == "project");
+            let position = |expected: &str| {
+                entries
+                    .iter()
+                    .position(|entry| entry == expected)
+                    .unwrap_or_else(|| panic!("{expected} missing from {entries:?}"))
+            };
+            let prepared = position("prepared:model");
+            let resolved = position("resolved:api_key,messages,model,timeout");
+            let project = position("project");
             assert!(prepared < resolved && resolved < project, "{entries:?}");
         });
     }
