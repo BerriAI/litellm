@@ -44,10 +44,12 @@ class TraceReceiver:
         max_concurrent_ingests: int = OTLP_MAX_CONCURRENT_INGESTS,
         decompressor: Callable[[bytes, str | None], bytes] = decompress,
         body_read_timeout: float = 30,
+        background_storage: ClickHouseStorage | None = None,
     ) -> None:
         if max_concurrent_ingests < 1:
             raise ValueError("OTLP ingestion concurrency must be positive")
         self.storage = storage
+        self.background_storage: Final = background_storage or storage
         self._decompressor: Final = decompressor
         self._body_read_timeout: Final = body_read_timeout
         self._ingest_slots: Final = BoundedSemaphore(max_concurrent_ingests)
