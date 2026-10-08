@@ -1,11 +1,113 @@
+from collections.abc import Mapping
 from typing import Final
 
 from pydantic import TypeAdapter
 
-from litellm.llms.openai.decisions.transformation import to_openai_request, to_systemone_response
-from litellm.types.decisions import DecisionsRequestBody
+from litellm.llms.base_llm.decisions.transformation import ir_to_systemone_response, systemone_request_to_ir
+from litellm.llms.openai.decisions.transformation import (
+    OPENAI_DECISIONS_ENDPOINT,
+    ir_to_openai_request,
+    ir_to_openai_response,
+    openai_request_to_ir,
+)
+from litellm.types.decisions import DecisionsIRRequest, DecisionsRequestBody, OpenAIDecisionRequestBody
 
 _SYSTEMONE_BODY: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
+_OPENAI_BODY: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
+
+_OPENAI_REQUEST: Final[Mapping[str, object]] = {
+    "input": [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "The screen is cracked."},
+                {"type": "input_image", "image_url": "data:image/png;base64,AA==", "detail": "high"},
+            ],
+        },
+        {"type": "message", "role": "user", "content": "Order 1234."},
+    ],
+    "questions": [
+        {"type": "predicate", "name": "damaged", "instructions": "Is the item damaged?"},
+        {
+            "type": "choice",
+            "instructions": "Should we refund?",
+            "choices": [{"value": True, "description": "Refund now"}, {"value": "escalate"}],
+        },
+        {
+            "type": "score",
+            "name": "severity",
+            "instructions": "How severe is it?",
+            "levels": [{"label": "minor"}, {"label": "major", "description": "Product unusable"}],
+        },
+        {"type": "predicate", "name": "fraud", "instructions": "Is this fraud?"},
+    ],
+    "safety_identifier": "end-user-1",
+}
+_PREDICATE_ANSWER: Final[Mapping[str, object]] = {"type": "predicate", "name": "damaged", "probability": 0.95}
+_CHOICE_ANSWER: Final[Mapping[str, object]] = {
+    "type": "choice",
+    "name": None,
+    "choice": True,
+    "probabilities": [{"value": True, "probability": 0.9}, {"value": "escalate", "probability": 0.1}],
+    "confidence": 0.8,
+}
+_REFUSAL_ANSWER: Final[Mapping[str, object]] = {"type": "refusal", "name": "fraud"}
+_USAGE: Final[Mapping[str, object]] = {
+    "input_tokens": 383,
+    "input_tokens_details": {"cached_tokens": 256, "cache_write_tokens": 64},
+    "output_tokens": 2,
+    "output_tokens_details": {"reasoning_tokens": 1},
+    "total_tokens": 385,
+}
+_OPENAI_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "gpt-6-luna",
+    "answers": [
+        _PREDICATE_ANSWER,
+        _CHOICE_ANSWER,
+        {
+            "type": "score",
+            "name": "severity",
+            "score": 0.7,
+            "probabilities": [
+                {"value": 0, "label": "minor", "probability": 0.3},
+                {"value": 1, "label": "major", "probability": 0.7},
+            ],
+            "confidence": 0.6,
+        },
+        _REFUSAL_ANSWER,
+    ],
+    "usage": _USAGE,
+}
+
+
+def _openai_ir(raw: Mapping[str, object]) -> DecisionsIRRequest:
+    return openai_request_to_ir(_OPENAI_BODY.validate_python(raw))
+
+
+def test_an_openai_request_reaches_openai_unchanged() -> None:
+    assert ir_to_openai_request("gpt-6-luna", _openai_ir(_OPENAI_REQUEST)) == {
+        "model": "gpt-6-luna",
+        **_OPENAI_REQUEST,
+    }
+
+
+def test_an_openai_response_reaches_the_caller_unchanged() -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+
+    parsed: Final = OPENAI_DECISIONS_ENDPOINT.parse_response(_OPENAI_RESPONSE, ir)
+
+    assert ir_to_openai_response(parsed, ir, "requested").model_dump(mode="json") == _OPENAI_RESPONSE
+
+
+def test_answers_openai_did_not_return_are_refusals() -> None:
+    ir: Final = _openai_ir(_OPENAI_REQUEST)
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [_PREDICATE_ANSWER]}
+
+    response: Final = ir_to_openai_response(OPENAI_DECISIONS_ENDPOINT.parse_response(payload, ir), ir, "requested")
+
+    assert [answer.type for answer in response.answers] == ["predicate", "refusal", "refusal", "refusal"]
+    assert [answer.name for answer in response.answers] == ["damaged", None, "severity", "fraud"]
 
 
 def test_a_systemone_request_becomes_an_openai_request_with_questions_named_by_their_keys() -> None:
@@ -30,7 +132,7 @@ def test_a_systemone_request_becomes_an_openai_request_with_questions_named_by_t
         }
     )
 
-    assert to_openai_request("gpt-6-luna", request) == {
+    assert ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request)) == {
         "model": "gpt-6-luna",
         "input": '{"ticket": 1234, "text": "Screen cracked"}',
         "questions": [
@@ -51,41 +153,40 @@ def test_a_systemone_request_becomes_an_openai_request_with_questions_named_by_t
     }
 
 
-def test_an_openai_response_becomes_systemone_answers_keyed_by_question_name_without_refusals() -> None:
-    response: Final = to_systemone_response(
-        {
-            "model": "gpt-6-luna",
-            "answers": [
-                {"type": "predicate", "name": "damaged", "probability": 0.95},
-                {
-                    "type": "choice",
-                    "name": "action",
-                    "choice": True,
-                    "probabilities": [{"value": True, "probability": 0.9}, {"value": "escalate", "probability": 0.1}],
-                    "confidence": 0.8,
+def test_an_openai_response_becomes_systemone_answers_with_the_callers_score_labels() -> None:
+    ir: Final = systemone_request_to_ir(
+        _SYSTEMONE_BODY.validate_python(
+            {
+                "state": "Screen cracked",
+                "questions": {
+                    "damaged": {"type": "noul", "instructions": "Damaged?"},
+                    "action": {"type": "choice", "criteria": {"true": None, "escalate": None}},
+                    "severity": {"type": "score", "criteria": ["minor", {"label": "major"}]},
+                    "fraud": {"type": "noul", "instructions": "Fraud?"},
                 },
-                {
-                    "type": "score",
-                    "name": "severity",
-                    "score": 1.72,
-                    "probabilities": [
-                        {"value": 0, "label": "minor", "probability": 0.0},
-                        {"value": 1, "label": "major", "probability": 0.28},
-                        {"value": 2, "label": "critical", "probability": 0.72},
-                    ],
-                    "confidence": 0.58,
-                },
-                {"type": "refusal", "name": "fraud"},
-            ],
-            "usage": {
-                "input_tokens": 383,
-                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
-                "output_tokens": 2,
-                "output_tokens_details": {"reasoning_tokens": 0},
-                "total_tokens": 385,
-            },
-        }
+            }
+        )
     )
+    payload: Final = {
+        **_OPENAI_RESPONSE,
+        "answers": [
+            _PREDICATE_ANSWER,
+            _CHOICE_ANSWER,
+            {
+                "type": "score",
+                "name": "severity",
+                "score": 0.7,
+                "probabilities": [
+                    {"value": 0, "label": "minor", "probability": 0.3},
+                    {"value": 1, "label": '{"label": "major"}', "probability": 0.7},
+                ],
+                "confidence": 0.6,
+            },
+            _REFUSAL_ANSWER,
+        ],
+    }
+
+    response: Final = ir_to_systemone_response(OPENAI_DECISIONS_ENDPOINT.parse_response(payload, ir), ir)
 
     assert response.model_dump(mode="json") == {
         "model": "gpt-6-luna",
@@ -99,11 +200,13 @@ def test_an_openai_response_becomes_systemone_answers_keyed_by_question_name_wit
             },
             "severity": {
                 "type": "score",
-                "score": 1.72,
-                "confidence": 0.58,
-                "legend": {"0": "minor", "1": "major", "2": "critical"},
-                "probabilities": {"0": 0.0, "1": 0.28, "2": 0.72},
+                "score": 0.7,
+                "confidence": 0.6,
+                "legend": {"0": "minor", "1": {"label": "major"}},
+                "probabilities": {"0": 0.3, "1": 0.7},
             },
         },
         "usage": {"input_tokens": 383, "output_tokens": 2},
     }
+    assert response.usage is not None
+    assert (response.usage.cached_tokens, response.usage.cache_write_tokens) == (256, 64)

@@ -1,17 +1,26 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.decisions.transformation import DecisionsProviderConfig
+from litellm.llms.base_llm.decisions.transformation import (
+    DecisionsProviderConfig,
+    ir_to_systemone_response,
+    systemone_request_to_ir,
+)
 from litellm.llms.cloudflare.decisions.transformation import CLOUDFLARE_DECISIONS_ENDPOINT
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, get_httpx_client
-from litellm.llms.openai.decisions.transformation import OPENAI_DECISIONS_ENDPOINT
+from litellm.llms.openai.decisions.transformation import (
+    OPENAI_DECISIONS_ENDPOINT,
+    ir_to_openai_response,
+    openai_request_to_ir,
+)
 from litellm.llms.openrouter.decisions.transformation import OPENROUTER_DECISIONS_ENDPOINT
 from litellm.llms.perplexity.decisions.transformation import PERPLEXITY_DECISIONS_ENDPOINT
 from litellm.llms.strands_decider.decisions.transformation import STRANDS_DECIDER_DECISIONS_ENDPOINT
@@ -19,9 +28,16 @@ from litellm.llms.typesafe.decisions.transformation import TYPESAFE_DECISIONS_EN
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     DecisionQuestion,
+    DecisionsIRRequest,
+    DecisionsIRResponse,
     DecisionsJSON,
-    DecisionsRequest,
+    DecisionsRequestBody,
     DecisionsResponse,
+    OpenAIDecisionInput,
+    OpenAIDecisionQuestion,
+    OpenAIDecisionRequestBody,
+    OpenAIDecisionResponse,
+    UnsupportedDecisionsRequest,
 )
 from litellm.utils import client
 
@@ -36,9 +52,14 @@ DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsProviderConfig]] = MappingProxy
     }
 )
 
-_DECISIONS_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequest]] = TypeAdapter(DecisionsRequest)
+DecisionsQuestions: TypeAlias = (
+    Mapping[str, DecisionQuestion | Mapping[str, object]] | Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
+)
+DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequestBody
+
+_SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
+_OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
 _DECISIONS_PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
-_DECISIONS_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -50,6 +71,8 @@ class _PreparedDecisionsRequest:
     api_key: str | None = field(repr=False)
     headers: Mapping[str, str] = field(repr=False)
     body: Mapping[str, object] = field(repr=False)
+    request: DecisionsRequestFormat = field(repr=False)
+    ir_request: DecisionsIRRequest = field(repr=False)
 
 
 def _resolve_provider_model(model: str, custom_llm_provider: str | None) -> tuple[str, str]:
@@ -97,20 +120,52 @@ def _resolve_api_key(
     return server_api_key
 
 
+def _validate_request(
+    *,
+    state: DecisionsJSON | None,
+    questions: DecisionsQuestions | None,
+    decision_input: OpenAIDecisionInput | None,
+    safety_identifier: str | None,
+) -> DecisionsRequestFormat:
+    if decision_input is None:
+        return _SYSTEMONE_REQUEST_ADAPTER.validate_python({"state": state, "questions": questions})
+    return _OPENAI_REQUEST_ADAPTER.validate_python(
+        {"input": decision_input, "questions": questions, "safety_identifier": safety_identifier}
+    )
+
+
+def _ir_request(request: DecisionsRequestFormat) -> DecisionsIRRequest:
+    match request:
+        case DecisionsRequestBody():
+            return systemone_request_to_ir(request)
+        case OpenAIDecisionRequestBody():
+            return openai_request_to_ir(request)
+        case _:
+            assert_never(request)
+
+
 def _prepare_request(
     *,
     model: str,
-    state: DecisionsJSON,
-    questions: Mapping[str, DecisionQuestion | Mapping[str, object]],
+    state: DecisionsJSON | None,
+    questions: DecisionsQuestions | None,
+    decision_input: OpenAIDecisionInput | None,
+    safety_identifier: str | None,
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, str] | None,
 ) -> _PreparedDecisionsRequest:
     provider, upstream_model = _resolve_provider_model(model, custom_llm_provider)
+    if state is not None and decision_input is not None:
+        raise litellm.BadRequestError(
+            message="Pass either state (System One format) or input (OpenAI format) to the Decisions API, not both",
+            model=model,
+            llm_provider=provider,
+        )
     try:
-        validated_request: Final = _DECISIONS_REQUEST_ADAPTER.validate_python(
-            {"model": model, "state": state, "questions": questions}
+        validated_request: Final = _validate_request(
+            state=state, questions=questions, decision_input=decision_input, safety_identifier=safety_identifier
         )
     except ValidationError as error:
         raise litellm.BadRequestError(
@@ -149,7 +204,14 @@ def _prepare_request(
             "Content-Type": "application/json",
         }
     )
-    body: Final = MappingProxyType(endpoint.request_body(endpoint.request_model(canonical_model), validated_request))
+    ir_request: Final = _ir_request(validated_request)
+    body: Final = endpoint.request_body(endpoint.request_model(canonical_model), ir_request)
+    if isinstance(body, UnsupportedDecisionsRequest):
+        raise litellm.BadRequestError(
+            message=f"Decisions provider '{provider}' cannot serve this request: {body.reason}",
+            model=model,
+            llm_provider=provider,
+        )
     return _PreparedDecisionsRequest(
         config=endpoint,
         provider=provider,
@@ -157,7 +219,9 @@ def _prepare_request(
         url=endpoint.endpoint_url(resolved_api_base, canonical_model),
         api_key=resolved_api_key,
         headers=outbound_headers,
-        body=body,
+        body=MappingProxyType(body),
+        request=validated_request,
+        ir_request=ir_request,
     )
 
 
@@ -192,13 +256,26 @@ def _log_request(
     return logging_obj
 
 
+def _format_response(
+    response: DecisionsIRResponse, prepared: _PreparedDecisionsRequest, model: str
+) -> DecisionsResponse | OpenAIDecisionResponse:
+    match prepared.request:
+        case DecisionsRequestBody():
+            return ir_to_systemone_response(response, prepared.ir_request)
+        case OpenAIDecisionRequestBody():
+            return ir_to_openai_response(response, prepared.ir_request, model)
+        case _:
+            assert_never(prepared.request)
+
+
 def _parse_response(
     response: httpx.Response,
     prepared: _PreparedDecisionsRequest,
-) -> DecisionsResponse:
+    model: str,
+) -> DecisionsResponse | OpenAIDecisionResponse:
     response.raise_for_status()
     payload: Final[object] = _DECISIONS_PAYLOAD_ADAPTER.validate_json(response.content)
-    result: Final = _DECISIONS_RESPONSE_ADAPTER.validate_python(prepared.config.unwrap_response(payload))
+    result: Final = _format_response(prepared.config.parse_response(payload, prepared.ir_request), prepared, model)
     result.hidden_params.update(
         {
             "model": f"{prepared.provider}/{prepared.upstream_model}",
@@ -220,19 +297,23 @@ def _map_upstream_exception(error: Exception, prepared: _PreparedDecisionsReques
 @client
 async def adecisions(
     model: str,
-    state: DecisionsJSON,
-    questions: Mapping[str, DecisionQuestion | Mapping[str, object]],
+    state: DecisionsJSON | None = None,
+    questions: DecisionsQuestions | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    input: OpenAIDecisionInput | None = None,
+    safety_identifier: str | None = None,
     **kwargs: object,
-) -> DecisionsResponse:
+) -> DecisionsResponse | OpenAIDecisionResponse:
     prepared: Final = _prepare_request(
         model=model,
         state=state,
         questions=questions,
+        decision_input=input,
+        safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
@@ -248,7 +329,7 @@ async def adecisions(
             timeout=timeout,
             logging_obj=logging_obj,
         )
-        return _parse_response(response=response, prepared=prepared)
+        return _parse_response(response=response, prepared=prepared, model=model)
     except Exception as error:
         raise _map_upstream_exception(error, prepared) from error
 
@@ -256,19 +337,23 @@ async def adecisions(
 @client
 def decisions(
     model: str,
-    state: DecisionsJSON,
-    questions: Mapping[str, DecisionQuestion | Mapping[str, object]],
+    state: DecisionsJSON | None = None,
+    questions: DecisionsQuestions | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    input: OpenAIDecisionInput | None = None,
+    safety_identifier: str | None = None,
     **kwargs: object,
-) -> DecisionsResponse:
+) -> DecisionsResponse | OpenAIDecisionResponse:
     prepared: Final = _prepare_request(
         model=model,
         state=state,
         questions=questions,
+        decision_input=input,
+        safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
@@ -284,7 +369,7 @@ def decisions(
             timeout=timeout,
             logging_obj=logging_obj,
         )
-        return _parse_response(response=response, prepared=prepared)
+        return _parse_response(response=response, prepared=prepared, model=model)
     except Exception as error:
         raise _map_upstream_exception(error, prepared) from error
 
