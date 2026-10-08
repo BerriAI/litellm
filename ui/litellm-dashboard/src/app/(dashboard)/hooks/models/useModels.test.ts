@@ -605,7 +605,15 @@ describe("useModelAccessGroupNames", () => {
       expect(result.current).toEqual(new Set(["repro-access-group", "another-access-group"]));
     });
 
-    expect(modelAvailableCall).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", false, null, true, true);
+    expect(modelAvailableCall).toHaveBeenCalledWith(
+      "test-access-token",
+      "test-user-id",
+      "Admin",
+      false,
+      null,
+      true,
+      true,
+    );
   });
 });
 

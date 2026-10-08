@@ -754,7 +754,11 @@ export default function KeyInfoView({
                 <div className="mt-2 flex flex-wrap gap-2">
                   {currentKeyData.models && currentKeyData.models.length > 0 ? (
                     currentKeyData.models.map((model, index) => (
-                      <BadgeLink key={index} href={modelOrAccessGroupHref(model, accessGroupNames)} className="min-w-0 break-words">
+                      <BadgeLink
+                        key={index}
+                        href={modelOrAccessGroupHref(model, accessGroupNames)}
+                        className="min-w-0 break-words"
+                      >
                         {model}
                       </BadgeLink>
                     ))
@@ -1106,7 +1110,11 @@ export default function KeyInfoView({
                     <div className="flex flex-wrap gap-2 mt-1">
                       {currentKeyData.models && currentKeyData.models.length > 0 ? (
                         currentKeyData.models.map((model, index) => (
-                          <BadgeLink key={index} href={modelOrAccessGroupHref(model, accessGroupNames)} className="min-w-0 break-words">
+                          <BadgeLink
+                            key={index}
+                            href={modelOrAccessGroupHref(model, accessGroupNames)}
+                            className="min-w-0 break-words"
+                          >
                             {model}
                           </BadgeLink>
                         ))

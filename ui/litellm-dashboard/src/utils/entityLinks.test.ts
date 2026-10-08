@@ -2,13 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/components/networking", () => ({ serverRootPath: "" }));
 
-import {
-  accessGroupHref,
-  modelGroupHref,
-  modelOrAccessGroupHref,
-  teamDetailHref,
-  userDetailHref,
-} from "./entityLinks";
+import { accessGroupHref, modelGroupHref, modelOrAccessGroupHref, teamDetailHref, userDetailHref } from "./entityLinks";
 
 describe("userDetailHref", () => {
   it("targets the users page filtered to the encoded user id", () => {
