@@ -1033,9 +1033,14 @@ async def test_stale_pin_delete_is_atomic_compare_and_delete():
     get_spy.assert_not_called()
     delete_spy.assert_not_called()
     script_source: Final = registered["source"]
-    assert "redis.call('GET', KEYS[1])" in script_source, (
-        "the delete must run as a Lua script that compares before deleting"
+    predicate: Final = "if tostring(stored_id) == ARGV[1] then"
+    assert predicate in script_source, (
+        "the Lua must compare the stored model id before deleting: the fake script "
+        "above hardcodes that contract, so only this assertion catches a Lua that "
+        "deletes unconditionally and would erase a sibling's fresh pin"
     )
-    assert "redis.call('DEL', KEYS[1])" in script_source, (
-        "the delete must run as a Lua script that compares before deleting"
+    assert script_source.count("redis.call('DEL'") == 1, (
+        "the script must contain exactly one DEL, guarded by the predicate"
     )
+    guarded_block: Final = script_source.split(predicate, 1)[1].split("end", 1)[0]
+    assert "redis.call('DEL', KEYS[1])" in guarded_block, "the DEL must sit inside the predicate's conditional block"
