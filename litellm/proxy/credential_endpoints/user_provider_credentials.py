@@ -172,21 +172,24 @@ async def invalidate_user_provider_credential_cache(
     cache: DualCache,
     user_id: str,
     credential_name: str,
-) -> None:
+) -> bool:
     """Write the not-connected tombstone rather than deleting: a read in flight
     before the disconnect must not fill the token back in behind it (fills are
-    set-if-absent)."""
+    set-if-absent). Returns False when Redis is attached and the write fails, so
+    the disconnect can refuse to drop the row while a stale token might linger."""
     token_cache: Final = cache.redis_cache
     if token_cache is None:
-        return
+        return True
     try:
         await token_cache.async_set_cache(
             _cache_key(user_id, credential_name),
             _NOT_CONNECTED,
             ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
         )
-    except Exception:  # noqa: BLE001  # a Redis outage must not fail a disconnect
+    except Exception:  # noqa: BLE001  # caller decides whether a Redis outage aborts the disconnect
         verbose_proxy_logger.warning("invalidate_user_provider_credential_cache: Redis tombstone failed")
+        return False
+    return True
 
 
 @with_service_target("user_provider_connections")

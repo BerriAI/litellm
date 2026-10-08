@@ -571,6 +571,91 @@ def test_e2e_completion_per_user_session_token_wins_over_caller_authorization(pe
     assert extra_headers["x-custom"] == "keep"
 
 
+_EVIL_AUTH_HEADERS = {"authorization": "Bearer caller-evil", "x-keep": "1"}
+
+
+def _assert_session_token_on_the_wire(requests):
+    upstream = [r for r in requests if r.url.host.endswith("githubcopilot.com")]
+    assert upstream, "expected the model request to the Copilot host"
+    assert upstream[0].headers["authorization"] == "Bearer copilot-token"
+
+
+def test_e2e_completion_per_user_caller_authorization_cannot_override_session(per_user_credential):
+    """Caller-supplied Authorization must be stripped at the wrapper: chat's SDK
+    client owns its own httpx transport, so the capture point is the headers
+    handed to openai_chat_completions.completion."""
+    caller_headers: dict[str, str] = dict(_EVIL_AUTH_HEADERS)
+    with (
+        github_http(_exchange_responder()),
+        _no_authenticator(),
+        patch(
+            "litellm.main.openai_chat_completions.completion",
+            return_value=_chat_completion_response(),
+        ) as mock_completion,
+    ):
+        litellm.completion(
+            model="github_copilot/gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_secret_fields("user-a", "gho_a"),
+            extra_headers=caller_headers,
+        )
+    extra_headers = mock_completion.call_args.kwargs["optional_params"]["extra_headers"]
+    assert extra_headers["Authorization"] == "Bearer copilot-token"
+    assert "authorization" not in extra_headers
+    assert extra_headers["x-keep"] == "1"
+    assert caller_headers == dict(_EVIL_AUTH_HEADERS), "the caller's dict must not be mutated"
+
+
+def test_e2e_embedding_per_user_caller_authorization_cannot_override_session(per_user_credential):
+    with (
+        github_http(_copilot_surface_responder(_embedding_response_payload())) as requests,
+        _no_authenticator(),
+    ):
+        litellm.embedding(
+            model="github_copilot/text-embedding-3-small",
+            input=["hi"],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_secret_fields("user-a", "gho_a"),
+            extra_headers=dict(_EVIL_AUTH_HEADERS),
+        )
+    _assert_session_token_on_the_wire(requests)
+
+
+def test_e2e_responses_per_user_caller_authorization_cannot_override_session(per_user_credential):
+    with (
+        github_http(_copilot_surface_responder(_responses_payload())) as requests,
+        _no_authenticator(),
+    ):
+        litellm.responses(
+            model="github_copilot/gpt-5.3-codex",
+            input=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_secret_fields("user-a", "gho_a"),
+            extra_headers=dict(_EVIL_AUTH_HEADERS),
+        )
+    _assert_session_token_on_the_wire(requests)
+
+
+@pytest.mark.asyncio
+async def test_e2e_anthropic_messages_per_user_caller_authorization_cannot_override_session(
+    per_user_credential,
+):
+    with (
+        github_http(_copilot_surface_responder(_anthropic_messages_payload())) as requests,
+        _no_authenticator(),
+    ):
+        await litellm.anthropic.messages.acreate(
+            model="github_copilot/claude-haiku-4.5",
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            secret_fields=_secret_fields("user-a", "gho_a"),
+            extra_headers=dict(_EVIL_AUTH_HEADERS),
+        )
+    _assert_session_token_on_the_wire(requests)
+
+
 def test_e2e_embedding_per_user_credential(per_user_credential):
     with (
         github_http(_copilot_surface_responder(_embedding_response_payload())) as requests,

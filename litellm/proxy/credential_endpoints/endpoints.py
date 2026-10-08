@@ -680,8 +680,18 @@ async def delete_user_connection(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
+        # Tombstone first: while a token may still be cached, the DB row stays.
+        # If the tombstone write fails and the row were deleted, the stale token
+        # would keep working until its TTL with no connection left to re-check.
+        tombstoned: Final = await invalidate_user_provider_credential_cache(
+            user_api_key_cache, user_id, credential_name
+        )
+        if not tombstoned:
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "could not revoke cached connection, retry"},
+            )
         prior: Final = await delete_user_provider_credential(prisma_client, user_id, credential_name)
-        await invalidate_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
         if prior is not None:
             evict_copilot_user_session(user_id, prior.access_token)
         return UserConnectionDeleteResponse(status="disconnected")

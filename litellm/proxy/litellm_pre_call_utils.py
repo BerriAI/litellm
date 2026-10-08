@@ -2652,6 +2652,9 @@ async def add_litellm_data_to_request(
         authenticated_user_id=authenticated_user_id,
         team_id=user_api_key_dict.team_id,
         llm_router=llm_router,
+        router_settings=(
+            user_api_key_dict.router_settings if isinstance(user_api_key_dict.router_settings, dict) else None
+        ),
     )
 
     ## ENFORCED PARAMS CHECK
@@ -2699,40 +2702,79 @@ def _fallback_edges(
     return frozenset(targets)
 
 
-def _request_fallback_groups(
+_REQUEST_FALLBACK_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+
+
+def _fallback_lists(
     data: Mapping[str, object],
+    llm_router: litellm.Router,
+    router_settings: Mapping[str, object] | None,
+) -> tuple[Sequence[object], ...]:
+    """Every fallback list the router can route this request through: the three
+    router-level lists, the same three keys from the request body (which replace
+    the router's when present, so the union is the safe superset), and the
+    key/team ``router_settings.fallbacks`` the proxy prefers over router-level
+    fallbacks in ``_configured_fallbacks``."""
+    lists: Final[list[Sequence[object]]] = []  # mutable-ok: accumulates each fallback list found
+    for router_list in (
+        llm_router.fallbacks,
+        llm_router.context_window_fallbacks,
+        llm_router.content_policy_fallbacks,
+    ):
+        if isinstance(router_list, list):
+            lists.append(router_list)
+    for key in _REQUEST_FALLBACK_KEYS:
+        entries: object = data.get(key)
+        if isinstance(entries, list):
+            lists.append(entries)
+    key_fallbacks: object = router_settings.get("fallbacks") if router_settings is not None else None
+    if isinstance(key_fallbacks, list):
+        lists.append(key_fallbacks)
+    return tuple(lists)
+
+
+def _fallback_edges(
+    fallback_lists: Sequence[Sequence[object]],
     model_group: str,
 ) -> frozenset[str]:
-    """Request-level fallbacks (``fallbacks``, ``context_window_fallbacks``,
-    ``content_policy_fallbacks``) in the shapes routing accepts: a list of
-    target group names applying to the request, or a list of
-    ``{model_group: [targets]}`` maps matching this model."""
-    targets: Final[set[str]] = set()  # mutable-ok: accumulates request-level fallback targets
-    for key in ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks"):
-        entries: Final = data.get(key)
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if isinstance(entry, str):
-                targets.add(entry)
-            elif isinstance(entry, dict):
-                raw = entry.get(model_group) or entry.get("*")
-                values = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
-                targets.update(value for value in values if isinstance(value, str))
+    """Targets routing would pick for ``model_group`` out of each list, resolved
+    with the router's own matcher so exact, provider-prefixed, stripped and "*"
+    keys plus bare-string entries all count."""
+    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+
+    targets: Final[set[str]] = set()  # mutable-ok: accumulates fallback targets
+    for fallback_list in fallback_lists:
+        resolved: Final = get_fallback_model_group(fallbacks=fallback_list, model_group=model_group)[0]
+        values: Final = resolved if isinstance(resolved, list) else ([resolved] if resolved is not None else [])
+        targets.update(name for value in values if (name := _fallback_target_name(value)) is not None)
     return frozenset(targets)
+
+
+def _fallback_target_name(value: object) -> str | None:
+    """The group a single fallback target names: a bare string, or the
+    ``{"model": "..."}`` advanced entry the router accepts."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        model_value: Final = value.get("model")
+        return model_value if isinstance(model_value, str) else None
+    return None
 
 
 def _fallback_target_groups(
     llm_router: litellm.Router,
+    data: Mapping[str, object],
+    router_settings: Mapping[str, object] | None,
     model_group: str,
 ) -> frozenset[str]:
-    """Transitive closure over the router's fallback graph: a chain like
-    A -> B -> C must still surface C's per-user credential for a request to A."""
+    """Transitive closure over every fallback graph that can route this request:
+    a chain like A -> B -> C must still surface C's per-user credential."""
+    lists: Final = _fallback_lists(data, llm_router, router_settings)
     seen: Final[set[str]] = set()  # mutable-ok: BFS visited set
     frontier: Final[list[str]] = [model_group]  # mutable-ok: BFS work list
     while frontier:
         group = frontier.pop()
-        for target in _fallback_edges(llm_router, group):
+        for target in _fallback_edges(lists, group):
             if target not in seen and target != model_group:
                 seen.add(target)
                 frontier.append(target)
@@ -2786,6 +2828,7 @@ async def _resolve_user_provider_credentials_for_request(
     authenticated_user_id: str | None,
     team_id: str | None,
     llm_router: litellm.Router | None,
+    router_settings: Mapping[str, object] | None = None,
 ) -> None:
     """Resolve the calling user's per-user provider connections into secret_fields.
 
@@ -2799,9 +2842,7 @@ async def _resolve_user_provider_credentials_for_request(
     model: Final = data.get("model")
     if llm_router is None or not isinstance(model, str):
         return
-    model_groups: Final = frozenset(
-        {model} | _fallback_target_groups(llm_router, model) | _request_fallback_groups(data, model)
-    )
+    model_groups: Final = frozenset({model} | _fallback_target_groups(llm_router, data, router_settings, model))
     credential_names: Final = _per_user_credential_names_for_groups(llm_router, model_groups, team_id)
     if credential_names and "litellm_credential_name" in data:
         raise HTTPException(
