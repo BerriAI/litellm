@@ -2,9 +2,7 @@ from typing import Final
 
 from integration.translation.case import TranslationTestCase
 
-"""Cloudflare Clef: LiteLLM's /v1/decisions and the provider both speak Jev / System One, so the body passes through.
-
-Provider side from https://developers.cloudflare.com/workers-ai (POST /ai/run/@cf/cloudflare/clef, reply wrapped in result). Mock reply captured live on 2026-10-06.
+"""Provider request and reply shape from https://developers.cloudflare.com/workers-ai (POST /ai/run/@cf/cloudflare/clef, reply wrapped in result). Mock reply captured live on 2026-10-06.
 """
 CLEF_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",

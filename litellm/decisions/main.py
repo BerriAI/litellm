@@ -7,6 +7,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.decisions import (
@@ -135,6 +136,13 @@ def _prepare_call(
 
 
 def _map_upstream_exception(error: Exception, call: _DecisionsCall) -> Exception:
+    if isinstance(error, BaseLLMException) and error.status_code_is_synthesized:
+        provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
+        return litellm.APIConnectionError(
+            message=f"{provider_label} - {error.message}",
+            llm_provider=call.custom_llm_provider,
+            model=f"{call.custom_llm_provider}/{call.model}",
+        )
     return litellm.exception_type(
         model=f"{call.custom_llm_provider}/{call.model}",
         custom_llm_provider=call.custom_llm_provider,

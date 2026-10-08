@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 import respx
 
@@ -412,6 +413,20 @@ def test_upstream_bad_request_maps_to_litellm_error(respx_mock: respx.MockRouter
     )
 
     with pytest.raises(litellm.BadRequestError):
+        litellm.decisions(
+            model="perplexity/pplx-decider-v1-27b",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_key="caller-key",
+        )
+
+
+def test_unreachable_upstream_maps_to_a_connection_error(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.perplexity.ai/v1/decisions").mock(
+        side_effect=httpx.ConnectError("Cannot connect to host api.perplexity.ai:443")
+    )
+
+    with pytest.raises(litellm.APIConnectionError, match="PerplexityException - Cannot connect to host"):
         litellm.decisions(
             model="perplexity/pplx-decider-v1-27b",
             state="review",
