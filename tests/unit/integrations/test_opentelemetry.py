@@ -7342,6 +7342,7 @@ class TestOpenTelemetryRawSpanRespectsRedaction(unittest.TestCase):
 
     @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
     def test_skips_raw_span_when_redaction_header_set(self):
+  # test-quality-ok: negative-path test; the observable behavior is precisely that no raw span is created, which is only assertable on the tracer mock
         """Redaction requested via the per-request header -> raw span is not created."""
         from litellm.integrations.opentelemetry import OpenTelemetry
 
@@ -7362,6 +7363,7 @@ class TestOpenTelemetryRawSpanRespectsRedaction(unittest.TestCase):
 
     @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
     def test_creates_raw_span_when_no_redaction_requested(self):
+  # test-quality-ok: positive-path twin of the test above; asserts the span name and raw-attribute hook via the tracer mock, matching the existing file style
         """No redaction requested (empty headers dict) -> raw span is still created."""
         from litellm.integrations.opentelemetry import RAW_REQUEST_SPAN_NAME, OpenTelemetry
 
