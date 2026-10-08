@@ -54,6 +54,7 @@ from litellm.types.guardrails import (
     LakeraCategoryThresholds,
     LitellmParams,
     SupportedGuardrailIntegrations,
+    with_tolerated_stream_scope,
 )
 
 from .guardrail_hooks.llm_as_a_judge import (
@@ -634,6 +635,8 @@ def _configure_callback_scoping(
             "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
             "scanning, so no request content would ever be scanned. Remove one of the two."
         )
+    if isinstance(custom_guardrail_callback, CustomGuardrail):  # pyright: ignore[reportUnnecessaryIsInstance]  # module-path classes may only subclass CustomLogger
+        custom_guardrail_callback.apply_stream_scope(litellm_params.stream_scope)
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
 
 
@@ -718,9 +721,11 @@ class InMemoryGuardrailHandler:
 
         if isinstance(litellm_params_data, dict):
             if reject_invalid_logging_only_scope:
-                litellm_params = LitellmParams(**litellm_params_data)
+                litellm_params = LitellmParams(**with_tolerated_stream_scope(litellm_params_data))
             else:
-                litellm_params = parse_tolerant_litellm_params(litellm_params_data, guardrail["guardrail_name"])
+                litellm_params = parse_tolerant_litellm_params(
+                    with_tolerated_stream_scope(litellm_params_data), guardrail["guardrail_name"]
+                )
         else:
             litellm_params = litellm_params_data
 
@@ -863,14 +868,17 @@ class InMemoryGuardrailHandler:
         # Extract additional params from litellm_params to pass to custom guardrail
         # This matches the behavior of other guardrail initializers (e.g., initialize_lakera)
         # and aligns with the documented behavior for custom guardrails
-        if hasattr(litellm_params, "model_dump"):
-            extra_params = litellm_params.model_dump(exclude_none=True)
-        else:
-            extra_params = dict(litellm_params) if litellm_params else {}
-
-        # Remove params that are handled explicitly or are internal
-        for key in ["guardrail", "mode", "default_on"]:
-            extra_params.pop(key, None)
+        excluded_extra_param_keys: Final = frozenset(("guardrail", "mode", "default_on", "stream_scope"))
+        extra_params_items: Final = (
+            litellm_params.model_dump(exclude_none=True).items()
+            if hasattr(litellm_params, "model_dump")
+            else iter(litellm_params)
+            if litellm_params
+            else ()
+        )
+        extra_params: Final = MappingProxyType(
+            {key: value for key, value in extra_params_items if key not in excluded_extra_param_keys}
+        )
 
         _guardrail_callback: Final = _guardrail_class(
             guardrail_name=guardrail["guardrail_name"],
@@ -1007,7 +1015,7 @@ class InMemoryGuardrailHandler:
             return params.model_dump()
         if isinstance(params, dict):
             try:
-                return parse_tolerant_litellm_params(params, guardrail_name).model_dump()
+                return parse_tolerant_litellm_params(with_tolerated_stream_scope(params), guardrail_name).model_dump()
             except ValidationError as e:
                 verbose_proxy_logger.warning(
                     "Could not normalize guardrail litellm_params for comparison; treating the guardrail as changed. Error: %s",

@@ -1,7 +1,7 @@
 import json
 from collections.abc import Iterable, Iterator
 from typing import ClassVar, Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -158,6 +158,43 @@ def test_duplicate_config_guardrail_names_get_distinct_stable_ids():
         assert len(handler.IN_MEMORY_GUARDRAILS) == 2
     finally:
         registry_module.guardrail_initializer_registry.pop("dup_name_test", None)
+
+
+def test_initialize_guardrail_treats_invalid_stored_scope_as_both():
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    guardrail_type: Final = "invalid_stored_scope_test"
+
+    def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks(litellm_params.mode),
+            default_on=True,
+        )
+
+    registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
+    try:
+        handler: Final = InMemoryGuardrailHandler()
+        guardrail: Final = Guardrail(
+            guardrail_id="invalid-stored-scope",
+            guardrail_name="invalid-stored-scope",
+            litellm_params={
+                "guardrail": guardrail_type,
+                "mode": "pre_call",
+                "default_on": True,
+                "stream_scope": "sometimes",
+            },
+        )
+
+        parsed_guardrail: Final = handler.initialize_guardrail(guardrail=guardrail, source="db")
+        callback: Final = handler.guardrail_id_to_custom_guardrail["invalid-stored-scope"]
+
+        assert parsed_guardrail["litellm_params"].stream_scope is None
+        assert callback is not None
+        assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+        assert callback.should_run_guardrail(data={"stream": True}, event_type=GuardrailEventHooks.pre_call) is True
+    finally:
+        registry_module.guardrail_initializer_registry.pop(guardrail_type, None)
 
 
 def _register_mode_following_initializer(guardrail_type: str):
@@ -1603,6 +1640,35 @@ def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+def test_configure_callback_scoping_copies_stream_scope_when_constructor_omits_it():
+    from litellm.proxy.guardrails.guardrail_registry import _configure_callback_scoping
+
+    class _CtorWithoutStreamScope(CustomGuardrail):
+        def __init__(self) -> None:
+            super().__init__(
+                guardrail_name="scoped",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+            )
+
+    instance = _CtorWithoutStreamScope()
+    params = LitellmParams(guardrail="bedrock", mode="post_call", stream_scope="streaming")
+    _configure_callback_scoping(instance, "scoped", params)
+
+    assert instance.stream_scope_default == "streaming"
+    assert instance.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
+    assert instance.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False
+
+
+def test_configure_callback_scoping_tolerates_a_custom_logger_callback():
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.guardrails.guardrail_registry import _configure_callback_scoping
+
+    callback: Final = CustomLogger()
+    _configure_callback_scoping(callback, "logger-backed", LitellmParams(guardrail="custom", mode="pre_call"))  # pyright: ignore[reportArgumentType]  # module-path guardrails may be plain CustomLogger
+    assert "stream_scope_by_hook" not in vars(callback)
 
 
 _ENCRYPTED_PREFIX = "litellm_enc::"

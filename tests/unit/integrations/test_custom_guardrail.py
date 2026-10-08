@@ -1,5 +1,9 @@
 import asyncio
+import copy
 import datetime as dt
+import json
+import pickle
+import threading
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -8,7 +12,10 @@ import pytest
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
+    _request_is_streaming,
+    guardrail_request_data_with_streaming,
     log_guardrail_information,
+    without_server_streaming_classification,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
@@ -529,6 +536,233 @@ class TestCustomGuardrailShouldRunGuardrail:
         }
 
         assert always_on.should_run_guardrail(data=forged, event_type=GuardrailEventHooks.pre_call) is True
+
+
+_STREAM_SCOPE_HOOKS: Final = (
+    GuardrailEventHooks.pre_call,
+    GuardrailEventHooks.during_call,
+    GuardrailEventHooks.post_call,
+)
+
+
+class TestCustomGuardrailStreamScope:
+    @pytest.mark.parametrize("event_type", _STREAM_SCOPE_HOOKS)
+    @pytest.mark.parametrize("stream", [True, False])
+    @pytest.mark.parametrize("stream_scope", [None, "both"])
+    def test_both_and_omitted_run_on_streaming_and_non_streaming(
+        self,
+        event_type: GuardrailEventHooks,
+        stream: bool,
+        stream_scope: str | None,
+    ):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=event_type,
+            stream_scope=stream_scope,
+        )
+        assert guardrail.should_run_guardrail({"stream": stream}, event_type) is True
+
+    @pytest.mark.parametrize("event_type", _STREAM_SCOPE_HOOKS)
+    def test_scalar_streaming_skips_non_streaming(self, event_type: GuardrailEventHooks):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=event_type,
+            stream_scope="streaming",
+        )
+        assert guardrail.should_run_guardrail({"stream": True}, event_type) is True
+        assert guardrail.should_run_guardrail({"stream": False}, event_type) is False
+        assert guardrail.should_run_guardrail({}, event_type) is False
+
+    @pytest.mark.parametrize("event_type", _STREAM_SCOPE_HOOKS)
+    def test_scalar_non_streaming_skips_streaming(self, event_type: GuardrailEventHooks):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=event_type,
+            stream_scope="non_streaming",
+        )
+        assert guardrail.should_run_guardrail({"stream": False}, event_type) is True
+        assert guardrail.should_run_guardrail({}, event_type) is True
+        assert guardrail.should_run_guardrail({"stream": True}, event_type) is False
+
+    def test_per_mode_map_applies_to_named_hooks_only(self):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+            stream_scope={"pre_call": "both", "post_call": "streaming"},
+        )
+        assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.pre_call) is True
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.pre_call) is True
+        assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False
+
+    def test_default_on_early_return_still_honors_stream_scope(self):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.post_call,
+            stream_scope="non_streaming",
+        )
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is True
+        assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is False
+
+    def test_apply_stream_scope_overwrites_constructor_default(self):
+        guardrail = CustomGuardrail(
+            guardrail_name="scoped",
+            default_on=True,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is True
+        guardrail.apply_stream_scope("streaming")
+        assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False
+
+    def test_direct_constructor_normalizes_mixed_case_map_keys(self):
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+            stream_scope={"Pre_Call": "streaming"},
+        )
+        assert guardrail.should_run_guardrail({"stream": True}, GuardrailEventHooks.pre_call) is True
+        assert guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.pre_call) is False
+
+    def test_realtime_transcription_counts_as_streaming(self):
+        streaming_only = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.realtime_input_transcription,
+            stream_scope="streaming",
+        )
+        assert (
+            streaming_only.should_run_guardrail(
+                {"litellm_metadata": {}}, GuardrailEventHooks.realtime_input_transcription
+            )
+            is True
+        )
+        non_streaming_only = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.realtime_input_transcription,
+            stream_scope="non_streaming",
+        )
+        assert (
+            non_streaming_only.should_run_guardrail(
+                {"litellm_metadata": {}}, GuardrailEventHooks.realtime_input_transcription
+            )
+            is False
+        )
+
+    def test_path_defined_streaming_classification_cannot_be_spoofed(self):
+        generate_content_body: Final = {"contents": [{"parts": [{"text": "hi"}]}]}
+        streaming_only = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+            stream_scope="streaming",
+        )
+        assert streaming_only.should_run_guardrail(generate_content_body, GuardrailEventHooks.pre_call) is False
+        assert (
+            streaming_only.should_run_guardrail(
+                {**generate_content_body, "is_streaming_request": True},
+                GuardrailEventHooks.pre_call,
+            )
+            is False
+        )
+        assert (
+            streaming_only.should_run_guardrail(
+                {**generate_content_body, "is_streaming_request": "litellm-server-streaming"},
+                GuardrailEventHooks.pre_call,
+            )
+            is False
+        )
+        assert (
+            streaming_only.should_run_guardrail(
+                {**generate_content_body, "litellm_server_streaming_classification": True},
+                GuardrailEventHooks.pre_call,
+            )
+            is False
+        )
+        server_streaming_data: Final = guardrail_request_data_with_streaming(
+            generate_content_body,
+            is_streaming=True,
+        )
+        assert (
+            streaming_only.should_run_guardrail(
+                server_streaming_data,
+                GuardrailEventHooks.pre_call,
+            )
+            is True
+        )
+        non_streaming_only = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+            stream_scope="non_streaming",
+        )
+        assert (
+            non_streaming_only.should_run_guardrail(
+                server_streaming_data,
+                GuardrailEventHooks.pre_call,
+            )
+            is False
+        )
+
+    def test_streaming_classification_is_json_serializable_without_spoofing(self):
+        d: Final = guardrail_request_data_with_streaming({}, is_streaming=True)
+        serialized: Final = json.dumps(d)
+        assert _request_is_streaming(d) is True
+
+        round_tripped: Final = json.loads(serialized)
+        assert _request_is_streaming(round_tripped) is False
+        assert round_tripped["litellm_server_streaming_classification"] == "litellm-server-streaming"
+        assert isinstance(round_tripped["litellm_server_streaming_classification"], str)
+        assert "litellm_server_streaming_classification" not in without_server_streaming_classification(round_tripped)
+
+    def test_streaming_classification_preserves_caller_fields_and_removes_only_server_marker(self):
+        caller_data: Final = {
+            "contents": [{"parts": [{"text": "hi"}]}],
+            "is_streaming_request": "caller-value",
+            "litellm_server_streaming_classification": True,
+        }
+        non_streaming_data: Final = guardrail_request_data_with_streaming(caller_data, is_streaming=False)
+        server_streaming_data: Final = guardrail_request_data_with_streaming(caller_data, is_streaming=True)
+
+        assert non_streaming_data is not caller_data
+        assert server_streaming_data is not caller_data
+        assert non_streaming_data == caller_data
+        assert server_streaming_data["is_streaming_request"] == "caller-value"
+        assert server_streaming_data["litellm_server_streaming_classification"] is not True
+        assert without_server_streaming_classification(caller_data) == caller_data
+        assert "litellm_server_streaming_classification" not in without_server_streaming_classification(
+            server_streaming_data
+        )
+
+    def test_server_streaming_classification_survives_scan_raw_request_snapshot(self):
+        from litellm.litellm_core_utils.core_helpers import independent_snapshot
+
+        generate_content_body: Final = {"contents": [{"parts": [{"text": "hi"}]}]}
+        snapshot: Final = independent_snapshot(
+            guardrail_request_data_with_streaming(generate_content_body, is_streaming=True)
+        )
+        streaming_only = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+            stream_scope="streaming",
+            scan_raw_request=True,
+        )
+        assert streaming_only.should_run_guardrail(snapshot, GuardrailEventHooks.pre_call) is True
+        assert (
+            streaming_only.should_run_guardrail(
+                independent_snapshot({**generate_content_body, "is_streaming_request": True}),
+                GuardrailEventHooks.pre_call,
+            )
+            is False
+        )
 
 
 class TestApplyGuardrailCheck:
@@ -3307,3 +3541,113 @@ class TestCustomGuardrailTimeout:
         )
 
         assert guardrail.timeout == 7.0
+
+
+@pytest.mark.parametrize("stream_scope", [None, "both", {"post_call": "streaming"}])
+def test_guardrail_survives_deepcopy_and_pickle_with_its_stream_scope(stream_scope):
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="copyable",
+        default_on=True,
+        event_hook=GuardrailEventHooks.post_call,
+        stream_scope=stream_scope,
+    )
+    expected: Final = guardrail.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call)
+    for clone in (copy.deepcopy(guardrail), pickle.loads(pickle.dumps(guardrail))):
+        assert dict(clone.stream_scope_by_hook) == dict(guardrail.stream_scope_by_hook)
+        assert clone.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is expected
+
+
+class _LockHoldingGuardrail(CustomGuardrail):
+    def __init__(self, **kwargs):
+        self.lock = threading.Lock()
+        super().__init__(**kwargs)
+
+    def __getstate__(self):
+        state: Final = dict(self.__dict__)
+        state.pop("lock")
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.lock = threading.Lock()
+
+
+class _SetstateOnlyGuardrail(CustomGuardrail):
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.restored = True
+
+
+class _SlotsGuardrail(CustomGuardrail):
+    __slots__ = ("vendor_client",)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.vendor_client = "vendor-client-object"
+
+
+def _subclass_guardrails():
+    kwargs: Final = {
+        "guardrail_name": "vendor",
+        "default_on": True,
+        "event_hook": GuardrailEventHooks.post_call,
+        "stream_scope": {"post_call": "streaming"},
+    }
+    return (
+        pytest.param(_LockHoldingGuardrail(**kwargs), id="dict-getstate"),
+        pytest.param(_SetstateOnlyGuardrail(**kwargs), id="setstate-only"),
+        pytest.param(_SlotsGuardrail(**kwargs), id="slots"),
+    )
+
+
+@pytest.mark.parametrize("guardrail", _subclass_guardrails())
+@pytest.mark.parametrize(
+    "cloner",
+    [copy.copy, copy.deepcopy, lambda g: pickle.loads(pickle.dumps(g))],
+    ids=["copy", "deepcopy", "pickle"],
+)
+def test_out_of_tree_guardrail_subclasses_survive_copy_and_pickle(guardrail, cloner):
+    clone = cloner(guardrail)
+
+    if isinstance(clone, _LockHoldingGuardrail):
+        assert isinstance(clone.lock, type(threading.Lock()))
+    elif isinstance(clone, _SetstateOnlyGuardrail):
+        assert clone.restored is True
+    else:
+        assert clone.vendor_client == "vendor-client-object"
+    assert clone.should_run_guardrail({"stream": False}, GuardrailEventHooks.post_call) is False
+    assert clone.should_run_guardrail({"stream": True}, GuardrailEventHooks.post_call) is True
+
+
+def test_router_constructs_with_a_dict_getstate_guardrail_in_deployment_callbacks():
+    import litellm
+
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-test",
+                    "callbacks": [
+                        _LockHoldingGuardrail(
+                            guardrail_name="vendor",
+                            default_on=True,
+                            event_hook=GuardrailEventHooks.post_call,
+                            stream_scope={"post_call": "streaming"},
+                        )
+                    ],
+                },
+            }
+        ]
+    )
+
+
+def test_subclass_that_skips_super_init_still_runs_with_default_scope():
+    class NoSuperInit(CustomGuardrail):
+        def __init__(self) -> None:
+            self.guardrail_name = "no-super"
+            self.event_hook = None
+            self.default_on = True
+
+    assert NoSuperInit().should_run_guardrail({"stream": True}, GuardrailEventHooks.pre_call) is True
