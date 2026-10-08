@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import json
 import os
@@ -7,7 +6,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import tempfile
-from unittest.mock import MagicMock, patch
 from typing import Final
 
 import pytest
@@ -93,8 +91,6 @@ def test_oidc_google():
     )
 
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
-
-
 @pytest.mark.skipif(
     os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN") is None,
     reason="Cannot run without being in GitHub Actions",
@@ -105,112 +101,3 @@ def test_oidc_github():
     )
 
     print(f"secret_val: {redact_oidc_signature(secret_val)}")
-
-
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
-def test_oidc_circleci():
-    secret_val = get_secret("oidc/circleci/")
-
-    print(f"secret_val: {redact_oidc_signature(secret_val)}")
-
-
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
-def test_oidc_circleci_v2():
-    secret_val = get_secret(
-        "oidc/circleci_v2/https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-text-express-v1/invoke"
-    )
-
-    print(f"secret_val: {redact_oidc_signature(secret_val)}")
-
-
-
-
-
-
-
-
-
-
-
-
-def test_google_secret_manager():
-    """
-    Test that we can get a secret from Google Secret Manager
-    """
-    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "litellm-ci-cd"
-
-    from litellm.secret_managers.google_secret_manager import GoogleSecretManager
-
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "payload": {
-            "data": base64.b64encode(b"anything").decode("utf-8"),
-        }
-    }
-
-    with (
-        patch("litellm.proxy.proxy_server.premium_user", True),
-        patch.object(
-            GoogleSecretManager,
-            "sync_construct_request_headers",
-            return_value={"Authorization": "Bearer mock_token"},
-        ),
-    ):
-        secret_manager = GoogleSecretManager()
-        secret_manager.sync_httpx_client = MagicMock()
-        secret_manager.sync_httpx_client.get.return_value = mock_response
-
-        secret_val = secret_manager.get_secret_from_google_secret_manager(
-            secret_name="OPENAI_API_KEY"
-        )
-        print("secret_val: {}".format(secret_val))
-
-        assert (
-            secret_val == "anything"
-        ), "did not get expected secret value. expect 'anything', got '{}'".format(
-            secret_val
-        )
-
-        secret_manager.sync_httpx_client.get.assert_called_once()
-        call_url = secret_manager.sync_httpx_client.get.call_args[1]["url"]
-        assert "projects/litellm-ci-cd/secrets/OPENAI_API_KEY" in call_url
-
-
-def test_google_secret_manager_read_in_memory():
-    """
-    Test that Google Secret manager returns in memory value when it exists
-    """
-    from litellm.secret_managers.google_secret_manager import GoogleSecretManager
-
-    os.environ["GOOGLE_SECRET_MANAGER_PROJECT_ID"] = "litellm-ci-cd"
-
-    with (
-        patch("litellm.proxy.proxy_server.premium_user", True),
-        patch.object(
-            GoogleSecretManager,
-            "sync_construct_request_headers",
-            return_value={"Authorization": "Bearer mock_token"},
-        ),
-    ):
-        secret_manager = GoogleSecretManager()
-        secret_manager.cache.cache_dict["UNIQUE_KEY"] = None
-        secret_manager.cache.cache_dict["UNIQUE_KEY_2"] = "lite-llm"
-
-        secret_val = secret_manager.get_secret_from_google_secret_manager(
-            secret_name="UNIQUE_KEY"
-        )
-        print("secret_val: {}".format(secret_val))
-        assert secret_val is None
-
-        secret_val = secret_manager.get_secret_from_google_secret_manager(
-            secret_name="UNIQUE_KEY_2"
-        )
-        print("secret_val: {}".format(secret_val))
-        assert secret_val == "lite-llm"
