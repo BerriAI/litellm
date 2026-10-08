@@ -19,8 +19,8 @@ from typing import (
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.proxy._types import ProxyException
+from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
-    ManagedFileRepository,
     ManagedObjectRepository,
 )
 from litellm.types.llms.openai import OpenAIFilesPurpose

@@ -86,6 +86,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_metadata,
 )
+from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
     AsyncCursorPage,
@@ -835,12 +836,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         stored: LiteLLM_ManagedFileTable,
         file_object: OpenAIFileObject,
     ) -> None:
-        file_object_json: Final = file_object.model_dump_json()
-        updated_row_count: Final = await _managed_file_table(self.prisma_client).update_many(
-            where={"unified_file_id": stored.unified_file_id},
-            data={"file_object": file_object_json},
-        )
-        if updated_row_count == 0:
+        if not await ManagedFileRepository(self.prisma_client).update_file_object(stored.unified_file_id, file_object):
             return
         refreshed_row: Final = stored.model_copy(update={"file_object": file_object})
         await self.internal_usage_cache.async_set_cache(

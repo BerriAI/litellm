@@ -72,7 +72,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy, is_known_model
 from litellm.repositories.managed_batch_repository import ManagedBatchRepository
-from litellm.repositories.table_repositories import ManagedFileRepository
+from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 from litellm.types.utils import LiteLLMBatch
