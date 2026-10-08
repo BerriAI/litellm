@@ -655,3 +655,23 @@ async def test_the_update_cache_read_sees_a_cached_spend_written_while_the_spend
 
     assert charged is True
     assert values == {"user-1": {"spend": 5.0}}, client.pipelines
+
+
+@pytest.mark.asyncio
+async def test_a_slot_held_on_two_gauges_is_released_one_key_per_pipelined_script():
+    client = FakeClient(_ok_replies)
+    limiter = _limiter(PostCallFakeRedisCache(client))
+
+    with request_redis_batch_scope():
+        await limiter._release_stashed_parallel_slot(
+            _slot_stash("slot-1", "{api_key:k1}:max_parallel_requests", "{team:t1}:max_parallel_requests"),
+            None,
+            in_logging_callback=True,
+        )
+        await flush_post_call_redis_batches()
+
+    releases = [c for c in client.pipelines[0].commands if c[:2] == ("EVALSHA", sha_of(PARALLEL_RELEASE_SCRIPT))]
+    assert [c[2:] for c in releases] == [
+        (1, "{api_key:k1}:max_parallel_requests", "slot-1"),
+        (1, "{team:t1}:max_parallel_requests", "slot-1"),
+    ]

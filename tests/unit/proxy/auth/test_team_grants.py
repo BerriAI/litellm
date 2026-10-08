@@ -28,6 +28,7 @@ def _full_team(model_aliases=ALIASES) -> LiteLLM_TeamTable:
         tpm_limit=1000,
         rpm_limit=10,
         tpd_limit=200000,
+        max_parallel_requests=4,
         max_budget=50.0,
         soft_budget=25.0,
         spend=12.5,
@@ -70,6 +71,7 @@ def test_team_grants_cover_every_team_field_the_key_path_gets():
     assert token.team_tpm_limit == 1000
     assert token.team_rpm_limit == 10
     assert token.team_tpd_limit == 200000
+    assert token.team_max_parallel_requests == 4
     assert token.team_max_budget == 50.0
     assert token.team_soft_budget == 25.0
     assert token.team_spend == 12.5
