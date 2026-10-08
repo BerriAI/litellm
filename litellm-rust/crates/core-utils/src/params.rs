@@ -15,7 +15,29 @@ use serde_json::{Map, Value};
 #[serde(transparent)]
 pub struct OpaqueParams(Map<String, Value>);
 
-pub fn is_control_param(name: &str) -> bool {
+mod owned;
+
+pub fn is_litellm_owned(name: &str) -> bool {
+    is_control_param(name)
+        || name.starts_with(owned::INTERNAL_PREFIX)
+        || owned::PYTHON_OWNED.binary_search(&name).is_ok()
+}
+
+pub fn is_secret_param(name: &str) -> bool {
+    matches!(
+        name,
+        "azure_ad_token"
+            | "client_secret"
+            | "azure_federated_token_file"
+            | "vertex_credentials"
+            | "vertex_ai_credentials"
+            | "aws_secret_access_key"
+            | "aws_session_token"
+            | "aws_web_identity_token"
+    )
+}
+
+fn is_control_param(name: &str) -> bool {
     matches!(
         name,
         "model"
@@ -112,9 +134,57 @@ impl IntoIterator for OpaqueParams {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use serde_json::json;
 
-    use super::OpaqueParams;
+    use super::{OpaqueParams, is_litellm_owned, is_secret_param, owned::PYTHON_OWNED};
+
+    #[rstest]
+    #[case::rust_control("drop_params")]
+    #[case::rust_credential("aws_secret_access_key")]
+    #[case::python_connection("api_key")]
+    #[case::python_logging("litellm_call_id")]
+    #[case::python_metadata("metadata")]
+    #[case::python_callback_credential("langfuse_secret_key")]
+    #[case::python_pricing("input_cost_per_token")]
+    #[case::internal_prefix("_litellm_anything_new")]
+    fn owned_names(#[case] name: &str) {
+        assert!(is_litellm_owned(name));
+    }
+
+    #[rstest]
+    #[case::openai_param("temperature")]
+    #[case::provider_field("top_k")]
+    #[case::unknown_field("future_provider_option")]
+    #[case::prefix_without_leading_underscore("litellm_")]
+    fn provider_names(#[case] name: &str) {
+        assert!(!is_litellm_owned(name));
+    }
+
+    #[test]
+    fn every_generated_python_name_is_owned() {
+        assert!(PYTHON_OWNED.iter().all(|name| is_litellm_owned(name)));
+    }
+
+    #[test]
+    fn every_secret_is_owned() {
+        let secrets = [
+            "azure_ad_token",
+            "client_secret",
+            "azure_federated_token_file",
+            "vertex_credentials",
+            "vertex_ai_credentials",
+            "aws_secret_access_key",
+            "aws_session_token",
+            "aws_web_identity_token",
+        ];
+        assert!(
+            secrets
+                .iter()
+                .all(|name| is_secret_param(name) && is_litellm_owned(name))
+        );
+        assert!(!is_secret_param("aws_region_name"));
+    }
 
     #[test]
     fn outer_value_must_be_an_object() {

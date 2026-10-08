@@ -9,7 +9,9 @@ use litellm_llms::base_llm::ocr::{
 use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 use serde_json::Value;
 
-use super::{arguments::is_secret_param, prepare::prepare_request, provider_config::OcrConfigKind};
+use litellm_core_utils::params::is_secret_param;
+
+use super::{prepare::prepare_request, provider_config::OcrConfigKind};
 use crate::types::ResolvedOcrRequest;
 
 pub(crate) async fn perform_ocr_request(

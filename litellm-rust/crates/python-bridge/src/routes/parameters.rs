@@ -1,9 +1,7 @@
-use litellm_core_utils::{call_arguments::CallArguments, params::is_control_param};
+use litellm_core_utils::{call_arguments::CallArguments, params::is_litellm_owned};
 use litellm_host_python::from_py;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
-
-const PROVIDER_FORWARDED: &[&str] = &["metadata"];
 
 pub(super) fn merged_request<'py>(
     bound: &Bound<'py, PyDict>,
@@ -22,27 +20,12 @@ pub(super) fn field<'py>(
 }
 
 pub(super) fn provider_parameters(
-    py: Python<'_>,
     request: &Bound<'_, PyDict>,
     input: &str,
+    forwarded: &[&str],
 ) -> PyResult<CallArguments> {
-    let owned = py
-        .import("litellm.types.utils")?
-        .getattr("is_litellm_owned_kwarg")?;
-    project_parameters(request, input, &|name| owned.call1((name,))?.extract())
-}
-
-fn project_parameters(
-    request: &Bound<'_, PyDict>,
-    input: &str,
-    owned: &impl Fn(&str) -> PyResult<bool>,
-) -> PyResult<CallArguments> {
-    let is_provider_field = |name: &str| -> PyResult<bool> {
-        if name == input || is_control_param(name) {
-            return Ok(false);
-        }
-        Ok(PROVIDER_FORWARDED.contains(&name) || !owned(name)?)
-    };
+    let is_provider_field =
+        |name: &str| name != input && (forwarded.contains(&name) || !is_litellm_owned(name));
     let overrides = field(request, "extra_body")?
         .map(|extra_body| {
             let extra_body = extra_body
@@ -59,7 +42,7 @@ fn project_parameters(
 
 fn provider_fields(
     fields: &Bound<'_, PyDict>,
-    is_provider_field: &impl Fn(&str) -> PyResult<bool>,
+    is_provider_field: &impl Fn(&str) -> bool,
     keep_none: bool,
 ) -> PyResult<Map<String, Value>> {
     fields
@@ -67,7 +50,7 @@ fn provider_fields(
         .filter(|(_, value)| keep_none || !value.is_none())
         .map(|(key, value)| {
             let name: String = key.extract()?;
-            if !is_provider_field(&name)? {
+            if !is_provider_field(&name) {
                 return Ok(None);
             }
             Ok(Some((name, from_py(&value)?)))
@@ -93,8 +76,11 @@ mod tests {
     }
 
     fn project(request: &Bound<'_, PyDict>) -> PyResult<Value> {
-        let owned = |name: &str| Ok(name.starts_with("litellm_") || name == "metadata");
-        project_parameters(request, "messages", &owned)
+        project_forwarding(request, &[])
+    }
+
+    fn project_forwarding(request: &Bound<'_, PyDict>, forwarded: &[&str]) -> PyResult<Value> {
+        provider_parameters(request, "messages", forwarded)
             .map(|parameters| serde_json::to_value(parameters).unwrap())
     }
 
@@ -125,10 +111,7 @@ mod tests {
         "{'litellm_call_id': 'call', 'litellm_logging_obj': object(), 'temperature': 1}",
         json!({"temperature": 1})
     )]
-    #[case::metadata_is_forwarded_although_owned(
-        "{'metadata': {'user_id': 'u'}}",
-        json!({"metadata": {"user_id": "u"}})
-    )]
+    #[case::metadata_is_owned_unless_a_route_forwards_it("{'metadata': {'user_id': 'u'}}", json!({}))]
     #[case::opaque_controls_are_never_serialized(
         "{'api_key': object(), 'callbacks': [object()], 'extra_body': {'api_key': object()}}",
         json!({})
@@ -152,14 +135,37 @@ mod tests {
         "{'extra_body': {'messages': [], 'litellm_call_id': 'call', 'extra_body': {'top_k': 1}}}",
         json!({})
     )]
-    #[case::extra_body_can_set_forwarded_metadata(
-        "{'metadata': {'a': 1}, 'extra_body': {'metadata': {'b': 2}}}",
-        json!({"metadata": {"b": 2}})
+    #[case::extra_body_cannot_set_unforwarded_metadata(
+        "{'extra_body': {'metadata': {'b': 2}}}",
+        json!({})
     )]
     fn projects_provider_fields(#[case] request: &str, #[case] expected: Value) {
         Python::initialize();
         Python::attach(|py| {
             assert_eq!(project(&python_dict(py, request)).unwrap(), expected);
+        });
+    }
+
+    #[rstest]
+    #[case::top_level("{'metadata': {'user_id': 'u'}}", json!({"metadata": {"user_id": "u"}}))]
+    #[case::extra_body_overrides(
+        "{'metadata': {'a': 1}, 'extra_body': {'metadata': {'b': 2}}}",
+        json!({"metadata": {"b": 2}})
+    )]
+    #[case::other_owned_names_stay_dropped(
+        "{'metadata': {'a': 1}, 'litellm_metadata': {'b': 2}, 'api_key': 'sk'}",
+        json!({"metadata": {"a": 1}})
+    )]
+    fn a_route_forwards_only_the_owned_names_it_lists(
+        #[case] request: &str,
+        #[case] expected: Value,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            assert_eq!(
+                project_forwarding(&python_dict(py, request), &["metadata"]).unwrap(),
+                expected
+            );
         });
     }
 
