@@ -17,6 +17,7 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsUsage,
     NoulAnswer,
+    OpenAIDecisionResponse,
     ScoreAnswer,
 )
 
@@ -29,6 +30,8 @@ _QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
 )
 _INPUT_TOKENS: Final[int] = 367
 _OUTPUT_TOKENS: Final[int] = 3
+_CACHED_TOKENS: Final[int] = 256
+_CACHE_WRITE_TOKENS: Final[int] = 64
 _RESPONSE: Final[Mapping[str, object]] = {
     "model": "jev-1.13",
     "answers": {
@@ -87,7 +90,7 @@ _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
     ],
     "usage": {
         "input_tokens": _INPUT_TOKENS,
-        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "input_tokens_details": {"cached_tokens": _CACHED_TOKENS, "cache_write_tokens": _CACHE_WRITE_TOKENS},
         "output_tokens": _OUTPUT_TOKENS,
         "output_tokens_details": {"reasoning_tokens": 0},
         "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
@@ -419,7 +422,7 @@ async def test_cloudflare_clef_resolves_model_and_response_envelope(
         "state": "review",
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
-    assert response.answers == DecisionsResponse.model_validate(_RESPONSE).answers
+    assert response.answers == {"is_defect": NoulAnswer(type="noul", noul=0.9)}
     assert response._hidden_params["model"] == "cloudflare/@cf/cloudflare/clef"
 
 
@@ -658,8 +661,88 @@ async def test_openai_decisions_translate_systemone_to_the_openai_wire_contract_
     assert response.answers == {"is_defect": NoulAnswer(type="noul", noul=0.9)}
     assert response._hidden_params["custom_llm_provider"] == "openai"
     luna_cost: Final = litellm.model_cost["gpt-6-luna"]
-    expected_cost: Final = _INPUT_TOKENS * float(luna_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
-        luna_cost["output_cost_per_token"]
+    expected_cost: Final = (
+        (_INPUT_TOKENS - _CACHED_TOKENS - _CACHE_WRITE_TOKENS) * float(luna_cost["input_cost_per_token"])
+        + _CACHED_TOKENS * float(luna_cost["cache_read_input_token_cost"])
+        + _CACHE_WRITE_TOKENS * float(luna_cost["cache_creation_input_token_cost"])
+        + _OUTPUT_TOKENS * float(luna_cost["output_cost_per_token"])
     )
     assert expected_cost > 0
     assert litellm.completion_cost(completion_response=response) == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_openai_format_calls_to_a_systemone_provider_get_openai_format_answers(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="typesafe/jev-1.13",
+        input="review",
+        questions=[
+            {"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"},
+            {
+                "type": "choice",
+                "name": "sentiment",
+                "instructions": "Tone?",
+                "choices": [{"value": "positive"}, {"value": "negative"}],
+            },
+        ],
+        api_key="caller-key",
+    )
+
+    assert route.called
+    assert tuple(json.loads(respx_mock.calls[0].request.content)["questions"]) == ("is_defect", "sentiment")
+    assert isinstance(response, OpenAIDecisionResponse)
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [
+        {"type": "predicate", "name": "is_defect", "probability": 0.9},
+        {
+            "type": "choice",
+            "name": "sentiment",
+            "choice": "positive",
+            "probabilities": [{"value": "positive", "probability": 0.8}, {"value": "negative", "probability": 0.2}],
+            "confidence": 0.8,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "request_kwargs", "message"),
+    (
+        (
+            "typesafe/jev-1.13",
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_image", "image_url": "data:image/png;base64,AA=="}],
+                    }
+                ],
+                "questions": [{"type": "predicate", "instructions": "Is this a defect?"}],
+            },
+            "cannot serve this request",
+        ),
+        (
+            "openai/gpt-6-luna",
+            {
+                "state": "review",
+                "input": "review",
+                "questions": [{"type": "predicate", "instructions": "Is this a defect?"}],
+            },
+            "not both",
+        ),
+    ),
+    ids=("image_to_systemone_provider", "state_and_input"),
+)
+async def test_requests_a_provider_cannot_serve_are_rejected_before_http(
+    respx_mock: respx.MockRouter,
+    model: str,
+    request_kwargs: Mapping[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match=message):
+        await litellm.adecisions(model=model, api_key="caller-key", **request_kwargs)
+
+    assert len(respx_mock.calls) == 0

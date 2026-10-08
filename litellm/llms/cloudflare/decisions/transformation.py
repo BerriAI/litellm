@@ -4,12 +4,12 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
-from litellm.llms.base_llm.decisions.transformation import systemone_request_body
+from litellm.llms.base_llm.decisions.transformation import ir_to_systemone_request, parse_systemone_response
 from litellm.secret_managers.main import (
     get_secret_str,
     normalize_nonempty_secret_str,
 )
-from litellm.types.decisions import DecisionsRequestBody
+from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse, UnsupportedDecisionsRequest
 
 _RESPONSE_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
@@ -45,19 +45,25 @@ class CloudflareDecisionsEndpoint:
             return f"{normalized_api_base}/{model}"
         return f"{normalized_api_base}/ai/run/{model}"
 
-    def request_body(self, model: str, request: DecisionsRequestBody) -> Mapping[str, object]:
-        return systemone_request_body(model, request)
+    def request_body(
+        self, model: str, request: DecisionsIRRequest
+    ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+        return ir_to_systemone_request(model, request)
 
-    def unwrap_response(self, payload: object) -> object:
-        if not isinstance(payload, Mapping):
-            return payload
-        response_mapping: Final = _RESPONSE_MAPPING_ADAPTER.validate_python(payload)
-        if "answers" in response_mapping:
-            return payload
-        result: Final = response_mapping.get("result")
-        if isinstance(result, Mapping):
-            return result
+    def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
+        return parse_systemone_response(_unwrap_result(payload), request)
+
+
+def _unwrap_result(payload: object) -> object:
+    if not isinstance(payload, Mapping):
         return payload
+    response_mapping: Final = _RESPONSE_MAPPING_ADAPTER.validate_python(payload)
+    if "answers" in response_mapping:
+        return payload
+    result: Final = response_mapping.get("result")
+    if isinstance(result, Mapping):
+        return result
+    return payload
 
 
 CLOUDFLARE_DECISIONS_ENDPOINT: Final[CloudflareDecisionsEndpoint] = CloudflareDecisionsEndpoint()

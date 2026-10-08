@@ -99,7 +99,7 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
-from litellm.types.decisions import DecisionsResponse, DecisionsUsage
+from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -1054,12 +1054,24 @@ def get_usage_object(
         return None
 
 
+def _decisions_usage(
+    *, input_tokens: int, output_tokens: int, cached_tokens: int, cache_write_tokens: int
+) -> dict[str, object]:
+    return {
+        "prompt_tokens": input_tokens,
+        "completion_tokens": output_tokens,
+        "cache_read_input_tokens": cached_tokens,
+        "cache_creation_input_tokens": cache_write_tokens,
+    }
+
+
 def _is_known_usage_objects(usage_obj):
     """Returns True if the usage obj is a known Usage type"""
     return (
         isinstance(usage_obj, litellm.Usage)
         or isinstance(usage_obj, ResponseAPIUsage)
         or isinstance(usage_obj, DecisionsUsage)
+        or isinstance(usage_obj, OpenAIDecisionUsage)
         or TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj)
     )
 
@@ -1469,10 +1481,19 @@ def completion_cost(
                             litellm.Usage(**_usage_for_dump.model_dump()),
                         )
                     if isinstance(usage_obj, DecisionsUsage):
-                        _usage = {
-                            "prompt_tokens": usage_obj.input_tokens,
-                            "completion_tokens": usage_obj.output_tokens,
-                        }
+                        _usage = _decisions_usage(
+                            input_tokens=usage_obj.input_tokens,
+                            output_tokens=usage_obj.output_tokens,
+                            cached_tokens=usage_obj.cached_tokens,
+                            cache_write_tokens=usage_obj.cache_write_tokens,
+                        )
+                    elif isinstance(usage_obj, OpenAIDecisionUsage):
+                        _usage = _decisions_usage(
+                            input_tokens=usage_obj.input_tokens,
+                            output_tokens=usage_obj.output_tokens,
+                            cached_tokens=usage_obj.input_tokens_details.cached_tokens,
+                            cache_write_tokens=usage_obj.input_tokens_details.cache_write_tokens,
+                        )
                     elif usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
@@ -1965,7 +1986,8 @@ def response_cost_calculator(
     | OpenAIModerationResponse
     | Response
     | SearchResponse
-    | DecisionsResponse,
+    | DecisionsResponse
+    | OpenAIDecisionResponse,
     model: str,
     custom_llm_provider: str | None,
     call_type: Literal[
