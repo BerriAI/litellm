@@ -34,12 +34,18 @@ async def provide_storage(request: Request) -> ClickHouseStorage | None:
     return tracing.storage if tracing is not None else None
 
 
+async def provide_background_storage(request: Request) -> ClickHouseStorage | None:
+    tracing: Final = await provide_receiver(request)
+    return tracing.background_storage if tracing is not None else None
+
+
 @asynccontextmanager
 async def manage_tracing(
     enabled: bool,
     receiver_factory: Callable[[], TraceReceiver] | None = None,
     settings: Mapping[str, object] | None = None,
     client_factory: Callable[[LensConnection], httpx.AsyncClient] = LensConnection.lifespan_client,
+    background_client_factory: Callable[[LensConnection], httpx.AsyncClient] = LensConnection.background_client,
 ) -> AsyncGenerator[TraceReceiver | None, None]:
     if not enabled:
         yield None
@@ -52,11 +58,14 @@ async def manage_tracing(
         )
         yield None
         return
-    async with client_factory(connection) as client:
+    async with client_factory(connection) as client, background_client_factory(connection) as background:
         tracing: Final = (
             receiver_factory()
             if receiver_factory
-            else TraceReceiver(storage=ClickHouseStorage(RemoteTraceStore(client)))
+            else TraceReceiver(
+                storage=ClickHouseStorage(RemoteTraceStore(client)),
+                background_storage=ClickHouseStorage(RemoteTraceStore(background)),
+            )
         )
         async with _export_requests(LensExporter(client)):
             yield tracing
