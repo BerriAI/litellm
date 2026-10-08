@@ -3448,6 +3448,7 @@ async def test_user_info_v2_response_shape(mocker):
         "updated_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
         "sso_user_id": None,
         "teams": ["team-a", "team-b"],
+        "blocked": True,
         "model_max_budget": {"gpt-3.5-turbo": {"budget_limit": 5.0, "time_period": "30d"}},
     }
 
@@ -3489,6 +3490,7 @@ async def test_user_info_v2_response_shape(mocker):
         "updated_at",
         "sso_user_id",
         "teams",
+        "blocked",
         "object_permission",
         "model_max_budget",
         "model_max_budget_usage",
@@ -3506,6 +3508,7 @@ async def test_user_info_v2_response_shape(mocker):
     assert isinstance(response.teams, list)
     assert all(isinstance(t, str) for t in response.teams)
     assert response.teams == ["team-a", "team-b"]
+    assert response.blocked is True
 
     # Verify models is a list of strings
     assert isinstance(response.models, list)
@@ -5172,3 +5175,89 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
 
     revoke_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", [True, False], ids=["block", "unblock"])
+@pytest.mark.parametrize("all_users", [False, True], ids=["single-user", "bulk-all-users"])
+async def test_user_blocked_update_persists_and_evicts_cached_user(
+    mocker: MockerFixture, all_users: bool, blocked: bool
+) -> None:
+    """`blocked` reaches the user row through both `/user/update` and `/user/bulk_update`, including the
+    `false` an unblock sends (the update filter drops empties, and `false` must not count as one), and the
+    cached user is evicted on every worker so auth sees the change on the next request."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper, bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    saved_user: Final = LiteLLM_UserTable(user_id="user-spruce", blocked=not blocked)
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
+    prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
+    prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )  # test-quality-ok: substitute the database dependency
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
+    mocker.patch(
+        "litellm.proxy.proxy_server.user_api_key_cache", cache
+    )  # test-quality-ok: exercise a real isolated cache
+    broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+    admin: Final = UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    if all_users:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(all_users=True, user_updates={"blocked": blocked}),
+            user_api_key_dict=admin,
+            litellm_changed_by=None,
+        )
+        prisma_client.db.litellm_usertable.update_many.assert_awaited_once_with(where={}, data={"blocked": blocked})
+    else:
+        await _update_single_user_helper(
+            user_request=UpdateUserRequest(user_id=saved_user.user_id, blocked=blocked),
+            user_api_key_dict=admin,
+        )
+        assert prisma_client.update_data.call_args.kwargs["data"]["blocked"] is blocked
+
+    assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) is None
+    broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["single", "bulk-users"])
+async def test_non_admin_cannot_block_or_unblock_a_user(mocker: MockerFixture, surface: str) -> None:
+    """A user may edit their own record, but `blocked` is an admin switch: a non-admin sending it, even on
+    themselves, gets 403 before anything is written, on both `/user/update` and `/user/bulk_update`."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper, bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="alice", blocked=True)
+    )
+    prisma_client.update_data = mocker.AsyncMock()
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )  # test-quality-ok: substitute the database dependency
+    caller: Final = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    call: Final = (
+        _update_single_user_helper(
+            user_request=UpdateUserRequest(user_id="alice", blocked=False), user_api_key_dict=caller
+        )
+        if surface == "single"
+        else bulk_user_update(
+            data=BulkUpdateUserRequest(users=[{"user_id": "alice", "blocked": False}]),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+        )
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await call
+    assert exc_info.value.status_code == 403
+    assert "block" in str(exc_info.value.detail)
+    prisma_client.update_data.assert_not_called()

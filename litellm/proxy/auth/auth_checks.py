@@ -1000,6 +1000,7 @@ async def common_checks(
     """
     Common checks across jwt + key-based auth.
 
+    0. If user is blocked
     1. If team is blocked
     1.1. If project is blocked
     2. If team can call model
@@ -1018,6 +1019,14 @@ async def common_checks(
     11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if user_object is not None and user_object.blocked is True:
+        raise ProxyException(
+            message=f"User={user_object.user_id} is blocked. Update via `/user/update` if you're an admin.",
+            type=ProxyErrorTypes.auth_error,
+            param="user_id",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
     _model: Final[str | list[str] | None] = get_model_from_request(
         request_data=request_body,

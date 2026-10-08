@@ -1900,3 +1900,48 @@ async def test_user_api_key_auth_websocket_rejection_adds_no_traceback_for_other
     proxy_records: Final = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
     assert [record.getMessage() for record in proxy_records if record.exc_info is not None] == []
     assert [record.levelno for record in proxy_records if record.levelno >= logging.WARNING] == [logging.ERROR]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", [True, False], ids=["blocked", "not-blocked"])
+@pytest.mark.parametrize(
+    "user_role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN], ids=["internal-user", "proxy-admin"]
+)
+async def test_key_auth_refuses_a_blocked_user_with_401(user_role: LitellmUserRoles, blocked: bool) -> None:
+    """A virtual key owned by a blocked user is refused with 401 on the very next request, whatever the
+    user's role. The proxy-admin case matters on its own: the auth wrapper rebuilds an admin's user object
+    from the token, and that rebuild has to keep the blocked flag or admins slip through."""
+    import time
+
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    user_id = f"blocked-user-{user_role.value}-{blocked}"
+    user_key = f"sk-{user_id}"
+    valid_token = UserAPIKeyAuth(
+        user_id=user_id,
+        user_role=user_role,
+        token=hash_token(user_key),
+        last_refreshed_at=time.time(),
+    )
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
+    user_api_key_cache.set_cache(
+        key=user_id, value=LiteLLM_UserTable(user_id=user_id, user_role=user_role, blocked=blocked)
+    )
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    request._url = URL(url="/chat/completions")
+
+    if not blocked:
+        assert (await user_api_key_auth(request=request, api_key="Bearer " + user_key)).user_id == user_id
+        return
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    assert exc_info.value.code == "401"
+    assert f"User={user_id} is blocked" in exc_info.value.message
