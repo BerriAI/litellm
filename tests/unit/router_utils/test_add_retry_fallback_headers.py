@@ -15,17 +15,17 @@ from litellm.router_utils.add_retry_fallback_headers import (
     replace_complexity_router_headers,
 )
 from litellm.types.decisions import (
-    DecisionsInputTokensDetails,
-    DecisionsOutputTokensDetails,
+    DecisionInputTokensDetails,
+    DecisionOutputTokensDetails,
     DecisionsResponse,
-    DecisionsUsage,
+    DecisionUsage,
 )
 
-_ZERO_USAGE: Final = DecisionsUsage(
+_ZERO_USAGE: Final = DecisionUsage(
     input_tokens=0,
-    input_tokens_details=DecisionsInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
+    input_tokens_details=DecisionInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
     output_tokens=0,
-    output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
+    output_tokens_details=DecisionOutputTokensDetails(reasoning_tokens=0),
     total_tokens=0,
 )
 

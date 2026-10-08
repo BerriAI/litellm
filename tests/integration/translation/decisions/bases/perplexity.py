@@ -2,9 +2,7 @@ from typing import Final
 
 from integration.translation.case import TranslationTestCase
 
-"""Perplexity: LiteLLM speaks the OpenAI Decisions shape; the provider speaks Jev / System One.
-
-Provider side from https://docs.perplexity.ai (POST /v1/decisions). Mock reply captured live on 2026-10-06.
+"""Provider request and reply shape from https://docs.perplexity.ai (POST /v1/decisions). Mock reply captured live on 2026-10-06.
 """
 PPLX_DECIDER_V1_27B_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",

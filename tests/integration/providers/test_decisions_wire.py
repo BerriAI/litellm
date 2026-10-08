@@ -166,16 +166,18 @@ _PROVIDERS: Final = (
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
 _PREDICATE: Final[dict[str, JsonValue]] = {"type": "predicate", "name": "q", "instructions": "Is it?"}
+_OPENROUTER: Final = _PROVIDERS[2]
+_OPENROUTER_CHAT_MODEL: Final = "openrouter/openai/gpt-5-mini"
+_UNSUPPORTED_PROVIDER_MODEL: Final = "openai/gpt-6-luna"
+_CONNECTION_ERROR: Final = "litellm.APIConnectionError"
+_GENERIC_API_ERROR: Final = "litellm.APIError"
 _INVALID_BODIES: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = (
     ("missing questions", {"input": _INPUT}),
     ("missing input", {"questions": _QUESTIONS}),
     ("numeric input", {"input": 5, "questions": _QUESTIONS}),
     ("assistant message input", {"input": [{"role": "assistant", "content": "hi"}], "questions": _QUESTIONS}),
-    ("empty questions", {"input": _INPUT, "questions": []}),
     ("questions as a map", {"input": _INPUT, "questions": {"q": _PREDICATE}}),
     ("predicate without instructions", {"input": _INPUT, "questions": [{"type": "predicate", "name": "q"}]}),
-    ("choice without choices", {"input": _INPUT, "questions": [{**_PREDICATE, "type": "choice", "choices": []}]}),
-    ("score without levels", {"input": _INPUT, "questions": [{**_PREDICATE, "type": "score", "levels": []}]}),
     ("unknown question type", {"input": _INPUT, "questions": [{**_PREDICATE, "type": "ranking"}]}),
 )
 _IMAGE_INPUT: Final[list[JsonValue]] = [
@@ -241,6 +243,12 @@ def _upstream_calls(gateway: Gateway, handle: ScenarioHandle) -> list[dict[str, 
 def _spend_row(call_id: str) -> dict[str, JsonValue]:
     rows: Final = eventually(lambda: read_rows(_SPEND_QUERY, (call_id,)), lambda found: len(found) == 1, seconds=70)
     return rows[0]
+
+
+def _assert_connection_error(response: httpx.Response) -> None:
+    assert 500 <= response.status_code < 600, response.text
+    assert _CONNECTION_ERROR in response.text, response.text
+    assert _GENERIC_API_ERROR not in response.text, response.text
 
 
 def _free_closed_port() -> int:
@@ -524,16 +532,75 @@ def test_upstream_success_without_answers_is_a_gateway_side_server_error(gateway
         assert _spend_row(response.headers["x-litellm-call-id"])["status"] == "failure"
 
 
-def test_unreachable_upstream_fails_only_its_own_deployment(gateway: Gateway) -> None:
+@pytest.mark.parametrize("provider", _PROVIDERS, ids=lambda provider: provider.name)
+def test_unreachable_upstream_fails_only_its_own_deployment(gateway: Gateway, provider: _Provider) -> None:
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _PERPLEXITY.upstream_reply())
         healthy: Final = _deployment(scenario, handle, _PERPLEXITY)
         dead: Final = scenario.model(
-            model=_PERPLEXITY.model, api_base=f"http://127.0.0.1:{_free_closed_port()}", api_key=_API_KEY
+            model=provider.model, api_base=f"http://127.0.0.1:{_free_closed_port()}", api_key=provider.api_key
         )
         failed: Final = _decide(gateway, dead, num_retries=0)
-        assert 500 <= failed.status_code < 600, failed.text
+        _assert_connection_error(failed)
         assert _spend_row(failed.headers["x-litellm-call-id"])["status"] == "failure"
         served: Final = _decide(gateway, healthy)
         assert served.status_code == 200, served.text
         assert len(_upstream_calls(gateway, handle)) == 1
+
+
+def test_an_unreachable_openrouter_deployment_reports_a_connection_error_on_chat_embeddings_and_decisions(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        dead_api_base: Final = f"http://127.0.0.1:{_free_closed_port()}"
+        chat_model: Final = scenario.model(model=_OPENROUTER_CHAT_MODEL, api_base=dead_api_base, api_key=_API_KEY)
+        decisions_model: Final = scenario.model(model=_OPENROUTER.model, api_base=dead_api_base, api_key=_API_KEY)
+        chat: Final = _chat(gateway, chat_model, num_retries=0)
+        streamed: Final = _chat(gateway, chat_model, num_retries=0, stream=True)
+        embeddings: Final = gateway.request(
+            "POST", "/v1/embeddings", {"model": chat_model, "input": "hi", "num_retries": 0}
+        )
+        decisions: Final = _decide(gateway, decisions_model, num_retries=0)
+        for response in (chat, streamed, embeddings, decisions):
+            _assert_connection_error(response)
+        for response in (chat, decisions):
+            assert _spend_row(response.headers["x-litellm-call-id"])["status"] == "failure"
+
+
+async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gateway: Gateway) -> None:
+    dead_api_base: Final = f"http://127.0.0.1:{_free_closed_port()}"
+    with pytest.raises(litellm.APIConnectionError):
+        litellm.completion(
+            model=_OPENROUTER_CHAT_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=dead_api_base,
+            api_key=_API_KEY,
+        )
+    with pytest.raises(litellm.APIConnectionError):
+        await litellm.acompletion(
+            model=_OPENROUTER_CHAT_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=dead_api_base,
+            api_key=_API_KEY,
+        )
+    with pytest.raises(litellm.APIConnectionError):
+        litellm.decisions(
+            model=_OPENROUTER.model, input=_INPUT, questions=_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
+        )
+    with pytest.raises(litellm.APIConnectionError):
+        await litellm.adecisions(
+            model=_OPENROUTER.model, input=_INPUT, questions=_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
+        )
+
+
+def test_a_deployment_whose_provider_has_no_decisions_support_is_refused_naming_every_supported_provider(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _PERPLEXITY.upstream_reply())
+        model: Final = scenario.model(model=_UNSUPPORTED_PROVIDER_MODEL, api_base=handle.api_base(), api_key=_API_KEY)
+        response: Final = _decide(gateway, model)
+        assert response.status_code == 400, response.text
+        for provider in _PROVIDERS:
+            assert provider.name in response.text, response.text
+        assert _upstream_calls(gateway, handle) == []

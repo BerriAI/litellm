@@ -2,9 +2,7 @@ from typing import Final
 
 from integration.translation.case import TranslationTestCase
 
-"""OpenRouter: LiteLLM speaks the OpenAI Decisions shape; the provider speaks Jev / System One.
-
-Provider side from https://openrouter.ai/docs (POST /api/alpha/decisions). Mock reply captured live on 2026-10-06.
+"""Provider request and reply shape from https://openrouter.ai/docs (POST /api/alpha/decisions). Mock reply captured live on 2026-10-06.
 """
 TYPESAFE_JEV_1_13_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",

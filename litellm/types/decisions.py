@@ -1,12 +1,13 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, PrivateAttr, with_config
+from pydantic import ConfigDict, Field, PrivateAttr, StrictBool, StrictStr, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
-ChoiceValue: TypeAlias = str | bool
+ChoiceValue: TypeAlias = StrictStr | StrictBool
 
 
 class DecisionsObjectBase(LiteLLMPydanticObjectBase):
@@ -33,7 +34,7 @@ class DecisionInputMessage(DecisionsObjectBase):
     type: Literal["message"] | None = None
 
 
-DecisionsInput: TypeAlias = str | Sequence[DecisionInputMessage]
+DecisionInput: TypeAlias = str | Sequence[DecisionInputMessage]
 
 
 class DecisionChoice(DecisionsObjectBase):
@@ -55,14 +56,14 @@ class PredicateQuestion(DecisionsObjectBase):
 class ChoiceQuestion(DecisionsObjectBase):
     type: Literal["choice"]
     instructions: str
-    choices: Annotated[Sequence[DecisionChoice], Field(min_length=1)]
+    choices: Sequence[DecisionChoice]
     name: str | None = None
 
 
 class ScoreQuestion(DecisionsObjectBase):
     type: Literal["score"]
     instructions: str
-    levels: Annotated[Sequence[DecisionLevel], Field(min_length=1)]
+    levels: Sequence[DecisionLevel]
     name: str | None = None
 
 
@@ -71,23 +72,25 @@ DecisionQuestion: TypeAlias = Annotated[
     Field(discriminator="type"),
 ]
 
-DecisionQuestions: TypeAlias = Annotated[Sequence[DecisionQuestion], Field(min_length=1)]
+DecisionQuestions: TypeAlias = Sequence[DecisionQuestion]
 
 
 class DecisionsRequestBody(DecisionsObjectBase):
-    input: DecisionsInput
+    input: DecisionInput
     questions: DecisionQuestions
     safety_identifier: str | None = None
 
 
-class DecisionsRequest(DecisionsRequestBody):
+@dataclass(frozen=True, slots=True)
+class DecisionsRequest:
     model: str
+    body: DecisionsRequestBody
 
 
 @with_config(ConfigDict(extra="allow"))
 class DecisionsCallParams(TypedDict, total=False):
     model: Required[ReadOnly[str]]
-    input: Required[ReadOnly[DecisionsInput]]
+    input: Required[ReadOnly[DecisionInput]]
     questions: Required[ReadOnly[DecisionQuestions]]
     safety_identifier: ReadOnly[str | None]
     api_key: ReadOnly[str | None]
@@ -141,27 +144,27 @@ DecisionAnswer: TypeAlias = Annotated[
 ]
 
 
-class DecisionsInputTokensDetails(DecisionsObjectBase):
+class DecisionInputTokensDetails(DecisionsObjectBase):
     cached_tokens: int
     cache_write_tokens: int
 
 
-class DecisionsOutputTokensDetails(DecisionsObjectBase):
+class DecisionOutputTokensDetails(DecisionsObjectBase):
     reasoning_tokens: int
 
 
-class DecisionsUsage(DecisionsObjectBase):
+class DecisionUsage(DecisionsObjectBase):
     input_tokens: int
-    input_tokens_details: DecisionsInputTokensDetails
+    input_tokens_details: DecisionInputTokensDetails
     output_tokens: int
-    output_tokens_details: DecisionsOutputTokensDetails
+    output_tokens_details: DecisionOutputTokensDetails
     total_tokens: int
 
 
 class DecisionsResponse(DecisionsObjectBase):
     model: str
     answers: Sequence[DecisionAnswer]
-    usage: DecisionsUsage
+    usage: DecisionUsage
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 

@@ -5,6 +5,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+import httpx
 import pytest
 import respx
 
@@ -14,10 +15,10 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.decisions import (
     ChoiceAnswer,
     DecisionInputMessage,
-    DecisionsInputTokensDetails,
-    DecisionsOutputTokensDetails,
+    DecisionInputTokensDetails,
+    DecisionOutputTokensDetails,
     DecisionsResponse,
-    DecisionsUsage,
+    DecisionUsage,
     PredicateAnswer,
     ScoreAnswer,
 )
@@ -97,11 +98,11 @@ _EXPECTED_USAGE: Final[Mapping[str, object]] = {
     "output_tokens_details": {"reasoning_tokens": 0},
     "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
 }
-_ZERO_USAGE: Final = DecisionsUsage(
+_ZERO_USAGE: Final = DecisionUsage(
     input_tokens=0,
-    input_tokens_details=DecisionsInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
+    input_tokens_details=DecisionInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
     output_tokens=0,
-    output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
+    output_tokens_details=DecisionOutputTokensDetails(reasoning_tokens=0),
     total_tokens=0,
 )
 _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
@@ -392,11 +393,11 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
     response: Final = DecisionsResponse(
         model="pplx-decider-v1-27b",
         answers=[],
-        usage=DecisionsUsage(
+        usage=DecisionUsage(
             input_tokens=_INPUT_TOKENS,
-            input_tokens_details=DecisionsInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
+            input_tokens_details=DecisionInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
             output_tokens=_OUTPUT_TOKENS,
-            output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
+            output_tokens_details=DecisionOutputTokensDetails(reasoning_tokens=0),
             total_tokens=_INPUT_TOKENS + _OUTPUT_TOKENS,
         ),
     )
@@ -515,9 +516,8 @@ async def test_empty_custom_provider_falls_back_to_the_model_prefix(respx_mock: 
         [{"type": "choice", "name": "sentiment", "instructions": "How?"}],
         [{"type": "noul", "name": "is_defect", "instructions": "Is this a defect?"}],
         {"is_defect": {"type": "predicate", "instructions": "Is this a defect?"}},
-        [],
     ),
-    ids=("choice without choices", "jev question type", "questions map", "no questions"),
+    ids=("choice without choices", "jev question type", "questions map"),
 )
 async def test_invalid_questions_are_rejected_before_http(questions: object, respx_mock: respx.MockRouter) -> None:
     with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
@@ -536,6 +536,20 @@ def test_upstream_bad_request_maps_to_litellm_error(respx_mock: respx.MockRouter
     with pytest.raises(litellm.BadRequestError):
         litellm.decisions(
             model="perplexity/pplx-decider-v1-27b", input=_INPUT, questions=_predicate(), api_key="caller-key"
+        )
+
+
+def test_unreachable_upstream_maps_to_a_connection_error(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.perplexity.ai/v1/decisions").mock(
+        side_effect=httpx.ConnectError("Cannot connect to host api.perplexity.ai:443")
+    )
+
+    with pytest.raises(litellm.APIConnectionError, match="PerplexityException - Cannot connect to host"):
+        litellm.decisions(
+            model="perplexity/pplx-decider-v1-27b",
+            input=_INPUT,
+            questions=_predicate(),
+            api_key="caller-key",
         )
 
 

@@ -7,18 +7,20 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.decisions import (
+    DecisionInput,
     DecisionQuestion,
-    DecisionsInput,
     DecisionsRequest,
+    DecisionsRequestBody,
     DecisionsResponse,
 )
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, client
 
-_DECISIONS_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequest]] = TypeAdapter(DecisionsRequest)
+_DECISIONS_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _HANDLER: Final = BaseLLMHTTPHandler()
 
 
@@ -61,7 +63,7 @@ def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfi
 def _prepare_call(
     *,
     model: str,
-    input: DecisionsInput | Sequence[Mapping[str, object]],
+    input: DecisionInput | Sequence[Mapping[str, object]],
     questions: Sequence[DecisionQuestion | Mapping[str, object]],
     safety_identifier: str | None = None,
     api_key: str | None,
@@ -86,8 +88,8 @@ def _prepare_call(
             llm_provider=provider,
         )
     try:
-        request: Final = _DECISIONS_REQUEST_ADAPTER.validate_python(
-            {"model": canonical_model, "input": input, "questions": questions, "safety_identifier": safety_identifier}
+        body: Final = _DECISIONS_BODY_ADAPTER.validate_python(
+            {"input": input, "questions": questions, "safety_identifier": safety_identifier}
         )
     except ValidationError as error:
         raise litellm.BadRequestError(
@@ -95,6 +97,7 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         ) from error
+    request: Final = DecisionsRequest(model=canonical_model, body=body)
 
     resolved_api_base: Final = provider_config.resolve_api_base(dynamic_api_base or api_base)
     if resolved_api_base is None:
@@ -136,6 +139,13 @@ def _prepare_call(
 
 
 def _map_upstream_exception(error: Exception, call: _DecisionsCall) -> Exception:
+    if isinstance(error, BaseLLMException) and error.status_code_is_synthesized:
+        provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
+        return litellm.APIConnectionError(
+            message=f"{provider_label} - {error.message}",
+            llm_provider=call.custom_llm_provider,
+            model=f"{call.custom_llm_provider}/{call.model}",
+        )
     return litellm.exception_type(
         model=f"{call.custom_llm_provider}/{call.model}",
         custom_llm_provider=call.custom_llm_provider,
@@ -146,7 +156,7 @@ def _map_upstream_exception(error: Exception, call: _DecisionsCall) -> Exception
 @client
 async def adecisions(
     model: str,
-    input: DecisionsInput | Sequence[Mapping[str, object]],
+    input: DecisionInput | Sequence[Mapping[str, object]],
     questions: Sequence[DecisionQuestion | Mapping[str, object]],
     safety_identifier: str | None = None,
     api_key: str | None = None,
@@ -187,7 +197,7 @@ async def adecisions(
 @client
 def decisions(
     model: str,
-    input: DecisionsInput | Sequence[Mapping[str, object]],
+    input: DecisionInput | Sequence[Mapping[str, object]],
     questions: Sequence[DecisionQuestion | Mapping[str, object]],
     safety_identifier: str | None = None,
     api_key: str | None = None,

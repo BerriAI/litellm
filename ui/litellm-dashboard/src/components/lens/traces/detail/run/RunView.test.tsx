@@ -113,19 +113,12 @@ describe("RunView", () => {
     expect(screen.getByRole("banner")).toHaveTextContent(`Step errors ${swarm.summary.error_count}`);
   });
 
-  it("opens a failed run on its first failed span", async () => {
-    renderRun(swarm);
-
-    const pane = await screen.findByTestId("detail-pane");
-    const { selectedId } = initialRunSelection(swarm);
-    expect(selectedId).not.toBe(rootSpanId(swarm));
-    expect(pane).toHaveAttribute("data-row-id", selectedId);
-    expect(swarm.spans.find((s) => s.span_id === selectedId)?.status).toBe("error");
-  });
-
-  it("opens a healthy run on the root span", async () => {
-    renderRun(research);
-    expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(research));
+  it.each([
+    ["failed", swarm],
+    ["healthy", research],
+  ])("opens a %s run on the root span", async (_label, trace) => {
+    renderRun(trace);
+    expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(trace));
   });
 
   it("inside the drawer moves spans with the arrow keys and leaves J / K to switch runs", async () => {
@@ -191,7 +184,7 @@ describe("RunView", () => {
       expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(swarm.summary)),
     );
     expect(screen.getByTestId("run-view")).toHaveAttribute("aria-busy", "false");
-    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", initialRunSelection(swarm).selectedId);
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(swarm));
   });
 
   it("moves the selection with J / K and closes the detail pane with Esc", async () => {
@@ -712,36 +705,19 @@ describe("initialRunSelection", () => {
     return { ...base, ...defaults, ...over };
   };
 
-  it("lands on a visible failure, never on a framework span the tree hides", () => {
-    const hiddenFields: Partial<Span> = { span_id: "mw", type: "framework", status: "error", start_offset_ms: 1 };
-    const toolFields: Partial<Span> = { span_id: "tool", type: "tool", status: "error", start_offset_ms: 5 };
-    const hiddenFailure = child(hiddenFields);
-    const toolFailure = child(toolFields);
-    const trace = { ...research, spans: [base, hiddenFailure, toolFailure] };
-    expect(initialRunSelection(trace).selectedId).toBe("tool");
-  });
-
-  it("folds other agent branches while revealing the failed step", () => {
-    const first = child({ span_id: "first", type: "agent" });
-    const second = child({ span_id: "second", type: "agent" });
-    const failureFields: Partial<Span> = { span_id: "failed", parent_span_id: "second", type: "tool", status: "error" };
-    const failure = child(failureFields);
-    const { selectedId, state } = initialRunSelection({ ...research, spans: [base, first, second, failure] });
-    expect(selectedId).toBe("failed");
-    expect(state.collapsedSpanIds.has("first")).toBe(true);
-    expect(state.collapsedSpanIds.has("second")).toBe(false);
-  });
-
-  it("falls back to the nearest visible ancestor when only a hidden span failed", () => {
-    const agent = child({ span_id: "agent", type: "agent", name: "researcher" });
-    const hiddenFields: Partial<Span> = { span_id: "mw", parent_span_id: "agent", type: "framework", status: "error" };
-    const hiddenFailure = child(hiddenFields);
-    const trace = { ...research, spans: [base, agent, hiddenFailure] };
-    expect(initialRunSelection(trace).selectedId).toBe("agent");
+  it("opens on the root and folds nested agent branches even when a step failed", () => {
+    const agentFields: Partial<Span> = { span_id: "agent", type: "agent" };
+    const failureFields: Partial<Span> = { span_id: "failed", parent_span_id: "agent", type: "tool", status: "error" };
+    const { selectedId, state } = initialRunSelection({
+      ...research,
+      spans: [base, child(agentFields), child(failureFields)],
+    });
+    expect(selectedId).toBe(base.span_id);
+    expect(state.collapsedSpanIds.has("agent")).toBe(true);
   });
 });
 
-it("opens a cited span instead of the default failed span", () => {
+it("opens a cited span instead of the root", () => {
   const cited = research.spans.find((span) => span.parent_span_id !== null)!;
   expect(initialRunSelection(research, cited.span_id).selectedId).toBe(cited.span_id);
   expect(initialRunSelection(research, "missing")).toEqual(initialRunSelection(research));

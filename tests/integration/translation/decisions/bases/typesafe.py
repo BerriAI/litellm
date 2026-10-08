@@ -2,9 +2,7 @@ from typing import Final
 
 from integration.translation.case import TranslationTestCase
 
-"""TypeSafe: LiteLLM speaks the OpenAI Decisions shape; the provider speaks Jev / System One.
-
-Provider side from https://docs.typesafe.ai (POST /v1/systemone). Mock reply captured live on 2026-10-06.
+"""Provider request and reply shape from https://docs.typesafe.ai (POST /v1/systemone). Mock reply captured live on 2026-10-06.
 """
 JEV_1_13_0_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",

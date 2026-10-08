@@ -20,7 +20,7 @@ import { SignalPills } from "../ui/SignalPills";
 import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
 import type { TraceSummary } from "../types";
 import { traceRefOf } from "../routing";
-import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "../utils";
+import { fmtMs, previewText, traceAgentNames } from "../utils";
 
 interface AgentTracesTableProps {
   traces: TraceSummary[];
@@ -103,11 +103,14 @@ function AgentCell({ run }: { run: TraceSummary }) {
 }
 
 function InputCell({ run }: { run: TraceSummary }) {
+  const input = singleLine(previewText(run.input_preview));
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <span className="truncate text-foreground">
-        {singleLine(previewText(run.input_preview)) || traceDisplayName(run)}
-      </span>
+      {input ? (
+        <span className="truncate text-foreground">{input}</span>
+      ) : (
+        <span className="truncate text-muted-foreground">No input recorded</span>
+      )}
       {run.resolution_limited && (
         <span
           className="shrink-0 text-xs text-muted-foreground"
@@ -170,11 +173,11 @@ function SignalsCell({ run }: { run: TraceSummary }) {
   if (!state || state.status === "pending") return <Skeleton aria-label="Loading signals" className="h-3 w-16" />;
   if (state.status === "error") return muted("Unavailable", "Could not load signals");
   const { status } = state.signals;
-  if (status === "unclassified") return muted("Queued", "Waiting for the System 1 model to check this run");
-  if (status === "pending") return muted("Checking", "The System 1 model is checking this run");
+  if (status === "unclassified" || status === "pending")
+    return muted("Checking", "The System 1 model is checking this run");
   if (status === "failed") return muted("Not checked", "The System 1 model could not check this run");
   const flags = flaggedSignals(state.signals);
-  if (!flags.length) return muted("-", "No signals detected");
+  if (!flags.length) return <span title="No signals detected" />;
   return <SignalPills flags={flags} className="overflow-hidden" />;
 }
 

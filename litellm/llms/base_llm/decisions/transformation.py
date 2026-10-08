@@ -8,8 +8,8 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.systemone import (
     SYSTEM_ONE_RESPONSE_ADAPTER,
-    decisions_response,
-    system_one_request,
+    to_decisions_response,
+    to_system_one_request,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import DecisionsRequest, DecisionsResponse
@@ -62,7 +62,7 @@ class BaseDecisionsConfig(ABC):
         request: DecisionsRequest,
         custom_llm_provider: str,
     ) -> dict[str, object]:
-        return system_one_request(self.request_model(model), request, custom_llm_provider)
+        return to_system_one_request(self.request_model(model), request.body, custom_llm_provider)
 
     def unwrap_response(self, payload: object) -> object:
         return payload
@@ -82,7 +82,7 @@ class BaseDecisionsConfig(ABC):
                 status_code=500,
                 message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
             ) from error
-        response: Final = decisions_response(system_one, request, custom_llm_provider)
+        response: Final = to_decisions_response(system_one, request, custom_llm_provider)
         self.set_hidden_params(response, model, custom_llm_provider)
         return response
 

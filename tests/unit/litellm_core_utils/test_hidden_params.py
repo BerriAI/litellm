@@ -12,19 +12,19 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from litellm.types.decisions import (
-    DecisionsInputTokensDetails,
-    DecisionsOutputTokensDetails,
+    DecisionInputTokensDetails,
+    DecisionOutputTokensDetails,
     DecisionsResponse,
-    DecisionsUsage,
+    DecisionUsage,
 )
 from litellm.types.llms.base import HiddenParams
 from litellm.types.utils import ModelResponse, TextChoices, TextCompletionResponse, Usage
 
-_ZERO_USAGE: Final = DecisionsUsage(
+_ZERO_USAGE: Final = DecisionUsage(
     input_tokens=0,
-    input_tokens_details=DecisionsInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
+    input_tokens_details=DecisionInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
     output_tokens=0,
-    output_tokens_details=DecisionsOutputTokensDetails(reasoning_tokens=0),
+    output_tokens_details=DecisionOutputTokensDetails(reasoning_tokens=0),
     total_tokens=0,
 )
 

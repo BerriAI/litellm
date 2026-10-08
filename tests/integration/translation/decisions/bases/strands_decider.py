@@ -2,9 +2,7 @@ from typing import Final
 
 from integration.translation.case import TranslationTestCase
 
-"""Strands Decider: LiteLLM speaks the OpenAI Decisions shape; the provider speaks Jev / System One.
-
-Provider side from https://github.com/strands-agents/decider (POST /v1/systemone, no auth). Mock reply captured live on 2026-10-06.
+"""Provider request and reply shape from https://github.com/strands-agents/decider (POST /v1/systemone, no auth). Mock reply captured live on 2026-10-06.
 """
 STRANDS_DECIDER_2B_HOBSON_V19_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
