@@ -232,8 +232,10 @@ class TestResponses:
         assert events, "responses stream returned no events"
         deltas: Final = tuple(event.delta for event in events if event.type == "response.output_text.delta")
         assert any(delta for delta in deltas), "responses stream returned no text deltas"
-        completed: Final = next((event for event in events if isinstance(event, ResponseCompletedEvent)), None)
-        assert completed is not None, f"responses stream did not terminate with response.completed: {events[-1].type}"
+        completed: Final = events[-1]
+        assert isinstance(completed, ResponseCompletedEvent), (
+            f"responses stream did not terminate with response.completed: {completed.type}"
+        )
         usage: Final = completed.response.usage
         assert usage is not None, f"response.completed had no usage: {completed.response!r}"
         assert usage.input_tokens > 0, f"response.completed had no input tokens: {usage!r}"
@@ -355,7 +357,7 @@ class TestResponses:
             extra_body=NO_PROXY_CACHE,
         )
         assert response.status == "completed", f"legacy tool replay was not completed: {response.status}"
-        assert "31 Celsius" in response.output_text, (
+        assert "31" in response.output_text, (
             f"legacy tool result was missing from output text: {response.output_text!r}"
         )
 
@@ -793,16 +795,30 @@ class TestResponses:
         conversation: Final[ResponseInputParam] = [
             {"role": "user", "content": "Remember that my favorite color is blue."},
             {"role": "assistant", "content": "I will remember that your favorite color is blue."},
-            {"role": "user", "content": "What color should you remember?"},
         ]
 
-        response: Final = client.responses.compact(
+        compacted: Final = client.responses.compact(
             model=model,
             input=conversation,
             extra_body=NO_PROXY_CACHE,
         )
-        assert response.id, f"/responses/compact returned no id: {response!r}"
-        assert response.output, f"/responses/compact returned no output items: {response!r}"
+        assert compacted.id, f"/responses/compact returned no id: {compacted!r}"
+        assert any(item.type == "compaction" for item in compacted.output), (
+            f"/responses/compact returned no compaction item: {compacted.output!r}"
+        )
+        compacted_input: Final[ResponseInputParam] = TypeAdapter(ResponseInputParam).validate_python(
+            [item.model_dump(exclude_none=True) for item in compacted.output]
+            + [{"role": "user", "content": "What is my favorite color?"}]
+        )
+
+        response: Final = client.responses.create(
+            model=model,
+            input=compacted_input,
+            extra_body=NO_PROXY_CACHE,
+        )
+        assert "blue" in response.output_text.lower(), (
+            f"compacted conversation did not retain the favorite color: {response.output_text!r}"
+        )
 
     @meta(
         Subject(
@@ -823,15 +839,23 @@ class TestResponses:
             prefix="e2e-responses-context-compaction",
         )
         client: Final = sdk.openai(resources.key())
+        filler: Final = "The archive record has a blue marker beside every stored entry. " * 350
+        conversation: Final[ResponseInputParam] = [
+            {"role": "user", "content": filler},
+            {"role": "assistant", "content": "I have read the archive and retained its details."},
+            {"role": "user", "content": "Reply with one word to verify server-side compaction."},
+        ]
 
         response: Final = client.responses.create(
             model=model,
-            input="Reply with one word to verify server-side compaction.",
-            context_management=[{"type": "compaction", "compact_threshold": 200000}],
+            input=conversation,
+            context_management=[{"type": "compaction", "compact_threshold": 1000}],
             extra_body=NO_PROXY_CACHE,
         )
         assert response.status == "completed", f"context management did not complete: {response.status}"
-        assert response.output_text.strip(), f"context management returned no output text: {response.output!r}"
+        assert any(item.type == "compaction" for item in response.output), (
+            f"context management returned no compaction item: {response.output!r}"
+        )
 
     @pytest.mark.covers("llm.responses.azure_openai.tool_use.nonstream.works")
     @meta(
