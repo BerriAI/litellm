@@ -3698,50 +3698,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-core"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-util",
- "litellm-auth",
- "litellm-auth-aws",
- "litellm-auth-gcp",
- "litellm-cache",
- "litellm-cache-memory",
- "litellm-cache-response",
- "litellm-core-utils",
- "litellm-framing",
- "litellm-host",
- "litellm-host-native",
- "litellm-http",
- "litellm-llms",
- "litellm-llms-types",
- "litellm-secrets",
- "litellm-tracing",
- "mime_guess",
- "moka",
- "rand 0.8.7",
- "reqwest 0.12.28",
- "rstest",
- "rstest_reuse",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "strum",
- "subtle",
- "thiserror 2.0.19",
- "time",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "url",
- "veil",
- "wiremock",
-]
-
-[[package]]
 name = "litellm-core-utils"
 version = "0.1.0"
 dependencies = [
@@ -3796,7 +3752,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-framing"
+name = "litellm-framer"
 version = "0.1.0"
 dependencies = [
  "aws-smithy-eventstream",
@@ -3821,12 +3777,12 @@ dependencies = [
  "http-body-util",
  "litellm-auth-types",
  "litellm-config",
- "litellm-core",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
  "litellm-gateway-ui",
  "litellm-http",
+ "litellm-inference",
  "litellm-llms",
  "litellm-secrets",
  "litellm-tracing",
@@ -3875,11 +3831,16 @@ dependencies = [
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
- "litellm-core",
  "litellm-gateway-auth",
  "litellm-host",
  "litellm-host-http",
  "litellm-http",
+ "litellm-inference",
+ "litellm-inference-chat",
+ "litellm-inference-messages",
+ "litellm-inference-ocr",
+ "litellm-inference-responses",
+ "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router",
@@ -4039,6 +4000,178 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-inference"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-cache",
+ "litellm-cache-memory",
+ "litellm-cache-response",
+ "litellm-core-utils",
+ "litellm-framer",
+ "litellm-host",
+ "litellm-http",
+ "litellm-llms",
+ "litellm-secrets",
+ "litellm-tracing",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "litellm-inference-chat"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-auth",
+ "litellm-cache-memory",
+ "litellm-cache-response",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-inference-messages"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-auth-aws",
+ "litellm-cache-memory",
+ "litellm-cache-response",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-inference-ocr"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-auth-aws",
+ "litellm-auth-gcp",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "mime_guess",
+ "rand 0.8.7",
+ "rstest",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-inference-responses"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-cache",
+ "litellm-cache-memory",
+ "litellm-cache-response",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-inference-testing"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-secrets",
+]
+
+[[package]]
+name = "litellm-inference-transcription"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-auth",
+ "litellm-core-utils",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-secrets",
+ "litellm-tracing",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-llms"
 version = "0.1.0"
 dependencies = [
@@ -4053,7 +4186,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-core-utils",
- "litellm-framing",
+ "litellm-framer",
  "litellm-host",
  "litellm-http",
  "litellm-llms-types",
@@ -4086,26 +4219,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-migrate"
-version = "0.1.0"
-dependencies = [
- "litellm-migrate-macros",
- "rstest",
-]
-
-[[package]]
-name = "litellm-migrate-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "rstest",
- "syn 2.0.119",
- "tempfile",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
@@ -4132,22 +4245,20 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-cache",
- "litellm-cache-azure-blob",
- "litellm-cache-disk",
- "litellm-cache-gcs",
  "litellm-cache-memory",
- "litellm-cache-qdrant-semantic",
  "litellm-cache-redis",
- "litellm-cache-redis-semantic",
  "litellm-cache-response",
- "litellm-cache-s3",
- "litellm-cache-valkey-semantic",
  "litellm-callbacks-legacy-python",
- "litellm-core",
  "litellm-core-utils",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",
+ "litellm-inference",
+ "litellm-inference-chat",
+ "litellm-inference-messages",
+ "litellm-inference-ocr",
+ "litellm-inference-responses",
+ "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
@@ -4156,25 +4267,24 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-traces",
+ "litellm-traces-cache",
  "litellm-traces-clickhouse",
  "litellm-tracing",
  "prost",
  "pyo3",
  "pyo3-async-runtimes",
- "qdrant-client",
  "redis",
  "reqwest 0.12.28",
  "rstest",
  "serde",
  "serde_json",
  "serde_with",
- "sha2 0.10.9",
+ "sqlx",
  "strum",
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
  "tracing",
- "url",
  "veil",
  "wiremock",
 ]
@@ -4199,7 +4309,8 @@ name = "litellm-router"
 version = "0.1.0"
 dependencies = [
  "litellm-config",
- "litellm-core",
+ "litellm-inference",
+ "litellm-inference-messages",
  "rstest",
 ]
 
@@ -4367,6 +4478,9 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "serde_with",
+ "sqlx",
+ "testcontainers-modules",
  "thiserror 2.0.19",
  "tokio",
  "url",
@@ -4453,15 +4567,40 @@ dependencies = [
 name = "litellm-traces"
 version = "0.1.0"
 dependencies = [
+ "askama",
+ "base64 0.22.1",
  "criterion",
  "indexmap 2.14.0",
+ "litellm-llms-types",
+ "macro_rules_attribute",
  "opentelemetry-proto",
  "prost",
  "rstest",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
+ "serde_with",
+ "sha2 0.10.9",
  "strum",
  "thiserror 2.0.19",
+ "time",
+]
+
+[[package]]
+name = "litellm-traces-cache"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "litellm-traces",
+ "moka",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4472,15 +4611,19 @@ dependencies = [
  "flate2",
  "futures-util",
  "hmac 0.12.1",
+ "jsonschema",
  "litellm-http",
- "litellm-migrate",
  "litellm-storage-clickhouse",
  "litellm-traces",
+ "litellm-traces-cache",
+ "macro_rules_attribute",
  "moka",
  "rstest",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sqlx",
  "strum",
  "testcontainers-modules",
  "thiserror 2.0.19",
@@ -6040,17 +6183,6 @@ dependencies = [
  "rustc_version",
  "syn 2.0.119",
  "unicode-ident",
-]
-
-[[package]]
-name = "rstest_reuse"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3a8fb4672e840a587a66fc577a5491375df51ddb88f2a2c2a792598c326fe14"
-dependencies = [
- "quote",
- "rand 0.8.7",
- "syn 2.0.119",
 ]
 
 [[package]]

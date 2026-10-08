@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -246,9 +246,9 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
 
 
 def _bedrock_model_supports(model: str, key: str) -> bool:
-    from litellm.utils import _supports_factory
+    from litellm.utils import supports_factory
 
-    return _supports_factory(model=model, custom_llm_provider="bedrock", key=key)
+    return supports_factory(model=model, custom_llm_provider="bedrock", key=key)
 
 
 def apply_bedrock_invoke_structured_output(
@@ -313,7 +313,7 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         return
     if all(key == "format" for key in output_config):
         return
-    if _bedrock_model_supports(model, "supports_output_config") or AnthropicConfig._model_supports_effort_param(
+    if _bedrock_model_supports(model, "supports_output_config") or AnthropicConfig.model_supports_effort_param(
         model, "bedrock"
     ):
         return
@@ -773,12 +773,15 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
 _BEDROCK_GLOBAL_REGIONS: list[str] | None = None
 
 
-def _get_all_bedrock_regions() -> list[str]:
+def get_all_bedrock_regions() -> list[str]:
     """Get all Bedrock regions, cached at module level."""
     global _BEDROCK_GLOBAL_REGIONS
     if _BEDROCK_GLOBAL_REGIONS is None:
         _BEDROCK_GLOBAL_REGIONS = AmazonBedrockGlobalConfig().get_all_regions()
     return _BEDROCK_GLOBAL_REGIONS
+
+
+_get_all_bedrock_regions = get_all_bedrock_regions
 
 
 def get_bedrock_cross_region_inference_regions() -> list[str]:
@@ -829,7 +832,7 @@ def split_bedrock_region_path(model: str) -> tuple[str | None, str]:
     """
     stripped: Final = strip_bedrock_routing_prefix(model)
     region, separator, model_id = stripped.partition("/")
-    if separator and region in _get_all_bedrock_regions():
+    if separator and region in get_all_bedrock_regions():
         return region, model_id
     return None, stripped
 
@@ -1104,7 +1107,7 @@ def get_bedrock_base_model(model: str) -> str:
 
     if potential_region in get_bedrock_cross_region_inference_regions():
         return model.split(".", 1)[1]
-    elif alt_potential_region in _get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
+    elif alt_potential_region in get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
         return model.split("/", 1)[1]
 
     return model
@@ -1125,23 +1128,42 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     ``cachePoint`` blocks. Bedrock rejects requests carrying cachePoint blocks for
     models without prompt caching support ("You invoked an unsupported model or your
     request did not allow prompt caching"), so a model whose cost-map entry does not declare
-    ``supports_prompt_caching`` must not receive them. A model absent from the map
-    (an application inference profile ARN, a model newer than the map) keeps emitting
-    so existing caching setups never silently degrade. ``litellm.utils.supports_prompt_caching``
-    is not reusable here: it returns False for unmapped models, the opposite polarity.
+    ``supports_prompt_caching`` must not receive them. An explicit
+    ``supports_prompt_cache_breakpoint`` on the entry wins over that flag: a model can price
+    cached tokens through implicit caching yet reject the marker on Converse ("This model
+    doesn't support the cachePoint field", Kimi K3). The router registers a deployment's
+    ``model_info`` under ``bedrock/<model>`` as configured, route prefix included, while the
+    Converse transformation sees the model with ``converse/`` or ``converse_like/`` already
+    stripped, so every registration form is read. That flag set there covers an application
+    inference profile ARN or a model newer than the map, while only the map decides whether
+    a model is known: absent a map entry the model keeps emitting so existing caching setups
+    never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
+    it returns False for unmapped models, the opposite polarity.
     """
     if model is None:
         return True
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
-    entries: Final = tuple(
-        entry
-        for candidate in (model, get_bedrock_base_model(model))
-        if (entry := litellm.model_cost.get(candidate)) is not None
+    map_keys: Final = (model, get_bedrock_base_model(model))
+    registered_keys: Final = tuple(f"bedrock/{route}{model}" for route in ("", "converse/", "converse_like/"))
+    explicit_marker_support: Final = next(
+        (
+            entry.get("supports_prompt_cache_breakpoint") is True
+            for key in (*registered_keys, *map_keys)
+            if (entry := litellm.model_cost.get(key)) is not None
+            and entry.get("supports_prompt_cache_breakpoint") is not None
+        ),
+        None,
     )
-    if not entries:
+    if explicit_marker_support is not None:
+        return explicit_marker_support
+    if not any(key in litellm.model_cost for key in map_keys):
         return True
-    return any(entry.get("supports_prompt_caching") is True for entry in entries)
+    return any(
+        entry.get("supports_prompt_caching") is True
+        for key in map_keys
+        if (entry := litellm.model_cost.get(key)) is not None
+    )
 
 
 def bedrock_supports_tool_search(model: str) -> bool:
@@ -1155,7 +1177,7 @@ def bedrock_supports_tool_search(model: str) -> bool:
     """
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-    return AnthropicModelInfo._supports_model_capability(model, "supports_tool_search", "bedrock")
+    return AnthropicModelInfo.supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:
@@ -1672,6 +1694,9 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonInvokeConfig()
 
 
+_BOTOCORE_SERVICE_DESCRIPTION: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
 def _load_bedrock_response_stream_shape():
     """
     Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
@@ -1684,7 +1709,9 @@ def _load_bedrock_response_stream_shape():
         from botocore.model import ServiceModel
 
         loader: Final = Loader()
-        service_dict: Final = loader.load_service_model("bedrock-runtime", "service-2")
+        service_dict: Final = _BOTOCORE_SERVICE_DESCRIPTION.validate_python(
+            loader.load_service_model("bedrock-runtime", "service-2")
+        )
         return ServiceModel(service_dict).shape_for("ResponseStream")
     except Exception as e:
         verbose_logger.warning(
@@ -1837,9 +1864,12 @@ class BedrockEventStreamDecoderBase:
             return chunk.decode()
 
 
+_JSON_VALUE: Final = TypeAdapter(object)
+
+
 def _decoded_json_value(raw: str) -> object:
     """Decode a JSON document into an opaque value for isinstance narrowing."""
-    return json.loads(raw)
+    return _JSON_VALUE.validate_python(json.loads(raw))
 
 
 def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
@@ -2028,7 +2058,7 @@ class CommonBatchFilesUtils:
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        aws_region_name: Final = self._base_aws._get_aws_region_name(optional_params=optional_params, model="")
+        aws_region_name: Final = self._base_aws.get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final = self._base_aws.resolve_credentials(
             AwsAuthParams.model_validate(optional_params), aws_region_name
         )

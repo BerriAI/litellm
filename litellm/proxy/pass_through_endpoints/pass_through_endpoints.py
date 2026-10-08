@@ -28,6 +28,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.routing import BaseRoute, Route
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
 from websockets.exceptions import (
@@ -61,7 +62,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -71,6 +72,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.oss_decision import validate_oss_request
 from litellm.passthrough import BasePassthroughUtils
+from litellm.proxy._lazy_features import lazy_owned_routes
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -721,23 +723,29 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if not subpath:
             return base_target
 
-        # Ensure base_target ends with / and subpath doesn't start with /
-        if not base_target.endswith("/"):
-            base_target = base_target + "/"
-        subpath = subpath.removeprefix("/")
+        target_root: Final = base_target if base_target.endswith("/") else base_target + "/"
+        return target_root + HttpPassThroughEndpointHelpers.resolve_subpath(subpath)
 
-        # Resolve any '..' segments in the subpath so it cannot climb above
-        # the base_target prefix that the operator configured. Preserve a
-        # trailing slash on the original subpath since some upstreams treat
-        # `/foo` and `/foo/` as different resources.
-        trailing_slash: Final = subpath.endswith("/")
-        safe_subpath = posixpath.normpath("/" + subpath).lstrip("/")
-        if safe_subpath == ".":
-            safe_subpath = ""
-        if trailing_slash and safe_subpath and not safe_subpath.endswith("/"):
-            safe_subpath += "/"
+    @staticmethod
+    def resolve_subpath(subpath: str) -> str:
+        """
+        ``subpath`` with ``.``, ``..`` and empty segments resolved, so it cannot climb above the target the
+        operator configured. A trailing slash is kept since some upstreams treat `/foo` and `/foo/` differently.
+        """
+        resolved: Final = posixpath.normpath("/" + subpath.removeprefix("/")).lstrip("/")
+        return resolved + "/" if resolved and subpath.endswith("/") else resolved
 
-        return base_target + safe_subpath
+    @staticmethod
+    def forwarded_route(endpoint_path: str, subpath: str) -> str:
+        """
+        The proxy route as the upstream sees it: the subpath resolved like the forwarder resolves it, then
+        parsed by ``httpx`` like the forwarded URL is, so a decoded ``?`` or ``#`` ends the path there too.
+        """
+        route: Final = f"{endpoint_path.rstrip('/')}/{HttpPassThroughEndpointHelpers.resolve_subpath(subpath)}"
+        try:
+            return httpx.URL(route).path
+        except httpx.InvalidURL:
+            return route
 
     @staticmethod
     def join_base_and_endpoint_path(base_url: httpx.URL, endpoint_path: str) -> str:
@@ -1164,7 +1172,7 @@ async def pass_through_request(
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
-            _get_masked_values(upstream_headers),
+            get_masked_values(upstream_headers),
             _parsed_body,
         )
 
@@ -2956,35 +2964,34 @@ def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) ->
     return None
 
 
+def _placed_ahead(routes: Sequence[BaseRoute], moving: BaseRoute, before: BaseRoute) -> tuple[BaseRoute, ...]:
+    kept: Final = tuple(route for route in routes if route is not moving)
+    at: Final = next(index for index, route in enumerate(kept) if route is before)
+    return (*kept[:at], moving, *kept[at:])
+
+
 class SafeRouteAdder:
     """
     Wrapper class for adding routes to FastAPI app.
-    Only adds routes if they don't already exist on the app.
+    Only adds routes if they don't already exist on the app. A route a lazy feature registered
+    does not count: a route added at its path goes ahead of it, the precedence a config
+    pass-through at /v1/decisions gets in lazy mode, where the feature has not loaded yet.
     """
 
     @staticmethod
+    def _colliding_routes(app: FastAPI, path: str, methods: Sequence[str]) -> tuple[Route, ...]:
+        wanted: Final = frozenset(methods)
+        return tuple(
+            route
+            for route in app.routes
+            if isinstance(route, Route) and route.path == path and not wanted.isdisjoint(route.methods or ())
+        )
+
+    @staticmethod
     def _is_path_registered(app: FastAPI, path: str, methods: list[str]) -> bool:
-        """
-        Check if a path with any of the specified methods is already registered on the app.
-
-        Args:
-            app: The FastAPI application instance
-            path: The path to check (e.g., "/v1/chat/completions")
-            methods: List of HTTP methods to check (e.g., ["GET", "POST"])
-
-        Returns:
-            True if the path is already registered with any of the methods, False otherwise
-        """
-        for route in app.routes:
-            # Use getattr to safely access route attributes
-            route_path = getattr(route, "path", None)
-            route_methods = getattr(route, "methods", None)
-
-            if route_path == path and route_methods is not None:
-                # Check if any of the methods overlap
-                if any(method in route_methods for method in methods):
-                    return True
-        return False
+        """True when a route the app itself defines already serves the path with one of the methods."""
+        lazy_owned: Final = lazy_owned_routes(app)
+        return any(id(route) not in lazy_owned for route in SafeRouteAdder._colliding_routes(app, path, methods))
 
     @staticmethod
     def add_api_route_if_not_exists(
@@ -3015,12 +3022,17 @@ class SafeRouteAdder:
             )
             return False
 
+        shadowed: Final = SafeRouteAdder._colliding_routes(app, path, methods)
         app.add_api_route(
             path=path,
             endpoint=endpoint,
             methods=methods,
             dependencies=dependencies,
         )
+        if shadowed:
+            app.router.routes[:] = _placed_ahead(  # rebind-ok: the app owns its route table
+                app.router.routes, app.router.routes[-1], shadowed[0]
+            )
         verbose_proxy_logger.debug(
             "Successfully added route: %s with methods %s",
             path,
@@ -3279,6 +3291,31 @@ class InitPassThroughEndpointHelpers:
                         return True
 
         return False
+
+    @staticmethod
+    def forwarded_routes(route: str) -> tuple[str, ...]:
+        """
+        ``route`` as each registered endpoint it falls under would forward it. An exact endpoint, or no
+        endpoint at all, sees ``route`` itself.
+        """
+        comparison_route: Final = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
+        registered: Final = tuple(
+            (parts[1], parts[2])
+            for parts in (key.split(":", 3) for key in _registered_pass_through_routes)
+            if len(parts) >= 3
+        )
+        subpath_endpoint_paths: Final = tuple(
+            path
+            for route_type, path in registered
+            if route_type == "subpath" and (comparison_route == path or comparison_route.startswith(path + "/"))
+        )
+        forwarded: Final = tuple(
+            HttpPassThroughEndpointHelpers.forwarded_route(endpoint_path=path, subpath=comparison_route[len(path) :])
+            for path in subpath_endpoint_paths
+        )
+        if subpath_endpoint_paths and ("exact", comparison_route) not in registered:
+            return forwarded
+        return (comparison_route, *forwarded)
 
     @staticmethod
     def get_registered_pass_through_route(route: str, method: str | None = None) -> dict[str, Any] | None:
@@ -3584,7 +3621,8 @@ async def _filter_endpoints_by_team_allowed_routes(
     prisma_client,
 ) -> list[PassThroughGenericEndpoint]:
     """
-    Filter pass-through endpoints based on team's allowed_passthrough_routes metadata.
+    Filter pass-through endpoints based on team's allowed_passthrough_routes and
+    denied_passthrough_routes metadata.
 
     Args:
         team_id: The team ID to check permissions for
@@ -3611,18 +3649,23 @@ async def _filter_endpoints_by_team_allowed_routes(
     team_metadata: Final = cast(  # cast-ok: prisma types the Json column as str; reads hand back the decoded value
         "Mapping[str, object] | None", team.metadata
     )
-    if team_metadata is not None and team_metadata.get("allowed_passthrough_routes") is not None:
-        ## FILTER pass_through_endpoints by allowed_passthrough_routes
-        pass_through_endpoints = [
-            endpoint
-            for endpoint in pass_through_endpoints
-            if endpoint.path
-            in cast(  # cast-ok: guarded above; team metadata stores this key as a list of route paths
-                Sequence[str], team_metadata.get("allowed_passthrough_routes")
-            )
-        ]
+    if team_metadata is None:
+        return pass_through_endpoints
 
-    return pass_through_endpoints
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    allowed_routes: Final = cast(  # cast-ok: team metadata stores this key as a list of route paths
+        "Sequence[str] | None", team_metadata.get("allowed_passthrough_routes")
+    )
+    return [
+        endpoint
+        for endpoint in pass_through_endpoints
+        if (allowed_routes is None or endpoint.path in allowed_routes)
+        and not (
+            endpoint.auth
+            and RouteChecks.matching_denied_passthrough_route(route=endpoint.path, metadata_sources=(team_metadata,))
+        )
+    ]
 
 
 @router.get(

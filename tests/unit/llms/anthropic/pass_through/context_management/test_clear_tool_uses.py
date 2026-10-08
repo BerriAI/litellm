@@ -258,9 +258,7 @@ def test_tool_result_list_content_shape_preserved():
         {"role": "user", "content": "Hi"},
         {
             "role": "assistant",
-            "content": [
-                {"type": "tool_use", "id": "toolu_a", "name": "f", "input": {}}
-            ],
+            "content": [{"type": "tool_use", "id": "toolu_a", "name": "f", "input": {}}],
         },
         {
             "role": "user",
@@ -274,9 +272,7 @@ def test_tool_result_list_content_shape_preserved():
         },
         {
             "role": "assistant",
-            "content": [
-                {"type": "tool_use", "id": "toolu_b", "name": "f", "input": {}}
-            ],
+            "content": [{"type": "tool_use", "id": "toolu_b", "name": "f", "input": {}}],
         },
         {
             "role": "user",

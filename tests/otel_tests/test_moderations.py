@@ -1,3 +1,4 @@
+import os
 import pytest
 import asyncio
 import aiohttp, openai
@@ -40,7 +41,7 @@ async def test_basic_moderations_on_proxy_no_model():
         try:
             response = await make_moderations_curl_request(
                 session,
-                "sk-1234",
+                os.environ["LITELLM_MASTER_KEY"],
                 request_data,
             )
             print("response=", response)
@@ -63,7 +64,7 @@ async def test_basic_moderations_on_proxy_with_model():
         try:
             response = await make_moderations_curl_request(
                 session,
-                "sk-1234",
+                os.environ["LITELLM_MASTER_KEY"],
                 request_data,
             )
             print("response=", response)

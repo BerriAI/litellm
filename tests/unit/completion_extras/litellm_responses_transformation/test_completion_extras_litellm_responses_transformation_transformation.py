@@ -1,8 +1,9 @@
+import copy
 import datetime
 import json
 import os
 import unittest
-from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, get_args
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
@@ -21,7 +22,7 @@ import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
-from litellm.types.llms.openai import REASONING_EFFORT
+from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
@@ -1577,7 +1578,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler.map_reasoning_effort(effort)
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
@@ -1593,7 +1594,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = True
 
         for effort in effort_levels:
-            result = handler._map_reasoning_effort(effort)
+            result = handler.map_reasoning_effort(effort)
 
             assert result is not None, f"Result should not be None for effort={effort}"
             assert result["effort"] == effort, f"Effort should be {effort}"
@@ -1609,7 +1610,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
         litellm.reasoning_auto_summary = False
         monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
-        result = handler._map_reasoning_effort("high")
+        result = handler.map_reasoning_effort("high")
         assert (
             result["summary"] == "detailed"
         ), "Summary should be 'detailed' when env var is enabled"
@@ -1621,7 +1622,7 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
         dict_input = {"effort": "high", "summary": "custom_summary"}
-        result_dict = handler._map_reasoning_effort(dict_input)
+        result_dict = handler.map_reasoning_effort(dict_input)
         assert result_dict["effort"] == "high"
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
@@ -4355,6 +4356,342 @@ def test_streaming_final_chunk_carries_provider_metadata():
 
 def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
+
+
+@pytest.mark.parametrize(
+    ("content_block", "expected_content"),
+    [
+        (
+            {"type": "text", "text": "Stable prefix"},
+            {"type": "input_text", "text": "Stable prefix"},
+        ),
+        (
+            {"type": "image_url", "image_url": "https://example.com/image.png"},
+            {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "auto"},
+        ),
+        (
+            {"type": "file", "file": {"file_id": "file-123"}},
+            {"type": "input_file", "file_id": "file-123"},
+        ),
+    ],
+    ids=("text", "image_url", "file"),
+)
+def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion(
+    content_block: dict[str, object], expected_content: dict[str, object]
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    marked_content: Final = {**content_block, "prompt_cache_breakpoint": cache_breakpoint}
+
+    request: Final = handler.transform_request(
+        model="gpt-5.6-sol",
+        messages=[
+            {
+                "role": "user",
+                "content": [marked_content],
+            }
+        ],
+        optional_params={"prompt_cache_options": cache_breakpoint},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"][0] == {
+        "type": "message",
+        "role": "user",
+        "content": [{**expected_content, "prompt_cache_breakpoint": cache_breakpoint}],
+    }
+    assert request["prompt_cache_options"] == cache_breakpoint
+
+
+def test_prompt_cache_breakpoint_read_tolerates_non_string_content_block_keys() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    # Non-string keys are not JSON-representable but are accepted by chat completion
+    # callers passing Python dicts; reading the marker must not validate or reject them.
+    content: Final = [
+        {"type": "text", "text": "Stable prefix", 1: "ignored"},
+        {"type": "image_url", "image_url": "https://example.com/image.png", 2: "ignored"},
+        {"type": "file", "file": {"file_id": "file-123"}, 3: "ignored"},
+    ]
+    messages: Final = [{"role": "user", "content": content}]
+
+    for model in ("gpt-5.6", "gpt-4o"):  # marker keep path and strip path both read the block
+        request: dict[str, object] = handler.transform_request(
+            model=model,
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+            litellm_logging_obj=Mock(),
+        )
+
+        assert request["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Stable prefix"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/image.png",
+                        "detail": "auto",
+                    },
+                    {"type": "input_file", "file_id": "file-123"},
+                ],
+            }
+        ]
+
+
+def test_prompt_cache_breakpoints_are_dropped_for_unsupported_models() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    marked_content: Final = [
+        {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": cache_breakpoint},
+        {
+            "type": "image_url",
+            "image_url": "https://example.com/image.png",
+            "prompt_cache_breakpoint": cache_breakpoint,
+        },
+        {
+            "type": "file",
+            "file": {"file_id": "file-123"},
+            "prompt_cache_breakpoint": cache_breakpoint,
+        },
+    ]
+    messages: Final = [{"role": "user", "content": marked_content}]
+
+    request: Final = handler.transform_request(
+        model="gpt-5.4-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Stable prefix"},
+                {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "auto"},
+                {"type": "input_file", "file_id": "file-123"},
+            ],
+        }
+    ]
+    assert "prompt_cache_options" not in request
+    assert messages == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {
+                    "type": "image_url",
+                    "image_url": "https://example.com/image.png",
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                },
+                {
+                    "type": "file",
+                    "file": {"file_id": "file-123"},
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                },
+            ],
+        }
+    ]
+
+
+def test_prompt_cache_breakpoints_are_dropped_from_function_call_output_for_unsupported_models() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "Tool result", "prompt_cache_breakpoint": cache_breakpoint}],
+            }
+        ],
+    )
+
+    request: Final = cast(
+        dict[str, object],
+        handler.transform_request(
+            model="gpt-5.4-mini",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+            litellm_logging_obj=Mock(),
+        ),
+    )
+
+    assert request["input"] == [
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [{"type": "input_text", "text": "Tool result"}],
+        }
+    ]
+    assert messages == [
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "Tool result", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        }
+    ]
+
+
+def test_convert_chat_completion_messages_to_responses_api_drops_prompt_cache_breakpoints_unless_kept() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    image_data_url: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+    file_data: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Review these inputs", "prompt_cache_breakpoint": cache_breakpoint},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_data_url},
+                        "prompt_cache_breakpoint": cache_breakpoint,
+                    },
+                    {
+                        "type": "file",
+                        "file": {"file_data": file_data, "filename": "input.pdf"},
+                        "prompt_cache_breakpoint": cache_breakpoint,
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [
+                    {"type": "text", "text": "Tool result", "prompt_cache_breakpoint": cache_breakpoint}
+                ],
+            },
+        ],
+    )
+    messages_before: Final = copy.deepcopy(messages)
+
+    default_input, default_instructions = handler.convert_chat_completion_messages_to_responses_api(messages)
+    kept_input, kept_instructions = handler.convert_chat_completion_messages_to_responses_api(
+        messages,
+        keep_prompt_cache_breakpoints=True,
+    )
+
+    assert default_instructions is None
+    assert default_input == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Review these inputs"},
+                {"type": "input_image", "image_url": image_data_url, "detail": "auto"},
+                {"type": "input_file", "file_data": file_data, "filename": "input.pdf"},
+            ],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": "{}",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [{"type": "input_text", "text": "Tool result"}],
+        },
+    ]
+    assert kept_instructions is None
+    assert kept_input == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Review these inputs",
+                    "prompt_cache_breakpoint": cache_breakpoint,
+                },
+                {
+                    "type": "input_image",
+                    "image_url": image_data_url,
+                    "detail": "auto",
+                    "prompt_cache_breakpoint": cache_breakpoint,
+                },
+                {
+                    "type": "input_file",
+                    "file_data": file_data,
+                    "filename": "input.pdf",
+                    "prompt_cache_breakpoint": cache_breakpoint,
+                },
+            ],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": "{}",
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [{"type": "input_text", "text": "Tool result", "prompt_cache_breakpoint": cache_breakpoint}],
+        },
+    ]
+    assert messages == messages_before
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "keep_marker"),
+    (({"base_model": "gpt-5.6"}, True), ({}, False)),
+    ids=("supported-base-model", "missing-base-model"),
+)
+def test_prompt_cache_breakpoint_supports_model_alias_with_base_model(
+    litellm_params: dict[str, object],
+    keep_marker: bool,
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    marked_content: Final = {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": cache_breakpoint}
+
+    request: Final = handler.transform_request(
+        model="mydeployment",
+        messages=[{"role": "user", "content": [marked_content]}],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    expected_content: Final = {
+        "type": "input_text",
+        "text": "Stable prefix",
+        **({"prompt_cache_breakpoint": cache_breakpoint} if keep_marker else {}),
+    }
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [expected_content],
+        }
+    ]
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():

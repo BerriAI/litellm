@@ -33,7 +33,7 @@ from typing import (
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -109,7 +109,7 @@ from litellm.proxy.auth.auth_checks import (
     invalidate_team_member_spend_state,
 )
 from litellm.proxy.auth.auth_utils import (
-    enforce_batch_enqueued_token_limit_is_admin_only,
+    enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -117,12 +117,13 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
     resolve_model_budget,
 )
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
@@ -164,6 +165,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
     handle_update_object_permission_common,
+    invalidate_cached_object_permissions,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -194,6 +196,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -1386,6 +1389,7 @@ async def new_team(
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+    - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
@@ -1405,7 +1409,7 @@ async def new_team(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
       "team_alias": "my-new-team_2",
@@ -1417,7 +1421,7 @@ async def new_team(
 
      ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
                 "team_alias": "QA Prod Bot",
@@ -1487,7 +1491,7 @@ async def new_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
-        enforce_batch_enqueued_token_limit_is_admin_only(
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=None,
             user_api_key_dict=user_api_key_dict,
@@ -1720,7 +1724,7 @@ async def new_team(
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
 
         # Serialize router_settings to JSON (matching key creation pattern)
-        router_settings_value: Final = getattr(data, "router_settings", None)
+        router_settings_value: Final = data.router_settings
         router_settings_json: Final = (
             safe_dumps(router_settings_value) if router_settings_value is not None else safe_dumps({})
         )
@@ -2148,6 +2152,7 @@ async def update_team(
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+    - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
@@ -2165,7 +2170,7 @@ async def update_team(
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
@@ -2176,7 +2181,7 @@ async def update_team(
     Example - Update Team `max_budget` budget
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
@@ -2273,14 +2278,19 @@ async def update_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
-        enforce_batch_enqueued_token_limit_is_admin_only(
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
 
-        _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
+        _check_passthrough_routes_caller_permission(
+            data,
+            user_api_key_dict,
+            entity="team",
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+        )
         _check_disable_global_guardrails_caller_permission(
             data.disable_global_guardrails,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
@@ -2544,6 +2554,10 @@ async def update_team(
 
         verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=team_row.team_id)
+        await invalidate_cached_object_permissions(
+            object_permission_ids=(existing_team.object_permission_id, team_row.object_permission_id),
+            user_api_key_cache=user_api_key_cache,
+        )
         await _refresh_cached_team(
             team_row=team_row,
             user_api_key_cache=user_api_key_cache,
@@ -2595,7 +2609,7 @@ async def patch_team(
 
     ```
     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "metadata": {"cost_center": "1234", "deprecated_key": null}
@@ -3366,7 +3380,7 @@ async def team_member_add(
     ```
 
     curl -X POST 'http://0.0.0.0:4000/team/member_add' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H 'Content-Type: application/json' \
     -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
 
@@ -3547,7 +3561,7 @@ async def team_member_delete(
     ```
     curl -X POST 'http://0.0.0.0:8000/team/member_delete' \
 
-    -H 'Authorization: Bearer sk-1234' \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     -H 'Content-Type: application/json' \
 
@@ -4033,7 +4047,7 @@ async def reset_team_member_spend_fn(
     }
 
 
-class _TeamMetadataView(BaseModel):
+class _TeamMetadataView(LiteLLMBaseModel):
     metadata: Mapping[str, object] | None = None
 
 
@@ -4194,7 +4208,7 @@ async def bulk_team_member_add(
     Example request:
     ```bash
     curl --location 'http://0.0.0.0:4000/team/bulk_member_add' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234",
@@ -4327,7 +4341,7 @@ async def delete_team(
 
     ```
     curl --location 'http://0.0.0.0:4000/team/delete' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_ids": ["8d916b1c-510d-4894-a334-1c16a93344f5"]
@@ -4792,11 +4806,11 @@ async def _hydrate_member_user_details(
     return tuple(hydrate(m) for m in members)
 
 
-class _OrganizationModelsRow(BaseModel):
-    models: list[str] = []  # mutable-ok: pydantic field default
+class _OrganizationModelsRow(LiteLLMBaseModel):
+    models: list[str] = Field(default=[])  # mutable-ok: pydantic field default
 
 
-class _TeamRowWithOrganization(BaseModel):
+class _TeamRowWithOrganization(LiteLLMBaseModel):
     litellm_organization_table: _OrganizationModelsRow | None = None
 
 
@@ -5139,7 +5153,7 @@ async def block_team(
     Example:
     ```
     curl --location 'http://0.0.0.0:4000/team/block' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234"
@@ -5194,7 +5208,7 @@ async def unblock_team(
     Example:
     ```
     curl --location 'http://0.0.0.0:4000/team/unblock' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234"
@@ -5865,7 +5879,7 @@ async def list_team(
     """
     ```
     curl --location --request GET 'http://0.0.0.0:4000/team/list' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Parameters:
@@ -6069,7 +6083,7 @@ async def team_model_add(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/model/add' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234",
@@ -6185,7 +6199,7 @@ async def team_model_delete(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/model/delete' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234",
@@ -6794,13 +6808,14 @@ async def get_team_spend_by_user(
 
     own_user_only: Final = scope.api_key_filter is not None
     user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
-    rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
-        _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
-        start_date,
-        end_date,
-        *scoped_team_ids,
-        *user_param,
-    )
+    async with db_span("team_user_spend", "LiteLLM_SpendLogs"):
+        rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
+            _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+            start_date,
+            end_date,
+            *scoped_team_ids,
+            *user_param,
+        )
     results: Final = tuple(
         TeamUserSpendRow(
             team_id=row["team_id"],

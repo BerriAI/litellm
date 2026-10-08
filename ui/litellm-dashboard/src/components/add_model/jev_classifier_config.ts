@@ -16,7 +16,8 @@ const jevClassifierConfigFields = {
   instructions: z
     .string()
     .nullish()
-    .transform((value) => value ?? undefined),
+    .transform((value) => value ?? undefined)
+    .optional(),
   circuit_breaker_enabled: z.boolean().optional(),
   circuit_breaker_cooldown_seconds: z.number().finite().positive().optional(),
 };
@@ -34,7 +35,7 @@ export const jevClassifierConfigSchema = z
       !config.provider ||
       config.provider === "jev" ||
       OSS_CLASSIFIER_MODELS[config.provider].some((model) => model === config.model),
-    { message: "Select a supported classifier model", path: ["model"] },
+    { error: "Select a supported classifier model", path: ["model"] },
   );
 
 export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema>;

@@ -340,6 +340,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
+    "litellm_roi_estimator",
     "proxy_server_request",
     "secret_fields",
     "_guardrail_pipelines",
@@ -562,7 +563,7 @@ def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
 
 
 def _strip_client_callback_credentials(
-    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
     """Drop callback credentials and destinations supplied by the caller.
 
@@ -626,7 +627,7 @@ def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
 
 
 def _strip_router_reserved_metadata(
-    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
     """Drop the router-owned fallback stamps from any client-supplied metadata bucket."""
     for metadata_key in ("metadata", "litellm_metadata"):
@@ -2566,6 +2567,10 @@ async def add_litellm_data_to_request(
     _update_model_if_key_alias_exists(
         data=data,
         user_api_key_dict=user_api_key_dict,
+    )
+
+    data[_metadata_variable_name]["litellm_roi_estimator"] = (
+        getattr(request.state, "litellm_roi_estimator", False) is True
     )
 
     verbose_proxy_logger.debug("[PROXY] returned data from litellm_pre_call_utils: %s", data)

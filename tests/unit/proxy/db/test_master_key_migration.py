@@ -22,8 +22,9 @@ from litellm.proxy.db.master_key_migration import (
     reencrypt_stored_values,
     replace_ciphertexts,
 )
+from tests._master_key import MASTER_KEY
 
-PREVIOUS_KEY = "sk-1234"
+PREVIOUS_KEY = MASTER_KEY
 NEW_KEY = "sk-qa-9f2c1e7a44b0d3"
 UNRELATED_KEY = "sk-some-other-deployment"
 
@@ -173,6 +174,27 @@ async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_
     assert untouched_before == json.dumps(
         [tables["LiteLLM_ProxyModelTable"][1], tables["LiteLLM_Config"][1:], tables["LiteLLM_TeamTable"][1]]
     )
+
+
+@pytest.mark.asyncio
+async def test_search_tool_litellm_params_are_moved_to_the_new_key():
+    tables: Tables = {
+        "LiteLLM_SearchToolsTable": [
+            {
+                "search_tool_id": "search-tool-1",
+                "litellm_params": {"search_provider": _encrypted("tavily"), "api_key": _encrypted("tvly-secret")},
+            },
+            {"search_tool_id": "legacy-search-tool", "litellm_params": {"api_key": "tvly-plaintext"}},
+        ]
+    }
+
+    migrated = await reencrypt_stored_values(_FakeDatabase(tables), from_key=PREVIOUS_KEY, to_key=NEW_KEY)
+
+    assert migrated == 2
+    search_tool_params = tables["LiteLLM_SearchToolsTable"][0]["litellm_params"]
+    assert decrypt_if_encrypted_with(search_tool_params["api_key"], NEW_KEY) == "tvly-secret"
+    assert decrypt_if_encrypted_with(search_tool_params["search_provider"], NEW_KEY) == "tavily"
+    assert tables["LiteLLM_SearchToolsTable"][1]["litellm_params"] == {"api_key": "tvly-plaintext"}
 
 
 @pytest.mark.asyncio

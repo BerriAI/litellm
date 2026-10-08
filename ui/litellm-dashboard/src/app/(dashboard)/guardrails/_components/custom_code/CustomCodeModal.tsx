@@ -2,6 +2,13 @@ import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
 import { toast } from "@/lib/toast";
+import { loggingOnlyScopeToChoice } from "../guardrail_info_helpers";
+import type { LoggingOnlyScope, LoggingOnlyScopeChoice } from "../guardrail_info_helpers";
+import {
+  CustomCodeLoggingOnlyScopeSelect,
+  getCustomCodeLoggingOnlyScopeCreate,
+  getCustomCodeLoggingOnlyScopeUpdate,
+} from "./CustomCodeLoggingOnlyScope";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -56,6 +63,7 @@ export interface EditGuardrailData {
     mode?: string | string[] | Record<string, unknown>;
     default_on?: boolean;
     custom_code?: string;
+    logging_only_scope?: LoggingOnlyScope | null;
     [key: string]: any;
   };
 }
@@ -75,6 +83,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   const [guardrailName, setGuardrailName] = useState("");
   const [mode, setMode] = useState<string[]>(["pre_call"]);
   const [streamScopeByMode, setStreamScopeByMode] = useState<Record<string, GuardrailStreamScope>>({});
+  const [loggingOnlyScopeChoice, setLoggingOnlyScopeChoice] = useState<LoggingOnlyScopeChoice>("default");
   const [defaultOn, setDefaultOn] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("empty");
   const [code, setCode] = useState(CODE_TEMPLATES.empty.code);
@@ -208,6 +217,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             normalizeMode(editData.litellm_params?.mode),
           ),
         );
+        setLoggingOnlyScopeChoice(loggingOnlyScopeToChoice(editData.litellm_params?.logging_only_scope));
         setDefaultOn(editData.litellm_params?.default_on || false);
         setCode(editData.litellm_params?.custom_code || CODE_TEMPLATES.empty.code);
         setSelectedTemplate(""); // No template selected in edit mode
@@ -216,6 +226,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         setGuardrailName("");
         setMode(["pre_call"]);
         setStreamScopeByMode({});
+        setLoggingOnlyScopeChoice("default");
         setDefaultOn(false);
         setSelectedTemplate("empty");
         setCode(CODE_TEMPLATES.empty.code);
@@ -273,6 +284,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         const updateData: any = {
           litellm_params: {
             custom_code: code,
+            ...getCustomCodeLoggingOnlyScopeUpdate(mode, editData.litellm_params, loggingOnlyScopeChoice),
           },
         };
 
@@ -311,6 +323,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             default_on: defaultOn,
             custom_code: code,
             ...(streamScope !== undefined ? { stream_scope: streamScope } : {}),
+            ...getCustomCodeLoggingOnlyScopeCreate(mode, loggingOnlyScopeChoice),
           },
           guardrail_info: {},
         };
@@ -458,6 +471,9 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               </Combobox>
             )}
           </div>
+          {mode.includes("logging_only") && (
+            <CustomCodeLoggingOnlyScopeSelect value={loggingOnlyScopeChoice} onChange={setLoggingOnlyScopeChoice} />
+          )}
           <div className="w-[180px]">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Template</label>
             <Select

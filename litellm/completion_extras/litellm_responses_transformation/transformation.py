@@ -24,8 +24,11 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
+from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
+    with_prompt_cache_breakpoint,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
@@ -76,6 +79,38 @@ _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"
 _RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
     ChatCompletion.model_fields
 )
+
+
+def _strip_prompt_cache_breakpoint_from_content_block(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    content_block: Final = cast(dict[str, object], value)  # cast-ok: isinstance confirms the content block is a mapping
+    return {key: item for key, item in content_block.items() if key != "prompt_cache_breakpoint"}
+
+
+def _strip_prompt_cache_breakpoints_from_content(value: object) -> object:
+    if isinstance(value, list):
+        list_content: Final = cast(list[object], value)  # cast-ok: isinstance confirms a list of content blocks
+        return [_strip_prompt_cache_breakpoint_from_content_block(item) for item in list_content]
+    if isinstance(value, tuple):
+        tuple_content: Final = cast(tuple[object, ...], value)  # cast-ok: isinstance confirms a tuple of content blocks
+        return tuple(_strip_prompt_cache_breakpoint_from_content_block(item) for item in tuple_content)
+    return _strip_prompt_cache_breakpoint_from_content_block(value)
+
+
+def _strip_prompt_cache_breakpoints_from_item(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    input_item: Final = cast(dict[str, object], value)  # cast-ok: isinstance confirms a Responses input item mapping
+    return {
+        key: _strip_prompt_cache_breakpoints_from_content(item) if key in ("content", "output") else item
+        for key, item in input_item.items()
+        if key != "prompt_cache_breakpoint"
+    }
+
+
+def _strip_prompt_cache_breakpoints(input_items: list[object]) -> list[object]:
+    return [_strip_prompt_cache_breakpoints_from_item(item) for item in input_items]
 
 
 def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -244,7 +279,7 @@ def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Cha
     name: Final = item.get("name") or ("custom_tool" if is_custom else "")
     function_chunk: Final = ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments)
     tool_call_dict: Final = _ChatToolCallDict(
-        id=LiteLLMCompletionResponsesConfig._tool_call_id_from_responses_item(item.get("id"), item.get("call_id")),
+        id=LiteLLMCompletionResponsesConfig.tool_call_id_from_responses_item(item.get("id"), item.get("call_id")),
         type="function",
         function=function_chunk,
         index=index,
@@ -362,6 +397,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return None, index
 
     def convert_chat_completion_messages_to_responses_api(
+        self,
+        messages: list["AllMessageValues"],
+        *,
+        keep_prompt_cache_breakpoints: bool = False,
+    ) -> tuple[list[object], str | None]:
+        converted_input_items, instructions = self._convert_chat_completion_messages_to_responses_input(messages)
+        return (
+            converted_input_items
+            if keep_prompt_cache_breakpoints
+            else _strip_prompt_cache_breakpoints(converted_input_items),
+            instructions,
+        )
+
+    def _convert_chat_completion_messages_to_responses_input(
         self, messages: list["AllMessageValues"]
     ) -> tuple[list[object], str | None]:
         input_items: Final[list[object]] = []
@@ -525,7 +574,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value
             elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
+                responses_api_request["reasoning"] = self.map_reasoning_effort(value)
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
 
@@ -592,24 +641,31 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
-        (
-            input_items,
-            instructions,
-        ) = self.convert_chat_completion_messages_to_responses_api(messages)
-
+        base_model: Final = litellm_params.get("base_model")
+        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model) or (
+            isinstance(base_model, str) and bool(base_model) and supports_openai_prompt_cache_breakpoint(base_model)
+        )
+        converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
+            messages,
+            keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
+        )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
         # of instructions, mirroring how non-string system content is already
         # handled in convert_chat_completion_messages_to_responses_api.
-        if not input_items and instructions is not None:
-            input_items = [
+        is_system_only_request: Final = not converted_input_items and converted_instructions is not None
+        input_items: Final = (
+            [
                 {
                     "type": "message",
                     "role": "system",
-                    "content": [{"type": "input_text", "text": instructions}],
+                    "content": [{"type": "input_text", "text": converted_instructions}],
                 }
             ]
-            instructions = None
+            if is_system_only_request
+            else converted_input_items
+        )
+        instructions: Final = None if is_system_only_request else converted_instructions
 
         optional_params = self._extract_extra_body_params(optional_params)
 
@@ -983,7 +1039,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         setattr(
             model_response,
             "usage",
-            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_response.usage),
+            ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_response.usage),
         )
 
         model_response.id = _upstream_response_id(raw_response.id) or raw_response.id
@@ -992,20 +1048,25 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Preserve hidden params from the ResponsesAPIResponse, especially the headers
         # which contain important provider information like x-request-id
-        raw_response_hidden_params: Final = getattr(raw_response, "_hidden_params", {})
+        raw_response_hidden_params: Final = get_hidden_params(raw_response) or {}
         if raw_response_hidden_params:
-            if not hasattr(model_response, "_hidden_params") or model_response._hidden_params is None:
-                model_response._hidden_params = {}
+            model_response_hidden_params: Final = get_or_create_hidden_params(model_response)
             # Merge the raw_response hidden params with model_response hidden params
             # Preserve existing keys in model_response but add/override with raw_response params
             for key, value in raw_response_hidden_params.items():
-                if key == "additional_headers" and key in model_response._hidden_params:
-                    # Merge additional_headers to preserve both sets
-                    existing_additional_headers = model_response._hidden_params.get("additional_headers", {})
-                    merged_headers = {**value, **existing_additional_headers}
-                    model_response._hidden_params[key] = merged_headers
+                if key == "additional_headers" and key in model_response_hidden_params:
+                    existing_additional_headers = model_response_hidden_params.get("additional_headers", {})
+                    merged_headers = {
+                        **cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                            "dict[str, object]", value
+                        ),
+                        **cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                            "dict[str, object]", existing_additional_headers
+                        ),
+                    }
+                    model_response_hidden_params[key] = merged_headers
                 else:
-                    model_response._hidden_params[key] = value
+                    model_response_hidden_params[key] = value
 
         return model_response
 
@@ -1089,16 +1150,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Handle multimodal content
                     original_type = item.get("type")
                     if original_type == "text":
-                        converted = self._convert_content_str_to_input_text(item.get("text", ""), role)
+                        converted = with_prompt_cache_breakpoint(
+                            self._convert_content_str_to_input_text(item.get("text", ""), role),
+                            item.get("prompt_cache_breakpoint"),
+                        )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   text -> %s", converted)
                     elif original_type == "image_url":
                         # Map to responses API image format
-                        converted = cast(
-                            dict,
-                            self._convert_content_to_responses_format_image(
-                                cast(ChatCompletionImageObject, item), role
+                        converted = with_prompt_cache_breakpoint(
+                            cast(
+                                dict,
+                                self._convert_content_to_responses_format_image(
+                                    cast(ChatCompletionImageObject, item), role
+                                ),
                             ),
+                            item.get("prompt_cache_breakpoint"),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   image_url -> %s", converted)
@@ -1110,8 +1177,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   image -> %s", converted)
                         elif item_type == "file":
-                            converted = _input_file_from_file_value(
-                                cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                            converted = with_prompt_cache_breakpoint(
+                                _input_file_from_file_value(
+                                    cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
+                                ),
+                                item.get("prompt_cache_breakpoint"),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
@@ -1206,7 +1276,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def _map_reasoning_effort(self, reasoning_effort: object) -> Reasoning:
+    def map_reasoning_effort(self, reasoning_effort: object) -> Reasoning:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
             return Reasoning(
@@ -1224,6 +1294,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if auto_summary_enabled
             else Reasoning(effort=reasoning_effort)
         )
+
+    _map_reasoning_effort = map_reasoning_effort
 
     def _add_web_search_tool(
         self,
@@ -1626,7 +1698,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             if response_data.get("usage"):
                 from litellm.responses.utils import ResponseAPILoggingUtils
 
-                usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response_data.get("usage"))
+                usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response_data.get("usage"))
             provider_metadata: Final = _provider_metadata(response_data)
             served_service_tier: Final = response_data.get("service_tier")
             return ModelResponseStream(

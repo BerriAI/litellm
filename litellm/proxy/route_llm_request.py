@@ -10,7 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.router_utils.common_utils import _is_proxy_admin_request
+from litellm.router_utils.common_utils import is_proxy_admin_request
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -64,7 +64,7 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object,
     if not isinstance(llm_router, litellm.Router):
         return
     deployments: Final = llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
-    if llm_router._are_all_deployments_blocked(deployments):
+    if llm_router.are_all_deployments_blocked(deployments):
         raise litellm.PermissionDeniedError(
             message="Model is blocked",
             model=model_name,
@@ -93,6 +93,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acompact_responses": "/responses/compact",
     "aocr": "/ocr",
     "asearch": "/search",
+    "adecisions": "/decisions",
     "avideo_generation": "/videos",
     "avideo_list": "/videos",
     "avideo_status": "/videos/{video_id}",
@@ -487,6 +488,7 @@ RouteType = Literal[
     "avector_store_file_delete",
     "aocr",
     "asearch",
+    "adecisions",
     "avideo_generation",
     "avideo_list",
     "avideo_status",
@@ -597,7 +599,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
-    is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(data)
+    is_proxy_admin_without_team: Final = team_id is None and is_proxy_admin_request(data)
 
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
@@ -685,7 +687,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                         if (
                             deployment
                             and deployment.litellm_params
-                            and not llm_router._is_deployment_blocked(deployment)
+                            and not llm_router.is_deployment_blocked(deployment)
                         ):
                             deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
 

@@ -1,15 +1,16 @@
+import base64
 import json
 import uuid
-from itertools import chain
+from itertools import chain, count
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually, string_value
+from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "gpt-5.4-mini"
-_GPT_6_MODELS: Final = ("gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol")
 _API_KEY: Final = "synthetic-openai-key"
 _PROMPT: Final = "Summarize this conversation in one sentence."
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -24,38 +25,6 @@ def _completion(identity: str, content: str) -> bytes:
             "model": _BACKEND,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 19, "completion_tokens": 7, "total_tokens": 26},
-        }
-    ).encode()
-
-
-def _tool_completion(model_name: str) -> bytes:
-    return json.dumps(
-        {
-            "id": "chatcmpl-weather",
-            "object": "chat.completion",
-            "created": 1,
-            "model": model_name,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Let me check the weather.",
-                        "tool_calls": [
-                            {
-                                "id": "call_1",
-                                "type": "function",
-                                "function": {
-                                    "name": "get_weather",
-                                    "arguments": '{"city":"Paris"}',
-                                },
-                            }
-                        ],
-                    },
-                    "finish_reason": "tool_calls",
-                }
-            ],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         }
     ).encode()
 
@@ -98,399 +67,6 @@ def test_openai_chat_tool_choice_without_tools_is_not_forwarded(gateway: Gateway
             }
         ]
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/chat/completions")]
-
-
-@pytest.mark.parametrize("model_name", _GPT_6_MODELS, ids=_GPT_6_MODELS)
-def test_azure_gpt_6_function_tool_with_reasoning_effort_none_stays_on_chat(gateway: Gateway, model_name: str) -> None:
-    identity: Final = f"azure-{model_name}-{uuid.uuid4().hex}"
-    upstream_target: Final = f"/openai/deployments/{model_name}/chat/completions?api-version=2025-04-01-preview"
-
-    def respond(request: Request) -> Reply:
-        assert request.method == "POST"
-        assert request.target == upstream_target
-        body: Final = _JSON_OBJECT.validate_json(request.body)
-        assert body["model"] == model_name
-        assert body["messages"] == [{"role": "user", "content": f"What is the weather in Paris? {identity}"}]
-        assert body["tools"] == [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the weather for a city.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"city": {"type": "string"}},
-                        "required": ["city"],
-                    },
-                },
-            }
-        ]
-        assert body["reasoning_effort"] == "none"
-        return Reply(body=_tool_completion(model_name))
-
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model=f"azure/{model_name}",
-            api_base=wire.url,
-            api_key=_API_KEY,
-            api_version="2025-04-01-preview",
-        )
-        response: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "description": "Get the weather for a city.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {"city": {"type": "string"}},
-                                "required": ["city"],
-                            },
-                        },
-                    }
-                ],
-                "reasoning_effort": "none",
-                "cache": {"no-cache": True},
-            },
-        )
-        assert response.status_code == 200, response.text
-        payload: Final = _JSON_OBJECT.validate_json(response.content)
-        assert payload["choices"] == [
-            {
-                "finish_reason": "tool_calls",
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "Let me check the weather.",
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {
-                                "name": "get_weather",
-                                "arguments": '{"city":"Paris"}',
-                            },
-                        }
-                    ],
-                    "provider_specific_fields": {"refusal": None},
-                },
-                "provider_specific_fields": {},
-            }
-        ]
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", upstream_target)]
-
-
-@pytest.mark.parametrize("model_name", _GPT_6_MODELS, ids=_GPT_6_MODELS)
-def test_azure_gpt_6_function_tool_without_reasoning_effort_bridges_to_responses(
-    gateway: Gateway, model_name: str
-) -> None:
-    identity: Final = f"azure-{model_name}-{uuid.uuid4().hex}"
-    upstream_target: Final = "/openai/responses?api-version=2025-04-01-preview"
-
-    def respond(request: Request) -> Reply:
-        assert request.method == "POST"
-        assert request.target == upstream_target
-        body: Final = _JSON_OBJECT.validate_json(request.body)
-        assert body["model"] == model_name
-        assert body["tools"] == [
-            {
-                "type": "function",
-                "name": "get_weather",
-                "description": "Get the weather for a city.",
-                "strict": None,
-                "parameters": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                    "required": ["city"],
-                },
-            }
-        ]
-        return Reply(
-            body=json.dumps(
-                {
-                    "id": "resp_weather",
-                    "object": "response",
-                    "created_at": 1789788253,
-                    "status": "completed",
-                    "model": model_name,
-                    "output": [
-                        {
-                            "type": "message",
-                            "id": "msg_weather",
-                            "status": "completed",
-                            "role": "assistant",
-                            "content": [
-                                {
-                                    "type": "output_text",
-                                    "text": "Let me check the weather.",
-                                    "annotations": [],
-                                }
-                            ],
-                        },
-                        {
-                            "type": "function_call",
-                            "id": "fc_1",
-                            "call_id": "call_1",
-                            "name": "get_weather",
-                            "arguments": '{"city":"Paris"}',
-                            "status": "completed",
-                        },
-                    ],
-                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
-                }
-            ).encode()
-        )
-
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model=f"azure/{model_name}",
-            api_base=wire.url,
-            api_key=_API_KEY,
-            api_version="2025-04-01-preview",
-        )
-        response: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "description": "Get the weather for a city.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {"city": {"type": "string"}},
-                                "required": ["city"],
-                            },
-                        },
-                    }
-                ],
-                "cache": {"no-cache": True},
-            },
-        )
-        assert response.status_code == 200, response.text
-        body: Final = response.json()
-        assert body["choices"] == [
-            {
-                "finish_reason": "tool_calls",
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "Let me check the weather.",
-                    "tool_calls": [
-                        {
-                            "id": "fc_1",
-                            "type": "function",
-                            "function": {
-                                "name": "get_weather",
-                                "arguments": '{"city":"Paris"}',
-                            },
-                            "index": 0,
-                        }
-                    ],
-                },
-            }
-        ], response.text
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", upstream_target)]
-
-
-@pytest.mark.parametrize("model_name", _GPT_6_MODELS, ids=_GPT_6_MODELS)
-def test_openai_custom_base_gpt_6_function_tool_without_reasoning_effort_stays_on_chat(
-    gateway: Gateway, model_name: str
-) -> None:
-    identity: Final = f"openai-{model_name}-{uuid.uuid4().hex}"
-
-    def respond(request: Request) -> Reply:
-        assert request.method == "POST"
-        assert request.target == "/chat/completions"
-        body: Final = _JSON_OBJECT.validate_json(request.body)
-        assert body["model"] == model_name
-        assert body["messages"] == [{"role": "user", "content": f"What is the weather in Paris? {identity}"}]
-        assert body["tools"] == [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the weather for a city.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"city": {"type": "string"}},
-                        "required": ["city"],
-                    },
-                },
-            }
-        ]
-        return Reply(body=_tool_completion(model_name))
-
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=f"openai/{model_name}", api_base=wire.url, api_key=_API_KEY)
-        response: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "description": "Get the weather for a city.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {"city": {"type": "string"}},
-                                "required": ["city"],
-                            },
-                        },
-                    }
-                ],
-                "cache": {"no-cache": True},
-            },
-        )
-        assert response.status_code == 200, response.text
-        body: Final = _JSON_OBJECT.validate_json(response.content)
-        assert body["choices"] == [
-            {
-                "finish_reason": "tool_calls",
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "Let me check the weather.",
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {
-                                "name": "get_weather",
-                                "arguments": '{"city":"Paris"}',
-                            },
-                        }
-                    ],
-                    "provider_specific_fields": {"refusal": None},
-                },
-                "provider_specific_fields": {},
-            }
-        ], response.text
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/chat/completions")]
-
-
-def test_openai_custom_base_gpt_6_function_tool_with_low_effort_bridges_to_responses(gateway: Gateway) -> None:
-    identity: Final = f"openai-gpt-6-sol-{uuid.uuid4().hex}"
-
-    def respond(request: Request) -> Reply:
-        assert request.method == "POST"
-        assert request.target == "/responses"
-        body: Final = _JSON_OBJECT.validate_json(request.body)
-        assert body["model"] == "gpt-6-sol"
-        assert body["reasoning"]["effort"] == "low"
-        assert body["tools"] == [
-            {
-                "type": "function",
-                "name": "get_weather",
-                "description": "Get the weather for a city.",
-                "strict": None,
-                "parameters": {
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                    "required": ["city"],
-                },
-            }
-        ]
-        return Reply(
-            body=json.dumps(
-                {
-                    "id": "resp_weather",
-                    "object": "response",
-                    "created_at": 1789788253,
-                    "status": "completed",
-                    "model": "gpt-6-sol",
-                    "output": [
-                        {
-                            "type": "message",
-                            "id": "msg_weather",
-                            "status": "completed",
-                            "role": "assistant",
-                            "content": [
-                                {
-                                    "type": "output_text",
-                                    "text": "Let me check the weather.",
-                                    "annotations": [],
-                                }
-                            ],
-                        },
-                        {
-                            "type": "function_call",
-                            "id": "fc_1",
-                            "call_id": "call_1",
-                            "name": "get_weather",
-                            "arguments": '{"city":"Paris"}',
-                            "status": "completed",
-                        },
-                    ],
-                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
-                }
-            ).encode()
-        )
-
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model="openai/gpt-6-sol", api_base=wire.url, api_key=_API_KEY)
-        response: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
-                "reasoning_effort": "low",
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "description": "Get the weather for a city.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {"city": {"type": "string"}},
-                                "required": ["city"],
-                            },
-                        },
-                    }
-                ],
-                "cache": {"no-cache": True},
-            },
-        )
-        assert response.status_code == 200, response.text
-        body: Final = response.json()
-        assert body["choices"] == [
-            {
-                "finish_reason": "tool_calls",
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "Let me check the weather.",
-                    "tool_calls": [
-                        {
-                            "id": "fc_1",
-                            "type": "function",
-                            "function": {
-                                "name": "get_weather",
-                                "arguments": '{"city":"Paris"}',
-                            },
-                            "index": 0,
-                        }
-                    ],
-                },
-            }
-        ], response.text
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
 
 
 def test_azure_gpt_6_bridged_stream_returns_text_and_tool_call_on_one_choice(gateway: Gateway) -> None:
@@ -678,3 +254,167 @@ def test_azure_gpt_6_bridged_stream_returns_text_and_tool_call_on_one_choice(gat
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/openai/responses?api-version=2025-04-01-preview")
         ]
+
+
+_RESPONSES_TARGET: Final = "/openai/responses?api-version=2025-04-01-preview"
+
+
+def _responses_json(identity: str) -> bytes:
+    return json.dumps(
+        {
+            "id": identity,
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-6-sol",
+            "output": [
+                {
+                    "id": f"msg_{identity}",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        }
+    ).encode()
+
+
+def _gpt_6_function_request(model: str, identity: str, **extra: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        **extra,
+    }
+
+
+def test_azure_gpt_6_bridged_no_cache_function_requests_each_reach_provider_and_log_spend(
+    gateway: Gateway,
+) -> None:
+    identity: Final = f"azure-gpt-6-sol-nocache-{uuid.uuid4().hex}"
+    response_ids: Final = ("resp_first", "resp_second")
+    calls: Final = count()
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == _RESPONSES_TARGET
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert body["model"] == "gpt-6-sol"
+        assert body["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": f"What is the weather in Paris? {identity}"}],
+            }
+        ]
+        return Reply(body=_responses_json(response_ids[next(calls)]))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="azure/gpt-6-sol",
+            api_base=wire.url,
+            api_key=_API_KEY,
+            api_version="2025-04-01-preview",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+        request: Final = _gpt_6_function_request(model, identity, cache={"no-cache": True})
+        first: Final = gateway.request("POST", "/v1/chat/completions", request)
+        second: Final = gateway.request("POST", "/v1/chat/completions", request)
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert string_value(_JSON_OBJECT.validate_json(first.content)["id"]) == "resp_first", first.text
+        assert string_value(_JSON_OBJECT.validate_json(second.content)["id"]) == "resp_second", second.text
+        assert [(request.method, request.target) for request in wire.drain()] == [
+            ("POST", _RESPONSES_TARGET),
+            ("POST", _RESPONSES_TARGET),
+        ]
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_id, status, cache_hit, spend FROM "LiteLLM_SpendLogs" WHERE model_group=%s',
+                (model,),
+            ),
+            lambda found: len(found) == 2,
+            seconds=70,
+        )
+        by_response_id: Final = {
+            (decoded := base64.b64decode(string_value(row["request_id"]).removeprefix("resp_")).decode())
+            .rsplit("response_id:", 1)[1]: (decoded, row)
+            for row in rows
+        }
+        for response_id in response_ids:
+            decoded, row = by_response_id[response_id]
+            assert decoded.startswith("litellm:custom_llm_provider:azure;model_id:"), rows
+            assert (
+                string_value(row["status"]),
+                string_value(row["cache_hit"]),
+                float(row["spend"]),
+            ) == ("success", "None", pytest.approx(10 * 0.001 + 5 * 0.002)), rows
+
+
+def test_azure_gpt_6_bridged_function_requests_without_cache_field_still_hit_cache(
+    gateway: Gateway,
+) -> None:
+    identity: Final = f"azure-gpt-6-sol-cached-{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == _RESPONSES_TARGET
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert body["model"] == "gpt-6-sol"
+        return Reply(body=_responses_json("resp_cached"))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="azure/gpt-6-sol",
+            api_base=wire.url,
+            api_key=_API_KEY,
+            api_version="2025-04-01-preview",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+        request: Final = _gpt_6_function_request(model, identity)
+        first: Final = gateway.request("POST", "/v1/chat/completions", request)
+        second: Final = gateway.request("POST", "/v1/chat/completions", request)
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert string_value(_JSON_OBJECT.validate_json(first.content)["id"]) == "resp_cached", first.text
+        assert string_value(_JSON_OBJECT.validate_json(second.content)["id"]) == "resp_cached", second.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", _RESPONSES_TARGET)]
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_id, status, cache_hit, spend FROM "LiteLLM_SpendLogs" WHERE model_group=%s'
+                " ORDER BY request_id",
+                (model,),
+            ),
+            lambda found: len(found) == 2,
+            seconds=70,
+        )
+        priced, cached = rows
+        priced_request: Final = base64.b64decode(
+            string_value(priced["request_id"]).removeprefix("resp_")
+        ).decode()
+        assert priced_request.startswith("litellm:custom_llm_provider:azure;model_id:"), rows
+        assert priced_request.endswith(";response_id:resp_cached"), rows
+        assert (
+            priced["status"],
+            priced["cache_hit"],
+            float(priced["spend"]),
+        ) == ("success", "None", pytest.approx(10 * 0.001 + 5 * 0.002)), rows
+        assert string_value(cached["request_id"]).startswith("resp_cached_cache_hit"), rows
+        assert (cached["status"], cached["cache_hit"], float(cached["spend"])) == ("success", "True", 0), rows

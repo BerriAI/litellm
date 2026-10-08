@@ -24,6 +24,7 @@ from starlette.datastructures import FormData
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
 from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -589,7 +590,7 @@ class TestVertexAIPassThroughHandler:
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router",
             pass_through_router,
         )
-        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-master-1234")
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
 
         endpoint = f"/v1/projects/{test_project}/locations/{test_location}/publishers/google/models/gemini-1.5-flash:generateContent"
 
@@ -610,7 +611,7 @@ class TestVertexAIPassThroughHandler:
 
         with (
             mock.patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._ensure_access_token_async"
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base.ensure_access_token_async"
             ) as mock_ensure_token,
             mock.patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.vertex_llm_base._get_token_and_url"
@@ -1162,7 +1163,7 @@ class TestVertexAIPassThroughHandler:
                     end_time=end_time,
                     cache_hit=False,
                 )
-            recomputed: Final = logging_obj._response_cost_calculator(result=result["result"])
+            recomputed: Final = logging_obj.response_cost_calculator(result=result["result"])
             return result["kwargs"]["response_cost"], recomputed
 
         global_handler_cost, global_recomputed_cost = costs_for("global")
@@ -2064,7 +2065,7 @@ class TestBedrockAgentRuntimePassthroughToggle:
 
 class TestBedrockAgentRuntimePassthroughVirtualKeyLeak:
     VKEY: Final = "sk-litellm-victim-key"
-    MASTER_KEY: Final = "sk-master-1234"
+    MASTER_KEY: Final = SHARED_MASTER_KEY
     ENDPOINT: Final = "knowledgebases/KB1234567/retrieve"
     AMBIENT_AWS_ENV: Final = (
         "AWS_BEARER_TOKEN_BEDROCK",
@@ -4050,6 +4051,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     """
 
     VKEY = "sk-litellm-victim-key"
+    MASTER_KEY: Final = SHARED_MASTER_KEY
     ENDPOINT = "v1/projects/my-proj/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
 
     async def _run(
@@ -4057,7 +4059,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         monkeypatch,
         headers: list[tuple[bytes, bytes]],
         authenticated: UserAPIKeyAuth | None = None,
-        master_key: str | None = "sk-master-1234",
+        master_key: str | None = SHARED_MASTER_KEY,
     ) -> tuple[HTTPException | None, dict | None]:
         monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
         caller: Final = authenticated if authenticated is not None else UserAPIKeyAuth(api_key=self.VKEY)
@@ -4375,12 +4377,12 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         ("master_key", "authenticated"),
         [
             pytest.param(
-                "sk-master-1234",
+                SHARED_MASTER_KEY,
                 UserAPIKeyAuth(api_key="best-api-key-ever", user_role=LitellmUserRoles.PROXY_ADMIN),
                 id="custom-auth-returning-its-own-identifier",
             ),
             pytest.param(
-                "sk-master-1234",
+                SHARED_MASTER_KEY,
                 UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(LITELLM_JWT_CLAIMS)),
                 id="jwt-auth",
             ),
@@ -4466,10 +4468,11 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     async def test_master_key_in_authorization_alone_is_rejected(self, monkeypatch):
         raised, forwarded = await self._run(
             monkeypatch,
-            [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
-            authenticated=UserAPIKeyAuth(
-                api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN
-            ),
+            [
+                (b"authorization", f"Bearer {self.MASTER_KEY}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN),
         )
         assert forwarded is None, "the master key must never reach the upstream forwarder"
         assert raised is not None and raised.status_code == 401
@@ -4479,7 +4482,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         raised, forwarded = await self._run(
             monkeypatch,
             [
-                (b"authorization", b"Bearer sk-master-1234"),
+                (b"authorization", f"Bearer {self.MASTER_KEY}".encode()),
                 (b"x-goog-api-key", b"AIza-real-google-api-key"),
                 (b"content-type", b"application/json"),
             ],
@@ -4491,7 +4494,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert forwarded is not None
         assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
         assert "authorization" not in forwarded
-        assert "sk-master-1234" not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+        assert self.MASTER_KEY not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
 
 class TestAnthropicPassthroughVirtualKeyLeak:
@@ -4504,7 +4507,7 @@ class TestAnthropicPassthroughVirtualKeyLeak:
         monkeypatch,
         headers: list[tuple[bytes, bytes]],
         authenticated: UserAPIKeyAuth | None = None,
-        master_key: str | None = "sk-master-1234",
+        master_key: str | None = SHARED_MASTER_KEY,
         proxy_api_key: str | None = None,
     ) -> tuple[HTTPException | None, dict | None]:
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
@@ -4602,8 +4605,11 @@ class TestAnthropicPassthroughVirtualKeyLeak:
     async def test_master_key_in_authorization_is_rejected_not_forwarded(self, monkeypatch):
         raised, forwarded = await self._run(
             monkeypatch,
-            [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
-            authenticated=UserAPIKeyAuth(api_key="sk-master-1234", user_role=LitellmUserRoles.PROXY_ADMIN),
+            [
+                (b"authorization", f"Bearer {SHARED_MASTER_KEY}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=UserAPIKeyAuth(api_key=SHARED_MASTER_KEY, user_role=LitellmUserRoles.PROXY_ADMIN),
         )
         assert forwarded is None, "the master key must never reach Anthropic"
         assert raised is not None and raised.status_code == 401
@@ -5692,7 +5698,7 @@ class TestVertexAILiveWebsocketPassthrough:
         ws_passthrough = AsyncMock()
 
         with (
-            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
             patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
         ):
             await passthrough_module.vertex_ai_live_websocket_passthrough(
@@ -5801,7 +5807,7 @@ class TestVertexAILiveWebsocketPassthrough:
         ws_passthrough = AsyncMock()
 
         with (
-            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
             patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
         ):
             await passthrough_module.vertex_ai_live_websocket_passthrough(
@@ -5833,7 +5839,7 @@ class TestVertexAILiveWebsocketPassthrough:
         ensure_token = AsyncMock(side_effect=Exception("Unable to find your credentials"))
 
         with (
-            patch.object(passthrough_module.vertex_llm_base, "_ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
             patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
         ):
             mock_proxy_logging.post_call_failure_hook = AsyncMock()
@@ -5847,6 +5853,348 @@ class TestVertexAILiveWebsocketPassthrough:
         assert "use_in_pass_through" in close_kwargs["reason"]
         assert "default_vertex_config" in close_kwargs["reason"]
         assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+
+
+class TestAnthropicProxyRoute:
+    """The /anthropic passthrough route: custom auth headers must not clobber the
+    client's anthropic-beta, and the WIF tier must mint through the async facade."""
+
+    def _get_request(self, headers: dict) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "GET"
+        request.headers = headers
+        request.query_params = {}
+        return request
+
+    def _clear_anthropic_env(self, monkeypatch) -> None:
+        for name in (
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_BASE",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_FEDERATION_RULE_ID",
+            "ANTHROPIC_ORGANIZATION_ID",
+            "ANTHROPIC_IDENTITY_TOKEN_FILE",
+            "ANTHROPIC_IDENTITY_TOKEN",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+    @pytest.mark.asyncio
+    async def test_client_anthropic_beta_merged_into_auth_header(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            anthropic_proxy_route,
+        )
+
+        self._clear_anthropic_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-oat01-passthrough-token")
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            return_value=AsyncMock(return_value={"ok": True}),
+        ) as mock_create_route:
+            await anthropic_proxy_route(
+                endpoint="v1/models",
+                request=self._get_request({"anthropic-beta": "context-1m-2025-08-07"}),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+            )
+
+        custom_headers = mock_create_route.call_args.kwargs["custom_headers"]
+        assert custom_headers["authorization"] == "Bearer sk-ant-oat01-passthrough-token"
+        betas = set(custom_headers["anthropic-beta"].split(","))
+        assert {"context-1m-2025-08-07", "oauth-2025-04-20"} <= betas
+
+    @pytest.mark.asyncio
+    async def test_wif_mint_goes_through_async_facade(self, monkeypatch):
+        import threading
+
+        from litellm.llms.anthropic import common_utils as anthropic_common_utils
+        from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
+        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            anthropic_proxy_route,
+        )
+
+        self._clear_anthropic_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_route")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-route")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "route-inline-jwt")
+
+        minted: Final = "sk-ant-oat01-route-minted"
+        thread_ids: Final = []
+
+        class ThreadRecordingPoster:
+            def post(self, url, *, content, headers, timeout):
+                thread_ids.append(threading.get_ident())
+                return httpx.Response(
+                    200,
+                    json={"access_token": minted, "token_type": "Bearer", "expires_in": 3600},
+                )
+
+        engine = JwtBearerTokenExchangeEngine(poster=ThreadRecordingPoster())
+        sync_calls: Final = []
+
+        def sync_shim(litellm_params, api_base, model):
+            sync_calls.append(model)
+            return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+        async def async_shim(litellm_params, api_base, model):
+            return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+        monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", sync_shim)
+        monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            return_value=AsyncMock(return_value={"ok": True}),
+        ) as mock_create_route:
+            await anthropic_proxy_route(
+                endpoint="v1/models",
+                request=self._get_request({}),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+            )
+
+        custom_headers = mock_create_route.call_args.kwargs["custom_headers"]
+        assert custom_headers["authorization"] == f"Bearer {minted}"
+        assert custom_headers["anthropic-beta"] == "oauth-2025-04-20"
+        assert sync_calls == []
+        assert thread_ids and thread_ids[0] != threading.get_ident()
+
+
+class TestAnthropicProxyRouteCallerAuthHeaders:
+    """Regression for a caller credential riding upstream next to a server-owned one.
+
+    /anthropic forwards the caller's headers, so a caller-supplied ``x-api-key`` used to reach
+    Anthropic alongside the server-minted ``Authorization: Bearer``. These drive the real relay
+    (only the httpx client is stubbed) and assert on the bytes actually handed to the upstream.
+    """
+
+    _MINTED: Final = "sk-ant-oat01-plan-minted"
+
+    def _clear_anthropic_env(self, monkeypatch) -> None:
+        for name in (
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_BASE",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_FEDERATION_RULE_ID",
+            "ANTHROPIC_ORGANIZATION_ID",
+            "ANTHROPIC_IDENTITY_TOKEN_FILE",
+            "ANTHROPIC_IDENTITY_TOKEN",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+        # A sibling test leaving SERVER_ROOT_PATH set re-prefixes the passthrough route, so
+        # /anthropic/... stops resolving and the request 404s before any header is built.
+        # Pin it so this class asserts on headers rather than on ambient state.
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+
+    def _enable_wif(self, monkeypatch) -> None:
+        from litellm.llms.anthropic import common_utils as anthropic_common_utils
+        from litellm.llms.anthropic.wif import aget_anthropic_wif_token
+        from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_plan")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-plan")
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "plan-inline-jwt")
+
+        minted: Final = self._MINTED
+
+        class StubPoster:
+            def post(self, url, *, content, headers, timeout):
+                return httpx.Response(
+                    200,
+                    json={"access_token": minted, "token_type": "Bearer", "expires_in": 3600},
+                )
+
+        engine: Final = JwtBearerTokenExchangeEngine(poster=StubPoster())
+
+        async def async_shim(litellm_params, api_base, model):
+            return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+        monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
+
+    def _request(self, headers: Mapping[str, str]) -> Request:
+        body: Final = b'{"model":"claude-sonnet-4-5","messages":[]}'
+        scope: Final = {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/anthropic/v1/messages",
+            "raw_path": b"/anthropic/v1/messages",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(name.lower().encode(), value.encode()) for name, value in headers.items()],
+            "client": ("127.0.0.1", 51234),
+            "server": ("proxy.local", 4000),
+            "state": {},
+        }
+
+        async def receive() -> dict:
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        return Request(scope, receive)
+
+    async def _upstream_headers(self, request: Request) -> dict:
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            anthropic_proxy_route,
+        )
+
+        upstream_response: Final = MagicMock()
+        upstream_response.status_code = 200
+        upstream_response.headers = {"content-type": "application/json"}
+        upstream_response.aread = AsyncMock(return_value=b'{"ok": true}')
+        upstream_response.aiter_bytes = AsyncMock(return_value=[b'{"ok": true}'])
+
+        httpx_client: Final = MagicMock()
+        httpx_client.build_request = MagicMock(return_value=MagicMock())
+        httpx_client.send = AsyncMock(return_value=upstream_response)
+        client_wrapper: Final = MagicMock()
+        client_wrapper.client = httpx_client
+
+        with (
+            patch(  # test-quality-ok: stubbing the http client IS the boundary; the test asserts on the bytes handed to it
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+                return_value=client_wrapper,
+            ),
+            patch(  # test-quality-ok: the relay calls these hooks, and they need a db this test has no use for
+                "litellm.proxy.proxy_server.proxy_logging_obj"
+            ) as mock_logging_obj,
+        ):
+            mock_logging_obj.pre_call_hook = AsyncMock(return_value={"model": "claude-sonnet-4-5", "messages": []})
+            mock_logging_obj.post_call_success_hook = AsyncMock()
+            mock_logging_obj.post_call_failure_hook = AsyncMock()
+            mock_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+            await anthropic_proxy_route(
+                endpoint="v1/messages",
+                request=request,
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-caller-virtual-key"),
+            )
+
+        assert httpx_client.send.called
+        return {name.lower(): value for name, value in dict(httpx_client.build_request.call_args[1]["headers"]).items()}
+
+    @pytest.mark.asyncio
+    async def test_wif_credential_drops_caller_supplied_api_key(self, monkeypatch):
+        self._clear_anthropic_env(monkeypatch)
+        self._enable_wif(monkeypatch)
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    "x-api-key": "sk-caller-virtual-key",
+                    "user-agent": "caller/1.0",
+                }
+            )
+        )
+
+        assert sent["authorization"] == f"Bearer {self._MINTED}"
+        assert "x-api-key" not in sent
+        assert sent["user-agent"] == "caller/1.0"
+
+    @pytest.mark.asyncio
+    async def test_wif_credential_drops_caller_supplied_authorization(self, monkeypatch):
+        self._clear_anthropic_env(monkeypatch)
+        self._enable_wif(monkeypatch)
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    "authorization": "Bearer sk-caller-virtual-key",
+                }
+            )
+        )
+
+        assert sent["authorization"] == f"Bearer {self._MINTED}"
+        assert all("sk-caller-virtual-key" not in value for value in sent.values())
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("header_name", sorted(SpecialHeaders.litellm_credential_header_names()))
+    async def test_wif_credential_drops_every_proxy_key_header(self, monkeypatch, header_name: str):
+        """The proxy accepts a LiteLLM key in any SpecialHeaders slot, so the caller's virtual
+        key must not reach Anthropic from any of them once the server owns the credential."""
+        self._clear_anthropic_env(monkeypatch)
+        self._enable_wif(monkeypatch)
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    header_name: "sk-caller-virtual-key",
+                    "user-agent": "caller/1.0",
+                }
+            )
+        )
+
+        assert sent["authorization"] == f"Bearer {self._MINTED}"
+        assert header_name == "authorization" or header_name not in sent
+        assert all("sk-caller-virtual-key" not in value for value in sent.values())
+        assert sent["user-agent"] == "caller/1.0"
+
+    @pytest.mark.asyncio
+    async def test_wif_credential_drops_configured_custom_key_header(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        self._clear_anthropic_env(monkeypatch)
+        self._enable_wif(monkeypatch)
+        monkeypatch.setitem(proxy_server.general_settings, "litellm_key_header_name", "X-Tenant-Key")
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    "x-tenant-key": "sk-caller-virtual-key",
+                    "x-tenant-region": "eu",
+                }
+            )
+        )
+
+        assert sent["authorization"] == f"Bearer {self._MINTED}"
+        assert "x-tenant-key" not in sent
+        assert all("sk-caller-virtual-key" not in value for value in sent.values())
+        assert sent["x-tenant-region"] == "eu"
+
+    @pytest.mark.asyncio
+    async def test_server_api_key_drops_caller_supplied_authorization(self, monkeypatch):
+        self._clear_anthropic_env(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-owned")
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    "authorization": "Bearer sk-caller-virtual-key",
+                    "x-api-key": "sk-caller-virtual-key",
+                }
+            )
+        )
+
+        assert sent["x-api-key"] == "sk-ant-server-owned"
+        assert "authorization" not in sent
+
+    @pytest.mark.asyncio
+    async def test_byok_caller_key_still_reaches_upstream(self, monkeypatch):
+        self._clear_anthropic_env(monkeypatch)
+
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    "x-api-key": "sk-ant-caller-owned",
+                    "anthropic-version": "2023-06-01",
+                }
+            )
+        )
+
+        assert sent["x-api-key"] == "sk-ant-caller-owned"
+        assert sent["anthropic-version"] == "2023-06-01"
+        assert "authorization" not in sent
 
 
 class TestPassthroughRouterModelBudgetReservation:

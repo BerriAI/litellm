@@ -43,8 +43,8 @@ async def test_basic_secret_detection_chat():
     It should mask the following API_KEY = 'sk_1234567890abcdef' and  OPENAI_API_KEY = 'sk_1234567890abcdef'
     """
     secret_instance = _ENTERPRISE_SecretDetection()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -111,8 +111,8 @@ async def test_basic_secret_detection_text_completion():
     It should mask the following API_KEY = 'sk_1234567890abcdef' and  OPENAI_API_KEY = 'sk_1234567890abcdef'
     """
     secret_instance = _ENTERPRISE_SecretDetection()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -149,8 +149,8 @@ async def test_basic_secret_detection_embeddings():
     It should mask the following API_KEY = 'sk_1234567890abcdef' and  OPENAI_API_KEY = 'sk_1234567890abcdef'
     """
     secret_instance = _ENTERPRISE_SecretDetection()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -187,8 +187,8 @@ async def test_basic_secret_detection_embeddings_list():
     It should mask the following API_KEY = 'sk_1234567890abcdef' and  OPENAI_API_KEY = 'sk_1234567890abcdef'
     """
     secret_instance = _ENTERPRISE_SecretDetection()
-    _api_key = "sk-12345"
-    _api_key = hash_token("sk-12345")
+    _api_key = "sk-98765"
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
     local_cache = DualCache()
 
@@ -242,7 +242,7 @@ router = Router(
             "litellm_params": {
                 "model": "openai/fake",
                 "api_base": FAKE_OPENAI_API_BASE,
-                "api_key": "sk-12345",
+                "api_key": "sk-98765",
             },
         }
     ]
@@ -262,7 +262,7 @@ async def test_chat_completion_request_with_redaction():
     setattr(proxy_server, "llm_router", router)
     _test_logger = testLogger()
     litellm.callbacks = [_ENTERPRISE_SecretDetection(), _test_logger]
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Prepare the query string
     query_params = "param1=value1&param2=value2"
@@ -281,15 +281,15 @@ async def test_chat_completion_request_with_redaction():
     request._url = URL(url="/chat/completions")
 
     async def return_body():
-        return b'{"model": "fake-model", "messages": [{"role": "user", "content": "Hello here is my OPENAI_API_KEY = sk-12345"}]}'
+        return b'{"model": "fake-model", "messages": [{"role": "user", "content": "Hello here is my OPENAI_API_KEY = sk-98765"}]}'
 
     request.body = return_body
 
     response = await chat_completion(
         request=request,
         user_api_key_dict=UserAPIKeyAuth(
-            api_key="sk-12345",
-            token="hashed_sk-12345",
+            api_key="sk-98765",
+            token="hashed_sk-98765",
         ),
         fastapi_response=Response(),
     )

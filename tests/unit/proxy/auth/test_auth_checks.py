@@ -7,9 +7,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from collections.abc import Iterator
+from types import SimpleNamespace
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest, litellm
 import httpx
-from litellm.proxy._types import UserAPIKeyAuth
+from prisma import Prisma
+from litellm._service_logger import ServiceTypes
+from litellm.proxy._types import LiteLLM_OrganizationTable, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import get_org_object, get_user_object
+from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -23,6 +32,7 @@ from litellm.proxy._types import (
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
+    _is_model_cost_zero,
     _virtual_key_soft_budget_check,
     _team_soft_budget_check,
 )
@@ -1491,3 +1501,139 @@ async def test_key_access_group_grants_model_when_get_access_object_raises():
     finally:
         for p in patches:
             p.stop()
+
+
+@pytest.fixture
+def db_success_hook() -> Iterator[AsyncMock]:
+    hook: Final = AsyncMock()
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        MagicMock(service_logging_obj=MagicMock(async_service_success_hook=hook)),
+    ):
+        yield hook
+
+
+async def _db_service_call_types(hook: AsyncMock) -> tuple[str, ...]:
+    await asyncio.sleep(0)
+    return tuple(call.kwargs["call_type"] for call in hook.await_args_list if call.kwargs["service"] == ServiceTypes.DB)
+
+
+def _prisma_client_serving(user_id: str) -> SimpleNamespace:
+    row: Final = {
+        "user_id": user_id,
+        "user_role": "internal_user",
+        "teams": [],
+        "spend": 0.0,
+        "models": [],
+        "metadata": "{}",
+        "allowed_cache_controls": [],
+        "policies": [],
+        "model_spend": "{}",
+        "model_max_budget": "{}",
+        "organization_memberships": [],
+    }
+    engine: Final = SimpleNamespace(query=AsyncMock(return_value={"data": {"result": row}}), stop=lambda: None)
+    generated_client: Final = Prisma()
+    generated_client._engine = engine
+    return SimpleNamespace(db=PrismaWrapper(original_prisma=generated_client, iam_token_db_auth=False))
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_cache_hit_emits_no_postgres_service_event(db_success_hook: AsyncMock) -> None:
+    user_id: Final = f"cached-user-{uuid.uuid4()}"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=user_id, value=LiteLLM_UserTable(user_id=user_id, user_role="internal_user"))
+
+    result: Final = await get_user_object(
+        user_id=user_id,
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+        user_id_upsert=False,
+        parent_otel_span="auth-span",
+    )
+
+    assert result is not None and result.user_id == user_id
+    assert await _db_service_call_types(db_success_hook) == ()
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_cache_hit_emits_no_postgres_service_event(db_success_hook: AsyncMock) -> None:
+    org_id: Final = f"cached-org-{uuid.uuid4()}"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=f"org_id:{org_id}",
+        value=LiteLLM_OrganizationTable(
+            organization_id=org_id, budget_id="b", models=[], created_by="t", updated_by="t"
+        ),
+    )
+
+    result: Final = await get_org_object(
+        org_id=org_id,
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+        parent_otel_span="auth-span",
+    )
+
+    assert result is not None and result.organization_id == org_id
+    assert await _db_service_call_types(db_success_hook) == ()
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_cache_miss_emits_exactly_one_postgres_get_user_object_event(
+    db_success_hook: AsyncMock,
+) -> None:
+    user_id: Final = f"db-user-{uuid.uuid4()}"
+    prisma_client: Final = _prisma_client_serving(user_id)
+
+    result: Final = await get_user_object(
+        user_id=user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+        user_id_upsert=False,
+        parent_otel_span="auth-span",
+    )
+
+    assert result is not None and result.user_id == user_id
+    assert await _db_service_call_types(db_success_hook) == ("get_user_object",)
+    assert db_success_hook.await_args_list[0].kwargs["parent_otel_span"] == "auth-span"
+
+
+@pytest.mark.parametrize("entry_first", [True, False])
+def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_routes_to(
+    monkeypatch: pytest.MonkeyPatch, entry_first: bool
+) -> None:
+    """chain-entry resolves one hop to local-free and is served by local-free's own free
+    deployment, so an over-budget key is waived for it; local-free by name resolves to paid-gpt
+    and stays enforced. local-free's alias is a hop the router never takes for chain-entry, and
+    the per-name verdict cache must not let either name's verdict leak into the other's."""
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "local-free",
+                "litellm_params": {
+                    "model": "ollama/qwen3:0.6b",
+                    "api_base": "http://localhost:11434",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {
+                "model_name": "paid-gpt",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "fake",
+                    "input_cost_per_token": 3e-06,
+                    "output_cost_per_token": 1.5e-05,
+                },
+            },
+        ],
+        model_group_alias={"chain-entry": "local-free", "local-free": "paid-gpt"},
+    )
+    expected: Final = {"chain-entry": True, "local-free": False, "paid-gpt": False}
+    order: Final = ("chain-entry", "local-free", "paid-gpt") if entry_first else ("local-free", "paid-gpt", "chain-entry")
+
+    verdicts: Final = {name: _is_model_cost_zero(model=name, llm_router=router) for name in order}
+
+    assert verdicts == expected
+    assert {name: _is_model_cost_zero(model=name, llm_router=router) for name in order} == expected
