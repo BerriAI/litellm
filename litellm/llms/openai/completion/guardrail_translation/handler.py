@@ -5,7 +5,7 @@ This module provides guardrail translation support for OpenAI's text completion 
 The handler processes the 'prompt' parameter for guardrails.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -75,7 +75,9 @@ class OpenAITextCompletionHandler(BaseTranslation):
             )
 
         elif isinstance(prompt, list):
-            if any(not isinstance(p, str) for p in prompt):
+            # cast-ok: data.get returns Unknown; narrow the list once so the element check is object, not Unknown
+            prompt_list: Final = cast(list[object], prompt)
+            if any(not isinstance(p, str) for p in prompt_list):
                 # Token-ID prompts (list[int] or list[list[int]]) carry no inspectable
                 # text, so an input guardrail cannot judge them. Fail closed instead of
                 # forwarding an uninspected request.
