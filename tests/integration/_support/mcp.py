@@ -628,6 +628,7 @@ def tool_calls(observed: tuple[dict[str, object], ...]) -> tuple[dict[str, objec
 def paginated_mcp_peer(
     *,
     page_size: int = 1,
+    ttl_ms: int = 0,
     repeat_cursor: bool = False,
     fail_listing: bool = False,
     fail_continuation: bool = False,
@@ -664,6 +665,8 @@ def paginated_mcp_peer(
     async def tools(context, params):
         indexes, cursor = window(params)
         return ListToolsResult(
+            ttl_ms=ttl_ms,
+            cache_scope="public",
             tools=[
                 Tool(
                     name=f"add{index}",
@@ -682,12 +685,18 @@ def paginated_mcp_peer(
     async def prompts(context, params):
         indexes, cursor = window(params)
         return ListPromptsResult(
-            prompts=[Prompt(name=f"prompt{index}") for index in indexes], next_cursor=cursor, meta=metadata
+            ttl_ms=ttl_ms,
+            cache_scope="public",
+            prompts=[Prompt(name=f"prompt{index}") for index in indexes],
+            next_cursor=cursor,
+            meta=metadata,
         )
 
     async def resources(context, params):
         indexes, cursor = window(params)
         return ListResourcesResult(
+            ttl_ms=ttl_ms,
+            cache_scope="public",
             resources=[Resource(name=f"resource{index}", uri=f"status://item{index}") for index in indexes],
             next_cursor=cursor,
             meta=metadata,
@@ -696,6 +705,8 @@ def paginated_mcp_peer(
     async def templates(context, params):
         indexes, cursor = window(params)
         return ListResourceTemplatesResult(
+            ttl_ms=ttl_ms,
+            cache_scope="public",
             resource_templates=[
                 ResourceTemplate(name=f"template{index}", uri_template=f"status{index}://{{item}}") for index in indexes
             ],
