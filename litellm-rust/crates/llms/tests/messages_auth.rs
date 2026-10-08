@@ -16,6 +16,17 @@ const X_API_KEY: ProviderAuthPolicy = ProviderAuthPolicy {
     audience: None,
 };
 
+const REJECT_X_API_KEY: ProviderAuthPolicy = ProviderAuthPolicy {
+    rules: &[CredentialRule {
+        kind: CredentialPlanKind::Static,
+        placement: CredentialPlacement::Header("x-api-key"),
+    }],
+    accepted_existing_headers: &["x-api-key"],
+    existing_header_behavior: ExistingHeaderBehavior::Reject,
+    scope: None,
+    audience: None,
+};
+
 const BEARER: ProviderAuthPolicy = ProviderAuthPolicy {
     rules: &[CredentialRule {
         kind: CredentialPlanKind::Static,
@@ -106,6 +117,21 @@ async fn an_existing_credential_header_is_forwarded(
 ) {
     let authenticated = resolved(&policy, forwarded, api_key).await.unwrap();
     assert_eq!(authenticated.headers, headers(expected));
+}
+
+#[rstest]
+#[case::existing_header_with_key(Some("sk"))]
+#[tokio::test]
+async fn a_policy_that_rejects_existing_credential_headers_returns_an_error(
+    #[case] api_key: Option<&str>,
+) {
+    let error = resolved(&REJECT_X_API_KEY, &[("x-api-key", "caller")], api_key)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        litellm_auth::Error::InvalidConfiguration("credential header already exists".into())
+    );
 }
 
 #[rstest]

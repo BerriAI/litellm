@@ -6,8 +6,8 @@
 //! as an [`AuthScheme`], and [`resolve_auth`] turns the scheme into headers and a signer.
 
 use litellm_auth::{
-    AuthServices, CredentialPlacement, CredentialPlanKind, ProviderAuthPolicy, SecretValue,
-    TokenProviderHandle,
+    AuthServices, CredentialPlacement, CredentialPlanKind, ExistingHeaderBehavior,
+    ProviderAuthPolicy, SecretValue, TokenProviderHandle,
 };
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
 use litellm_http::request::with_header;
@@ -45,8 +45,8 @@ pub struct ValidatedEnvironment {
 }
 
 impl ValidatedEnvironment {
-    /// A caller credential header the policy accepts is sent as is. Otherwise the non-blank
-    /// `api_key` goes in the policy's static placement, and its absence is `missing`.
+    /// An accepted caller credential header is sent as is or rejected when the policy says so.
+    /// Otherwise, a non-blank `api_key` uses the policy's static placement, and its absence is `missing`.
     pub fn with_api_key(
         policy: &ProviderAuthPolicy,
         headers: Headers,
@@ -54,10 +54,15 @@ impl ValidatedEnvironment {
         missing: litellm_auth::Error,
     ) -> Result<Self, litellm_auth::Error> {
         if policy.has_existing_credential(&headers) {
-            return Ok(Self {
-                headers,
-                auth: AuthScheme::Forwarded,
-            });
+            return match policy.existing_header_behavior {
+                ExistingHeaderBehavior::Preserve => Ok(Self {
+                    headers,
+                    auth: AuthScheme::Forwarded,
+                }),
+                ExistingHeaderBehavior::Reject => Err(litellm_auth::Error::InvalidConfiguration(
+                    "credential header already exists".into(),
+                )),
+            };
         }
         let placement = policy
             .placement(CredentialPlanKind::Static)
