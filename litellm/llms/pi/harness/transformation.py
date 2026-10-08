@@ -3,7 +3,9 @@ pi harness config: `pi --mode json` (JSONL session events), once per turn.
 
 Every model call goes to one custom provider (`litellm`, api=openai-completions) declared in
 the models.json of a LiteLLM-owned PI_CODING_AGENT_DIR, so the user's own pi settings, auth,
-extensions, MCP servers and skills are never read. The provider's apiKey is the `$`-reference
+extensions, MCP servers and skills are never read. PiOptions.config is pi's own config:
+`mcpServers` goes to that dir's mcp.json and every other key to its settings.json, minus the
+keys LiteLLM manages. The provider's apiKey is the `$`-reference
 pi resolves from LITELLM_HARNESS_TOKEN, so the token is never in argv or on disk. pi exits 0
 after a failed provider call, so failure is read from the last assistant message instead.
 Verified against @earendil-works/pi-coding-agent 1.1.0.
@@ -11,15 +13,16 @@ Verified against @earendil-works/pi-coding-agent 1.1.0.
 
 from __future__ import annotations
 
+import itertools
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
-from litellm.harness.errors import CapabilityUnsupported, HarnessError
+from litellm.harness.errors import CapabilityUnsupported, HarnessError, OptionsMismatch
 from litellm.harness.options import PiOptions
 from litellm.harness.types import (
     Capabilities,
@@ -59,6 +62,29 @@ SESSIONS_DIRNAME: Final = "sessions"
 SKILLS_DIRNAME: Final = "skills"
 INSTRUCTIONS_FILENAME: Final = "instructions.md"
 MODELS_FILENAME: Final = f"{AGENT_DIRNAME}/models.json"
+SETTINGS_FILENAME: Final = f"{AGENT_DIRNAME}/settings.json"
+MCP_FILENAME: Final = f"{AGENT_DIRNAME}/mcp.json"
+MCP_CONFIG_KEY: Final = "mcpServers"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+MCP_TOOL_PATTERN: Final = "mcp__*"
+EXPOSURE_TOOLS: Final = (("codemode", "codemode"), ("codemode-deferred", "codemode"), ("deferred", "tool_search"))
+
+# settings.json keys that would reroute model calls, bypass permissions=, or load code as the host user.
+MANAGED_CONFIG_KEYS: Final = frozenset(
+    {
+        "defaultProvider",
+        "defaultModel",
+        "enabledModels",
+        "defaultThinkingLevel",
+        "defaultTools",
+        "defaultProjectTrust",
+        "sessionDir",
+        "httpProxy",
+        "packages",
+        "extensions",
+        "skills",
+    }
+)
 
 PI_ISOLATION_ENV: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -107,6 +133,17 @@ FAILED_STOP_REASONS: Final = frozenset({"error", "aborted"})
 
 class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True)
+
+
+class _McpServer(_Frozen):
+    exposure: str = "codemode"
+    tool_exposure: Mapping[str, str] = Field(default_factory=lambda: MappingProxyType({}), alias="toolExposure")
+
+    def exposures(self) -> frozenset[str]:
+        return frozenset({self.exposure, *self.tool_exposure.values()})
+
+
+_MCP_SERVERS: Final = TypeAdapter(Mapping[str, _McpServer])
 
 
 class _ContentBlock(_Frozen):
@@ -214,15 +251,32 @@ def _tool_end_events(line: Mapping[str, object]) -> Sequence[Event]:
     return event_list(ToolResult(id=end.tool_call_id, output=_tool_output_text(end.result), is_error=end.is_error))
 
 
-def tool_args(permissions: PermissionMode, disable_tools: Sequence[str]) -> tuple[str, ...]:
-    """`--tools` allowlist for a permission mode, plus `--exclude-tools` for disable_tools."""
+def tool_args(
+    permissions: PermissionMode, disable_tools: Sequence[str], mcp_tools: Sequence[str] = ()
+) -> tuple[str, ...]:
+    """`--tools` allowlist for a permission mode and MCP servers, plus `--exclude-tools` for disable_tools."""
     if permissions not in PERMISSION_TOOLS:
         raise CapabilityUnsupported(
             f"Harness.PI does not support permissions={permissions!r} (supported: {sorted(PERMISSION_TOOLS)})"
         )
     denied: Final = native_tool_names(disable_tools, NORMALIZED_TO_NATIVE)
     exclude: Final = ("--exclude-tools", ",".join(denied)) if denied else ()
-    return ("--tools", ",".join(PERMISSION_TOOLS[permissions]), *exclude)
+    return ("--tools", ",".join((*PERMISSION_TOOLS[permissions], *mcp_tools)), *exclude)
+
+
+def mcp_tool_entries(config: Mapping[str, object]) -> tuple[str, ...]:
+    """`--tools` entries that keep configured MCP servers reachable.
+
+    A plain-name `--tools` list drops MCP tools in pi 1.1.0, so `mcp__*` is listed whenever servers
+    are configured, plus the tool each exposure is reached through: `codemode` (pi's default) or
+    `tool_search` for `deferred`.
+    """
+    servers: Final = _MCP_SERVERS.validate_python(config.get(MCP_CONFIG_KEY) or {})
+    if not servers:
+        return ()
+    exposures: Final = frozenset(itertools.chain.from_iterable(server.exposures() for server in servers.values()))
+    reach: Final = tuple(tool for exposure, tool in EXPOSURE_TOOLS if exposure in exposures)
+    return (MCP_TOOL_PATTERN, *reach)
 
 
 def build_models_json(model: str, base_url: str) -> str:
@@ -235,6 +289,37 @@ def build_models_json(model: str, base_url: str) -> str:
         }
     )
     return json.dumps({"providers": {PI_PROVIDER_ID: dict(provider)}})
+
+
+def validate_user_config(config: Mapping[str, object]) -> None:
+    """Reject PiOptions.config keys LiteLLM manages, and a malformed mcpServers."""
+    managed: Final = sorted(MANAGED_CONFIG_KEYS.intersection(config))
+    if managed:
+        raise OptionsMismatch(
+            f"PiOptions.config may not set {', '.join(managed)}; LiteLLM manages it. Use the matching "
+            "agent() argument (model=, permissions=, disable_tools=, skills=) or PiOptions.thinking instead"
+        )
+    try:
+        _MCP_SERVERS.validate_python(config.get(MCP_CONFIG_KEY) or {})
+    except ValidationError as e:
+        raise OptionsMismatch(
+            f"PiOptions.config[{MCP_CONFIG_KEY!r}] must map each server name to its config: {e}"
+        ) from e
+
+
+def _plain_json(value: object) -> object:
+    if isinstance(value, Mapping):
+        return _JSON_OBJECT.validate_python(value)
+    raise TypeError(f"{type(value).__name__} in PiOptions.config is not JSON serializable")
+
+
+def config_files(config: Mapping[str, object]) -> tuple[tuple[str, bytes], ...]:
+    """settings.json for every key but mcpServers, and mcp.json for mcpServers; each only when non-empty."""
+    settings: Final = MappingProxyType({key: value for key, value in config.items() if key != MCP_CONFIG_KEY})
+    servers: Final = config.get(MCP_CONFIG_KEY)
+    settings_file: Final = ((SETTINGS_FILENAME, json.dumps(settings, default=_plain_json)),) if settings else ()
+    mcp_file: Final = ((MCP_FILENAME, json.dumps({MCP_CONFIG_KEY: servers}, default=_plain_json)),) if servers else ()
+    return tuple((path, text.encode("utf-8")) for path, text in (*settings_file, *mcp_file))
 
 
 class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
@@ -258,8 +343,9 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
         return "npm install -g @earendil-works/pi-coding-agent"
 
     def validate_environment(self, ctx: SessionContext) -> None:
-        self.get_options(ctx)
-        tool_args(ctx.permissions, ctx.disable_tools)
+        options: Final = self.get_options(ctx)
+        validate_user_config(options.config)
+        tool_args(ctx.permissions, ctx.disable_tools, mcp_tool_entries(options.config))
 
     def transform_session_setup(self, ctx: SessionContext, private_dir: str) -> HarnessSessionSetup:
         if ctx.endpoint is None:
@@ -275,7 +361,7 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
             ((INSTRUCTIONS_FILENAME, instructions.encode("utf-8")),) if instructions is not None else ()
         )
         return HarnessSessionSetup(
-            files=MappingProxyType(dict((models_file, *instructions_file))),
+            files=MappingProxyType(dict((models_file, *config_files(options.config), *instructions_file))),
             persisted_dirs=((SESSIONS_DIRNAME, "pi/sessions"),),
             skills_dir=SKILLS_DIRNAME,
             env=MappingProxyType(
@@ -313,7 +399,7 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
             "--session-dir",
             f"{private_dir}/{SESSIONS_DIRNAME}",
             *(("--session", native_session_id) if native_session_id else ()),
-            *tool_args(ctx.permissions, ctx.disable_tools),
+            *tool_args(ctx.permissions, ctx.disable_tools, mcp_tool_entries(options.config)),
             *(("--thinking", options.thinking) if options.thinking else ()),
             *(("--skill", f"{private_dir}/{SKILLS_DIRNAME}") if ctx.skills else ()),
             *(

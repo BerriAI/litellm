@@ -29,13 +29,19 @@ from litellm.llms.base_llm.harness.transformation import (
 )
 from litellm.llms.pi.harness.transformation import (
     INSTRUCTIONS_FILENAME,
+    MANAGED_CONFIG_KEYS,
+    MCP_FILENAME,
     MODELS_FILENAME,
+    SETTINGS_FILENAME,
     PI_ISOLATION_ENV,
     PI_TOKEN_ENV,
     PiHarnessConfig,
     PiStreamState,
     build_models_json,
+    config_files,
+    mcp_tool_entries,
     tool_args,
+    validate_user_config,
 )
 from litellm.utils import ProviderConfigManager
 
@@ -45,6 +51,7 @@ SESSION = "01a11cb0-87cf-752e-a3e3-365c7a169871"
 PRIVATE = "/tmp/pi-1"
 MODEL = "claude-haiku-4-5-20251001"
 FULL_TOOLS = "read,bash,edit,write,grep,find,ls"
+MOYAI = {"command": "/path/to/mcp-server", "args": [], "env": {}, "exposure": "direct"}
 CONFIG = PiHarnessConfig()
 
 
@@ -259,6 +266,21 @@ def test_parse_denied_tool_is_error_result():
     assert state.final_text.startswith("FAILED")
 
 
+def test_parse_mcp_tool_turn():
+    events, state = parse_all("mcp_tool.jsonl")
+    call = next(e for e in events if isinstance(e, ToolCall))
+    result = next(e for e in events if isinstance(e, ToolResult))
+    assert call == ToolCall(
+        id="call_m1",
+        name="mcp__moyai__echo",
+        native_name="mcp__moyai__echo",
+        input={"text": "hello"},
+        builtin=False,
+    )
+    assert result == ToolResult(id="call_m1", output="moyai says: hello", is_error=False)
+    assert state.final_text == "The MCP tool replied."
+
+
 def test_parse_api_error_records_error():
     events, state = parse_all("api_error.jsonl")
     assert events == []
@@ -386,6 +408,52 @@ def test_disable_tools_map_to_native_excludes():
     assert flag(args, "--exclude-tools") == "bash,powershell,find,write,mcp__x"
 
 
+def test_mcp_servers_keep_tools_reachable():
+    assert mcp_tool_entries({}) == ()
+    assert mcp_tool_entries({"mcpServers": {}}) == ()
+    assert mcp_tool_entries({"mcpServers": {"moyai": MOYAI}}) == ("mcp__*",)
+    assert mcp_tool_entries({"mcpServers": {"s": {"command": "x"}}}) == ("mcp__*", "codemode")
+    assert mcp_tool_entries({"mcpServers": {"s": {"url": "u", "exposure": "deferred"}}}) == (
+        "mcp__*",
+        "tool_search",
+    )
+    assert mcp_tool_entries(
+        {"mcpServers": {"s": {"command": "x", "exposure": "hidden", "toolExposure": {"a": "direct", "b": "deferred"}}}}
+    ) == ("mcp__*", "tool_search")
+    args = tool_args("read-only", ["mcp__moyai__drop"], mcp_tool_entries({"mcpServers": {"moyai": MOYAI}}))
+    assert flag(args, "--tools") == "read,grep,find,ls,mcp__*"
+    assert flag(args, "--exclude-tools") == "mcp__moyai__drop"
+
+
+def test_config_files_split_settings_and_mcp():
+    files = dict(config_files({"mcpServers": {"moyai": MOYAI}, "compaction": {"enabled": False}}))
+    assert json.loads(files[MCP_FILENAME]) == {"mcpServers": {"moyai": MOYAI}}
+    assert json.loads(files[SETTINGS_FILENAME]) == {"compaction": {"enabled": False}}
+    assert dict(config_files({"mcpServers": {"moyai": MOYAI}})).keys() == {MCP_FILENAME}
+    assert dict(config_files({"theme": "dark"})).keys() == {SETTINGS_FILENAME}
+    assert config_files({}) == ()
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        *({key: "x"} for key in sorted(MANAGED_CONFIG_KEYS)),
+        {"mcpServers": "not-a-mapping"},
+        {"mcpServers": {"moyai": "not-a-mapping"}},
+    ],
+)
+def test_managed_keys_rejected(config):
+    with pytest.raises(OptionsMismatch):
+        validate_user_config(config)
+
+
+def test_options_config_cannot_load_code_or_reroute_model():
+    for key in ("extensions", "packages", "defaultProjectTrust", "defaultProvider", "defaultModel", "httpProxy"):
+        assert key in MANAGED_CONFIG_KEYS
+    with pytest.raises(OptionsMismatch, match="extensions"):
+        validate_user_config({"extensions": ["./evil.ts"]})
+
+
 def test_build_models_json():
     models = json.loads(build_models_json("m1", "http://h:1/v1"))
     assert models == {
@@ -410,10 +478,13 @@ def test_config_metadata():
     assert isinstance(ProviderConfigManager.get_provider_harness_config(Harness.PI), PiHarnessConfig)
 
 
-def test_validate_environment_rejects_wrong_options_and_ask_mode():
+def test_validate_environment_rejects_wrong_options_managed_config_and_ask_mode():
     CONFIG.validate_environment(make_ctx())
+    CONFIG.validate_environment(make_ctx(options=PiOptions(config={"mcpServers": {"moyai": MOYAI}})))
     with pytest.raises(OptionsMismatch):
         CONFIG.validate_environment(make_ctx(options=OpenCodeOptions()))
+    with pytest.raises(OptionsMismatch, match="defaultModel"):
+        CONFIG.validate_environment(make_ctx(options=PiOptions(config={"defaultModel": "openai/x"})))
     with pytest.raises(CapabilityUnsupported):
         CONFIG.validate_environment(make_ctx(permissions="ask"))
 
@@ -439,6 +510,14 @@ def test_session_setup_env_and_persisted_sessions():
     for key, value in PI_ISOLATION_ENV.items():
         assert env[key] == value
     assert env["FOO"] == "1"
+
+
+def test_session_setup_writes_user_config_next_to_managed_models():
+    options = PiOptions(config={"mcpServers": {"moyai": MOYAI}, "compaction": {"enabled": False}})
+    setup = setup_for(make_ctx(options=options))
+    assert set(setup.files) == {MODELS_FILENAME, MCP_FILENAME, SETTINGS_FILENAME}
+    assert json.loads(setup.files[MCP_FILENAME]) == {"mcpServers": {"moyai": MOYAI}}
+    assert setup_models(setup)["providers"]["litellm"]["apiKey"] == f"${PI_TOKEN_ENV}"
 
 
 def test_session_setup_errors():
@@ -646,9 +725,20 @@ async def test_start_missing_endpoint_raises():
         await started(endpoint=None)
 
 
+async def test_mcp_servers_written_and_reachable():
+    handler, ctx, sandbox = await started(options=PiOptions(config={"mcpServers": {"moyai": MOYAI}}))
+    assert json.loads(sandbox.files["/tmp/pi-1/agent/mcp.json"]) == {"mcpServers": {"moyai": MOYAI}}
+    sandbox.outputs.append(fixture_proc("mcp_tool.jsonl"))
+    events = await collect(handler, ctx, "call the moyai echo tool")
+    assert flag(sandbox.execs[0]["cmd"], "--tools") == f"{FULL_TOOLS},mcp__*"
+    assert ToolResult(id="call_m1", output="moyai says: hello", is_error=False) in events
+
+
 async def test_wrong_options_and_ask_mode_rejected():
     with pytest.raises(OptionsMismatch):
         await started(options=OpenCodeOptions())
+    with pytest.raises(OptionsMismatch):
+        await started(options=PiOptions(config={"sessionDir": "/elsewhere"}))
     with pytest.raises(CapabilityUnsupported):
         await started(permissions="ask")
 

@@ -31,7 +31,8 @@ class OpenCodeOptions:
 @dataclass(frozen=True)
 class PiOptions:
     thinking: Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
-    env: Mapping[str, str] = field(default_factory=dict[str, str])
+    config: Mapping[str, object] = field(default_factory=dict)
+    env: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
