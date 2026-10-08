@@ -8126,16 +8126,16 @@ def _to_ns(dt):
     return int(dt.timestamp() * 1e9)
 
 
-_STREAM_MODEL_LEVEL_GUARDRAIL_DATA: Final[ContextVar[tuple[dict, dict] | None]] = ContextVar(
+_STREAM_MODEL_LEVEL_GUARDRAIL_DATA: Final[ContextVar[tuple[dict[str, object], dict[str, object]] | None]] = ContextVar(
     "_STREAM_MODEL_LEVEL_GUARDRAIL_DATA", default=None
 )
 
 
-def _stream_model_level_guardrail_data(data: dict, llm_router: Router | None) -> dict:
+def _stream_model_level_guardrail_data(data: dict[str, object], llm_router: Router | None) -> dict[str, object]:
     cached: Final = _STREAM_MODEL_LEVEL_GUARDRAIL_DATA.get()
     if cached is not None and cached[0] is data:
         return cached[1]
-    merged: Final = _check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
+    merged: Final[dict[str, object]] = _check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
     _ = _STREAM_MODEL_LEVEL_GUARDRAIL_DATA.set((data, merged))
     return merged
 
