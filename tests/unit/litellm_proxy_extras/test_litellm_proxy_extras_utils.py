@@ -656,10 +656,6 @@ class _FakePsycopgConn:
 
 
 class TestLensRenamePendingCheck:
-    """The check runs before `prisma db push`, and its RuntimeError is the only
-    text proxy_cli prints before exiting, so a database failure has to be
-    readable in that message rather than in a swallowed chained exception."""
-
     _DATABASE_URL: Final = "postgresql://litellm:hunter2@localhost:5432/litellm"
 
     def test_database_failure_text_reaches_the_raised_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
