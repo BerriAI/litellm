@@ -320,7 +320,7 @@ class OpenAIDecisionResponse(_HiddenParamsResponse):
     answers: tuple[OpenAIDecisionAnswer, ...]
     usage: OpenAIDecisionUsage
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="allow", frozen=True)
 
 
 _NO_EXTRA: Final[Mapping[str, object]] = MappingProxyType({})
