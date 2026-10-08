@@ -113,8 +113,11 @@ async def _process_systemone(
             openai_body.questions,
             str(data.get("model", "")),
         )
-        if include_guardrail_response_requested(processor.data):
-            return attach_guardrail_information(response=openai_response, request_data=processor.data)
+        request_data: Final = _REQUEST_DATA_ADAPTER.validate_python(
+            processor.data  # pyright: ignore[reportUnknownMemberType]  # ProxyBaseLLMRequestProcessing.data is a bare dict
+        )
+        if include_guardrail_response_requested(request_data):
+            return attach_guardrail_information(response=openai_response, request_data=request_data)
         return openai_response
     except ValidationError as error:
         raise await _invalid_request(raw_data=data, error=error, user_api_key_dict=user_api_key_dict)
