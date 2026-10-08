@@ -10,6 +10,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.decisions.main import DECISIONS_ENDPOINTS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.decisions import (
@@ -743,3 +744,14 @@ async def test_databricks_router_deployment_sends_its_own_key_to_its_own_base(
     assert route.called
     assert respx_mock.calls[0].request.headers["authorization"] == "Bearer deployment-key"
     assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+
+
+@pytest.mark.parametrize("provider", sorted(DECISIONS_ENDPOINTS))
+def test_every_decisions_provider_ships_an_evaluation_mode_cost_map_entry(provider: str) -> None:
+    evaluation_entries: Final = tuple(
+        name
+        for name, info in litellm.model_cost.items()
+        if isinstance(info, Mapping) and info.get("litellm_provider") == provider and info.get("mode") == "evaluation"
+    )
+
+    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a mode: evaluation entry"
