@@ -463,7 +463,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
         return setup
 
-    def _warn_session_update_dropped(self, session_payload: dict, *, provider: str) -> None:
+    def _warn_session_update_dropped(self, session_payload: Mapping[str, object], *, provider: str) -> None:
         """Report, once per session, that a later ``session.update`` reached nothing.
 
         Live accepts ``setup`` as the first-and-only client message, so a second one
