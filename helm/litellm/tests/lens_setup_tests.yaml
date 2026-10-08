@@ -101,26 +101,36 @@ tests:
     set:
       fullnameOverride: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     asserts:
-      - equal:
+      - matchRegex:
           path: metadata.name
-          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+          pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$'
         template: lens/clickhouse.yaml
         documentIndex: 0
-      - equal:
-          path: spec.serviceName
-          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+      - matchRegex:
+          path: metadata.name
+          pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$'
         template: lens/clickhouse.yaml
         documentIndex: 1
       - equal:
           path: metadata.name
-          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+        template: lens/clickhouse.yaml
+        documentIndex: 0
+      - equal:
+          path: spec.serviceName
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+        template: lens/clickhouse.yaml
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
         template: lens/secrets.yaml
         documentIndex: 1
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: CLICKHOUSE_HOST
-            value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+            value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
         template: lens/deployment.yaml
       - contains:
           path: spec.template.spec.containers[0].env
@@ -128,7 +138,7 @@ tests:
             name: CLICKHOUSE_PASSWORD
             valueFrom:
               secretKeyRef:
-                name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+                name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
                 key: password
         template: lens/deployment.yaml
   - it: allows cold storage startup and inherits registry credentials

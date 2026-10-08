@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { readRequest, requestPath } from "@/../tests/lens-test-utils";
 import { LensWorkspace } from "./LensWorkspace";
 import { createLensDemoData } from "./data/demo/fixtures";
@@ -206,6 +206,41 @@ describe("Lens setup journey", () => {
     await user.click(intro.getByRole("button", { name: "Continue to worker" }));
     await waitFor(() => expect(setupParam(onUrlUpdate)).toBeNull());
     await connectWorkerFromSettings(user);
+  });
+
+  it("continues to agent setup when a background service check detects the installation", async () => {
+    const user = userEvent.setup();
+    renderWorkspace({ searchParams: "?setup=lens" });
+    const intro = within(await screen.findByRole("region", { name: "Get started with Lens" }));
+    expect(await intro.findByRole("button", { name: "Check setup" })).toBeVisible();
+    serve({ enabled: true });
+    await act(() => testQueryClient.refetchQueries({ queryKey: ["lens-service"] }));
+    await user.click(await intro.findByRole("button", { name: "Continue to your agent" }));
+    expect(await intro.findByRole("combobox", { name: "Your agent framework" })).toBeVisible();
+    expect(intro.getByRole("button", { name: "Generate tracing key" })).toBeEnabled();
+    expect(intro.getByRole("button", { name: "Copy tracing configuration" })).toBeVisible();
+    await chooseSelectOption(user, intro.getByRole("combobox", { name: "Your agent framework" }), "LangGraph");
+    const normal = network.getMockImplementation()!;
+    network.mockImplementation((input, init) =>
+      requestPath(input) === "/lens/tracing/keys"
+        ? Promise.resolve(Response.json({ key: "sk-tracing-setup", active: true }))
+        : normal(input, init),
+    );
+    await user.click(intro.getByRole("button", { name: "Generate tracing key" }));
+    expect(await intro.findByText("Your tracing key")).toBeVisible();
+    serve({ enabled: true, storageReady: false });
+    await act(() => testQueryClient.refetchQueries({ queryKey: ["lens-service"] }));
+    const installation = within(await intro.findByRole("region", { name: /Install Lens/ }));
+    expect(await installation.findByText(/trace storage is unavailable/)).toBeVisible();
+    serve({ enabled: true });
+    await act(() => testQueryClient.refetchQueries({ queryKey: ["lens-service"] }));
+    const agent = within(await intro.findByRole("region", { name: /Send your first trace/ }));
+    expect(await agent.findByRole("combobox", { name: "Your agent framework" })).toHaveTextContent("LangGraph");
+    expect(agent.getByText("Your tracing key")).toBeVisible();
+    expect(agent.queryByRole("button", { name: "Generate tracing key" })).not.toBeInTheDocument();
+    serve({ enabled: true, traces: true });
+    await user.click(intro.getByRole("button", { name: "Check for traces" }));
+    expect(await intro.findByRole("button", { name: "Continue to worker" })).toBeEnabled();
   });
 
   it("resumes setup from the URL and leaves only when the user chooses traces", async () => {

@@ -384,7 +384,8 @@ shutdown drain window.
 {{- if .Values.lensWorker.publicUrl -}}
 {{- .Values.lensWorker.publicUrl -}}
 {{- else if .Values.lensWorker.ingress.enabled -}}
-{{- printf "%s://%s" (ternary "https" "http" (not (empty .Values.lensWorker.ingress.tls))) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
+{{- $tls := or (not (empty .Values.lensWorker.ingress.tls)) (hasKey .Values.lensWorker.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s" (ternary "https" "http" $tls) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
 {{- else if and .Values.ingress.enabled (eq (len .Values.ingress.hosts) 1) -}}
 {{- $host := required "ingress.hosts[0].host is required" (first .Values.ingress.hosts).host -}}
 {{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
@@ -395,5 +396,5 @@ shutdown drain window.
 {{- end -}}
 
 {{- define "litellm.lensWorker.clickhouseName" -}}
-{{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 48 | trimSuffix "-") -}}
+{{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
 {{- end -}}

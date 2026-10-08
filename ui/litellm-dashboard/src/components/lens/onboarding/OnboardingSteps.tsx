@@ -75,13 +75,6 @@ function ActivityContinuation({ state }: { state: LensReadiness }) {
 function AgentStep({ state }: StepProps) {
   const { readOnly, canMintTracingKey, openTrace } = useOnboarding();
   const accessToken = useLensAccessToken();
-  if (!state.tracingEnabled)
-    return (
-      <>
-        <p className="text-sm text-muted-foreground">Connect trace storage in step 1 before sending a trace.</p>
-        <ActivityContinuation state={state} />
-      </>
-    );
   return (
     <>
       <div hidden={state.tracesReady}>
