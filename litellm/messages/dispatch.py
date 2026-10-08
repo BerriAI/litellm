@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.rust_bridge.catalog import Route
 from litellm.rust_bridge.dispatch import Fields, PublicDispatch, model_is_named
@@ -47,10 +47,15 @@ def _messages_fields(fields: Fields) -> bool:
 
 
 def _resolved_provider(fields: Fields) -> str | None:
+    model: Final = str(fields["model"])
+    declared: Final = optional_str(fields.get("custom_llm_provider"))
+    authenticating: Final = declared_authenticating_provider(model, declared)
+    if authenticating is not None:
+        return authenticating
     try:
-        return get_llm_provider(str(fields["model"]), optional_str(fields.get("custom_llm_provider")))[1]
+        return get_llm_provider(model, declared)[1]
     except BadRequestError:
-        return optional_str(fields.get("custom_llm_provider"))
+        return declared
 
 
 _DISPATCH: Final = PublicDispatch(

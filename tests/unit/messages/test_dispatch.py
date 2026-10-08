@@ -40,6 +40,29 @@ def amessages_binding(native: NativeAmessages | None) -> NativeBinding[NativeAme
     return binding
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    (("github_copilot/gpt-5.5", None), ("gpt-5.5", "github_copilot"), ("chatgpt/gpt-5.5", None)),
+)
+def test_context_takes_an_authenticating_provider_from_the_declaration(
+    monkeypatch: pytest.MonkeyPatch, model: str, custom_llm_provider: str | None
+) -> None:
+    def resolver_runs_the_oauth_flow(*args: object, **kwargs: object) -> object:  # kwargs-ok: resolver call shape
+        pytest.fail("selecting an implementation must not run get_llm_provider for an authenticating provider")
+
+    monkeypatch.setattr(dispatch, "get_llm_provider", resolver_runs_the_oauth_flow)
+    request: Final = dispatch._DISPATCH.request(  # pyright: ignore[reportPrivateUsage]  # test the configured dispatch
+        (), {"model": model, "messages": MESSAGES, "max_tokens": 10, "custom_llm_provider": custom_llm_provider}
+    )
+    assert request is not None
+
+    context: Final = dispatch._DISPATCH.context(request)  # pyright: ignore[reportPrivateUsage]  # test the configured dispatch
+
+    assert context == RouteContext(
+        catalog.Route.MESSAGES, provider=custom_llm_provider or model.split("/")[0], model=model
+    )
+
+
 def response(model: str = "claude-sonnet-4-5") -> AnthropicMessagesResponse:
     return AnthropicMessagesResponse(id="msg_test", type="message", role="assistant", model=model, content=[])
 

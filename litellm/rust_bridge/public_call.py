@@ -6,12 +6,7 @@ import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import (  # noqa: TID251  # narrows caller-owned containers without copying them
-    Final,
-    TypeAlias,
-    TypeVar,
-    cast,
-)
+from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers
 
 import litellm
 
