@@ -13743,6 +13743,41 @@ async def test_team_member_add_evicts_the_cached_team_roster(monkeypatch):
     assert cache.get_cache(key="team_alias:roster-evict") is None
 
 
+@pytest.mark.asyncio
+async def test_team_member_add_rejects_non_admin_before_revealing_existing_members(monkeypatch):
+    from litellm.proxy._types import TeamMemberAddRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_row = LiteLLM_TeamTable(
+        team_id="team-private",
+        members_with_roles=[Member(user_id="dup-user-1", user_email="shared@example.com", role="user")],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team_row,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id="team-private", member=Member(user_email="shared@example.com", role="user")
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="outsider"),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "dup-user-1" not in str(exc_info.value.detail)
+
+
 class _RecordingAuditLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

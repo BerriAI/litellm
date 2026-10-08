@@ -3414,16 +3414,15 @@ async def team_member_add(
 
     complete_team_data: Final = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
 
-    team_member_add_duplication_check(
-        data=data,
-        existing_team_row=complete_team_data,
-    )
-
-    # Validate permissions
     await _validate_team_member_add_permissions(
         user_api_key_dict=user_api_key_dict,
         complete_team_data=complete_team_data,
         data=data,
+    )
+
+    team_member_add_duplication_check(
+        data=data,
+        existing_team_row=complete_team_data,
     )
 
     requested_members: Final = tuple(data.member) if isinstance(data.member, list) else (data.member,)
