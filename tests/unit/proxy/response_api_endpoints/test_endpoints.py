@@ -728,11 +728,17 @@ class TestResponsesWSFirstFrameModelAuth:
         async def fake_llm_call():
             return None
 
+        authenticated_models: Final[list[str]] = []
+
+        async def record_model_auth(*, model: str, **_kwargs: object) -> None:
+            authenticated_models.append(model)
+
         with (
             patch(
                 "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
                 new_callable=AsyncMock,
-            ) as mock_model_auth,
+                side_effect=record_model_auth,
+            ),
             patch(
                 "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
                 return_value=processor,
@@ -749,7 +755,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 user_api_key_dict=MagicMock(),
             )
 
-        mock_model_auth.assert_awaited_once()
+        assert authenticated_models == ["gpt-4o-mini"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
@@ -957,6 +963,7 @@ class TestResponsesWSFirstFrameModelAuth:
         request = Request({"type": "http", "method": "POST", "path": "/v1/responses", "headers": []})
         user_api_key_dict = MagicMock()
         llm_router = MagicMock()
+        empty_settings: Final[dict[str, object]] = {}
 
         with (
             patch(
@@ -973,7 +980,7 @@ class TestResponsesWSFirstFrameModelAuth:
             ),
             patch("litellm.proxy.proxy_server.master_key", "sk-test"),
             patch("litellm.proxy.proxy_server.user_custom_auth", None),
-            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch("litellm.proxy.proxy_server.general_settings", empty_settings),
         ):
             await _enforce_responses_ws_first_frame_model_auth(
                 request=request,
@@ -1000,7 +1007,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
 class TestReadWSModelFromFirstFrameErrors:
     @pytest.mark.asyncio
-    async def test_timeout_closes_without_error_frame(self):
+    async def test_transport_error_first_frame_closes_with_internal_error(self):
         import asyncio
 
         from litellm.proxy.response_api_endpoints.endpoints import (
@@ -1016,7 +1023,7 @@ class TestReadWSModelFromFirstFrameErrors:
 
         assert result is None
         ws.send_text.assert_not_awaited()
-        ws.close.assert_awaited_once_with(code=1008, reason="Timed out waiting for first message")
+        ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
 
     @pytest.mark.asyncio
     async def test_invalid_json_sends_error_and_closes(self):
@@ -1106,6 +1113,34 @@ class TestReadWSModelFromFirstFrameErrors:
         assert result == ("reasoning-group", raw)
         ws.send_text.assert_not_awaited()
         ws.close.assert_not_awaited()
+
+
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        (None, 3600.0),
+        (60, 60.0),
+        (1200, 1200.0),
+        (7200, 7200.0),
+        (59, 3600.0),
+        (0, 3600.0),
+        (9000, 3600.0),
+        ("not-a-number", 3600.0),
+    ],
+)
+def test_responses_ws_session_limit_resolution(monkeypatch, configured, expected):
+    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.response_api_endpoints.endpoints import (
+        _resolve_responses_ws_session_limit_seconds,
+    )
+
+    if configured is None:
+        monkeypatch.delitem(general_settings, "responses_websocket_session_limit_seconds", raising=False)
+    else:
+        monkeypatch.setitem(general_settings, "responses_websocket_session_limit_seconds", configured)
+
+    assert _resolve_responses_ws_session_limit_seconds() == expected
 
 
 class TestManagedResponsesSameProvider:
