@@ -2,12 +2,13 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_core::messages::{
-    Error, MessagesCall, MessagesShaping, messages_body,
-    route::{Messages, MessagesStreamHead},
-};
 use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
+use litellm_inference_messages::{
+    Error, MessagesCall, MessagesSettings, MessagesShaping, messages_body,
+    route::{Messages, MessagesStreamHead},
+};
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use pyo3::{
     exceptions::{PyException, PyValueError},
@@ -188,18 +189,24 @@ impl MessagesPythonHost {
         custom_llm_provider: Option<&str>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<MessagesShaping> {
-        let projected = py.import(ROUTE_HOST_MODULE)?.getattr("shaping")?.call1((
-            model,
-            custom_llm_provider,
-            arguments,
-        ))?;
-        from_py(&projected)
+        let module = py.import(ROUTE_HOST_MODULE)?;
+        let capabilities: MessagesModelCapabilities = from_py(
+            &py.import("litellm.rust_bridge.model_capabilities")?
+                .getattr("anthropic_model_capabilities")?
+                .call1((model, custom_llm_provider))?,
+        )?;
+        let settings: MessagesSettings =
+            from_py(&module.getattr("settings")?.call1((arguments,))?)?;
+        Ok(MessagesShaping {
+            capabilities,
+            settings,
+        })
     }
 
     fn provider(&self, py: Python<'_>) -> String {
         self.request
             .bind(py)
-            .getattr("custom_llm_provider")
+            .get_item("custom_llm_provider")
             .and_then(|value| value.extract::<Option<String>>())
             .ok()
             .flatten()

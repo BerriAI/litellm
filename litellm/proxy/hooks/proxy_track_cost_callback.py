@@ -2,7 +2,7 @@ import asyncio
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -10,10 +10,10 @@ from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
-    _get_parent_otel_span_from_kwargs,
     budget_reservation_from_metadata,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    get_parent_otel_span_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
@@ -291,7 +291,7 @@ class _ProxyDBLogger(CustomLogger):
     async def _PROXY_track_cost_callback(
         self,
         kwargs,  # kwargs to completion
-        completion_response: litellm.ModelResponse | Any | None,  # response from completion
+        completion_response: litellm.ModelResponse | object | None,  # response from completion
         start_time=None,
         end_time=None,  # start/end time for completion
     ):
@@ -309,7 +309,7 @@ class _ProxyDBLogger(CustomLogger):
                 kwargs.get("stream", None),
                 kwargs.get("complete_streaming_response", None),
             )
-            parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
+            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs=kwargs)
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             end_user_id: Final = get_end_user_id_for_cost_tracking(litellm_params)
             metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)

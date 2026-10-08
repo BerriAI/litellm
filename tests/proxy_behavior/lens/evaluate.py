@@ -16,19 +16,24 @@ from pydantic import BaseModel
 from litellm.proxy.lens.analysis import analyze_sample
 from litellm.proxy.lens.inference import _SYSTEM
 from litellm.proxy.lens.models import (
+    Activity,
     Check,
     Claim,
     Coverage,
-    LensSettings,
     Execution,
     ExecutionContent,
     Finding,
+    InFlight,
     Job,
+    LensSettings,
     ModelRequest,
     ModelResult,
+    Review,
     Sample,
     TracePart,
 )
+
+logger: Final = logging.getLogger(__name__)
 
 
 class Case(BaseModel):
@@ -149,8 +154,18 @@ async def evaluate(
             decisions.put((payload["candidate"]["title"], answer))
         return ModelResult(content=answer, cost=cost or 0)
 
-    async def progress(stage: str, coverage: Coverage) -> None:
-        logging.info("%s", json.dumps({"stage": stage, **coverage.model_dump()}))
+    async def progress(
+        stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        activity: Activity | None = None,
+        /,
+    ) -> None:
+        if activity is not None:
+            logger.info("%s", activity.model_dump_json())
+        elif coverage is not None:
+            logger.info("%s", json.dumps({"stage": stage, **coverage.model_dump()}))
 
     result: Final = await analyze_sample(
         claim,

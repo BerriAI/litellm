@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
 import { copyToClipboard } from "@/utils/dataUtils";
-import { LensPreviewContext } from "../../ui/LensPreviewButton";
 import { agentTraceCall, apiClient, sendOtlpTraceCall } from "../../../networking";
 import {
   codingAgentCommand,
@@ -33,22 +32,19 @@ const renderCard = (
     onCheck?: () => void;
     readOnly?: boolean;
     canMintTracingKey?: boolean;
-    onPreview?: () => void;
   } = {},
 ) => {
   const onOpenTrace = vi.fn();
   renderWithProviders(
-    <LensPreviewContext.Provider value={{ target: document.body, open: props.onPreview }}>
-      <TracingSetupCard
-        detail={props.detail ?? null}
-        connected={props.connected}
-        onCheck={props.onCheck}
-        readOnly={props.readOnly}
-        canMintTracingKey={props.canMintTracingKey ?? true}
-        accessToken="sk-admin"
-        onOpenTrace={onOpenTrace}
-      />
-    </LensPreviewContext.Provider>,
+    <TracingSetupCard
+      detail={props.detail ?? null}
+      connected={props.connected}
+      onCheck={props.onCheck}
+      readOnly={props.readOnly}
+      canMintTracingKey={props.canMintTracingKey ?? true}
+      accessToken="sk-admin"
+      onOpenTrace={onOpenTrace}
+    />,
   );
   return { onOpenTrace, card: screen.getByTestId("tracing-setup-card") };
 };
@@ -56,15 +52,13 @@ const renderCard = (
 beforeEach(() => vi.clearAllMocks());
 
 describe("TracingSetupCard", () => {
-  it("offers the interactive demo while waiting for the first trace", async () => {
+  it("guides agent connection while waiting for the first trace", async () => {
     const user = userEvent.setup();
-    const onPreview = vi.fn();
-    const { card } = renderCard({ onPreview });
+    const { card } = renderCard();
     expect(screen.getByRole("heading", { name: "Connect your agent" })).toBeVisible();
     expect(screen.getByText("Tracing enabled")).toBeVisible();
     expect(screen.getByText("Waiting for your first trace")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Preview sample" }));
-    expect(onPreview).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(sendOtlpTraceCall).not.toHaveBeenCalled();
     expect(card).not.toHaveTextContent("store: clickhouse");
     await user.click(screen.getByText("Set up manually"));

@@ -37,6 +37,19 @@ pub struct Span {
     pub output_tokens: u32,
     pub litellm_request_id: Option<String>,
     pub spend: Option<f64>,
+    pub spend_log_request_id: Option<String>,
+    pub spend_match: Option<SpendMatch>,
+}
+
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpendMatch {
+    Matched,
+    NoCallId,
+    NoSpendLog,
+    Ambiguous,
+    IncompleteEvidence,
 }
 
 /// One distinct agent in a trace: 200 invocations of `researcher` are one node.
@@ -50,6 +63,31 @@ pub struct AgentNode {
     pub tool_calls: u64,
     pub duration_ms: f64,
     pub spend: Option<f64>,
+    pub priced_calls: u64,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSourceType {
+    Slack,
+    Teams,
+    Discord,
+    Linear,
+    Github,
+    Jira,
+    #[serde(other)]
+    Custom,
+}
+
+/// The conversation that started the run, from the `agent.source.*` span attributes.
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunSource {
+    #[serde(rename = "type")]
+    pub kind: RunSourceType,
+    pub url: String,
+    pub title: String,
 }
 
 #[macro_rules_attribute::apply(response_type)]
@@ -80,6 +118,10 @@ pub struct TraceSummary {
     pub output_tokens: u64,
     pub models: Vec<String>,
     pub spend: Option<f64>,
+    pub priced_calls: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub source: Option<RunSource>,
 }
 
 #[macro_rules_attribute::apply(response_type)]

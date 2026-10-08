@@ -32,11 +32,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from e2e_config import OTEL_QUERY_URL, POLL_INTERVAL, POLL_TIMEOUT
 from e2e_http import URL, NetworkError, NoBody, Result, Success, get
+from e2e_metadata import step
 
 #: OTEL resource service.name the proxy exports under (OTEL_SERVICE_NAME default).
 JAEGER_SERVICE = "litellm"
 #: Span tag carrying the request's x-litellm-call-id (stamped on the gen-AI span).
 CALL_ID_TAG = "litellm.call_id"
+#: The v2 gen-AI span attribute recording time-to-first-token for streamed
+#: calls: seconds from the upstream request being issued to the first streamed
+#: chunk (stamped only for streaming; added in #32236).
+TTFT_TAG = "gen_ai.response.time_to_first_chunk"
+#: Jaeger's rendering of a span whose OTEL status is ERROR.
+ERROR_STATUS_TAG = "otel.status_code"
 
 
 class JaegerTag(BaseModel):
@@ -71,6 +78,12 @@ class JaegerSpan(BaseModel):
             if tag.key == "span.kind":
                 return str(tag.value)
         return ""
+
+    def tag(self, key: str) -> str | int | float | bool | None:
+        for entry in self.tags:
+            if entry.key == key:
+                return entry.value
+        return None
 
 
 class JaegerTrace(BaseModel):
@@ -116,6 +129,26 @@ def root_span(trace: JaegerTrace) -> JaegerSpan | None:
     in_trace = {span.span_id for span in trace.spans}
     roots = [span for span in trace.spans if all(ref.span_id not in in_trace for ref in span.references)]
     return roots[0] if len(roots) == 1 else None
+
+
+def served_genai_spans(trace: JaegerTrace, genai_span: str) -> list[JaegerSpan]:
+    """The gen-AI spans for attempts that actually served the request.
+
+    The proxy opens one gen-AI span per upstream attempt, so a call the router
+    retried carries an error span for every failed attempt beside the one that
+    answered. Only the served attempt streams chunks, so only it records TTFT
+    or a streaming flag; asserting over the raw span list makes every one of
+    these tests fail whenever the upstream 429s, 529s, or hands back a stale
+    credential on the first try."""
+    return [span for span in trace.spans if span.operation_name == genai_span and span.tag(ERROR_STATUS_TAG) != "ERROR"]
+
+
+def one_served_genai_span(trace: JaegerTrace, genai_span: str) -> JaegerSpan:
+    served = served_genai_spans(trace, genai_span)
+    assert len(served) == 1, (
+        f"a streamed call must produce exactly ONE served gen-AI span, got {len(served)}; spans: {trace.span_names()}"
+    )
+    return served[0]
 
 
 def _follows(trace: JaegerTrace, parent_trace_id: str, parent_span_id: str) -> bool:
@@ -199,6 +232,7 @@ class OtelReader:
             case failure:
                 pytest.fail(f"Jaeger query API at {self.query_url} failed: {failure}")
 
+    @step("Poll Jaeger for the traces of call {call_id}")
     def poll_traces_for_call(
         self,
         *,
