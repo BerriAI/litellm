@@ -1289,7 +1289,7 @@ def test_bedrock_deepseek_v3_reasoning_effort_forwarded_raw():
         "bedrock/arn:aws:bedrock:us-west-2:123456789012:inference-profile/global.zai.glm-5.3",
     ],
 )
-def test_bedrock_zai_glm_reasoning_effort_forwarded_raw(model):
+def test_bedrock_zai_glm_reasoning_effort_forwarded_raw(model: str) -> None:
     """Bedrock Z.AI GLM takes reasoning_effort verbatim in
     additionalModelRequestFields, never converted into the Anthropic `thinking`
     block that Claude models get (GLM ignores it, and `none` gets dropped)."""
@@ -1315,7 +1315,7 @@ def test_bedrock_zai_glm_reasoning_effort_forwarded_raw(model):
     assert request["additionalModelRequestFields"] == {"reasoning_effort": "high"}
 
 
-def test_bedrock_zai_glm_reasoning_effort_none_forwarded_raw():
+def test_bedrock_zai_glm_reasoning_effort_none_forwarded_raw() -> None:
     """reasoning_effort="none" must reach Bedrock GLM so thinking can be turned
     off; the Anthropic mapping drops it entirely (issue #34105)."""
     config: Final[AmazonConverseConfig] = AmazonConverseConfig()
@@ -1339,7 +1339,7 @@ def test_bedrock_zai_glm_reasoning_effort_none_forwarded_raw():
     assert request["additionalModelRequestFields"] == {"reasoning_effort": "none"}
 
 
-def test_bedrock_zai_glm_thinking_not_advertised():
+def test_bedrock_zai_glm_thinking_not_advertised() -> None:
     """GLM on Bedrock does not accept the Anthropic `thinking` block, so it must
     not be advertised as a supported param (reasoning goes through
     reasoning_effort only)."""
