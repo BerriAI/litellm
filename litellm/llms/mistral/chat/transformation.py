@@ -537,7 +537,7 @@ class MistralConfig(OpenAIGPTConfig):
                     # Only process if content is a list
                     if isinstance(content, list):
                         thinking_content = ""
-                        text_content = ""
+                        text_segments: list[str] = []
 
                         # Process each content block
                         for block in content:
@@ -549,10 +549,13 @@ class MistralConfig(OpenAIGPTConfig):
                                         thinking_texts.append(thinking_block.get("text", ""))
                                 thinking_content = "\n".join(thinking_texts)
                             elif block.get("type") == "text":
-                                text_content = block.get("text", "")
+                                text_segments.append(block.get("text", ""))
+                            elif block.get("type") == "reference":
+                                ref_ids = block.get("reference_ids") or []
+                                text_segments.append("".join(f"[{rid}]" for rid in ref_ids))
 
                         # Set the extracted content
-                        choice["message"]["content"] = text_content
+                        choice["message"]["content"] = "".join(text_segments)
                         if thinking_content:
                             choice["message"]["reasoning_content"] = thinking_content
 
@@ -696,6 +699,9 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                     )
             elif block_type == "text":
                 text_segments.append(block.get("text", ""))
+            elif block_type == "reference":
+                ref_ids = block.get("reference_ids") or []
+                text_segments.append("".join(f"[{rid}]" for rid in ref_ids))
 
         normalized_text: Final = "".join(text_segments) if text_segments else None
         reasoning_content: Final = "\n".join(reasoning_segments) if reasoning_segments else None
