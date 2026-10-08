@@ -1717,7 +1717,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             tuple(
                 asyncio.create_task(
                     run_signal_loop(
-                        receiver.storage,
+                        receiver.background_storage,
                         SignalRepository(WriterDatabase(writer_wrapper(prisma_client.db))),
                         signal_completion,
                         router_ready=lambda: llm_router is not None,
