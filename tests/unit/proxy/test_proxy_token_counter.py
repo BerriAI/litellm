@@ -2,12 +2,12 @@
 # 1. Generate a Key, and use it to make a call
 
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from dotenv import load_dotenv
+from pydantic import JsonValue
 
 load_dotenv()
 
@@ -762,11 +762,11 @@ class _FailingRuntimeHandler(BedrockCountTokensHandler):
 
     async def handle_count_tokens_request(
         self,
-        request_data: dict[str, Any],
-        litellm_params: dict[str, Any],
+        request_data: dict[str, object],
+        litellm_params: dict[str, object],
         resolved_model: str,
         client: AsyncHTTPHandler | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, JsonValue]:
         raise self._error
 
 
