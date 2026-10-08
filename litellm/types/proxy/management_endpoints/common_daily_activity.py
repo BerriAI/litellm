@@ -1,8 +1,9 @@
+from collections.abc import Sequence
 from datetime import date
 from enum import Enum
 from typing import Any
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -157,6 +158,30 @@ class DailyActivityKeySearchResponse(LiteLLMBaseModel):
 class DailyActivityKeyPageResponse(LiteLLMBaseModel):
     api_keys: list[KeySpendActivityRow]
     total_api_keys: int
+    offset: int
+    limit: int
+
+
+class UserActivityRow(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str | None = None
+    user_email: str | None = None
+    user_alias: str | None = None
+    spend: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    api_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+
+
+class DailyActivityUserPageResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    users: Sequence[UserActivityRow]
+    total_users: int
     offset: int
     limit: int
 

@@ -751,6 +751,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity/aggregated/model_top_keys",
             "/user/daily/activity/export",
             "/user/daily/activity/aggregated/cache_leakage_keys",
+            "/user/daily/activity/aggregated/users",
             # team
             "/team/new",
             "/team/update",
@@ -980,6 +981,7 @@ class LiteLLMRoutes(enum.Enum):
         "/user/daily/activity/aggregated/model_top_keys",
         "/user/daily/activity/export",
         "/user/daily/activity/aggregated/cache_leakage_keys",
+        "/user/daily/activity/aggregated/users",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
@@ -1075,6 +1077,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity/aggregated/model_top_keys",
             "/user/daily/activity/export",
             "/user/daily/activity/aggregated/cache_leakage_keys",
+            "/user/daily/activity/aggregated/users",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
             "/team/daily/activity/aggregated/keys",
