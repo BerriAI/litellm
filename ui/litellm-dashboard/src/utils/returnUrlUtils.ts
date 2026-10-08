@@ -1,3 +1,6 @@
+import { serverRootPath } from "@/lib/serverRootPath";
+import { resolveApiBase } from "@/lib/http/resolveApiBase";
+
 /**
  * Utility functions for managing return URLs during authentication flows.
  *
@@ -14,7 +17,7 @@ const RETURN_URL_COOKIE_NAME = "litellm_return_url";
 const RETURN_URL_PARAM = "redirect_to";
 
 export function getLoginUrl(baseUrl: string = ""): string {
-  return `${baseUrl}/ui/login/`;
+  return `${resolveApiBase({ explicitBase: baseUrl, serverRootPath })}/ui/login/`;
 }
 
 /**

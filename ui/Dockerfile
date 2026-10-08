@@ -35,6 +35,11 @@ COPY --from=builder /app/out /usr/share/nginx/html
 # Routing rules — see ui/nginx.conf for the full description.
 COPY ui/nginx.conf /etc/nginx/nginx.conf
 
+COPY --chmod=755 ui/prepare-root-path.sh /usr/local/bin/prepare-ui-root-path
+COPY --chmod=755 ui/docker-entrypoint.sh /usr/local/bin/litellm-ui-entrypoint
+
+ENTRYPOINT ["/usr/local/bin/litellm-ui-entrypoint"]
+
 EXPOSE 3000/tcp
 
 # nginx as PID 1 in foreground; respects SIGTERM out of the box, so

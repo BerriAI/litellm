@@ -560,3 +560,11 @@ shutdown drain window.
 {{- define "litellm.lensWorker.clickhouseName" -}}
 {{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
 {{- end -}}
+
+{{- define "litellm.serverRootPath" -}}
+{{- $root := .Values.serverRootPath | default "" | trimSuffix "/" -}}
+{{- if and $root (or (not (regexMatch "^(/[A-Za-z0-9_.~-]+)+$" $root)) (regexMatch "(^|/)\\.\\.?(/|$)" $root)) -}}
+{{- fail "serverRootPath must contain safe absolute path segments without traversal" -}}
+{{- end -}}
+{{- $root -}}
+{{- end -}}

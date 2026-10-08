@@ -55,6 +55,11 @@ spec:
               containerPort: 4000
               protocol: TCP
           env:
+            {{- $root := include "litellm.serverRootPath" . }}
+            {{- if $root }}
+            - name: SERVER_ROOT_PATH
+              value: {{ $root | quote }}
+            {{- end }}
             {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
             {{- if .Values.gateway.config.create }}
