@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Final
 
@@ -248,7 +249,7 @@ async def _collect_stream(response: object) -> str:
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_non_streaming_logs_usage_model_and_cost(respx_mock, monkeypatch):
-    pytest.skip("BUG: non-streaming aanthropic_messages never dispatches success callbacks in-process")
+    pytest.skip("BUG: _finalize_anthropic_messages_response returns without invoking any success handler, so non-streaming /v1/messages never produces a StandardLoggingPayload (litellm/llms/custom_httpx/llm_http_handler.py:2288); control test_control_recorder_fires_for_acompletion proves the recorder setup fires")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     recorder: Final = _RecordingLogger()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
@@ -261,7 +262,8 @@ async def test_anthropic_messages_non_streaming_logs_usage_model_and_cost(respx_
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
     )
-    await GLOBAL_LOGGING_WORKER.clear_queue()
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
     assert len(recorder.calls) == 1
     payload: Final = recorder.calls[0]
     assert payload["status"] == "success"
@@ -290,7 +292,8 @@ async def test_anthropic_messages_streaming_logs_payload_after_canned_sse(respx_
         api_key="fake-key",
     )
     await _collect_stream(stream)
-    await GLOBAL_LOGGING_WORKER.clear_queue()
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
     assert len(recorder.calls) == 1
     payload: Final = recorder.calls[0]
     assert payload["status"] == "success"
@@ -365,3 +368,33 @@ async def test_tool_search_forwards_deferred_tools_and_returns_tool_use(respx_mo
     tool_blocks: Final = [block for block in response["content"] if block.get("type") == "tool_use"]
     assert len(tool_blocks) == 1
     assert tool_blocks[0]["name"] == "web_search"
+
+
+@pytest.mark.asyncio
+async def test_control_recorder_fires_for_acompletion(respx_mock, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _RecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post(url__regex=r".*api\.openai\.com/v1/chat/completions.*").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4o",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fake-key",
+    )
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+    assert len(recorder.calls) == 1
