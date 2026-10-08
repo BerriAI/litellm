@@ -6,6 +6,7 @@ DB walkers are tested against an AsyncMock Prisma client. Live end-to-end
 proof-of-fix (real proxy + DB) is performed separately on the repro server.
 """
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Final
@@ -13,12 +14,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm._service_logger import ServiceTypes
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    _V2_GCM_PREFIX,
+    V2_GCM_PREFIX,
     encrypt_value_helper,
 )
 from litellm.proxy.management_endpoints import credential_migration as cm
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 @pytest.fixture
@@ -79,7 +82,7 @@ def test_reencrypt_value_legacy_to_v2(salt_key, monkeypatch):
 
     out = cm.reencrypt_value(legacy)
     assert out != legacy
-    assert out.startswith(_V2_GCM_PREFIX)
+    assert out.startswith(V2_GCM_PREFIX)
 
 
 def test_reencrypt_value_is_idempotent(salt_key, monkeypatch):
@@ -110,7 +113,7 @@ def test_reencrypt_selective_dict(salt_key, monkeypatch):
     data = {"api_key": legacy_key, "base_url": "https://x", "integration_token": None}
     out = cm.reencrypt_selective_dict(data, ["api_key", "integration_token"])
 
-    assert out["api_key"].startswith(_V2_GCM_PREFIX)
+    assert out["api_key"].startswith(V2_GCM_PREFIX)
     assert out["base_url"] == "https://x"  # untouched non-sensitive
     assert out["integration_token"] is None  # null skipped
 
@@ -134,7 +137,7 @@ def _config_prisma(record):
     """Build an AsyncMock prisma client whose litellm_config returns `record`."""
     client = MagicMock()
     client.db.litellm_config.find_unique = AsyncMock(return_value=record)
-    client.db.litellm_config.update = AsyncMock()
+    client.db.litellm_config.update = engine_call()
     return client
 
 
@@ -161,7 +164,7 @@ async def test_vantage_walker_migrates_legacy_field(salt_key, monkeypatch):
     written = json.loads(
         client.db.litellm_config.update.call_args.kwargs["data"]["param_value"]
     )
-    assert written["api_key"].startswith(_V2_GCM_PREFIX)
+    assert written["api_key"].startswith(V2_GCM_PREFIX)
     assert written["base_url"] == "https://api.vantage.sh"  # non-sensitive untouched
 
 
@@ -581,11 +584,11 @@ async def test_migrate_covered_tables_reports_real_counts(salt_key, monkeypatch)
     client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     async def fake_rotate(**kwargs):
-        # Stand in for _rotate_master_key: re-encrypt the model api_key in place.
+        # Stand in for rotate_master_key: re-encrypt the model api_key in place.
         row.litellm_params["api_key"] = v2
 
     monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints._rotate_master_key",
+        "litellm.proxy.management_endpoints.key_management_endpoints.rotate_master_key",
         fake_rotate,
     )
 
@@ -596,3 +599,49 @@ async def test_migrate_covered_tables_reports_real_counts(salt_key, monkeypatch)
     assert by_loc["model_table"].migrated == 1  # was legacy pre, v2 post
     assert by_loc["model_table"].legacy == 0  # residual zero after rotation
     assert by_loc["model_table"].already_v2 == 1
+
+
+def _db_service_hooks() -> tuple[AsyncMock, MagicMock]:
+    success: Final = AsyncMock()
+    service_logging: Final = MagicMock(async_service_success_hook=success, async_service_failure_hook=AsyncMock())
+    return success, MagicMock(service_logging_obj=service_logging)
+
+
+@pytest.mark.asyncio
+async def test_config_walker_write_emits_a_postgres_update_event_for_litellm_config(salt_key, monkeypatch):
+    _enable_aes(monkeypatch)
+    client = _config_prisma(SimpleNamespace(param_value={"api_key": _legacy_ct("vantage-secret", monkeypatch)}))
+    success, proxy_logging = _db_service_hooks()
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
+
+    await cm._migrate_config_settings_row(client, "vantage_settings", cm._VANTAGE_SENSITIVE, dry_run=False)
+    await asyncio.sleep(0)
+
+    event: Final = success.await_args.kwargs
+    assert (event["service"], event["call_type"], event["event_metadata"]) == (
+        ServiceTypes.DB,
+        "migrate_config_credentials",
+        {"table_name": "LiteLLM_Config"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_sso_walker_write_emits_a_postgres_update_event_for_litellm_ssoconfig(salt_key, monkeypatch):
+    _enable_aes(monkeypatch)
+    client = MagicMock()
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=SimpleNamespace(sso_settings={"client_secret": _legacy_ct("client-secret", monkeypatch)})
+    )
+    client.db.litellm_ssoconfig.update = engine_call()
+    success, proxy_logging = _db_service_hooks()
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
+
+    await cm._migrate_sso_config(client, dry_run=False)
+    await asyncio.sleep(0)
+
+    event: Final = success.await_args.kwargs
+    assert (event["service"], event["call_type"], event["event_metadata"]) == (
+        ServiceTypes.DB,
+        "migrate_sso_credentials",
+        {"table_name": "LiteLLM_SSOConfig"},
+    )

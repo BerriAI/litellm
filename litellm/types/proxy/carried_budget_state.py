@@ -10,11 +10,13 @@ from collections.abc import Mapping
 from datetime import datetime
 from types import MappingProxyType
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 from typing_extensions import Self
 
+from litellm.types.llms.base import LiteLLMBaseModel
 
-class _BudgetSnapshot(BaseModel):
+
+class _BudgetSnapshot(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True, extra="ignore")
 
     def metadata_entries(self) -> Mapping[str, object]:

@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 import litellm
 from litellm._internal_context import current_billing_time, pinned_billing_time
@@ -29,6 +28,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.prompt_cache_prediction import router as prompt_cache_prediction_router
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import (
     CostBreakdown,
     CostPerToken,
@@ -496,11 +496,11 @@ async def update_cost_margin_config(
         )
 
 
-class BlockUnpricedModelsRequest(BaseModel):
+class BlockUnpricedModelsRequest(LiteLLMBaseModel):
     enabled: bool
 
 
-class BlockUnpricedModelsResponse(BaseModel):
+class BlockUnpricedModelsResponse(LiteLLMBaseModel):
     enabled: bool
 
 

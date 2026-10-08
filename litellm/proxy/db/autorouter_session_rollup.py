@@ -22,12 +22,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.create_views import SupportsExecuteRaw
+from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsPayload
@@ -102,6 +104,8 @@ days AS (
         router_name,
         router_type,
         SUM(turns)::int AS turns,
+        CASE WHEN SUM(token_recorded_turns) = SUM(turns)
+            THEN SUM(total_tokens)::bigint END AS day_total_tokens,
         SUM(spend)::float8 AS spend,
         SUM(saved_spend)::float8 AS saved_spend,
         SUM(savings_estimated_turns)::int AS savings_estimated_turns,
@@ -137,6 +141,7 @@ SELECT
     COALESCE(sessions.total_tokens, 0) AS total_tokens,
     COALESCE(sessions.session_seconds, 0) AS session_seconds,
     COALESCE(days.turns, 0) AS turns,
+    CASE WHEN days.turns IS NULL THEN 0 ELSE days.day_total_tokens END AS day_total_tokens,
     COALESCE(days.spend, 0) AS spend,
     COALESCE(days.saved_spend, 0) AS saved_spend,
     COALESCE(days.savings_estimated_turns, 0) AS savings_estimated_turns,
@@ -173,6 +178,7 @@ class AutoRouterTurnTransaction:
     savings_estimated_actual_spend: float = 0.0
     savings_estimated_saved_spend: float = 0.0
     user_id: str = ""
+    token_counts_recorded: bool = False
 
 
 class TurnCacheFacts(NamedTuple):
@@ -292,6 +298,11 @@ def build_autorouter_turn_transaction(
     )
 
     usage_object_raw: Final = metadata.get("usage_object")
+    token_counts: Final = (
+        (usage_object_raw.get("prompt_tokens"), usage_object_raw.get("completion_tokens"))
+        if isinstance(usage_object_raw, Mapping)
+        else ()
+    )
     cache: Final = turn_cache_facts(usage_object_raw if isinstance(usage_object_raw, Mapping) else None)
     tier_raw: Final = routing_decision.get("tier")
     baseline_raw: Final = routing_decision.get("savings_baseline_model")
@@ -309,6 +320,8 @@ def build_autorouter_turn_transaction(
         model=model,
         turn_at=turn_at,
         total_tokens=int(payload.get("prompt_tokens") or 0) + int(payload.get("completion_tokens") or 0),
+        token_counts_recorded=len(token_counts) == 2
+        and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in token_counts),
         spend=actual_spend,
         saved_spend=saved_spend,
         classifier_cost=classifier_cost or 0.0,
@@ -433,17 +446,21 @@ ON CONFLICT ({user_column}api_key, session_id, router_name) DO UPDATE SET
 _DAY_UPSERT_SQL: Final = f"""
 day_rollup AS (
     INSERT INTO "LiteLLM_AutoRouterDailySpend" AS d (
-        date, api_key, user_id, router_name, router_type, turns, spend, saved_spend, savings_estimated_turns,
+        date, api_key, user_id, router_name, router_type, turns, total_tokens, token_recorded_turns,
+        spend, saved_spend, savings_estimated_turns,
         savings_estimated_actual_spend, savings_estimated_saved_spend, classifier_cost, classifier_cost_recorded_turns
     )
     VALUES (
         ({_TURN_AT}::timestamp)::date::text, {_p("api_key")}::text, {_p("user_id")}::text, {_p("router_name")},
-        {_p("router_type")}, 1, {_p("spend")}::float8, {_p("saved_spend")}::float8, {_p("savings_estimated_turns")}::int,
+        {_p("router_type")}, 1, {_p("total_tokens")}::bigint, {_p("token_counts_recorded")}::int,
+        {_p("spend")}::float8, {_p("saved_spend")}::float8, {_p("savings_estimated_turns")}::int,
         {_p("savings_estimated_actual_spend")}::float8, {_p("savings_estimated_saved_spend")}::float8,
         {_p("classifier_cost")}::float8, 1
     )
     ON CONFLICT (date, api_key, user_id, router_name, router_type) DO UPDATE SET
         turns = d.turns + 1,
+        total_tokens = d.total_tokens + EXCLUDED.total_tokens,
+        token_recorded_turns = d.token_recorded_turns + EXCLUDED.token_recorded_turns,
         spend = d.spend + EXCLUDED.spend,
         saved_spend = d.saved_spend + EXCLUDED.saved_spend,
         savings_estimated_turns = d.savings_estimated_turns + EXCLUDED.savings_estimated_turns,
@@ -468,6 +485,13 @@ WITH {_DAY_UPSERT_SQL}
 {_session_upsert_sql(user_scoped=True)}
 """
 
+_SESSION_TABLE_BY_STATEMENT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        UPSERT_AUTOROUTER_SESSION_SQL: "LiteLLM_AutoRouterSession",
+        UPSERT_AUTOROUTER_USER_SESSION_SQL: "LiteLLM_AutoRouterUserSession",
+    }
+)
+
 
 def _as_sql_param(value: str | float | bool | datetime | None) -> str | float | None:
     if isinstance(value, bool):
@@ -486,7 +510,8 @@ async def write_autorouter_turn(
     transaction: AutoRouterTurnTransaction,
     statement: str = UPSERT_AUTOROUTER_SESSION_SQL,
 ) -> None:
-    await db.execute_raw(statement, *_upsert_params(transaction))
+    async with db_span("write_autorouter_turn", _SESSION_TABLE_BY_STATEMENT.get(statement)):
+        await db.execute_raw(statement, *_upsert_params(transaction))
 
 
 async def _upsert_turn_with_retry(
