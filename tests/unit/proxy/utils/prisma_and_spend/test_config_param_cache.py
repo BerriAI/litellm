@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
-from typing import Any, List
+from typing import Any, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -227,7 +227,7 @@ async def test_invalidate_config_param_survives_a_cache_error(
         await invalidate_config_param("p5")
     finally:
         utils_mod.verbose_proxy_logger.removeHandler(caplog.handler)
-    actual = {
+    actual: Final = {
         "delete_calls": _swap_config_cache.async_delete_cache.await_count,
         "warned": "config cache eviction of p5 failed: redis down" in caplog.text,
     }
