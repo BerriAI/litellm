@@ -299,7 +299,7 @@ class ContextCachingEndpoints(VertexBase):
             for cached_item in raw_response["cachedContents"]:
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
-                    cache_name = cached_item.get("name")  # rebind-ok: per page
+                    cache_name = cached_item.get("name")
                     _remember_cache_name(memo_key, cache_name, cached_item.get("expireTime"))
                     return cache_name
 
@@ -393,7 +393,7 @@ class ContextCachingEndpoints(VertexBase):
             for cached_item in raw_response["cachedContents"]:
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
-                    cache_name = cached_item.get("name")  # rebind-ok: per page
+                    cache_name = cached_item.get("name")
                     _remember_cache_name(memo_key, cache_name, cached_item.get("expireTime"))
                     return cache_name
 
