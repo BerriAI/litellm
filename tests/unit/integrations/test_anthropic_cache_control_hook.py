@@ -3901,3 +3901,183 @@ class TestRecordGatewayInjection:
             custom_llm_provider="anthropic",
         )
         assert self.KEY not in kwargs["litellm_metadata"]
+
+
+class TestClientCacheControlTranslation:
+    """A client's own cache_control marks reach an OpenAI-dialect deployment as prompt_cache_breakpoint."""
+
+    EPHEMERAL = {"type": "ephemeral"}
+    EXPLICIT = {"mode": "explicit"}
+    QUESTION = {"role": "user", "content": "question"}
+    MARKED_SYSTEM_PART = {
+        "role": "system",
+        "content": [{"type": "text", "text": "stable context", "cache_control": {"type": "ephemeral"}}],
+    }
+    MARKED_SYSTEM_STRING = {"role": "system", "content": "stable context", "cache_control": {"type": "ephemeral"}}
+    BREAKPOINT_SYSTEM_PART = {"type": "text", "text": "stable context", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    CUSTOM_API_BASE = "http://127.0.0.1:9/v1"
+
+    def _openai_wire(self, messages, **kwargs):
+        import httpx
+        from openai import OpenAI
+
+        sent = []
+
+        def respond(request):
+            sent.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "gpt-5.6",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+                },
+            )
+
+        with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+            client = OpenAI(api_key="synthetic-test-key", http_client=http_client)
+            response = litellm.completion(
+                model="openai/gpt-5.6",
+                messages=copy.deepcopy(messages),
+                api_key="synthetic-test-key",
+                client=client,
+                num_retries=0,
+                max_retries=0,
+                **kwargs,
+            )
+        assert response.choices[0].message.content == "ok"
+        assert len(sent) == 1
+        return sent[0]
+
+    def _anthropic_wire(self, messages):
+        import httpx
+
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        sent = []
+
+        def respond(request):
+            sent.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "msg-test",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-5",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                },
+            )
+
+        with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+            response = litellm.completion(
+                model="anthropic/claude-sonnet-4-5",
+                messages=copy.deepcopy(messages),
+                api_key="synthetic-test-key",
+                client=HTTPHandler(client=http_client),
+                num_retries=0,
+            )
+        assert response.choices[0].message.content == "ok"
+        assert len(sent) == 1
+        return sent[0]
+
+    @pytest.mark.parametrize("system", [MARKED_SYSTEM_PART, MARKED_SYSTEM_STRING], ids=["part_mark", "message_mark"])
+    def test_client_marked_system_message_reaches_openai_as_breakpoint(self, local_model_cost_map, system):
+        sent = self._openai_wire([system, self.QUESTION])
+        assert sent["messages"][0] == {"role": "system", "content": [self.BREAKPOINT_SYSTEM_PART]}
+        assert sent["messages"][1] == self.QUESTION
+        assert "cache_control" not in json.dumps(sent)
+        assert sent["prompt_cache_options"] == {"mode": "implicit"}
+
+    def test_custom_api_base_without_opt_in_keeps_the_anthropic_dialect(self, local_model_cost_map):
+        sent = self._openai_wire([self.MARKED_SYSTEM_PART, self.QUESTION], api_base=self.CUSTOM_API_BASE)
+        assert sent["messages"][0] == self.MARKED_SYSTEM_PART
+        assert "prompt_cache_breakpoint" not in json.dumps(sent)
+        assert "prompt_cache_options" not in sent
+
+    def test_custom_api_base_opted_in_through_prompt_cache_options_is_translated(self, local_model_cost_map):
+        sent = self._openai_wire(
+            [self.MARKED_SYSTEM_PART, self.QUESTION],
+            api_base=self.CUSTOM_API_BASE,
+            prompt_cache_options={"mode": "explicit"},
+        )
+        assert sent["messages"][0] == {"role": "system", "content": [self.BREAKPOINT_SYSTEM_PART]}
+        assert "cache_control" not in json.dumps(sent)
+        assert sent["prompt_cache_options"] == {"mode": "explicit"}
+
+    def test_anthropic_deployment_keeps_cache_control_on_the_wire(self, local_model_cost_map):
+        sent = self._anthropic_wire([self.MARKED_SYSTEM_PART, self.QUESTION])
+        assert sent["system"] == [{"type": "text", "text": "stable context", "cache_control": self.EPHEMERAL}]
+        assert "prompt_cache_breakpoint" not in json.dumps(sent)
+
+    def test_marks_the_dialect_cannot_carry_are_dropped_without_an_options_default(self, local_model_cost_map):
+        messages = [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": [{"type": "text", "text": "a", "cache_control": self.EPHEMERAL}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "result", "cache_control": self.EPHEMERAL},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "context"},
+                    {"type": "tool_result", "tool_use_id": "call_1", "content": "x", "cache_control": self.EPHEMERAL},
+                ],
+            },
+        ]
+        params: dict = {}
+        out, _ = AnthropicCacheControlHook.translate_client_cache_control(
+            copy.deepcopy(messages), None, "openai/gpt-5.6", "openai", None, params
+        )
+        assert out[0] == messages[0]
+        assert out[1] == {"role": "assistant", "content": [{"type": "text", "text": "a"}]}
+        assert out[2] == {"role": "tool", "tool_call_id": "call_1", "content": "result"}
+        assert out[3]["content"] == [
+            {"type": "text", "text": "context"},
+            {"type": "tool_result", "tool_use_id": "call_1", "content": "x"},
+        ]
+        assert "prompt_cache_breakpoint" not in json.dumps(out)
+        assert params == {}
+
+    def test_messages_route_translates_system_blocks_and_user_parts(self, local_model_cost_map):
+        system = [{"type": "text", "text": "stable context", "cache_control": self.EPHEMERAL}]
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": self.EPHEMERAL}]}]
+        kwargs: dict = {"enable_prompt_caching": True, "litellm_metadata": {}}
+        out, out_system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(messages), copy.deepcopy(system), kwargs, model="openai/gpt-5.6", custom_llm_provider="openai"
+        )
+        assert out_system == [self.BREAKPOINT_SYSTEM_PART]
+        assert out == [{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]}]
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
+        assert "litellm_gateway_injected_cache" not in kwargs["litellm_metadata"]
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(out, out_system) == 2
+
+    def test_messages_route_translation_is_a_no_op_on_re_entry(self, local_model_cost_map):
+        system = [{"type": "text", "text": "stable context", "cache_control": self.EPHEMERAL}]
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": self.EPHEMERAL}]}]
+        kwargs: dict = {}
+        once_messages, once_system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages, system, kwargs, model="openai/gpt-5.6", custom_llm_provider="openai"
+        )
+        twice_messages, twice_system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            once_messages, once_system, kwargs, model="openai/gpt-5.6", custom_llm_provider="openai"
+        )
+        assert twice_messages is once_messages
+        assert twice_system is once_system
+
+    def test_messages_route_keeps_the_anthropic_dialect_for_claude(self, local_model_cost_map):
+        system = [{"type": "text", "text": "stable context", "cache_control": self.EPHEMERAL}]
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": self.EPHEMERAL}]}]
+        kwargs: dict = {}
+        out, out_system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages, system, kwargs, model="claude-sonnet-4-5", custom_llm_provider="anthropic"
+        )
+        assert out is messages
+        assert out_system is system
+        assert kwargs == {}

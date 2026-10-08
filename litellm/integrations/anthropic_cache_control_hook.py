@@ -68,6 +68,7 @@ _GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
     {"text", "image", "image_url", "file", "input_audio", "input_text", "input_image", "input_file"}
 )
+OPENAI_PROMPT_CACHE_BREAKPOINT_ROLES: Final = frozenset({"system", "developer", "user"})
 OPENAI_API_HOST: Final = "api.openai.com"
 OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
@@ -161,6 +162,51 @@ def _chat_transform_drops_tool_cache_control(tool: object) -> bool:
 
 def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
+
+
+def _marks_on(message: object, key: str) -> int:
+    on_message: Final = 1 if _attribute_or_key(message, key) is not None else 0
+    content: Final = _as_object_list(_attribute_or_key(message, "content"))
+    in_content: Final = sum(1 for block in content if _attribute_or_key(block, key) is not None) if content else 0
+    return on_message + in_content
+
+
+def _count_marks(messages: Iterable[object], system: object, key: str) -> int:
+    return sum(_marks_on(item, key) for item in (*messages, *(_as_object_list(system) or ())))
+
+
+def _without_cache_control(block: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in block.items() if key != "cache_control"}
+
+
+def _block_in_openai_dialect(block: object) -> object:
+    if not isinstance(block, dict) or block.get("cache_control") is None:
+        return block
+    unmarked: Final = _without_cache_control(block)
+    if not _accepts_prompt_cache_breakpoint(block):
+        return unmarked
+    return with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
+
+
+def _with_content(message: AllMessageValues, content: Sequence[object]) -> AllMessageValues:
+    return cast(AllMessageValues, {**message, "content": content})  # cast-ok: the message with its blocks rewritten
+
+
+def _message_in_openai_dialect(message: AllMessageValues) -> AllMessageValues:
+    if not isinstance(message, dict) or _marks_on(message, "cache_control") == 0:
+        return message
+    content: Final = message.get("content")
+    unmarked: Final = cast(AllMessageValues, _without_cache_control(message))  # cast-ok: the same message minus the key
+    if message.get("role") not in OPENAI_PROMPT_CACHE_BREAKPOINT_ROLES:
+        if not isinstance(content, list):
+            return unmarked
+        return _with_content(unmarked, [_without_cache_control(b) if isinstance(b, dict) else b for b in content])
+    if isinstance(content, list):
+        translated: Final = _with_content(unmarked, [_block_in_openai_dialect(block) for block in content])
+        if message.get("cache_control") is None:
+            return translated
+        return AnthropicCacheControlHook._insert_prompt_cache_breakpoint_in_message(translated)
+    return AnthropicCacheControlHook._insert_prompt_cache_breakpoint_in_message(unmarked)
 
 
 # Set by a caller whose message list is not the one that goes upstream -- today the
@@ -889,6 +935,43 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             non_default_params["cache_control_injection_points"] = points
 
     @staticmethod
+    def translate_client_cache_control(
+        messages: Sequence[AllMessageValues],
+        system: str | Sequence[object] | None,
+        model: str | None,
+        custom_llm_provider: str | None,
+        api_base: object,
+        request_params: dict[str, object],  # mutable-ok: the dialect's prompt_cache_options default rides back on it
+    ) -> tuple[Sequence[AllMessageValues], str | Sequence[object] | None]:
+        """Re-express the client's ``cache_control`` marks in the dialect the deployment reads.
+
+        Claude Code and the Anthropic SDK mark their breakpoints with ``cache_control``;
+        a GPT-5.6+ deployment on api.openai.com reads ``prompt_cache_breakpoint`` and the
+        OpenAI transforms strip the Anthropic key, so without this pass the client's
+        strategy never reaches the wire. A mark on a system, developer or user text, image
+        or file block moves key for key; one the dialect cannot carry (an assistant or tool
+        turn, a tool_result block) is dropped and OpenAI's implicit breakpoint on the
+        latest message stands in for it. Returns the inputs themselves when nothing applies.
+        """
+        if not AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+            model, custom_llm_provider, api_base, request_params.get("prompt_cache_options")
+        ):
+            return messages, system
+        if _count_marks(messages, system, "cache_control") == 0:
+            return messages, system
+        system_blocks: Final = _as_object_list(system)
+        translated_messages: Final = [_message_in_openai_dialect(message) for message in messages]
+        translated_system: Final = (
+            [_block_in_openai_dialect(block) for block in system_blocks] if system_blocks is not None else system
+        )
+        placed: Final = _count_marks(translated_messages, translated_system, "prompt_cache_breakpoint") - _count_marks(
+            messages, system, "prompt_cache_breakpoint"
+        )
+        if placed > 0:
+            request_params.setdefault("prompt_cache_options", PromptCacheOptions(mode="implicit"))
+        return translated_messages, translated_system
+
+    @staticmethod
     def record_gateway_injection(
         request_kwargs: Mapping[str, object],
         added: int,
@@ -985,7 +1068,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if remaining (non-message) points exist they are written back so
         downstream transforms can handle them.
         """
-        typed_messages = cast(list[AllMessageValues], messages)  # cast-ok: Anthropic-shaped dicts from v1/messages
+        translated_messages, translated_system = AnthropicCacheControlHook.translate_client_cache_control(
+            cast(list[AllMessageValues], messages),  # cast-ok: Anthropic-shaped dicts from v1/messages
+            system,
+            model,
+            custom_llm_provider,
+            api_base,
+            kwargs,
+        )
+        typed_messages: Final = cast(list[AllMessageValues], translated_messages)  # cast-ok: same dicts, new marks
+        typed_system: Final = cast(str | list | None, translated_system)  # cast-ok: the same blocks, marks rewritten
         enable_prompt_caching: Final = cast(  # cast-ok: kwargs is untyped; key stamped as bool by the proxy
             bool | None, kwargs.pop("enable_prompt_caching", None)
         )
@@ -996,7 +1088,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         injection_points: Final[Sequence[CacheControlInjectionPoint]] = configured or (
             AnthropicCacheControlHook.get_default_injection_points(
                 messages=typed_messages,
-                system=system,
+                system=typed_system,
                 tools=tools,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -1009,15 +1101,17 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             else ()
         )
         if not injection_points:
-            return messages, system
+            return cast(list[dict], typed_messages), typed_system  # cast-ok: the same dicts, marks rewritten
 
         openai_dialect: Final = AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
             model, custom_llm_provider, api_base, kwargs.get("prompt_cache_options")
         )
-        breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system)
-        messages, system, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
-            messages=messages,
-            system=system,
+        breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(
+            typed_messages, typed_system
+        )
+        injected_messages, injected_system, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=cast(list[dict], typed_messages),  # cast-ok: the same dicts, marks rewritten
+            system=typed_system,
             injection_points=injection_points,
             openai_dialect=openai_dialect,
             external_breakpoints=AnthropicCacheControlHook.count_external_cache_breakpoints_on_messages_route(
@@ -1025,14 +1119,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             ),
         )
         breakpoints_added: Final = (
-            AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system) - breakpoints_before
+            AnthropicCacheControlHook.count_request_cache_breakpoints(injected_messages, injected_system)
+            - breakpoints_before
         )
         AnthropicCacheControlHook.record_gateway_injection(kwargs, breakpoints_added)
         if openai_dialect and breakpoints_added > 0:
             kwargs.setdefault("prompt_cache_options", PromptCacheOptions(mode="implicit"))
         if remaining:
             kwargs["cache_control_injection_points"] = remaining
-        return messages, system
+        return injected_messages, injected_system
 
     @property
     def integration_name(self) -> str:
