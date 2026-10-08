@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import hashlib
 import json
 import os
 import time
@@ -55,6 +56,10 @@ from litellm.constants import (
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import CredentialItem
+from litellm.router_utils.clientside_credential_handler import (
+    FORWARDED_API_KEY_SCOPE_METADATA_KEY,
+    ForwardedApiKeyScope,
+)
 
 
 def test_check_if_token_is_service_account():
@@ -6979,6 +6984,68 @@ async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_
         assert value not in logged
 
 
+_FORWARDED_CLIENT_KEY: Final = "sk-ant-api03-client-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, expected_audiences",
+    [
+        ("claude", (("anthropic", ""),)),
+        ("claude-mixed", (("anthropic", ""), ("bedrock", ""))),
+        ("claude-gateway", (("anthropic", "https://gateway.example/anthropic"),)),
+        ("not-on-router", None),
+    ],
+)
+async def test_add_litellm_data_to_request_scopes_forwarded_x_api_key_to_requested_group_audiences(
+    model: str, expected_audiences: tuple[tuple[str, str], ...] | None
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "claude", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
+            {"model_name": "claude-mixed", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
+            {
+                "model_name": "claude-mixed",
+                "litellm_params": {"model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"},
+            },
+            {
+                "model_name": "claude-gateway",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "api_base": "https://gateway.example/anthropic/",
+                },
+            },
+        ]
+    )
+    request_mock: Final = _make_request_mock(
+        "/v1/messages", {"x-litellm-api-key": "Bearer sk-virtual-key", "x-api-key": _FORWARDED_CLIENT_KEY}
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        updated: Final = await add_litellm_data_to_request(
+            data={
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "litellm_metadata": {FORWARDED_API_KEY_SCOPE_METADATA_KEY: [[["openai", ""]], "0" * 64]},
+            },
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"forward_llm_provider_auth_headers": True},
+            version="test-version",
+        )
+
+    expected_scope: Final = (
+        None
+        if expected_audiences is None
+        else ForwardedApiKeyScope(
+            audiences=expected_audiences, key_sha256=hashlib.sha256(_FORWARDED_CLIENT_KEY.encode()).hexdigest()
+        )
+    )
+    assert updated["api_key"] == _FORWARDED_CLIENT_KEY
+    assert updated["litellm_metadata"].get(FORWARDED_API_KEY_SCOPE_METADATA_KEY) == expected_scope
+
+
 @pytest.mark.parametrize(
     "header, expected_redacted",
     [
@@ -7957,6 +8024,7 @@ _PLANTED_STAMPS = {
     "original_model_group": "spoofed-group",
     "request_retry_count": -100,
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
+    FORWARDED_API_KEY_SCOPE_METADATA_KEY: [[["bedrock", ""]], "0" * 64],
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 10**9,
     "client_key": "client_value",
 }
@@ -7991,6 +8059,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "_client_output_ceiling" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
+    assert FORWARDED_API_KEY_SCOPE_METADATA_KEY not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
 

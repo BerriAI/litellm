@@ -209,6 +209,12 @@ def _sanitize_for_log(value: object) -> str:
 
 
 from litellm.router import Router
+from litellm.router_utils.clientside_credential_handler import (
+    FORWARDED_API_KEY_SCOPE_METADATA_KEY,
+    STR_KEYED_MAPPING,
+    ForwardedApiKeyScope,
+    forwarded_api_key_scope,
+)
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
@@ -403,6 +409,7 @@ _ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
         "attempted_fallbacks",
         "original_model_group",
         "request_retry_count",
+        FORWARDED_API_KEY_SCOPE_METADATA_KEY,
         CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     }
@@ -2196,7 +2203,8 @@ async def add_litellm_data_to_request(
     verbose_proxy_logger.debug("Request Headers: %s", _logging_safe_headers)
     verbose_proxy_logger.debug("Raw Headers: %s", _raw_headers)
 
-    if forward_llm_auth and "x-api-key" in _headers:
+    _forwarded_client_api_key: Final = forward_llm_auth and "x-api-key" in _headers
+    if _forwarded_client_api_key:
         data["api_key"] = _headers["x-api-key"]
         verbose_proxy_logger.debug(
             "Setting client-provided x-api-key as api_key parameter (will override deployment key)"
@@ -2631,6 +2639,25 @@ async def add_litellm_data_to_request(
         user_api_key_dict=user_api_key_dict,
     )
 
+    _forwarded_api_key_scope: Final = (
+        _forwarded_api_key_scope_for(
+            llm_router,
+            _headers["x-api-key"],
+            STR_KEYED_MAPPING.validate_python(data).get("model"),
+            user_api_key_dict.team_id,
+        )
+        if _forwarded_client_api_key
+        else None
+    )
+    if _forwarded_api_key_scope is not None:
+        data[_metadata_variable_name][FORWARDED_API_KEY_SCOPE_METADATA_KEY] = (  # rebind-ok: data is an out-param
+            _forwarded_api_key_scope
+        )
+    elif _forwarded_client_api_key:
+        verbose_proxy_logger.debug(
+            "forwarded x-api-key left unscoped: the requested model's deployment audiences could not be resolved"
+        )
+
     data[_metadata_variable_name]["litellm_roi_estimator"] = (
         getattr(request.state, "litellm_roi_estimator", False) is True
     )
@@ -2669,6 +2696,20 @@ async def add_litellm_data_to_request(
     )
 
     return data
+
+
+def _forwarded_api_key_scope_for(
+    llm_router: Router | None, api_key: str, model: object, team_id: str | None
+) -> ForwardedApiKeyScope | None:
+    if llm_router is None or not isinstance(model, str):
+        return None
+    return forwarded_api_key_scope(
+        api_key,
+        (
+            deployment["litellm_params"]
+            for deployment in llm_router.get_model_list(model_name=model, team_id=team_id) or ()
+        ),
+    )
 
 
 def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> None:

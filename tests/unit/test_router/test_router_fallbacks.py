@@ -3,13 +3,19 @@ from __future__ import annotations
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import Router
 import os
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.clientside_credential_handler import (
+    FORWARDED_API_KEY_SCOPE_METADATA_KEY,
+    forwarded_api_key_scope,
+)
 
 
 @pytest.mark.asyncio
@@ -504,3 +510,274 @@ class MyCustomHandler(CustomLogger):
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Failure")
+
+
+@pytest.mark.asyncio
+async def test_forwarded_anthropic_api_key_does_not_reach_bedrock_fallback(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    client_key: Final = "sk-ant-api03-client-forwarded-key"
+    anthropic_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(529, json={"type": "error", "error": {"type": "overloaded_error", "message": "x"}})
+    )
+    bedrock_route: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude",
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    router: Final = Router(
+        num_retries=0,
+        fallbacks=[{"claude": ["claude-bedrock"]}],
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment-key"},
+            },
+            {
+                "model_name": "claude-bedrock",
+                "litellm_params": {
+                    "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "AKIAEXAMPLEEXAMPLE00",
+                    "aws_secret_access_key": "example-secret",
+                },
+            },
+        ],
+    )
+
+    await router.aanthropic_messages(
+        model="claude",
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        api_key=client_key,
+        headers={"x-api-key": client_key, "x-request-id": "req-123"},
+        litellm_metadata={
+            FORWARDED_API_KEY_SCOPE_METADATA_KEY: forwarded_api_key_scope(
+                client_key, ({"model": "anthropic/claude-haiku-4-5"},)
+            )
+        },
+    )
+
+    assert anthropic_route.calls.last.request.headers["x-api-key"] == client_key
+    bedrock_request: Final = bedrock_route.calls.last.request
+    bedrock_headers: Final = bedrock_request.headers
+    assert bedrock_headers["authorization"].startswith("AWS4-HMAC-SHA256 "), bedrock_headers["authorization"]
+    assert client_key not in str(bedrock_headers.raw), bedrock_headers
+    assert "x-api-key" not in bedrock_headers
+    assert bedrock_headers["x-request-id"] == "req-123"
+    assert client_key not in bedrock_request.content.decode()
+
+
+_CLIENT_KEY: Final = "sk-ant-api03-client-forwarded-key"
+_ANTHROPIC_SCOPE: Final = {
+    FORWARDED_API_KEY_SCOPE_METADATA_KEY: forwarded_api_key_scope(_CLIENT_KEY, ({"model": "anthropic/claude-haiku-4-5"},))
+}
+_USER_MESSAGES: Final = [{"role": "user", "content": "hi"}]
+
+
+def _overloaded() -> httpx.Response:
+    return httpx.Response(529, json={"type": "error", "error": {"type": "overloaded_error", "message": "x"}})
+
+
+def _message() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "hi"}],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+
+
+def _anthropic_with_fallback(fallback_params: dict[str, str]) -> Router:
+    return Router(
+        num_retries=0,
+        fallbacks=[{"claude": ["claude-fallback"]}],
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment-key"},
+            },
+            {"model_name": "claude-fallback", "litellm_params": fallback_params},
+        ],
+    )
+
+
+async def _send_forwarded_client_key(router: Router) -> None:
+    await router.aanthropic_messages(
+        model="claude",
+        max_tokens=16,
+        messages=_USER_MESSAGES,
+        api_key=_CLIENT_KEY,
+        headers={"x-api-key": _CLIENT_KEY, "x-request-id": "req-123"},
+        litellm_metadata=_ANTHROPIC_SCOPE,
+    )
+
+
+@pytest.mark.asyncio
+async def test_forwarded_anthropic_api_key_does_not_reach_bedrock_mantle_fallback(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_overloaded())
+    mantle_route: Final = respx_mock.post(host="bedrock-mantle.us-east-1.api.aws").mock(return_value=_message())
+    router: Final = _anthropic_with_fallback(
+        {
+            "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "AKIAEXAMPLEEXAMPLE00",
+            "aws_secret_access_key": "example-secret",
+        }
+    )
+
+    await _send_forwarded_client_key(router)
+
+    mantle_request: Final = mantle_route.calls.last.request
+    assert mantle_request.headers["authorization"].startswith("AWS4-HMAC-SHA256 "), mantle_request.headers
+    assert "x-api-key" not in mantle_request.headers
+    assert _CLIENT_KEY not in str(mantle_request.headers.raw)
+    assert _CLIENT_KEY not in mantle_request.content.decode()
+
+
+@pytest.mark.asyncio
+async def test_bedrock_fallback_with_its_own_api_key_still_sends_that_bearer_token(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_overloaded())
+    bedrock_route: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=_message()
+    )
+    router: Final = _anthropic_with_fallback(
+        {
+            "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "aws_region_name": "us-east-1",
+            "api_key": "bedrock-deployment-bearer",
+        }
+    )
+
+    await _send_forwarded_client_key(router)
+
+    bedrock_headers: Final = bedrock_route.calls.last.request.headers
+    assert bedrock_headers["authorization"] == "Bearer bedrock-deployment-bearer"
+    assert _CLIENT_KEY not in str(bedrock_headers.raw)
+
+
+@pytest.mark.asyncio
+async def test_forwarded_api_key_still_reaches_a_lone_anthropic_deployment(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    anthropic_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_message())
+    router: Final = Router(
+        num_retries=0,
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment-key"},
+            }
+        ],
+    )
+
+    await router.aanthropic_messages(
+        model="claude",
+        max_tokens=16,
+        messages=_USER_MESSAGES,
+        api_key=_CLIENT_KEY,
+        headers={"x-api-key": _CLIENT_KEY},
+        litellm_metadata=_ANTHROPIC_SCOPE,
+    )
+
+    assert anthropic_route.calls.last.request.headers["x-api-key"] == _CLIENT_KEY
+
+
+@pytest.mark.asyncio
+async def test_forwarded_api_key_survives_a_fallback_to_another_anthropic_group(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    anthropic_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[_overloaded(), _message()]
+    )
+    router: Final = _anthropic_with_fallback(
+        {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-other-deployment-key"}
+    )
+
+    await _send_forwarded_client_key(router)
+
+    assert [call.request.headers["x-api-key"] for call in anthropic_route.calls] == [_CLIENT_KEY, _CLIENT_KEY]
+
+
+@pytest.mark.asyncio
+async def test_forwarded_api_key_does_not_reach_a_same_provider_fallback_on_another_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_overloaded())
+    gateway_route: Final = respx_mock.post("https://gateway.example/anthropic/v1/messages").mock(
+        return_value=_message()
+    )
+    router: Final = _anthropic_with_fallback(
+        {
+            "model": "anthropic/claude-haiku-4-5",
+            "api_base": "https://gateway.example/anthropic",
+            "api_key": "gateway-deployment-key",
+        }
+    )
+
+    await _send_forwarded_client_key(router)
+
+    gateway_headers: Final = gateway_route.calls.last.request.headers
+    assert gateway_headers["x-api-key"] == "gateway-deployment-key"
+    assert _CLIENT_KEY not in str(gateway_headers.raw)
+
+
+@pytest.mark.asyncio
+async def test_admin_api_key_on_a_dict_fallback_target_survives_the_forwarded_key_scope(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_overloaded())
+    bedrock_route: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=_message()
+    )
+    router: Final = Router(
+        num_retries=0,
+        fallbacks=[{"claude": [{"model": "claude-bedrock", "api_key": "bedrock-admin-bearer"}]}],
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment-key"},
+            },
+            {
+                "model_name": "claude-bedrock",
+                "litellm_params": {
+                    "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+        ],
+    )
+
+    await _send_forwarded_client_key(router)
+
+    bedrock_headers: Final = bedrock_route.calls.last.request.headers
+    assert bedrock_headers["authorization"] == "Bearer bedrock-admin-bearer"
+    assert _CLIENT_KEY not in str(bedrock_headers.raw)

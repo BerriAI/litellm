@@ -11,11 +11,27 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from typing import Final
+import hashlib
+from collections.abc import Iterable, Mapping
+from typing import Annotated, Final, NamedTuple
 
+from pydantic import Field, TypeAdapter
+
+from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
+from litellm.router_utils.common_utils import provider_for_generic_call
+from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import server_owned_wif_litellm_params
 
 clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
+
+FORWARDED_API_KEY_SCOPE_METADATA_KEY: Final = "litellm_proxy_forwarded_api_key_scope"
+STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
+DEPLOYMENT_LITELLM_PARAMS: Final[TypeAdapter[Mapping[str, object] | LiteLLM_Params]] = TypeAdapter(
+    Annotated[Mapping[str, object] | LiteLLM_Params, Field(union_mode="left_to_right")]
+)
+_FORWARDED_API_KEY_HEADER: Final = "x-api-key"
+_FORWARDED_HEADER_KWARGS: Final = ("headers", "extra_headers")
+_METADATA_KWARGS: Final = ("litellm_metadata", "metadata")
 
 # Set on a deployment whose api_base was client-redirected, so the Anthropic auth path refuses to
 # mint a federation token there even when WIF is configured only through ANTHROPIC_* env vars (which
@@ -120,3 +136,89 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
         litellm_params[DISABLE_WORKLOAD_IDENTITY_PARAM] = True
 
     return litellm_params
+
+
+class ForwardedApiKeyScope(NamedTuple):
+    """The (provider, api_base) audiences a proxy-forwarded client api_key was sent for, and that key's sha256."""
+
+    audiences: tuple[tuple[str, str], ...]
+    key_sha256: str
+
+
+def _sha256(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def deployment_audience(litellm_params: Mapping[str, object] | LiteLLM_Params) -> tuple[str, str] | None:
+    params: Final = (
+        litellm_params
+        if isinstance(litellm_params, Mapping)
+        else {
+            "model": litellm_params.model,
+            "custom_llm_provider": litellm_params.custom_llm_provider,
+            "api_base": litellm_params.api_base,
+        }
+    )
+    provider: Final = provider_for_generic_call(params)
+    if provider is None:
+        return None
+    api_base: Final = params.get("api_base")
+    return (provider, api_base.rstrip("/") if isinstance(api_base, str) else "")
+
+
+def _is_strategy_router(litellm_params: Mapping[str, object]) -> bool:
+    model: Final = litellm_params.get("model")
+    return isinstance(model, str) and classify_strategy_router_model(model) is not None
+
+
+def forwarded_api_key_scope(
+    api_key: str, deployment_params: Iterable[Mapping[str, object]]
+) -> ForwardedApiKeyScope | None:
+    """None when the audiences cannot be known up front: no deployments, a strategy router, or an unresolvable one."""
+    params: Final = tuple(deployment_params)
+    if not params or any(_is_strategy_router(litellm_params) for litellm_params in params):
+        return None
+    audiences: Final = tuple(deployment_audience(litellm_params) for litellm_params in params)
+    if None in audiences:
+        return None
+    return ForwardedApiKeyScope(
+        audiences=tuple(sorted({audience for audience in audiences if audience is not None})),
+        key_sha256=_sha256(api_key),
+    )
+
+
+def _stamped_scope(metadata: object) -> ForwardedApiKeyScope | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    stamp: Final = STR_KEYED_MAPPING.validate_python(metadata).get(FORWARDED_API_KEY_SCOPE_METADATA_KEY)
+    return stamp if isinstance(stamp, ForwardedApiKeyScope) else None
+
+
+def stamped_forwarded_api_key_scope(request_kwargs: Mapping[str, object]) -> ForwardedApiKeyScope | None:
+    return next(
+        (stamp for key in _METADATA_KWARGS if (stamp := _stamped_scope(request_kwargs.get(key))) is not None),
+        None,
+    )
+
+
+def is_forwarded_api_key(value: object, scope: ForwardedApiKeyScope) -> bool:
+    return isinstance(value, str) and _sha256(value) == scope.key_sha256
+
+
+def _without_forwarded_x_api_key(headers: Mapping[str, object], scope: ForwardedApiKeyScope) -> Mapping[str, object]:
+    return {
+        name: value
+        for name, value in headers.items()
+        if name.lower() != _FORWARDED_API_KEY_HEADER or not is_forwarded_api_key(value, scope)
+    }
+
+
+def headers_without_forwarded_api_key(
+    request_kwargs: Mapping[str, object], scope: ForwardedApiKeyScope
+) -> Mapping[str, Mapping[str, object]]:
+    """The request's header kwargs without the forwarded key's x-api-key copy, keyed by the kwarg that carried them."""
+    return {
+        key: _without_forwarded_x_api_key(STR_KEYED_MAPPING.validate_python(headers), scope)
+        for key in _FORWARDED_HEADER_KWARGS
+        if isinstance(headers := request_kwargs.get(key), Mapping)
+    }
