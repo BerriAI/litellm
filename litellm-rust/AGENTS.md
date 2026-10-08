@@ -17,6 +17,9 @@ For string-valued enums and their Serde conversions, follow [.agents/skills/rust
 
 Use [`#[rstest]`](https://docs.rs/rstest/latest/rstest/attr.rstest.html) for new and updated tests and [`#[fixture]`](https://docs.rs/rstest/latest/rstest/attr.fixture.html) for reusable setup, injected through typed test arguments. Express input variations as named `#[case::name(...)]` cases instead of loops or duplicated tests so each failure identifies its case. Keep behavior assertions in the test body and fixtures focused on setup. Use the workspace `rstest` dependency
 
+- Never loop over inputs (`for`, `.iter().for_each`, `.all`) inside a test body; give each input its own `#[case::name(...)]`, or use `#[values(...)]` for a cross product
+- Exception: a test pinning a Rust table against a repo-owned data file (for example `include_str!` of a JSON config) may iterate that file's entries
+
 ## Error definitions
 
 - A crate's errors live in `src/error.rs`, defined with `thiserror`, and re-exported from `lib.rs`
