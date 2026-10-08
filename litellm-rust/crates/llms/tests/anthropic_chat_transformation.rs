@@ -3,7 +3,7 @@ use litellm_llms::{
     anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
     base_llm::{
         auth::AuthScheme,
-        chat::transformation::{BaseConfig, ProviderChatResponseData, Unsupported},
+        chat::transformation::{BaseConfig, ProviderChatResponseData},
     },
 };
 use litellm_llms_types::formats::chat_completions::{ChatCompletionsResponse, ChatMessage};
@@ -33,8 +33,8 @@ fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
         .transform_response("claude-sonnet-4-5", ProviderChatResponseData { body })
 }
 
-fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
-    ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+fn reason(msgs: Value, opts: Value) -> Result<(), Error> {
+    ANTHROPIC_CHAT_COMPLETIONS_CONFIG.validate_request(&messages(msgs), &params(opts))
 }
 
 #[test]
@@ -129,30 +129,13 @@ fn passes_every_supported_param_through_untouched() {
 }
 
 #[test]
-fn declines_top_k_because_python_gates_it_by_model_below_this_point() {
-    // `temperature` and `top_p` arrive already resolved, because
-    // `map_openai_params` applies `_apply_sampling_param` to them before the
-    // gate runs. `top_k` bypasses that and is gated inside `transform_request`,
-    // the function this route replaces, so forwarding it would send `top_k` to
-    // a model that removed sampling params and take a 400 after the call, where
-    // Python drops it and succeeds.
-    assert_eq!(
-        reason(
-            json!([{"role": "user", "content": "hi"}]),
-            json!({"top_k": 40})
-        ),
-        Some(Unsupported("unrecognized request parameter"))
-    );
-}
-
-#[test]
-fn declines_streaming_before_anything_else() {
+fn rejects_streaming_before_anything_else() {
     assert_eq!(
         reason(
             json!([{"role": "user", "content": "hi"}]),
             json!({"stream": true, "max_tokens": 16})
         ),
-        Some(Unsupported("streaming"))
+        Err(Error::Unsupported("streaming"))
     );
 }
 
@@ -163,27 +146,36 @@ fn accepts_an_explicit_stream_false() {
             json!([{"role": "user", "content": "hi"}]),
             json!({"stream": false, "max_tokens": 16})
         ),
-        None
+        Ok(())
     );
 }
 
 #[rstest]
+#[case::top_k(json!({"top_k":40}))]
+#[case::unknown(json!({"provider_extension":{"nested":[true,null,7]}}))]
 #[case::tools(json!({"tools": []}))]
 #[case::tool_choice(json!({"tool_choice": {"type": "auto"}}))]
 #[case::thinking(json!({"thinking": {"type": "enabled"}}))]
 #[case::system(json!({"system": "injected"}))]
 #[case::metadata(json!({"metadata": {"user_id": "u1"}}))]
 #[case::output_config(json!({"output_config": {"effort": "high"}}))]
-fn declines_any_param_outside_the_allowlist(#[case] param: Value) {
+fn preserves_provider_params_without_an_allowlist(#[case] param: Value) {
     assert_eq!(
         reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
-        Some(Unsupported("unrecognized request parameter")),
-        "expected {param} to decline"
+        Ok(())
     );
+    let body = transform(
+        "test-model",
+        json!([{"role":"user","content":"hi"}]),
+        param.clone(),
+    );
+    for (name, value) in params(param) {
+        assert_eq!(body[&name], value);
+    }
 }
 
 #[test]
-fn declines_tool_calls_tool_results_and_multimodal_content() {
+fn rejects_tool_calls_tool_results_and_multimodal_content() {
     assert_eq!(
         reason(
             json!([
@@ -195,7 +187,7 @@ fn declines_tool_calls_tool_results_and_multimodal_content() {
             ]),
             json!({})
         ),
-        Some(Unsupported("unrecognized message field"))
+        Err(Error::Unsupported("unrecognized message field"))
     );
     assert_eq!(
         reason(
@@ -205,7 +197,7 @@ fn declines_tool_calls_tool_results_and_multimodal_content() {
             ]),
             json!({})
         ),
-        Some(Unsupported("unrecognized message field"))
+        Err(Error::Unsupported("unrecognized message field"))
     );
     assert_eq!(
         reason(
@@ -215,7 +207,7 @@ fn declines_tool_calls_tool_results_and_multimodal_content() {
             ]}]),
             json!({})
         ),
-        Some(Unsupported("non-text message content"))
+        Err(Error::Unsupported("non-text message content"))
     );
     assert_eq!(
         reason(
@@ -225,30 +217,27 @@ fn declines_tool_calls_tool_results_and_multimodal_content() {
             ]}]),
             json!({})
         ),
-        Some(Unsupported("non-text message content"))
+        Err(Error::Unsupported("non-text message content"))
     );
 }
 
 #[test]
-fn declines_a_message_whose_content_list_is_empty() {
-    // An empty list passes every per-part check, so without this it would reach
-    // the provider as an empty `content` array and fail after the call rather
-    // than declining to Python before it.
+fn rejects_a_message_whose_content_list_is_empty() {
     assert_eq!(
         reason(json!([{"role": "user", "content": []}]), json!({})),
-        Some(Unsupported("message without content"))
+        Err(Error::Unsupported("message without content"))
     );
     assert_eq!(
         reason(
             json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]),
             json!({})
         ),
-        None
+        Ok(())
     );
 }
 
 #[test]
-fn declines_a_conversation_that_does_not_open_on_a_user_turn() {
+fn rejects_a_conversation_that_does_not_open_on_a_user_turn() {
     assert_eq!(
         reason(
             json!([
@@ -257,7 +246,9 @@ fn declines_a_conversation_that_does_not_open_on_a_user_turn() {
             ]),
             json!({})
         ),
-        Some(Unsupported("conversation does not open on a user turn"))
+        Err(Error::Unsupported(
+            "conversation does not open on a user turn"
+        ))
     );
 }
 
@@ -273,7 +264,7 @@ fn accepts_a_plain_text_conversation() {
             ]),
             json!({"max_tokens": 16, "temperature": 0.5})
         ),
-        None
+        Ok(())
     );
 }
 
@@ -343,9 +334,6 @@ fn maps_max_tokens_stop_reason_to_length() {
 
 #[test]
 fn a_refusal_returns_the_completion_python_returns() {
-    // `refusal` is a stop_reason, not a content block type, so the content is
-    // ordinary text and this normalizes rather than declining. Python maps it
-    // to content_filter in _FINISH_REASON_MAP and returns the completion.
     let response = transform_response(json!({
         "model": "claude-sonnet-4-5",
         "content": [{"type": "text", "text": "I can't help with that."}],
@@ -390,7 +378,7 @@ fn response_carries_no_id_so_python_keeps_its_chatcmpl_id() {
 }
 
 #[test]
-fn declines_a_response_carrying_a_non_text_block() {
+fn rejects_a_response_carrying_a_non_text_block() {
     let err = transform_response(json!({
         "model": "claude-sonnet-4-5",
         "content": [{"type": "tool_use", "id": "t1", "name": "f", "input": {}}],

@@ -8,33 +8,6 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
 
-import litellm
-
-_INFERENCE_CONTEXT: Final = frozenset(
-    {
-        "model",
-        "messages",
-        "input",
-        "api_key",
-        "api_base",
-        "base_url",
-        "custom_llm_provider",
-        "extra_headers",
-        "timeout",
-        "request_timeout",
-        "callbacks",
-        "success_callback",
-        "failure_callback",
-        "metadata",
-        "litellm_metadata",
-        "litellm_call_id",
-        "litellm_trace_id",
-        "litellm_logging_obj",
-        "litellm_credential_name",
-        "proxy_server_request",
-    }
-)
-
 
 def signature(legacy: Callable[..., object]) -> inspect.Signature:
     return inspect.signature(legacy)
@@ -55,10 +28,6 @@ def optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def optional_bool(value: object) -> bool | None:
-    return value if isinstance(value, bool) else None
-
-
 def optional_mapping(value: object) -> Mapping[str, object] | None:
     if not isinstance(value, Mapping):
         return None
@@ -69,19 +38,6 @@ def optional_sequence(value: object) -> Sequence[object] | None:
     if isinstance(value, str | bytes) or not isinstance(value, Sequence):
         return None
     return cast("Sequence[object]", value)  # cast-ok: the same caller-owned object is handed on unchanged
-
-
-def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, object]) -> str | None:
-    if litellm.drop_params or litellm.modify_params:
-        return "native inference does not implement the configured parameter rewrites"
-    for name, value in kwargs.items():
-        if value is None:
-            continue
-        if name in {"cache", "caching"}:
-            continue
-        if name not in parameters and name not in _INFERENCE_CONTEXT:
-            return f"native inference does not implement {name}"
-    return None
 
 
 @dataclass(frozen=True, slots=True)

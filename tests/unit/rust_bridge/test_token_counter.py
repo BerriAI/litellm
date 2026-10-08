@@ -359,11 +359,11 @@ DECLINED_REQUESTS: Final[tuple[dict[str, object], ...]] = (
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tokenizer", TOKENIZERS)
 @pytest.mark.parametrize("request_body", DECLINED_REQUESTS)
-async def test_native_declines_shapes_python_prices_differently(
+async def test_native_rejects_shapes_it_cannot_count(
     request_body: dict[str, object], tokenizer: bridge.RustTokenizer
 ) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     raw, _ = _counted(request_body, MODEL_BY_TOKENIZER[tokenizer])
 
-    with pytest.raises(native.RustBridgeDeclined):
+    with pytest.raises(ValueError, match="unsupported by the rust token counter"):
         await bridge.native_count(native.TokenCounter, tokenizer, raw)

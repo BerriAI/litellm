@@ -24,9 +24,9 @@ use pyo3::{
     types::PyBytes,
 };
 
-#[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
-use crate::errors::RustBridgeDeclined;
 use crate::routes::token_counter::token_count_error_to_pyerr;
+#[cfg(not(all(feature = "tiktoken", feature = "huggingface")))]
+use pyo3::exceptions::PyNotImplementedError;
 
 #[cfg(feature = "huggingface")]
 use litellm_token_counter::huggingface::{
@@ -100,7 +100,7 @@ impl Tokenizer {
         #[cfg(not(feature = "tiktoken"))]
         {
             let _ = (py, encoding);
-            Err(RustBridgeDeclined::new_err(
+            Err(PyNotImplementedError::new_err(
                 "tokenizer backend requires the tiktoken feature",
             ))
         }
@@ -118,7 +118,7 @@ impl Tokenizer {
         #[cfg(not(feature = "huggingface"))]
         {
             let _ = (py, tokenizer_json);
-            Err(RustBridgeDeclined::new_err(
+            Err(PyNotImplementedError::new_err(
                 "tokenizer backend requires the huggingface feature",
             ))
         }
@@ -151,7 +151,7 @@ impl Tokenizer {
         #[cfg(not(feature = "huggingface"))]
         {
             let _ = (py, identifier, revision, token);
-            Err(RustBridgeDeclined::new_err(
+            Err(PyNotImplementedError::new_err(
                 "tokenizer backend requires the huggingface feature",
             ))
         }
