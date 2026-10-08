@@ -237,7 +237,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
             else:
                 # Annotated rather than passed straight from json.loads, whose Any
                 # would reach the helper's Mapping parameter as an unknown type.
-                dropped_session: Mapping[str, object] = json_message.get("session") or {}
+                dropped_session: Final[Mapping[str, object]] = json_message.get("session") or {}
                 self._warn_session_update_dropped(dropped_session, provider="Vertex AI Realtime")
             return []
 
