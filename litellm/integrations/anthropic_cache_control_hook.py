@@ -773,7 +773,7 @@ def _message_dropping_created_cache_controls_between(
     )
 
 
-def _index_of_block_accepting_cache_control(content: list[object], on_a_tool_message: bool) -> int | None:
+def _index_of_block_accepting_cache_control(content: Sequence[object], on_a_tool_message: bool) -> int | None:
     """Last block a marker written here reaches the provider on, searched from the end.
 
     An empty text block is replaced by a placeholder unless it sits on a tool message,
@@ -783,12 +783,20 @@ def _index_of_block_accepting_cache_control(content: list[object], on_a_tool_mes
         block = content[index]
         if not isinstance(block, dict):
             continue
-        if block.get("type") in ANTHROPIC_BLOCK_TYPES_WITHOUT_CACHE_CONTROL:
+        fields = cast(dict[str, object], block)  # cast-ok: a runtime dict whose value types are not known here
+        if fields.get("type") in ANTHROPIC_BLOCK_TYPES_WITHOUT_CACHE_CONTROL:
             continue
-        if block.get("type") == "text" and not block.get("text") and not on_a_tool_message:
+        if fields.get("type") == "text" and not fields.get("text") and not on_a_tool_message:
             continue
         return index
     return None
+
+
+def _role_of(message: object) -> object:
+    """The ``role`` of a message dict, or None for anything else."""
+    if not isinstance(message, dict):
+        return None
+    return cast(dict[str, object], message).get("role")  # cast-ok: a runtime dict whose value types are not known here
 
 
 def _message_accepts_cache_control(message: object) -> bool:
@@ -801,7 +809,8 @@ def _message_accepts_cache_control(message: object) -> bool:
     if isinstance(content, str):
         return content != "" or on_a_tool_message
     if isinstance(content, list):
-        return _index_of_block_accepting_cache_control(content, on_a_tool_message) is not None
+        blocks: Final = cast(Sequence[object], content)  # cast-ok: a runtime list whose block types are not known here
+        return _index_of_block_accepting_cache_control(blocks, on_a_tool_message) is not None
     return False
 
 
@@ -1197,7 +1206,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         candidates: Final = tuple(
             index
             for index, message in enumerate(messages)
-            if targetted_role is None or message.get("role") == targetted_role
+            if targetted_role is None or _role_of(message) == targetted_role
         )
         free: Final = frozenset(
             index
@@ -1277,8 +1286,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             message["cache_control"] = control
         # 2. list of objects - the last block that accepts a marker, per Anthropic spec
         elif isinstance(message_content, list):
+            blocks: Final = cast(Sequence[object], message_content)  # cast-ok: TypedDict blocks read as objects
             target_index: Final = _index_of_block_accepting_cache_control(
-                message_content, on_a_tool_message=message.get("role") == "tool"
+                blocks, on_a_tool_message=_role_of(message) == "tool"
             )
             if target_index is not None:
                 message_content[target_index]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
