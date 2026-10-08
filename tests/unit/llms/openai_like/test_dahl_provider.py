@@ -63,7 +63,7 @@ def test_dahl_supported_endpoints():
 
     assert providers["dahl"]["endpoints"] == {
         "chat_completions": True,
-        "messages": False,
+        "messages": True,
         "responses": True,
         "embeddings": False,
         "image_generations": False,
