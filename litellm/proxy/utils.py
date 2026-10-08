@@ -3549,6 +3549,7 @@ class ProxyLogging:
                     key: {
                         **_as_str_mapping(existing.get(key)),
                         **_as_str_mapping(value),
+                        **user_api_key_logged_metadata,
                     }
                     for key, value in _litellm_params.items()
                     if key == "litellm_metadata"
