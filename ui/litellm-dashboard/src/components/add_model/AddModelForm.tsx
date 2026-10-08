@@ -370,11 +370,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                               <span className="text-sm text-muted-foreground">
                                 Workload identity federation is saved as a credential, then attached to this model.
                               </span>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => openCredentialModal()}
-                              >
+                              <Button type="button" variant="outline" onClick={() => openCredentialModal()}>
                                 Use workload identity federation
                               </Button>
                             </div>
