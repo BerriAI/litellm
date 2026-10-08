@@ -4575,3 +4575,131 @@ async def test_presidio_language_configuration_with_per_request_override():
 
     assert analyze_request_default["language"] == "de"
     assert analyze_request_default["text"] == test_text
+
+
+_PRESIDIO_ANALYZE_CARD_AND_EMAIL: Final = [
+    {
+        "entity_type": "CREDIT_CARD",
+        "start": 24,
+        "end": 43,
+        "score": 1.0,
+        "analysis_explanation": None,
+        "recognition_metadata": None,
+    },
+    {
+        "entity_type": "EMAIL_ADDRESS",
+        "start": 63,
+        "end": 79,
+        "score": 0.99,
+        "analysis_explanation": None,
+        "recognition_metadata": None,
+    },
+]
+
+_CARD_AND_EMAIL_TEXT: Final = (
+    "My credit card number is 4111-1111-1111-1111 and my email is test@example.com"
+)
+
+
+def _blocked_entities_guardrail():
+    guardrail: Final = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        pii_entities_config={
+            PiiEntityType.CREDIT_CARD: PiiAction.BLOCK,
+            PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
+        },
+        presidio_analyzer_api_base="http://localhost:5002",
+        presidio_anonymizer_api_base="http://localhost:5001",
+    )
+    if not hasattr(guardrail, "presidio_analyzer_api_base"):
+        guardrail.validate_environment(
+            presidio_analyzer_api_base="http://localhost:5002",
+            presidio_anonymizer_api_base="http://localhost:5001",
+        )
+    return guardrail
+
+
+@pytest.mark.asyncio
+async def test_check_pii_raises_blocked_entity_for_card():
+    guardrail: Final = _blocked_entities_guardrail()
+    analyze_request: Final = guardrail._get_presidio_analyze_request_payload(
+        text=_CARD_AND_EMAIL_TEXT, presidio_config=None, request_data={}
+    )
+    assert "entities" in analyze_request
+    assert set(analyze_request["entities"]) == set(guardrail.pii_entities_config.keys())
+
+    guardrail._get_session_iterator = _make_mock_session_iterator(
+        _PRESIDIO_ANALYZE_CARD_AND_EMAIL
+    )
+    with pytest.raises(BlockedPiiEntityError) as excinfo:
+        await guardrail.check_pii(
+            text=_CARD_AND_EMAIL_TEXT,
+            output_parse_pii=True,
+            presidio_config=None,
+            request_data={},
+        )
+    assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
+    assert excinfo.value.guardrail_name == guardrail.guardrail_name
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_raises_blocked_entity_for_card_message(
+    mock_user_api_key, mock_cache
+):
+    guardrail: Final = _blocked_entities_guardrail()
+    guardrail._get_session_iterator = _make_mock_session_iterator(
+        _PRESIDIO_ANALYZE_CARD_AND_EMAIL
+    )
+    data: Final = {
+        "messages": [{"role": "user", "content": _CARD_AND_EMAIL_TEXT}],
+        "metadata": {},
+    }
+    with pytest.raises(BlockedPiiEntityError) as excinfo:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=mock_user_api_key,
+            cache=mock_cache,
+            data=data,
+            call_type="completion",
+        )
+    assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
+    assert excinfo.value.guardrail_name == guardrail.guardrail_name
+
+
+@pytest.mark.asyncio
+async def test_legacy_pii_masking_config_registers_logging_only_guardrail(monkeypatch):
+    monkeypatch.setenv("PRESIDIO_ANALYZER_API_BASE", "http://localhost:5002")
+    monkeypatch.setenv("PRESIDIO_ANONYMIZER_API_BASE", "http://localhost:5001")
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    from litellm.proxy.guardrails.init_guardrails import initialize_guardrails
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    guardrails_config: Final = [
+        {
+            "pii_masking": {
+                "callbacks": ["presidio"],
+                "default_on": True,
+                "logging_only": True,
+            }
+        }
+    ]
+    assert len(litellm.guardrail_name_config_map) == 0
+    initialize_guardrails(
+        guardrails_config=guardrails_config,
+        premium_user=True,
+        config_file_path="",
+        litellm_settings={"guardrails": guardrails_config},
+    )
+    assert len(litellm.guardrail_name_config_map) == 1
+
+    pii_masking_obj: Final = next(
+        (c for c in litellm.callbacks if isinstance(c, _OPTIONAL_PresidioPIIMasking)),
+        None,
+    )
+    assert pii_masking_obj is not None
+    assert hasattr(pii_masking_obj, "logging_only")
+    assert pii_masking_obj.event_hook == GuardrailEventHooks.logging_only
+    assert pii_masking_obj.should_run_guardrail(
+        data={}, event_type=GuardrailEventHooks.logging_only
+    )

@@ -4,6 +4,7 @@ Unit tests for Bedrock Guardrails
 
 import json
 import asyncio
+from typing import Final
 from datetime import datetime, timezone
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7483,3 +7484,123 @@ async def test_should_raise_guardrail_blocked_exception_null_fields():
         guardrail._should_raise_guardrail_blocked_exception(response_null_grounding)
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_during_call_masking_rewrites_pii_in_messages():
+    guardrail: Final = BedrockGuardrail(
+        guardrailIdentifier="wf0hkdb5x07f", guardrailVersion="DRAFT"
+    )
+    masked_outputs: Final = [
+        {"text": "Hello, my phone number is {PHONE}"},
+        {"text": "Hello, how can I help you today?"},
+        {"text": "I need to cancel my order"},
+        {"text": "ok, my credit card number is {CREDIT_DEBIT_CARD_NUMBER}"},
+    ]
+    mock_bedrock_response: Final = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "NONE",
+        "outputs": masked_outputs,
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {"type": "PHONE", "match": "+1 412 555 1212", "action": "ANONYMIZED"},
+                        {"type": "CREDIT_DEBIT_CARD_NUMBER", "match": "1234-5678-9012-3456", "action": "ANONYMIZED"},
+                    ]
+                }
+            }
+        ],
+    }
+    mock_credentials: Final = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    request_data: Final = {
+        "model": "gpt-5.5",
+        "messages": [
+            {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"},
+            {"role": "assistant", "content": "Hello, how can I help you today?"},
+            {"role": "user", "content": "I need to cancel my order"},
+            {"role": "user", "content": "ok, my credit card number is 1234-5678-9012-3456"},
+        ],
+    }
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = mock_bedrock_response
+        response: Final = await guardrail.async_moderation_hook(
+            data=dict(request_data, messages=[dict(m) for m in request_data["messages"]]),
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+        )
+    assert response is not None
+    assert response["messages"][0]["content"] == "Hello, my phone number is {PHONE}"
+    assert response["messages"][1]["content"] == "Hello, how can I help you today?"
+    assert response["messages"][2]["content"] == "I need to cancel my order"
+    assert (
+        response["messages"][3]["content"]
+        == "ok, my credit card number is {CREDIT_DEBIT_CARD_NUMBER}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_during_call_masking_rewrites_only_pii_block_in_content_list():
+    guardrail: Final = BedrockGuardrail(
+        guardrailIdentifier="wf0hkdb5x07f", guardrailVersion="DRAFT"
+    )
+    masked_outputs: Final = [
+        {"text": "call me at {PHONE}"},
+        {"text": "unchanged block"},
+    ]
+    mock_bedrock_response: Final = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "NONE",
+        "outputs": masked_outputs,
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {"type": "PHONE", "match": "+1 412 555 1212", "action": "ANONYMIZED"}
+                    ]
+                }
+            }
+        ],
+    }
+    mock_credentials2: Final = MagicMock()
+    mock_credentials2.access_key = "test-access-key"
+    mock_credentials2.secret_key = "test-secret-key"
+    mock_credentials2.token = None
+    request_data: Final = {
+        "model": "gpt-5.5",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "call me at +1 412 555 1212"},
+                    {"type": "text", "text": "unchanged block"},
+                ],
+            },
+            {"role": "assistant", "content": "noted"},
+        ],
+    }
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials2, "us-east-1")),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = mock_bedrock_response
+        response: Final = await guardrail.async_moderation_hook(
+            data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
+        )
+    assert response is not None
+    content: Final = response["messages"][0]["content"]
+    assert isinstance(content, list)
+    assert content[0]["text"] == "call me at {PHONE}"
+    assert content[1]["text"] == "unchanged block"

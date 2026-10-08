@@ -480,26 +480,28 @@ async def test_batch_rate_limiter_passes_user_context_to_afile_content(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_batch_rate_limiter_user_context_does_not_change_usage(monkeypatch):
+async def test_batch_rate_limiter_without_user_context(monkeypatch):
     _, _, batch_limiter = _make_limiters()
     jsonl: Final = "\n".join(_batch_line(i, "Hello") for i in range(2))
-    monkeypatch.setattr(
-        "litellm.afile_content", AsyncMock(return_value=_file_content(jsonl))
+    expected_tokens: Final = sum(
+        litellm.token_counter(
+            model=row["body"]["model"], messages=row["body"]["messages"]
+        )
+        for row in (json.loads(line) for line in jsonl.splitlines())
     )
+    mock_content: Final = AsyncMock(return_value=_file_content(jsonl))
+    monkeypatch.setattr("litellm.afile_content", mock_content)
 
-    usage_without: Final = await batch_limiter.count_input_file_usage(
+    usage: Final = await batch_limiter.count_input_file_usage(
         file_id="file-abc123",
         custom_llm_provider="openai",
         user_api_key_dict=None,
     )
-    usage_with: Final = await batch_limiter.count_input_file_usage(
-        file_id="file-abc123",
-        custom_llm_provider="openai",
-        user_api_key_dict=UserAPIKeyAuth(api_key="test-key-000", tpm_limit=500),
-    )
 
-    assert usage_with.total_tokens == usage_without.total_tokens
-    assert usage_with.request_count == usage_without.request_count
+    assert usage.request_count == 2
+    assert usage.total_tokens == expected_tokens
+    assert mock_content.await_count == 1
+    assert mock_content.await_args.kwargs["user_api_key_dict"] is None
 
 
 @pytest.mark.asyncio

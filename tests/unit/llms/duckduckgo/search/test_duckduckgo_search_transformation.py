@@ -223,3 +223,38 @@ class TestDuckDuckGoSearchMocked:
             urls = [result.url for result in response.results]
             assert any("India" in url for url in urls)
             assert any("Indus" in url for url in urls)
+
+
+@pytest.mark.asyncio
+async def test_duckduckgo_search_response_structure_and_max_results():
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "AbstractText": "India is a country in South Asia.",
+        "AbstractURL": "https://en.wikipedia.org/wiki/India",
+        "Heading": "India",
+        "RelatedTopics": [
+            {
+                "FirstURL": f"https://example.com/{index}",
+                "Text": f"Topic {index} - snippet text for topic {index}.",
+            }
+            for index in range(10)
+        ],
+        "Results": [],
+        "Type": "D",
+    }
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
+        new_callable=AsyncMock,
+    ) as mock_get:
+        mock_get.return_value = mock_response
+        response = await litellm.asearch(query="india", search_provider="duckduckgo", max_results=5)
+    assert mock_get.call_count == 1
+    assert response.object == "search"
+    assert isinstance(response.results, list)
+    assert len(response.results) > 0
+    assert "max_results" in str(mock_get.call_args) or "5" in str(mock_get.call_args.kwargs)
+    first_result = response.results[0]
+    assert isinstance(first_result.title, str)
+    assert isinstance(first_result.url, str)
+    assert isinstance(first_result.snippet, str)

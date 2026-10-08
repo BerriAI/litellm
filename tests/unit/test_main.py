@@ -25,15 +25,17 @@ import litellm
 from litellm import acompletion, completion
 from litellm import main as litellm_main
 from litellm.constants import CONTROL_OPTIONS_KEY
+from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
 
@@ -5859,8 +5861,6 @@ async def test_speech_azure_returns_binary_audio(
     )
 
     assert route.called
-    from litellm.types.llms.openai import HttpxBinaryResponseContent
-
     assert isinstance(response, HttpxBinaryResponseContent)
     assert response.content == b"ID3-fake-mp3"
 
@@ -5887,8 +5887,6 @@ async def test_speech_openai_returns_binary_audio(
     )
 
     assert route.called
-    from litellm.types.llms.openai import HttpxBinaryResponseContent
-
     assert isinstance(response, HttpxBinaryResponseContent)
     assert response.content == b"ID3-fake-mp3"
 
@@ -5900,9 +5898,6 @@ EAGLE_WAV: Final = ("eagle.wav", b"RIFF\x00\x00\x00\x00WAVE-eagle", "audio/wav")
 async def test_transcription_caching_hit_same_file_miss_different_file(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
-    from litellm.caching.caching import Cache
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.cache = Cache()
     route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
@@ -5914,10 +5909,6 @@ async def test_transcription_caching_hit_same_file_miss_different_file(
 
     await litellm.atranscription(model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key")
     await GLOBAL_LOGGING_WORKER.clear_queue()
-    for _ in range(50):
-        if litellm.cache.cache.cache_dict:
-            break
-        await asyncio.sleep(0.1)
     assert litellm.cache.cache.cache_dict
 
     response_2: Final = await litellm.atranscription(
@@ -5940,7 +5931,7 @@ async def test_whisper_log_pre_call_fires_once(
     respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
         return_value=httpx.Response(200, json={"text": "hello"})
     )
-    calls: Final[list] = []
+    calls: Final[list[tuple]] = []
 
     class _PreCallRecorder(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
@@ -5964,16 +5955,19 @@ async def test_transcription_model_names_pass_through(
         return_value=httpx.Response(200, json={"text": "hello"})
     )
 
-    for model in TRANSCRIBE_MODELS:
-        response: Final = await litellm.atranscription(
+    responses: Final = [
+        await litellm.atranscription(
             model=f"openai/{model}",
             file=GETTYSBURG_WAV,
             api_key="fake-key",
             response_format="json",
         )
+        for model in TRANSCRIBE_MODELS
+    ]
+    for response, model in zip(responses, TRANSCRIBE_MODELS):
         assert response._hidden_params["model"] == model
         assert response._hidden_params["custom_llm_provider"] == "openai"
-        assert response.text is not None
+        assert response.text == "hello"
 
     for index, model in enumerate(TRANSCRIBE_MODELS):
         assert model.encode() in route.calls[index].request.content, model
