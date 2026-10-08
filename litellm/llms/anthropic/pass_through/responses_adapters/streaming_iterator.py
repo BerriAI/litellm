@@ -133,8 +133,6 @@ class AnthropicResponsesStreamWrapper:
         self._item_id_to_block_index: dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
-        # tool_use blocks that already received input_json_delta, so a later
-        # function_call_arguments.done does not send the arguments a second time
         self._tool_blocks_with_input: set[int] = set()  # mutable-ok: per-stream accumulator state
         self._sent_message_start = False
         self._sent_message_stop = False
@@ -213,12 +211,7 @@ class AnthropicResponsesStreamWrapper:
         self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
 
     def _emit_arguments_sent_only_on_done(self, event: object) -> None:
-        """Send the complete arguments of a call that streamed no argument deltas.
-
-        Some backends (e.g. the ChatGPT/Codex backend for parallel tool calls) deliver
-        a call's arguments only in ``response.function_call_arguments.done``; without
-        this the tool_use block would close with empty input.
-        """
+        """Send a tool call's complete arguments when no argument delta streamed them."""
         item_id: Final = self._field(event, "item_id")
         arguments: Final = self._field(event, "arguments")
         block_idx: Final = (
@@ -384,7 +377,6 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
-        # ---- function call arguments done ----
         if event_type == "response.function_call_arguments.done":
             self._emit_arguments_sent_only_on_done(event)  # pyright: ignore[reportUnknownArgumentType]  # event is narrowed to a bare dict by the dict fallbacks above
             return

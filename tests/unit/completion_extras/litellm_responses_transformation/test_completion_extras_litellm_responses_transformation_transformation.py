@@ -4,6 +4,7 @@ import json
 import os
 import unittest
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
@@ -5025,105 +5026,92 @@ def test_transform_request_drop_params_in_litellm_params_gates_the_prompt_cache_
 _PARALLEL_CITY_ARGUMENTS: Final = ('{"city": "Paris"}', '{"city": "London"}', '{"city": "Tokyo"}')
 
 
-def _responses_tool_call_events(output_index: int, arguments: str, *, deltas: bool, done: bool) -> list[dict]:
-    """One Responses function_call item; its arguments arrive as deltas, a done event, or both."""
+def _responses_tool_call_events(
+    output_index: int, arguments: str, *, deltas: bool, done: bool
+) -> tuple[dict[str, object], ...]:
     item_id: Final = f"fc_{output_index}"
-    events: list[dict] = [
-        {
-            "type": "response.output_item.added",
-            "output_index": output_index,
-            "item": {
-                "type": "function_call",
-                "id": item_id,
-                "call_id": f"call_{output_index}",
-                "name": "get_weather",
-                "arguments": "",
-            },
-        }
-    ]
-    if deltas:
-        half: Final = len(arguments) // 2
-        events += [
-            {
-                "type": "response.function_call_arguments.delta",
-                "output_index": output_index,
-                "item_id": item_id,
-                "delta": part,
-            }
-            for part in (arguments[:half], arguments[half:])
-        ]
-    if done:
-        events.append(
-            {
-                "type": "response.function_call_arguments.done",
-                "output_index": output_index,
-                "item_id": item_id,
-                "arguments": arguments,
-            }
-        )
-    events.append(
-        {
-            "type": "response.output_item.done",
-            "output_index": output_index,
-            "item": {"type": "function_call", "id": item_id, "call_id": f"call_{output_index}", "arguments": arguments},
-        }
+    half: Final = len(arguments) // 2
+    added: Final[dict[str, object]] = {
+        "type": "response.output_item.added",
+        "output_index": output_index,
+        "item": {"type": "function_call", "id": item_id, "call_id": f"call_{output_index}", "name": "get_weather", "arguments": ""},
+    }
+    argument_deltas: Final = tuple(
+        {"type": "response.function_call_arguments.delta", "output_index": output_index, "item_id": item_id, "delta": part}
+        for part in ((arguments[:half], arguments[half:]) if deltas else ())
     )
-    return events
+    arguments_done: Final[tuple[dict[str, object], ...]] = (
+        ({"type": "response.function_call_arguments.done", "output_index": output_index, "item_id": item_id, "arguments": arguments},)
+        if done
+        else ()
+    )
+    item_done: Final[dict[str, object]] = {
+        "type": "response.output_item.done",
+        "output_index": output_index,
+        "item": {"type": "function_call", "id": item_id, "call_id": f"call_{output_index}", "arguments": arguments},
+    }
+    return (added, *argument_deltas, *arguments_done, item_done)
 
 
-def _chatgpt_streamed_tool_calls(events: list[dict]) -> dict[int, str]:
-    """Run Responses events through the bridge and the chatgpt provider's stream
-    normalizer, then rebuild each tool call's arguments as a chat client would: index -> arguments.
-    Also checks every call opened with its own id."""
+def _chatgpt_streamed_tool_calls(events: Sequence[dict[str, object]]) -> dict[int, str]:
+    """Stream events through the bridge and the chatgpt normalizer, then join each call's arguments by index."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
     )
     from litellm.llms.chatgpt.chat.streaming_utils import ChatGPTToolCallNormalizer
 
     iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
-    arguments_by_index: dict[int, str] = {}
-    opening_ids: list[str] = []
-    for chunk in ChatGPTToolCallNormalizer(iter([iterator.chunk_parser(event) for event in events])):
-        for tool_call in chunk.choices[0].delta.tool_calls or ():
-            if tool_call.id:
-                opening_ids.append(tool_call.id)
-            arguments_by_index[tool_call.index] = arguments_by_index.get(tool_call.index, "") + (
-                tool_call.function.arguments or ""
-            )
-    assert len(set(opening_ids)) == len(opening_ids) == len(arguments_by_index)
-    return arguments_by_index
+    chunks: Final = tuple(ChatGPTToolCallNormalizer(iter(tuple(iterator.chunk_parser(event) for event in events))))
+    tool_calls: Final = tuple(chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks))
+    opening_ids: Final = tuple(tool_call.id for tool_call in tool_calls if tool_call.id)
+    indexes: Final = frozenset(tool_call.index for tool_call in tool_calls)
+    assert len(set(opening_ids)) == len(opening_ids) == len(indexes)
+    return {
+        index: "".join(tool_call.function.arguments or "" for tool_call in tool_calls if tool_call.index == index)
+        for index in indexes
+    }
 
 
-def test_chatgpt_parallel_tool_calls_with_arguments_only_on_done_keep_their_arguments():
-    """Regression for #45348: the ChatGPT/Codex backend sends parallel tool calls' arguments
-    only in response.function_call_arguments.done, with no delta events."""
-    events: Final = [
-        event
-        for i, arguments in enumerate(_PARALLEL_CITY_ARGUMENTS)
-        for event in _responses_tool_call_events(i, arguments, deltas=False, done=True)
-    ]
-
-    assert _chatgpt_streamed_tool_calls(events) == dict(enumerate(_PARALLEL_CITY_ARGUMENTS))
-
-
-def test_streamed_tool_call_arguments_are_not_repeated_by_the_done_event():
-    events: Final = [
-        event
-        for i, arguments in enumerate(_PARALLEL_CITY_ARGUMENTS)
-        for event in _responses_tool_call_events(i, arguments, deltas=True, done=True)
-    ]
-
-    assert _chatgpt_streamed_tool_calls(events) == dict(enumerate(_PARALLEL_CITY_ARGUMENTS))
-
-
-def test_mixed_delta_and_done_only_tool_calls_each_get_their_own_arguments():
-    events: Final = (
-        _responses_tool_call_events(0, _PARALLEL_CITY_ARGUMENTS[0], deltas=True, done=True)
-        + _responses_tool_call_events(1, _PARALLEL_CITY_ARGUMENTS[1], deltas=False, done=True)
-        + _responses_tool_call_events(2, _PARALLEL_CITY_ARGUMENTS[2], deltas=True, done=False)
+@pytest.mark.parametrize(
+    "deltas_and_done_per_call",
+    [
+        pytest.param(((False, True),) * 3, id="arguments-only-on-done"),
+        pytest.param(((True, True),) * 3, id="deltas-and-done-not-repeated"),
+        pytest.param(((True, True), (False, True), (True, False)), id="mixed-delta-and-done-only"),
+    ],
+)
+def test_chatgpt_parallel_tool_calls_each_stream_their_arguments_once(
+    deltas_and_done_per_call: tuple[tuple[bool, bool], ...],
+):
+    """Regression for #45348: parallel tool calls can carry their arguments only on function_call_arguments.done"""
+    events: Final = tuple(
+        chain.from_iterable(
+            _responses_tool_call_events(i, arguments, deltas=deltas, done=done)
+            for i, (arguments, (deltas, done)) in enumerate(zip(_PARALLEL_CITY_ARGUMENTS, deltas_and_done_per_call))
+        )
     )
 
     assert _chatgpt_streamed_tool_calls(events) == dict(enumerate(_PARALLEL_CITY_ARGUMENTS))
+
+
+def test_custom_tool_call_input_only_on_done_is_streamed():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    iterator.chunk_parser(
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "custom_tool_call", "id": "ctc_0", "call_id": "call_0", "name": "run_sql", "input": ""},
+        }
+    )
+    done: Final = iterator.chunk_parser(
+        {"type": "response.custom_tool_call_input.done", "output_index": 0, "item_id": "ctc_0", "input": "SELECT 1"}
+    )
+
+    assert done.choices[0].delta.tool_calls[0].function.arguments == "SELECT 1"
 
 
 def test_done_event_does_not_repeat_arguments_sent_with_output_item_added():
@@ -5145,3 +5133,25 @@ def test_done_event_does_not_repeat_arguments_sent_with_output_item_added():
 
     assert added.choices[0].delta.tool_calls[0].function.arguments == '{"a": 1}'
     assert not done.choices[0].delta.tool_calls
+
+
+def test_tool_call_with_empty_arguments_on_done_streams_without_an_arguments_delta():
+    """An empty done must not become an empty delta, which the delta translator rejects"""
+    no_argument_call: Final = _responses_tool_call_events(0, "", deltas=False, done=True)
+
+    assert _chatgpt_streamed_tool_calls(no_argument_call) == {0: ""}
+
+
+def test_chunk_parser_passes_a_chat_completion_chunk_through_unchanged():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chat_chunk: Final[dict[str, object]] = {
+        "object": "chat.completion.chunk",
+        "id": "chatcmpl-1",
+        "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+    }
+
+    assert iterator.chunk_parser(chat_chunk).choices[0].delta.content == "hi"
