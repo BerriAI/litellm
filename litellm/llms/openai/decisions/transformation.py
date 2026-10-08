@@ -45,10 +45,14 @@ from litellm.types.decisions import (
     OpenAIScoreAnswer,
     OpenAIScoreProbability,
     OpenAIScoreQuestion,
+    UnsupportedDecisionsRequest,
     systemone_choice_key,
 )
 
 _OPENAI_RESPONSE_ADAPTER: Final[TypeAdapter[OpenAIDecisionResponse]] = TypeAdapter(OpenAIDecisionResponse)
+_SINGLE_OPTION: Final = UnsupportedDecisionsRequest(
+    reason="OpenAI needs at least 2 choices or levels on every choice or score question"
+)
 
 
 def _ir_input(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
@@ -94,6 +98,10 @@ def _text_field(key: str, value: DecisionsJSON | None) -> Mapping[str, str]:
     return {} if value is None else {key: decisions_text(value)}
 
 
+def _instructions(value: DecisionsJSON | None, default: str) -> str:
+    return default if value is None else decisions_text(value)
+
+
 def _predicate_instructions(question: DecisionsIRPredicateQuestion) -> str:
     instructions: Final = () if question.instructions is None else (decisions_text(question.instructions),)
     criteria: Final = tuple(
@@ -110,13 +118,13 @@ def _openai_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
             return {
                 "type": "predicate",
                 **_text_field("name", question.name),
-                "instructions": _predicate_instructions(question),
+                "instructions": _predicate_instructions(question) or "Is this true of the input?",
             }
         case DecisionsIRChoiceQuestion():
             return {
                 "type": "choice",
                 **_text_field("name", question.name),
-                **_text_field("instructions", question.instructions),
+                "instructions": _instructions(question.instructions, "Which choice best fits the input?"),
                 "choices": [
                     {"value": option.value, **_text_field("description", option.description)}
                     for option in question.choices
@@ -126,7 +134,7 @@ def _openai_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
             return {
                 "type": "score",
                 **_text_field("name", question.name),
-                **_text_field("instructions", question.instructions),
+                "instructions": _instructions(question.instructions, "Which level best fits the input?"),
                 "levels": [
                     {"label": decisions_text(level.label), **_text_field("description", level.description)}
                     for level in question.levels
@@ -146,7 +154,19 @@ def _openai_input(decision_input: DecisionsIRState | DecisionsIRMessages) -> str
             assert_never(decision_input)
 
 
-def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object]:
+def _has_one_option(question: DecisionsIRQuestion) -> bool:
+    match question:
+        case DecisionsIRChoiceQuestion():
+            return len(question.choices) < 2
+        case DecisionsIRScoreQuestion():
+            return len(question.levels) < 2
+        case _:
+            return False
+
+
+def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+    if any(_has_one_option(question) for question in request.questions):
+        return _SINGLE_OPTION
     return {
         "model": model,
         "input": _openai_input(request.input),
@@ -298,7 +318,9 @@ class OpenAIDecisionsEndpoint:
     def endpoint_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}/v1/decisions"
 
-    def request_body(self, model: str, request: DecisionsIRRequest) -> Mapping[str, object]:
+    def request_body(
+        self, model: str, request: DecisionsIRRequest
+    ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
         return ir_to_openai_request(model, request)
 
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
