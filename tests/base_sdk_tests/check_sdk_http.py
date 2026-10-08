@@ -10,11 +10,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import Queue
 from threading import Event, Thread
 from typing import Final
+from unittest.mock import patch
 
-os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+ENVIRONMENT: Final = {"LITELLM_LOCAL_MODEL_COST_MAP": "True", "PYTHON_DOTENV_DISABLED": "1"}
 
-import litellm
+with patch.dict(os.environ, ENVIRONMENT):
+    import litellm
 
 RESPONSES: Final[Queue[tuple[int, bytes]]] = Queue()
 REQUESTS: Final[Queue[tuple[str, dict[str, str], bytes]]] = Queue()
@@ -197,4 +198,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with patch.dict(os.environ, ENVIRONMENT):
+        main()
