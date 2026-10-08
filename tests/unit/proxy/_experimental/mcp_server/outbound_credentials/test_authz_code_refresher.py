@@ -52,7 +52,8 @@ def _endpoint(body, sink=None):
 
 def _recording_persist(sink):
     async def persist(
-        user_id, server_id, access_token, refresh_token, expires_in, scopes
+        user_id, server_id, access_token, refresh_token, expires_in, scopes,
+        *, expected_credential: OAuthToken
     ):
         sink.append(
             (user_id, server_id, access_token, refresh_token, expires_in, scopes)

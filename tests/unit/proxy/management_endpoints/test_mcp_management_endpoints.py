@@ -5678,8 +5678,11 @@ async def test_delete_mcp_oauth_user_credential_invalidates_cached_token():
 
 
 @pytest.mark.asyncio
-async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_gone():
-    """A concurrent delete can remove the row between the read and the delete; the cache may
+@pytest.mark.parametrize("credential", [None, {"type": "oauth2", "access_token": "revoked-tok"}])
+async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_gone(
+    credential: dict[str, str] | None,
+) -> None:
+    """A previous or concurrent delete can remove the row; the cache may
     still hold the revoked token, so the invalidate must fire even on RecordNotFoundError."""
     if not mgmt_endpoints.MCP_AVAILABLE:
         pytest.skip("MCP module not installed")
@@ -5700,7 +5703,7 @@ async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
-            new=AsyncMock(return_value={"type": "oauth2", "access_token": "revoked-tok"}),
+            new=AsyncMock(return_value=credential),
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",

@@ -1,4 +1,5 @@
 import asyncio
+from typing import Final
 
 import pytest
 
@@ -10,6 +11,64 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_
     LazyPerUserOAuthTokenStore,
     ServerLookup,
 )
+
+
+@pytest.mark.asyncio
+async def test_runtime_backend_never_retains_positive_tokens() -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
+        _NoopTokenCacheBackend,
+    )
+
+    backend: Final = _NoopTokenCacheBackend()
+    token: Final = OAuthToken(access_token="revocable")
+    assert await backend.get("alice", "srv") is None
+    await backend.set("alice", "srv", token, 300)
+    assert await backend.get("alice", "srv") is None
+    await backend.delete("alice", "srv")
+    assert await backend.get("alice", "srv") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["saved", "revoked", "unavailable"])
+async def test_runtime_refresh_persistence_fails_closed(monkeypatch: pytest.MonkeyPatch, state: str) -> None:
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import per_user_oauth_store as module
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import TokenStoreUnavailable
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "synthetic-refresh-persistence-test-salt")
+    expected: Final = OAuthToken(access_token="old", refresh_token="original", connected_at="first")
+    encoded: Final = encrypt_value_helper(
+        json.dumps({"type": "oauth2", "access_token": "old", "refresh_token": "original", "connected_at": "first"})
+    )
+    prisma: Final = MagicMock()
+    table: Final = prisma.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=SimpleNamespace(credential_b64=encoded) if state == "saved" else None)
+    table.update_many = AsyncMock(return_value=1)
+    table.upsert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", None if state == "unavailable" else prisma)
+    pending: Final = module._persist_credential(
+        "alice", "srv", "new", "rotated", 3600, None, expected_credential=expected
+    )
+    if state == "saved":
+        await pending
+        table.update_many.assert_awaited_once()
+    elif state == "revoked":
+        with pytest.raises(HTTPException) as error:
+            await pending
+        assert error.value.status_code == 403
+        table.update_many.assert_not_awaited()
+    else:
+        with pytest.raises(TokenStoreUnavailable):
+            await pending
+        table.update_many.assert_not_awaited()
+    table.upsert.assert_not_awaited()
 
 
 class _RecordingStore:
@@ -310,6 +369,40 @@ async def test_enforced_cache_hit_avoids_credential_read_and_rejects_changed_pol
     read.assert_awaited_once()
     assert await store.fetch("alice", "srv") is None
     assert read.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_redis", [False, True])
+async def test_runtime_store_cannot_recache_a_revoked_in_flight_read(
+    monkeypatch: pytest.MonkeyPatch, with_redis: bool
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import per_user_oauth_store as module
+
+    read_completed: Final = asyncio.Event()
+    resume: Final = asyncio.Event()
+    credential: Final = {"access_token": "revoked-token"}
+
+    async def read(user_id: str, server_id: str) -> dict[str, str] | None:
+        captured: Final = credential.copy() if credential else None
+        if captured is not None:
+            read_completed.set()
+            await resume.wait()
+        return captured
+
+    coordinator: Final = AsyncMock() if with_redis else None
+    monkeypatch.setattr(module, "runtime_refresh_coordinator", lambda: coordinator)
+    monkeypatch.setattr(module, "_read_credential", read)
+    store: Final = module.build_per_user_oauth_token_store(lambda _: None)
+    pending: Final = asyncio.create_task(store.fetch("alice", "srv"))
+    await read_completed.wait()
+    credential.clear()  # rebind-ok: deletion occurs while the original credential read is suspended
+    await store.invalidate("alice", "srv")
+    resume.set()
+    assert (await pending).access_token == "revoked-token"
+    assert await store.fetch("alice", "srv") is None
+    assert await store.fetch("alice", "srv") is None
 
 
 @pytest.mark.asyncio

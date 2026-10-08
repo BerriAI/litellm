@@ -40,6 +40,7 @@ from litellm.proxy._experimental.mcp_server.db import (
     update_mcp_server,
 )
 from litellm.proxy._types import LiteLLM_MCPServerTable, NewMCPServerRequest, UpdateMCPServerRequest
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     SecretMapDecodeError,
     decode_secret_map,
@@ -50,6 +51,51 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 from litellm.types.mcp import MCPAuth, MCPTransport
 
 SALT_KEY = "test-salt-key-for-byok-credential-tests-1234"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["missing", "reconnected", "deleted_after_read", "unchanged"])
+async def test_refresh_updates_only_the_original_credential(state: str) -> None:
+    expected: Final = OAuthToken(
+        access_token="old", refresh_token="original-refresh", connected_at="first-connection"
+    )
+    encoded: Final = encrypt_value_helper(
+        json.dumps(
+            {
+                "type": "oauth2",
+                "access_token": "old",
+                "refresh_token": "original-refresh",
+                "connected_at": "second-connection" if state == "reconnected" else "first-connection",
+            }
+        )
+    )
+    row: Final = None if state == "missing" else SimpleNamespace(credential_b64=encoded)
+    prisma: Final = _make_prisma_with_existing(row)
+    table: Final = prisma.db.litellm_mcpusercredentials
+    table.update_many = AsyncMock(return_value=0 if state == "deleted_after_read" else 1)
+    saved: Final = await store_user_oauth_credential(
+        prisma,
+        "alice",
+        "srv-1",
+        "new",
+        refresh_token="rotated-refresh",
+        skip_byok_guard=True,
+        expected_credential=expected,
+    )
+    assert saved is (state == "unchanged")
+    table.upsert.assert_not_awaited()
+    if state in ("unchanged", "deleted_after_read"):
+        table.update_many.assert_awaited_once()
+        assert table.update_many.await_args.kwargs["where"] == {
+            "user_id": "alice",
+            "server_id": "srv-1",
+            "credential_b64": encoded,
+        }
+        stored: Final = _decode_user_credential(table.update_many.await_args.kwargs["data"]["credential_b64"])
+        assert isinstance(stored, str)
+        assert json.loads(stored)["access_token"] == "new"
+    else:
+        table.update_many.assert_not_awaited()
 
 
 @pytest.fixture(autouse=True)
