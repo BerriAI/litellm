@@ -909,6 +909,17 @@ def bedrock_model_is_openai_gpt(model: str) -> bool:
     return _openai_gpt_version(model) is not None
 
 
+def bedrock_runtime_chat_completions_serves_reasoning_inline(model: str) -> bool:
+    """Whether AWS's native Chat Completions writes this model's reasoning inline in the answer text.
+
+    Data-driven from the price-map ``supports_bedrock_runtime_chat_completions_inline_reasoning`` flag (gpt-oss).
+    A flagged model opens its answer with a ``<reasoning>...</reasoning>`` block instead of a
+    ``reasoning_content`` field, so litellm splits that block out for it and keeps every other model's
+    text as sent.
+    """
+    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_inline_reasoning")
+
+
 BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
     (
         "guardrailConfig",
