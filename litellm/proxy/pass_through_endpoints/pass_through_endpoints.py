@@ -605,6 +605,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         _parsed_body = _parsed_body or {}
         server_marker_free_body: Final = without_server_streaming_classification(_parsed_body)
+        # mutable-ok: the marker-free body must propagate through the caller's request dict,
+        # so downstream guardrail scans and snapshots never observe the server streaming marker.
         _parsed_body.clear()
         _parsed_body.update(server_marker_free_body)
         managed_model: Final = get_model_from_request(
