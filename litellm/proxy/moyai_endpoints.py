@@ -20,6 +20,7 @@ from urllib.parse import urlencode, urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
+from litellm._internal_context import with_service_target
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
@@ -28,6 +29,7 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     _ui_settings_db,
     normalize_moyai_url,
 )
+from litellm.proxy.utils import CONFIG_PARAMS_TARGET
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import UISettingsRepository
 
@@ -189,6 +191,7 @@ async def _moyai_key_alias(prisma_client, moyai_url: str) -> str:
     return alias
 
 
+@with_service_target(CONFIG_PARAMS_TARGET)
 async def _persist_moyai_url(prisma_client, moyai_url: str) -> None:
     from litellm.proxy.proxy_server import user_api_key_cache
 
