@@ -44973,6 +44973,8 @@ export interface components {
             type: "slack" | "teams" | "discord" | "linear" | "github" | "jira" | "custom";
             /** Url */
             url: string;
+            /** User */
+            user?: string;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
