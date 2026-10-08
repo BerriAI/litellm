@@ -18,10 +18,13 @@ from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
+    initialize_guardrail,
 )
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
+from litellm.types.guardrails import Guardrail, LitellmParams
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPIOptionalParams
 from litellm.types.utils import Choices, Message
 
 
@@ -2141,3 +2144,42 @@ class TestFailOnError:
                     request_data={},
                     input_type="response",
                 )
+
+
+@pytest.mark.parametrize(
+    ("option", "reason"),
+    [
+        ("skip_if_system_prompt_matches", "skipped: skip_if_system_prompt_matches"),
+        ("skip_if_first_role_in", "skipped: skip_if_first_role_in"),
+    ],
+)
+@pytest.mark.parametrize("via_optional_params", [False, True])
+@pytest.mark.asyncio
+async def test_initialize_guardrail_forwards_the_message_skip_options(
+    option: str, reason: str, via_optional_params: bool
+):
+    value = ["developer"] if option == "skip_if_first_role_in" else ["internal-agent"]
+    litellm_params = LitellmParams(
+        guardrail="generic_guardrail_api",
+        mode="pre_call",
+        api_base="https://guardrail.test",
+        **({} if via_optional_params else {option: value}),
+    )
+    if via_optional_params:
+        litellm_params.optional_params = GenericGuardrailAPIOptionalParams(**{option: value})
+    guardrail = initialize_guardrail(
+        litellm_params, Guardrail(guardrail_name="gg-config", litellm_params=litellm_params)
+    )
+    request_data = {"messages": [{"role": "developer", "content": "you are internal-agent"}]}
+    try:
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]}, request_data=request_data, input_type="request"
+        )
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(guardrail)
+
+    assert result == {"texts": ["hello"]}
+    assert [
+        (entry["guardrail_status"], entry["guardrail_response"])
+        for entry in request_data["metadata"]["standard_logging_guardrail_information"]
+    ] == [("not_run", reason)]

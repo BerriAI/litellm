@@ -40,6 +40,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         streaming_sampling_rate=_get_config_value(litellm_params, optional_params, "streaming_sampling_rate"),
         streaming_transform_mode=_get_config_value(litellm_params, optional_params, "streaming_transform_mode"),
         timeout=litellm_params.timeout,
+        skip_if_system_prompt_matches=_get_config_value(
+            litellm_params, optional_params, "skip_if_system_prompt_matches"
+        ),
+        skip_if_first_role_in=_get_config_value(litellm_params, optional_params, "skip_if_first_role_in"),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(_generic_guardrail_api_callback)

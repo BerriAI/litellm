@@ -104,6 +104,29 @@ class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
         ),
     )
 
+    skip_if_system_prompt_matches: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Regex patterns searched in the request's instructions (system and developer messages, a top-level "
+            "system prompt, Responses API instructions), never in user text. The first 16384 characters are "
+            "searched. On a match the guardrail skips the request and its response. The caller writes these "
+            "messages, so this scopes traffic and is not enforcement. Keep patterns linear-time: Python's re has "
+            "no timeout. An invalid value is ignored with a warning."
+        ),
+        json_schema_extra={"ui_hidden": True},
+    )
+
+    skip_if_first_role_in: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "If the role of the request's first message is in this list (e.g. ['developer']), the guardrail "
+            "skips the request and its response. A top-level system prompt or string instructions count as a leading "
+            "system message. The caller chooses its roles, so this scopes traffic and is not enforcement. An "
+            "invalid value is ignored with a warning."
+        ),
+        json_schema_extra={"ui_hidden": True},
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],
