@@ -63,7 +63,10 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     get_cooldown_deployments,
 )
-from litellm.router_utils.fallback_event_handlers import DISABLE_FALLBACKS_METADATA_KEY
+from litellm.router_utils.fallback_event_handlers import (
+    DISABLE_FALLBACKS_METADATA_KEY,
+    MID_STREAM_FALLBACK_CONTROLS_KEY,
+)
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
 from litellm.types.llms.openai import ChatCompletionRequest
@@ -3866,6 +3869,139 @@ async def test_acompletion_mid_stream_fallback_walks_every_entry_of_the_configur
         "fb1",
         "fb2",
     ]
+
+
+class _DiesBeforeFirstChunk(CustomStreamWrapper):
+    def __init__(self, model: str):
+        super().__init__(completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock())
+
+    def _mid_stream_error(self) -> MidStreamFallbackError:
+        return MidStreamFallbackError(
+            message=f"provider 500 from {self.model}",
+            model=self.model,
+            llm_provider="openai",
+            generated_content="",
+            is_pre_first_chunk=True,
+            original_exception=litellm.InternalServerError(
+                message=f"provider 500 from {self.model}", model=self.model, llm_provider="openai"
+            ),
+        )
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        raise self._mid_stream_error()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise self._mid_stream_error()
+
+
+class _Answers(_DiesBeforeFirstChunk):
+    def __init__(self, model: str):
+        super().__init__(model)
+        self._chunks = iter(
+            [litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": f"ok-from-{model}"}}])]
+        )
+
+    def __next__(self):
+        return next(self._chunks)
+
+    async def __anext__(self):
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
+def _primary_and_backup_router(**settings: object) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "backup", "litellm_params": {"model": "openai/backup-model", "api_key": "fake-key"}},
+        ],
+        num_retries=0,
+        **settings,
+    )
+
+
+def _stream_for(**kwargs: object) -> CustomStreamWrapper:
+    model: Final = str(kwargs["model"])
+    return _Answers(model) if "backup" in model else _DiesBeforeFirstChunk(model)
+
+
+def _groups_called(provider_calls: MagicMock) -> list[str]:
+    return [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list]
+
+
+def _router_internals_reached_the_provider(provider_calls: MagicMock) -> bool:
+    leaked: Final = (
+        "fallbacks",
+        "context_window_fallbacks",
+        "content_policy_fallbacks",
+        MID_STREAM_FALLBACK_CONTROLS_KEY,
+    )
+    return any(key in call.kwargs for call in provider_calls.call_args_list for key in leaked)
+
+
+def test_completion_mid_stream_fallback_honors_the_per_request_list():
+    router: Final = _primary_and_backup_router()
+
+    with patch("litellm.completion", side_effect=_stream_for) as provider_calls:
+        response: Final = router.completion(
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            fallbacks=[{"primary": ["backup"]}],
+        )
+        content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in response if chunk is not None)
+
+    assert content == "ok-from-openai/backup-model"
+    assert _groups_called(provider_calls) == ["primary", "backup"]
+    assert not _router_internals_reached_the_provider(provider_calls)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_mid_stream_fallback_honors_the_per_request_list():
+    router: Final = _primary_and_backup_router()
+
+    async def fake_acompletion(**kwargs):
+        return _stream_for(**kwargs)
+
+    with patch("litellm.acompletion", side_effect=fake_acompletion) as provider_calls:
+        response: Final = await router.acompletion(
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            fallbacks=[{"primary": ["backup"]}],
+        )
+        content: Final = "".join(
+            [chunk.choices[0].delta.content or "" async for chunk in response if chunk is not None]
+        )
+
+    assert content == "ok-from-openai/backup-model"
+    assert _groups_called(provider_calls) == ["primary", "backup"]
+    assert not _router_internals_reached_the_provider(provider_calls)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_mid_stream_fallback_honors_a_per_request_fallbacks_none():
+    router: Final = _primary_and_backup_router(fallbacks=[{"primary": ["backup"]}])
+
+    async def fake_acompletion(**kwargs):
+        return _stream_for(**kwargs)
+
+    with patch("litellm.acompletion", side_effect=fake_acompletion) as provider_calls:
+        response: Final = await router.acompletion(
+            model="primary", messages=[{"role": "user", "content": "hi"}], stream=True, fallbacks=None
+        )
+        with pytest.raises(litellm.InternalServerError, match="provider 500 from openai/primary-model"):
+            [chunk async for chunk in response]
+
+    assert _groups_called(provider_calls) == ["primary"]
 
 
 def test_refusal_on_the_last_fallback_hop_is_returned_instead_of_raised():

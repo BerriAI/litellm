@@ -227,6 +227,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_pre_routing_selection,
     has_unattempted_fallback_target,
     mid_stream_fallback_hop_kwargs,
+    mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
     per_request_fallback_controls,
     record_disable_fallbacks,
@@ -2660,6 +2661,8 @@ class Router:
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["original_function"] = self._completion
+            controls: Final = per_request_fallback_controls(kwargs)
+            kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
 
             response: Final = self.function_with_fallbacks(**kwargs)
@@ -2671,10 +2674,10 @@ class Router:
         model_name = None
         deployment = None
         try:
-            # Capture kwargs before deployment selection so the streaming
-            # fallback iterator can re-dispatch with the original model group.
-            input_kwargs_for_streaming_fallback: Final = kwargs.copy()
-            input_kwargs_for_streaming_fallback["model"] = model
+            controls: Final = kwargs.pop(MID_STREAM_FALLBACK_CONTROLS_KEY, None)
+            input_kwargs_for_streaming_fallback: Final = mid_stream_fallback_snapshot_kwargs(
+                model=model, controls=controls, kwargs=kwargs
+            )
 
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
@@ -2920,6 +2923,8 @@ class Router:
                     messages=messages,
                     kwargs=kwargs,
                 )
+            controls: Final = per_request_fallback_controls(kwargs)
+            kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
             if request_priority is not None and isinstance(request_priority, int):
                 response = await self.schedule_acompletion(**kwargs)
             else:
@@ -3815,8 +3820,10 @@ class Router:
         deployment = None
         _timeout_debug_deployment_dict = {}  # this is a temporary dict to debug timeout issues
         try:
-            input_kwargs_for_streaming_fallback: Final = kwargs.copy()
-            input_kwargs_for_streaming_fallback["model"] = model
+            controls: Final = kwargs.pop(MID_STREAM_FALLBACK_CONTROLS_KEY, None)
+            input_kwargs_for_streaming_fallback: Final = mid_stream_fallback_snapshot_kwargs(
+                model=model, controls=controls, kwargs=kwargs
+            )
 
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             start_time: Final = time.time()
