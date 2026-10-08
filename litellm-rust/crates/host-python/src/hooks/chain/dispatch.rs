@@ -323,6 +323,12 @@ impl CallHooks<PythonRuntime> for HookChain {
             .try_for_each(|hooks| hooks.arguments_prepared(py, arguments))
     }
 
+    fn arguments_resolved(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+        self.hooks
+            .iter_mut()
+            .try_for_each(|hooks| hooks.arguments_resolved(py, arguments))
+    }
+
     fn before_provider_request(
         &mut self,
         py: Python<'_>,

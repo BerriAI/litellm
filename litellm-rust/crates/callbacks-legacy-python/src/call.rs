@@ -3,7 +3,6 @@
 //! lifetime. No other callback host has that obligation, which is why nothing outside
 //! this crate holds them.
 
-use litellm_host_python::lookup;
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -13,21 +12,15 @@ use pyo3::{
 pub struct PublicCall {
     args: Py<PyTuple>,
     kwargs: Py<PyDict>,
-    bound: Py<PyDict>,
 }
 
 impl PublicCall {
     /// Copies the keyword arguments once, so the legacy path's rewrites never reach the
     /// caller's own dict while every value keeps its identity.
-    pub fn capture(
-        bound: &Bound<'_, PyDict>,
-        args: &Bound<'_, PyTuple>,
-        kwargs: &Bound<'_, PyDict>,
-    ) -> PyResult<Self> {
+    pub fn capture(args: &Bound<'_, PyTuple>, kwargs: &Bound<'_, PyDict>) -> PyResult<Self> {
         Ok(Self {
             args: args.clone().unbind(),
             kwargs: kwargs.copy()?.unbind(),
-            bound: bound.clone().unbind(),
         })
     }
 
@@ -50,18 +43,9 @@ impl PublicCall {
         self.kwargs = kwargs;
     }
 
-    pub(crate) fn lookup<'py>(
-        &self,
-        py: Python<'py>,
-        name: &str,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        lookup(self.kwargs.bind(py), self.bound.bind(py), name)
-    }
-
     pub(crate) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.args)?;
-        visit.call(&self.kwargs)?;
-        visit.call(&self.bound)
+        visit.call(&self.kwargs)
     }
 }
 
@@ -73,12 +57,8 @@ mod tests {
     fn capture<'py>(py: Python<'py>, source: &std::ffi::CStr) -> (PublicCall, Bound<'py, PyDict>) {
         let locals = PyDict::new(py);
         py.run(source, Some(&locals), Some(&locals)).unwrap();
-        let call = PublicCall::capture(
-            &local_dict(&locals, "bound"),
-            &PyTuple::empty(py),
-            &local_dict(&locals, "kwargs"),
-        )
-        .unwrap();
+        let call =
+            PublicCall::capture(&PyTuple::empty(py), &local_dict(&locals, "kwargs")).unwrap();
         (call, locals)
     }
 
@@ -90,7 +70,6 @@ mod tests {
                 py,
                 c"
 pages = [0]
-bound = {'pages': [1]}
 kwargs = {'pages': pages}
 ",
             );
@@ -101,7 +80,9 @@ kwargs = {'pages': pages}
                 .unwrap();
             assert!(!caller.contains("litellm_call_id").unwrap());
             assert!(
-                call.lookup(py, "pages")
+                call.kwargs()
+                    .bind(py)
+                    .get_item("pages")
                     .unwrap()
                     .unwrap()
                     .is(local(&locals, "pages"))

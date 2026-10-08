@@ -18,7 +18,7 @@ use crate::PythonHostCalls;
 use crate::handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
 use crate::hooks::{HookResume, HookStep, PythonCallEvent, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};
-use crate::{InvokeError, PythonBinding, missing_state};
+use crate::{InvokeError, PythonBinding, effective, missing_state};
 
 type ProtocolOf<H> = <H as PythonBinding>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
@@ -31,6 +31,13 @@ type StartMachine<P, M> = Box<
         + Send
         + Sync,
 >;
+
+/// The public call as Python bound it: `base` carries the positional arguments by name
+/// plus the signature defaults, `kwargs` the caller's keyword dict that hooks may rewrite.
+pub struct CallArguments {
+    pub base: Py<PyDict>,
+    pub kwargs: Py<PyDict>,
+}
 
 pub struct CallOptions {
     pub asynchronous: bool,
@@ -100,6 +107,7 @@ where
     native: NativeMachine<M>,
     start: Option<StartMachine<ProtocolOf<H>, M>>,
     closed: bool,
+    base: Py<PyDict>,
     arguments: Option<Py<PyDict>>,
     started_at: f64,
     ended_at: Option<f64>,
@@ -123,7 +131,7 @@ pub fn run_call<H, M, L>(
     + 'static,
     binding: H,
     hooks: L,
-    arguments: Py<PyDict>,
+    arguments: CallArguments,
     options: CallOptions,
 ) -> PyResult<Py<PyAny>>
 where
@@ -138,7 +146,8 @@ where
         native: NativeMachine::new(options.asynchronous),
         start: Some(Box::new(start)),
         closed: false,
-        arguments: Some(arguments),
+        base: arguments.base,
+        arguments: Some(arguments.kwargs),
         started_at: 0.0,
         ended_at: None,
         stage: Stage::Begin,
@@ -268,8 +277,15 @@ where
                 self.pending = Some(Pending::Arguments(resume));
                 Ok(ExecutionStep::Await(awaitable))
             }
-            HookStep::Ready(arguments) => {
-                if let Err(error) = self.hooks.arguments_prepared(py, &arguments) {
+            HookStep::Ready(kwargs) => {
+                if let Err(error) = self.hooks.arguments_prepared(py, &kwargs) {
+                    return self.hook_failed(py, error);
+                }
+                let arguments = match effective(self.base.bind(py), kwargs.bind(py)) {
+                    Ok(arguments) => arguments.unbind(),
+                    Err(error) => return self.failure(py, error, FailureOrigin::Host),
+                };
+                if let Err(error) = self.hooks.arguments_resolved(py, &arguments) {
                     return self.hook_failed(py, error);
                 }
                 let decoded = self.binding.decode_request(py, arguments.bind(py));
@@ -680,6 +696,7 @@ where
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.binding.traverse(visit)?;
         self.hooks.traverse(visit)?;
+        visit.call(&self.base)?;
         visit.call(&self.arguments)?;
         visit.call(&self.interrupted)?;
         match &self.stage {
@@ -726,6 +743,13 @@ mod tests {
 
     fn call_options(asynchronous: bool) -> CallOptions {
         CallOptions::new(asynchronous, lifecycle_binding)
+    }
+
+    fn keywords(py: Python<'_>, kwargs: Py<PyDict>) -> CallArguments {
+        CallArguments {
+            base: PyDict::new(py).unbind(),
+            kwargs,
+        }
     }
 
     fn install_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
@@ -1210,7 +1234,7 @@ mod tests {
                     pending_reply: None,
                 },
                 hooks,
-                PyDict::new(py).unbind(),
+                keywords(py, PyDict::new(py).unbind()),
                 call_options(asynchronous),
             )
             .unwrap();
@@ -1271,7 +1295,7 @@ mod tests {
             move |_, _, request| Ok(machine(request)),
             host,
             compose(adapter),
-            arguments.unbind(),
+            keywords(py, arguments.unbind()),
             options,
         );
         let result = if asynchronous {
@@ -1664,7 +1688,7 @@ mod tests {
                     log: Log(log.0.clone()),
                     script: HookScript::Plain,
                 },
-                PyDict::new(py).unbind(),
+                keywords(py, PyDict::new(py).unbind()),
                 CallOptions {
                     asynchronous,
                     lifecycle: lifecycle_binding,
@@ -1761,7 +1785,7 @@ mod tests {
                     |_, _, request| Ok(streaming_machine()(request)),
                     StreamingBinding,
                     adapter,
-                    PyDict::new(py).unbind(),
+                    keywords(py, PyDict::new(py).unbind()),
                     call_options(asynchronous),
                 )
                 .unwrap();
@@ -1966,6 +1990,153 @@ mod tests {
         });
     }
 
+    /// Rewrites the keyword dict the way `function_setup` does: replaces one keyword and
+    /// deletes another.
+    struct KeywordRewrite;
+
+    impl CallHooks<PythonRuntime> for KeywordRewrite {
+        fn prepare_arguments(
+            &mut self,
+            py: Python<'_>,
+            arguments: Py<PyDict>,
+            _: f64,
+        ) -> PyResult<HookStep<Self, Py<PyDict>>> {
+            let rewritten = arguments.bind(py).copy()?;
+            rewritten.set_item("model", "hook-model")?;
+            rewritten.del_item("api_key")?;
+            Ok(HookStep::Ready(rewritten.unbind()))
+        }
+    }
+
+    impl PythonOwned for KeywordRewrite {
+        fn close(&mut self, _: Python<'_>) {}
+        fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+            Ok(())
+        }
+    }
+
+    struct ArgumentViews(Log);
+
+    impl ArgumentViews {
+        fn record(&self, py: Python<'_>, view: &str, arguments: &Py<PyDict>) -> PyResult<()> {
+            let mut keys: Vec<String> = arguments.bind(py).keys().extract()?;
+            keys.sort();
+            self.0.push(format!("{view}:{}", keys.join(",")));
+            Ok(())
+        }
+    }
+
+    impl CallHooks<PythonRuntime> for ArgumentViews {
+        fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+            self.record(py, "prepared", arguments)
+        }
+
+        fn arguments_resolved(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+            self.record(py, "resolved", arguments)
+        }
+    }
+
+    impl PythonOwned for ArgumentViews {
+        fn close(&mut self, _: Python<'_>) {}
+        fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+            Ok(())
+        }
+    }
+
+    /// Runs a call whose base binds `messages` positionally with `api_key` and `timeout`
+    /// defaulting to `None`, and whose caller passed `model` and `api_key` as keywords.
+    fn decoded_argument(py: Python<'_>, name: &'static str) -> (Option<String>, Vec<String>) {
+        install_lifecycle_module(py);
+        let log = Log::default();
+        let views = Log(log.0.clone());
+        let decoded = Log(log.0.clone());
+        let base = PyDict::new(py);
+        base.set_item("model", "base-model").unwrap();
+        base.set_item("messages", "positional").unwrap();
+        base.set_item("api_key", py.None()).unwrap();
+        base.set_item("timeout", py.None()).unwrap();
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("model", "caller-model").unwrap();
+        kwargs.set_item("api_key", "caller-key").unwrap();
+        run_call(
+            py,
+            move |_, arguments, request| {
+                let value: Option<String> = arguments
+                    .get_item(name)?
+                    .map(|value| value.extract())
+                    .transpose()?
+                    .flatten();
+                decoded.push(format!("{name}={value:?}"));
+                Ok(success_machine()(request))
+            },
+            SyntheticBinding {
+                log: Log(log.0.clone()),
+                op: OpScript::Answer,
+                classifier_fails: false,
+                pending_reply: None,
+            },
+            crate::HookChain::new()
+                .with(KeywordRewrite)
+                .with(ArgumentViews(views)),
+            CallArguments {
+                base: base.unbind(),
+                kwargs: kwargs.unbind(),
+            },
+            call_options(false),
+        )
+        .unwrap();
+        let entries = log.entries();
+        let value = entries
+            .iter()
+            .find_map(|entry| entry.strip_prefix(&format!("{name}=")))
+            .map(|value| match value {
+                "None" => None,
+                some => Some(
+                    some.trim_start_matches("Some(\"")
+                        .trim_end_matches("\")")
+                        .to_string(),
+                ),
+            })
+            .expect("the machine start saw the decoded arguments");
+        (value, entries)
+    }
+
+    #[rstest::rstest]
+    #[case::rewritten_keyword_wins("model", Some("hook-model"))]
+    #[case::deleted_keyword_falls_back_to_the_signature_default("api_key", None)]
+    #[case::positional_survives_the_rewrite("messages", Some("positional"))]
+    #[case::untouched_default_stays("timeout", None)]
+    fn the_decoded_call_lays_the_rewritten_keywords_over_the_base(
+        #[case] name: &'static str,
+        #[case] expected: Option<&str>,
+    ) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            let (value, _) = decoded_argument(py, name);
+            assert_eq!(value.as_deref(), expected);
+        });
+    }
+
+    #[rstest::rstest]
+    fn preflight_sees_the_keyword_dict_and_the_resolved_view_follows_it() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            let (_, entries) = decoded_argument(py, "model");
+            let prepared = entries.iter().position(|entry| entry == "prepared:model");
+            let resolved = entries
+                .iter()
+                .position(|entry| entry == "resolved:api_key,messages,model,timeout");
+            let project = entries.iter().position(|entry| entry == "project");
+            assert!(prepared < resolved && resolved < project, "{entries:?}");
+        });
+    }
+
     enum ArgumentPolicy {
         Inherit,
         Reject(Py<PyBaseException>),
@@ -2035,7 +2206,7 @@ mod tests {
                         script: HookScript::RewriteArguments,
                     })
                     .with(ArgumentPolicy::Inherit),
-                arguments.clone().unbind(),
+                keywords(py, arguments.clone().unbind()),
                 call_options(asynchronous),
             );
             let settled = if asynchronous {
@@ -2116,7 +2287,7 @@ mod tests {
                     log: Log(log.0.clone()),
                     script: HookScript::Plain,
                 },
-                PyDict::new(py).unbind(),
+                keywords(py, PyDict::new(py).unbind()),
                 call_options(true),
             )
             .unwrap();
@@ -2335,7 +2506,7 @@ mod tests {
                 |_, _, request| Ok(success_machine()(request)),
                 host,
                 adapter,
-                PyDict::new(py).unbind(),
+                keywords(py, PyDict::new(py).unbind()),
                 call_options(false),
             )
             .unwrap_err();
