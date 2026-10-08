@@ -2290,6 +2290,53 @@ class TestBedrockFileContentTransformation:
         assert result.purpose == "batch_output"
         assert result.status == "processed"
 
+    @pytest.mark.parametrize("last_modified", [None, "invalid"])
+    def test_transform_retrieve_file_response_uses_fallback_metadata(self, monkeypatch, last_modified):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        monkeypatch.setattr("litellm.llms.bedrock.files.transformation.time.time", lambda: 123)
+        headers = (
+            {"Content-Length": "42"}
+            if last_modified is None
+            else {"Content-Length": "42", "Last-Modified": last_modified}
+        )
+        raw_response = httpx.Response(
+            206,
+            headers=headers,
+            request=httpx.Request("GET", self.EXPECTED_URL),
+        )
+
+        result = BedrockFilesConfig().transform_retrieve_file_response(
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+            litellm_params={**self._litellm_params(), "_s3_retrieve_file_id": self.S3_URI},
+        )
+
+        assert result.bytes == 42
+        assert result.created_at == 123
+        assert result.filename == "input.jsonl.out"
+
+    def test_transform_retrieve_file_response_requires_file_id(self):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        raw_response = httpx.Response(
+            206,
+            headers={"Content-Range": "bytes 0-0/42"},
+            request=httpx.Request("GET", self.EXPECTED_URL),
+        )
+
+        with pytest.raises(ValueError, match="file id is required"):
+            BedrockFilesConfig().transform_retrieve_file_response(
+                raw_response=raw_response,
+                logging_obj=MagicMock(),
+                litellm_params={},
+            )
+
     def test_transform_retrieve_file_response_raises_for_not_found(self):
         import httpx
 
