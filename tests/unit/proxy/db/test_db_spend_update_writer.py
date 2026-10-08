@@ -538,11 +538,7 @@ async def test_update_daily_spend_retries_connect_errors(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_daily_spend_retries_lock_timeout_errors(monkeypatch):
-    # Regression for the dropped final flush: lock_timeout (SQLSTATE 55P03)
-    # cancels the upsert before it takes its lock, so nothing applied and the
-    # batch is safe to resend. Without the retry the row only goes back on the
-    # queue, where a shutdown flush never gets a next tick to write it.
+async def test_update_daily_spend_retries_lock_timeout_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     def _lock_timeout_error() -> PrismaDataError:
         return PrismaDataError(
             data={
@@ -554,7 +550,7 @@ async def test_update_daily_spend_retries_lock_timeout_errors(monkeypatch):
             }
         )
 
-    outcomes = iter([_lock_timeout_error(), None])
+    outcomes: Final = iter([_lock_timeout_error(), None])
 
     def first_attempt_locks_out():
         outcome = next(outcomes)
@@ -562,15 +558,15 @@ async def test_update_daily_spend_retries_lock_timeout_errors(monkeypatch):
             raise outcome
         return 1
 
-    prisma_client = _RecordingPrisma(execute_raw=first_attempt_locks_out)
-    proxy_logging = MagicMock()
+    prisma_client: Final = _RecordingPrisma(execute_raw=first_attempt_locks_out)
+    proxy_logging: Final = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
 
     async def fake_sleep(seconds: float) -> None:
         return None
 
     monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", fake_sleep)
-    daily_spend_transactions = {"k1": _daily_txn()}
+    daily_spend_transactions: Final = {"k1": _daily_txn()}
     await DBSpendUpdateWriter._update_daily_spend(
         n_retry_times=3,
         prisma_client=prisma_client,
@@ -580,8 +576,12 @@ async def test_update_daily_spend_retries_lock_timeout_errors(monkeypatch):
         entity_id_field="user_id",
     )
 
-    assert len(prisma_client.db.statements) == 2
-    assert daily_spend_transactions == {}
+    assert len(prisma_client.db.statements) == 2, (
+        "a 55P03 lock_timeout cancels the upsert before it applies, so the writer must "
+        "resend it in place instead of only requeueing it for a next tick a shutdown "
+        "flush never gets"
+    )
+    assert daily_spend_transactions == {}, "the retried batch must drain the transactions dict"
     proxy_logging.failure_handler.assert_not_called()
 
 
