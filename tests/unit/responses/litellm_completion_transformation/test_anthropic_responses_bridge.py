@@ -247,3 +247,55 @@ async def test_previous_response_id_tool_output_without_instructions_keeps_the_p
 
     assert _message_shapes(request) == _EXPECTED_MESSAGES
     assert [block.text for block in request.system] == [_FIRST_TURN_INSTRUCTIONS]
+
+
+def _second_turn(instructions: str | None) -> Mapping[str, object]:
+    return {
+        "request_id": "chatcmpl-second-turn",
+        "call_type": "aresponses",
+        "session_id": "session-1",
+        "proxy_server_request": {
+            "model": _MODEL,
+            "input": [{"type": "function_call_output", "call_id": "toolu_weather", "output": "47C"}],
+            **({"instructions": instructions} if instructions else {}),
+        },
+        "response": {
+            "id": "chatcmpl-second-turn",
+            "object": "chat.completion",
+            "created": 0,
+            "model": _MODEL,
+            "choices": [
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "47C in Tokyo."}}
+            ],
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("second_turn_instructions", "expected_system"),
+    [("Answer in French.", "Answer in French."), (None, _FIRST_TURN_INSTRUCTIONS)],
+)
+async def test_previous_response_id_without_instructions_carries_the_latest_ones_ahead_of_a_tool_roundtrip(
+    second_turn_instructions: str | None, expected_system: str
+) -> None:
+    anthropic: Final = _RecordingAnthropicMessages()
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        _FakePrismaClient([_FIRST_TURN, _second_turn(second_turn_instructions)]),
+    ):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-second-turn",
+            input="What about Osaka?",
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    assert anthropic.request is not None
+    assert _message_shapes(anthropic.request) == [
+        *_EXPECTED_MESSAGES,
+        ("assistant", [("text", "47C in Tokyo.")]),
+        ("user", [("text", "What about Osaka?")]),
+    ]
+    assert [block.text for block in anthropic.request.system] == [expected_system]

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -41,12 +42,15 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 
 
+def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
+    instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
+    return instructions if isinstance(instructions, str) and instructions else None
+
+
 class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
-        *,
-        carry_over_instructions: bool = True,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -72,12 +76,16 @@ class ResponsesSessionHandler:
             | ChatCompletionResponseMessage
             | Message
         ] = []
-        for spend_log in all_spend_logs:
+        proxy_server_requests: Final = [
+            await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
+            for spend_log in all_spend_logs
+        ]
+        for spend_log, proxy_server_request_dict in zip(all_spend_logs, proxy_server_requests):
             chat_completion_message_history = (
-                await ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+                ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
                     spend_log=spend_log,
+                    proxy_server_request_dict=proxy_server_request_dict,
                     chat_completion_message_history=chat_completion_message_history,
-                    carry_over_instructions=carry_over_instructions,
                 )
             )
 
@@ -88,11 +96,20 @@ class ResponsesSessionHandler:
         return ChatCompletionSession(
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
+            instructions=next(
+                (
+                    instructions
+                    for instructions in map(_stored_instructions, reversed(proxy_server_requests))
+                    if instructions
+                ),
+                None,
+            ),
         )
 
     @staticmethod
-    async def extend_chat_completion_message_with_spend_log_payload(
+    def extend_chat_completion_message_with_spend_log_payload(
         spend_log: "SpendLogsPayload",
+        proxy_server_request_dict: Mapping[str, object] | None,
         chat_completion_message_history: list[
             AllMessageValues
             | GenericChatCompletionMessage
@@ -100,7 +117,6 @@ class ResponsesSessionHandler:
             | ChatCompletionResponseMessage
             | Message
         ],
-        carry_over_instructions: bool,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -109,9 +125,6 @@ class ResponsesSessionHandler:
             LiteLLMCompletionResponsesConfig,
         )
 
-        proxy_server_request_dict: Final = await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(
-            spend_log=spend_log,
-        )
         response_input_param: str | ResponseInputParam | None = None
 
         ############################################################
@@ -133,7 +146,7 @@ class ResponsesSessionHandler:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                     input=response_input_param,
-                    responses_api_request=(proxy_server_request_dict or {}) if carry_over_instructions else {},
+                    responses_api_request={},
                     replay_reasoning=True,
                 )
             )
@@ -154,7 +167,7 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_proxy_server_request_from_spend_log(
         spend_log: "SpendLogsPayload",
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get the parsed proxy server request from the spend log
         """
