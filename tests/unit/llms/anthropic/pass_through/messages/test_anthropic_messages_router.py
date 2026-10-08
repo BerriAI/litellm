@@ -15,6 +15,12 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router import Router
+from litellm.types.llms.anthropic import (
+    AnthropicMessagesTextParam,
+    AnthropicMessagesTool,
+    AnthropicMessagesUserMessageParam,
+    AnthropicToolSearchToolRegex,
+)
 from litellm.types.utils import StandardLoggingPayload
 
 _ALIAS: Final = "claude-special-alias"
@@ -94,7 +100,7 @@ _STREAM_EVENTS: Final = (
 
 
 class _RecordingLogger(CustomLogger):
-    def __init__(self, messages: list[dict[str, str]]) -> None:
+    def __init__(self, messages: list[AnthropicMessagesUserMessageParam]) -> None:
         super().__init__()
         self.messages: Final = messages
         self.payloads: tuple[StandardLoggingPayload, ...] = ()
@@ -107,7 +113,7 @@ class _RecordingLogger(CustomLogger):
             self.received.set()
 
 
-def _unique_messages() -> list[dict[str, str]]:
+def _unique_messages() -> list[AnthropicMessagesUserMessageParam]:
     return [{"role": "user", "content": f"{_PROMPT} {uuid.uuid4().hex}"}]
 
 
@@ -441,7 +447,7 @@ async def test_router_aanthropic_messages_streaming_logs_usage_model_and_cost(
 _LARGE_SYSTEM_PROMPT: Final = "This is a comprehensive legal agreement between Party A and Party B. " * 100
 
 
-def _cached_system() -> list[dict[str, object]]:
+def _cached_system() -> list[AnthropicMessagesTextParam]:
     return [{"type": "text", "text": _LARGE_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
 
@@ -548,8 +554,8 @@ async def test_bedrock_streaming_message_start_carries_cache_usage_fields(
     assert "cache_read_input_tokens" in usage, usage
 
 
-def _tool_search_tools() -> list[dict[str, object]]:
-    def deferred(name: str, description: str, field: str) -> dict[str, object]:
+def _tool_search_tools() -> list[AnthropicToolSearchToolRegex | AnthropicMessagesTool]:
+    def deferred(name: str, description: str, field: str) -> AnthropicMessagesTool:
         return {
             "name": name,
             "description": description,
@@ -598,7 +604,7 @@ async def test_tool_search_forwards_deferred_tools_and_beta_header(
     response: Final = await litellm.anthropic.messages.acreate(
         model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": prompt}],
-        tools=_tool_search_tools(),
+        tools=[dict(tool) for tool in _tool_search_tools()],
         max_tokens=1024,
         api_key="fake-key",
         extra_headers={"anthropic-beta": "advanced-tool-use-2025-11-20"},
