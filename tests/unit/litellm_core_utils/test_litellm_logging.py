@@ -3140,6 +3140,21 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert "User-Agent: litellm/1.0.0" in tags
 
 
+@pytest.mark.parametrize("unusable_metadata_tags", [123, "tag", {"tag": True}, []])
+def test_get_request_tags_falls_back_to_litellm_metadata_when_metadata_tags_are_unusable(unusable_metadata_tags):
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={
+            "metadata": {"tags": unusable_metadata_tags},
+            "litellm_metadata": {"tags": ["litellm-metadata-tag"]},
+        },
+        proxy_server_request={},
+    )
+
+    assert tags == ["litellm-metadata-tag"]
+
+
 def test_get_request_tags_does_not_mutate_original_tags():
     """
     Test that _get_request_tags does not mutate the original tags list in metadata.
