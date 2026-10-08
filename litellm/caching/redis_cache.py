@@ -1229,7 +1229,7 @@ class RedisCache(BaseCache):
         # Iterate through each key-value pair in the cache_list and set them in the pipeline.
         for cache_key, cache_value in cache_list:
             cache_key = self.check_and_fix_namespace(key=cache_key)
-            print_verbose(f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}")
+            print_verbose(f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nttl={ttl}")
             json_cache_value = json.dumps(cache_value)
             # Set the value with a TTL if it's provided.
             _td: timedelta | None = None
