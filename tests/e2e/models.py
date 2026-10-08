@@ -441,6 +441,7 @@ class CompletionTokensDetails(BaseModel):
 
 class Usage(BaseModel):
     prompt_tokens: int | None = None
+    input_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
     cache_read_input_tokens: int | None = None
