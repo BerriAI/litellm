@@ -34,6 +34,7 @@ from fastapi import Request as Request_http_parsing
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from starlette.types import Message
+from starlette.websockets import WebSocket
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -1565,3 +1566,36 @@ async def test_read_request_body_unexpected_error():
 
     result = await read_request_body(_request(receive))
     assert result == {}
+
+
+async def _never_receive() -> Message:
+    raise AssertionError("the OTLP route check never reads the body")
+
+
+async def _never_send(message: Message) -> None:
+    raise AssertionError("the OTLP route check never sends")
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected"),
+    [
+        ({"type": "http", "method": "POST", "path": "/v1/traces"}, True),
+        ({"type": "http", "method": "POST", "path": "/v1/logs"}, True),
+        ({"type": "http", "method": "GET", "path": "/v1/traces"}, False),
+        ({"type": "http", "method": "POST", "path": "/v1/responses"}, False),
+        ({"type": "http", "path": "/v1/traces"}, False),
+        ({"type": "websocket", "path": "/v1/traces"}, False),
+        ({"type": "websocket", "path": "/v1/responses"}, False),
+    ],
+)
+def test_is_otlp_trace_request_matches_only_http_posts_to_the_otlp_routes(
+    scope: dict[str, object], expected: bool
+) -> None:
+    full_scope: Final[dict[str, object]] = {**scope, "headers": [], "query_string": b""}
+    connection: Final = (
+        WebSocket(full_scope, _never_receive, _never_send)
+        if scope["type"] == "websocket"
+        else Request(full_scope, _never_receive)
+    )
+
+    assert http_parsing_utils.is_otlp_trace_request(connection) is expected

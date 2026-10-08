@@ -5,11 +5,12 @@
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-from typing import Dict, List, Optional
-from unittest.mock import MagicMock, patch, AsyncMock
+from typing import Dict, Final, List, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.datastructures import URL
+from starlette.types import Message
 from litellm._logging import verbose_proxy_logger
 import logging
 import litellm
@@ -1811,3 +1812,91 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
         "the mapped-key branch returns before the shared virtual-key checks, so the "
         "user's per-model budget is never attached and never enforced"
     )
+
+
+def _rejected_websocket(sent: list[Message], bearer: str) -> WebSocket:
+    async def receive() -> Message:
+        return {"type": "websocket.connect"}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    return WebSocket(
+        {
+            "type": "websocket",
+            "path": "/v1/responses",
+            "query_string": b"model=gpt-5.4",
+            "headers": [(b"authorization", f"Bearer {bearer}".encode())],
+        },
+        receive,
+        send,
+    )
+
+
+def _serve_virtual_key(monkeypatch: pytest.MonkeyPatch, user_key: str, token: UserAPIKeyAuth) -> None:
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+
+    user_api_key_cache.set_cache(key=hash_token(user_key), value=token)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", "connected")
+    monkeypatch.setattr(litellm, "log_client_error_tracebacks", False)
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_logs_a_model_access_denial_as_one_warning_without_a_traceback(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.proxy.proxy_server import hash_token
+
+    user_key: Final = "sk-websocket-key-limited-to-mini"
+    _serve_virtual_key(
+        monkeypatch,
+        user_key,
+        UserAPIKeyAuth(token=hash_token(user_key), models=["gpt-5.4-mini"]),
+    )
+    sent: Final[list[Message]] = []
+    with (
+        caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name),
+        pytest.raises(HTTPException) as rejection,
+    ):
+        await user_api_key_auth_websocket(_rejected_websocket(sent, user_key))
+
+    assert rejection.value.status_code == 403
+    assert sent == [{"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION, "reason": ""}]
+    proxy_records: Final = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
+    assert [record.getMessage() for record in proxy_records if record.exc_info is not None] == []
+    assert [record.getMessage() for record in proxy_records if record.levelno == logging.WARNING] == [
+        "key not allowed to access model. This key can only access models=['gpt-5.4-mini']. Tried to access gpt-5.4"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_rejection_adds_no_traceback_for_other_auth_errors(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.proxy.proxy_server import hash_token
+
+    user_key: Final = "sk-websocket-key-expired-in-2020"
+    expired_in_2020: Final = "2020-01-01T00:00:00+00:00"
+    _serve_virtual_key(
+        monkeypatch,
+        user_key,
+        UserAPIKeyAuth(token=hash_token(user_key), expires=expired_in_2020),
+    )
+    sent: Final[list[Message]] = []
+    with (
+        caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name),
+        pytest.raises(HTTPException) as rejection,
+    ):
+        await user_api_key_auth_websocket(_rejected_websocket(sent, user_key))
+
+    assert rejection.value.status_code == 403
+    assert "expired key" in str(rejection.value.detail).lower()
+    assert sent == [{"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION, "reason": ""}]
+    proxy_records: Final = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
+    assert [record.getMessage() for record in proxy_records if record.exc_info is not None] == []
+    assert [record.levelno for record in proxy_records if record.levelno >= logging.WARNING] == [logging.ERROR]
