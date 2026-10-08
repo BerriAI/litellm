@@ -467,6 +467,7 @@ def anthropic_messages_handler(
         custom_llm_provider=custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
+        litellm_params=litellm_params,
     )
 
     # Store agentic loop params in logging object for agentic hooks

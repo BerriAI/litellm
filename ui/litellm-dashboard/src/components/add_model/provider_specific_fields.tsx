@@ -331,6 +331,11 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
           <p className="text-sm text-muted-foreground">{selectedAuthType.description}</p>
         </div>
       )}
+      {Object.entries(selectedAuthType?.fixedValues ?? {}).map(([fieldKey, fixedValue]) => (
+        <MountedFormField key={`${selectedProvider}:${fieldKey}`} name={fieldKey} defaultValue={fixedValue} bare>
+          {() => null}
+        </MountedFormField>
+      ))}
       {isLoading && allFields.length === 0 && <p className="text-sm mb-2">Loading provider fields...</p>}
       {loadError && allFields.length === 0 && (
         <p className="text-sm mb-2 text-destructive">

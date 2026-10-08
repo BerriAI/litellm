@@ -17,6 +17,7 @@ from ..common_utils import (
     GetAPIKeyError,
     get_copilot_default_headers,
 )
+from ..per_user_auth import require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -109,12 +110,19 @@ class GithubCopilotConfig(OpenAIConfig):
         )
 
         # Add Copilot-specific headers (editor-version, user-agent, etc.)
-        try:
-            copilot_api_key: Final = self.authenticator.get_api_key()
-            copilot_headers: Final = get_copilot_default_headers(copilot_api_key)
-            validated_headers = {**copilot_headers, **validated_headers}
-        except GetAPIKeyError:
-            pass  # Will be handled later in the request flow
+        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        if user_session is not None:
+            validated_headers = {**get_copilot_default_headers(user_session.token), **validated_headers}
+            # the caller's stored session token wins unconditionally, even over a
+            # caller-supplied api_key or the parent's placeholder Authorization
+            validated_headers["Authorization"] = f"Bearer {user_session.token}"
+        else:
+            try:
+                copilot_api_key: Final = self.authenticator.get_api_key()
+                copilot_headers: Final = get_copilot_default_headers(copilot_api_key)
+                validated_headers = {**copilot_headers, **validated_headers}
+            except GetAPIKeyError:
+                pass  # Will be handled later in the request flow
 
         # Add X-Initiator header based on message roles
         initiator: Final = self._determine_initiator(messages)

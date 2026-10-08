@@ -26,6 +26,7 @@ from ..common_utils import (
     GetAPIKeyError,
     get_copilot_default_headers,
 )
+from ..per_user_auth import require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -61,6 +62,9 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Validate environment and set up headers for GitHub Copilot API.
         """
+        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        if user_session is not None:
+            return {**get_copilot_default_headers(user_session.token), **headers}
         try:
             # Get GitHub Copilot API key via OAuth
             api_key = self.authenticator.get_api_key()
@@ -101,9 +105,10 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
+        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
         effective_api_base = (
-            api_base
+            (user_session.api_base if user_session is not None else None)
+            or api_base
             or self.authenticator.get_api_base()
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE

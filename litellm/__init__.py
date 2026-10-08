@@ -1392,6 +1392,8 @@ from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from .exceptions import (
     AuthenticationError,
+    CallerCredentialAuthenticationError,
+    CallerCredentialRateLimitError,
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,

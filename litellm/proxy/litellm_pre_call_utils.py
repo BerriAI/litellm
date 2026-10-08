@@ -267,6 +267,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "proxy_server_request",
     "standard_logging_object",
     "secret_fields",
+    "github_copilot_user_session",
     "mock_response",
     "mock_tool_calls",
     "disable_global_guardrails",
@@ -2217,6 +2218,9 @@ async def add_litellm_data_to_request(
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
     )
 
+    # Header mappings can overwrite user_id below; the key/JWT identity is the only
+    # one allowed to load per-user provider credentials.
+    authenticated_user_id: Final = user_api_key_dict.user_id
     user_api_key_dict = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
         general_settings, user_api_key_dict, _headers
     )
@@ -2595,6 +2599,12 @@ async def add_litellm_data_to_request(
         llm_router=llm_router,
     )
 
+    await _resolve_user_provider_credentials_for_request(
+        data=data,
+        authenticated_user_id=authenticated_user_id,
+        llm_router=llm_router,
+    )
+
     ## ENFORCED PARAMS CHECK
     # loop through each enforced param
     # example enforced_params ['user', 'metadata', 'metadata.generation_name']
@@ -2618,6 +2628,129 @@ async def add_litellm_data_to_request(
     )
 
     return data
+
+
+def _fallback_edges(
+    llm_router: litellm.Router,
+    model_group: str,
+) -> frozenset[str]:
+    targets: Final[set[str]] = set()  # mutable-ok: accumulates fallback targets
+    for fallback_list in (
+        llm_router.fallbacks,
+        llm_router.context_window_fallbacks,
+        llm_router.content_policy_fallbacks,
+    ):
+        for entry in fallback_list or ():
+            if not isinstance(entry, dict):
+                continue
+            for key in (model_group, "*"):
+                raw = entry.get(key)
+                values = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
+                targets.update(value for value in values if isinstance(value, str))
+    return frozenset(targets)
+
+
+def _fallback_target_groups(
+    llm_router: litellm.Router,
+    model_group: str,
+) -> frozenset[str]:
+    """Transitive closure over the router's fallback graph: a chain like
+    A -> B -> C must still surface C's per-user credential for a request to A."""
+    seen: Final[set[str]] = set()  # mutable-ok: BFS visited set
+    frontier: Final[list[str]] = [model_group]  # mutable-ok: BFS work list
+    while frontier:
+        group = frontier.pop()
+        for target in _fallback_edges(llm_router, group):
+            if target not in seen and target != model_group:
+                seen.add(target)
+                frontier.append(target)
+    return frozenset(seen)
+
+
+def _per_user_credential_names_for_groups(
+    llm_router: litellm.Router,
+    model_groups: frozenset[str],
+) -> tuple[str, ...]:
+    from litellm.constants import (
+        GITHUB_COPILOT_AUTH_TYPE_KEY,
+        GITHUB_COPILOT_PER_USER_AUTH_TYPE,
+    )
+
+    names: Final[list[str]] = []  # mutable-ok: accumulates one name per per-user deployment
+    for group in model_groups:
+        for deployment in llm_router.get_model_list(model_name=group) or ():
+            litellm_params = deployment.get("litellm_params")
+            credential_name_obj: object = (
+                litellm_params.get("litellm_credential_name")
+                if isinstance(litellm_params, Mapping)
+                else getattr(litellm_params, "litellm_credential_name", None)
+            )
+            if not isinstance(credential_name_obj, str) or not credential_name_obj or credential_name_obj in names:
+                continue
+            credential = CredentialAccessor.find_credential(credential_name_obj)
+            if credential is None:
+                continue
+            values = credential.credential_values
+            if (
+                isinstance(values, Mapping)
+                and values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+            ):
+                names.append(credential_name_obj)
+    return tuple(names)
+
+
+async def _resolve_user_provider_credentials_for_request(
+    data: dict[str, object],  # mutable-ok: writes resolved credentials into the nested secret_fields dict
+    authenticated_user_id: str | None,
+    llm_router: litellm.Router | None,
+) -> None:
+    """Resolve the calling user's per-user provider connections into secret_fields.
+
+    Runs after model alias rewrites so ``data['model']`` is the final requested
+    model. ``authenticated_user_id`` is the identity established by the validated
+    API key or JWT, never a header-mapped value, so a caller cannot load another
+    user's stored token. Never raises for "not connected": shared deployments in
+    the same group still serve the request, so the provider-side helper is the
+    one that fails the call with a 401 when per-user mode applies."""
+    user_id: Final = authenticated_user_id
+    model: Final = data.get("model")
+    if not isinstance(user_id, str) or not user_id or llm_router is None or not isinstance(model, str):
+        return
+    model_groups: Final = frozenset({model} | _fallback_target_groups(llm_router, model))
+    credential_names: Final = _per_user_credential_names_for_groups(llm_router, model_groups)
+    if not credential_names:
+        return
+    if "litellm_credential_name" in data:
+        raise HTTPException(
+            status_code=400,
+            detail="litellm_credential_name cannot be set in the request body for a model that uses per-user GitHub OAuth",
+        )
+
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
+
+    from .credential_endpoints.user_provider_credentials import aget_user_provider_tokens
+
+    if prisma_client is None:
+        return
+    try:
+        tokens: Final = await aget_user_provider_tokens(
+            prisma_client=prisma_client,
+            cache=user_api_key_cache,
+            user_id=user_id,
+            credential_names=credential_names,
+        )
+    except Exception:  # noqa: BLE001  # credential lookup failures degrade to the shared deployment, never break the request
+        verbose_proxy_logger.exception(
+            "_resolve_user_provider_credentials_for_request: failed to load user provider credentials"
+        )
+        return
+
+    secret_fields: Final = data.get("secret_fields")
+    if not isinstance(secret_fields, dict):
+        return
+    secret_fields["user_provider_credentials"] = RedactedDict(dict(tokens))
+    secret_fields["user_provider_credentials_user_id"] = user_id
 
 
 def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> None:

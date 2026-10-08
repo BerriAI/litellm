@@ -2,6 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+import json
 from collections.abc import Mapping
 from typing import (
     Annotated,
@@ -13,7 +14,13 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, 
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    GITHUB_COPILOT_AUTH_TYPE_KEY,
+    GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX,
+    GITHUB_COPILOT_PER_USER_AUTH_TYPE,
+)
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.llms.anthropic.wif import (
@@ -22,7 +29,14 @@ from litellm.llms.anthropic.wif import (
     UnbuildableIdentitySource,
     anthropic_internal_issuer_jwks,
 )
-from litellm.models.credentials import UpdateCredentialItem
+from litellm.models.credentials import (
+    UpdateCredentialItem,
+    UserConnectionDeleteResponse,
+    UserConnectionPollResponse,
+    UserConnectionStartResponse,
+    UserProviderConnection,
+    UserProviderConnectionsResponse,
+)
 from litellm.proxy._types import (
     CommonProxyErrors,
     LitellmUserRoles,
@@ -37,15 +51,30 @@ from litellm.proxy.common_utils.credential_hydration import (
     named_credential_wif_fields,
     stored_credential_provider,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.router import server_owned_wif_fields_named
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
+from .user_provider_credentials import (
+    GithubCopilotUserConnectionPayload,
+    decode_user_provider_credential,
+    delete_user_provider_credential,
+    delete_user_provider_credentials_for_credential,
+    invalidate_user_provider_credential_cache,
+    list_user_provider_credentials,
+    list_user_provider_credentials_for_credential,
+    upsert_user_provider_credential,
+)
+
 router: Final = APIRouter()
 _CREDENTIAL_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_GITHUB_COPILOT_PROVIDER: Final = "github_copilot"
 
 
 def _reject_non_admin_wif_fields(
@@ -418,6 +447,268 @@ async def get_credential_by_model(
         raise handle_exception_on_proxy(e)
 
 
+def _authenticated_user_id(user_api_key_dict: UserAPIKeyAuth) -> str:
+    user_id: Final = user_api_key_dict.user_id
+    if not isinstance(user_id, str) or not user_id:
+        raise HTTPException(status_code=401, detail="An authenticated user is required")
+    return user_id
+
+
+def _per_user_credential_or_404(credential_name: str) -> CredentialItem:
+    credential: Final = CredentialAccessor.find_credential(credential_name)
+    values: Final = credential.credential_values if credential is not None else None
+    if (
+        credential is None
+        or not isinstance(values, Mapping)
+        or values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) != GITHUB_COPILOT_PER_USER_AUTH_TYPE
+    ):
+        raise HTTPException(status_code=404, detail="Credential not found")
+    return credential
+
+
+def _device_flow_cache_key(user_id: str, credential_name: str) -> str:
+    pair: Final = json.dumps([user_id, credential_name], separators=(",", ":"))
+    return f"{GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX}:{pair}"
+
+
+def _per_user_credential_names() -> tuple[str, ...]:
+    return tuple(
+        credential.credential_name
+        for credential in litellm.credential_list
+        if isinstance(credential.credential_values, Mapping)
+        and credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+    )
+
+
+@router.get(
+    "/credentials/user_connections",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+    response_model=UserProviderConnectionsResponse,
+)
+async def list_user_connections(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+):
+    """List the calling user's per-user provider connections."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        user_id: Final = _authenticated_user_id(user_api_key_dict)
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        rows: Final = await list_user_provider_credentials(prisma_client, user_id)
+        github_logins: Final[dict[str, str]] = {}  # mutable-ok: accumulates one entry per credential row
+        connected_at: Final[dict[str, str]] = {}  # mutable-ok: accumulates one entry per credential row
+        for row in rows:
+            if row.provider != _GITHUB_COPILOT_PROVIDER:
+                continue
+            payload = decode_user_provider_credential(row.credential_b64)
+            if payload is not None:
+                github_logins[row.credential_name] = payload.github_login
+            updated = getattr(row, "updated_at", None)
+            if updated is not None:
+                connected_at[row.credential_name] = updated.isoformat()
+        return UserProviderConnectionsResponse(
+            connections=[
+                UserProviderConnection(
+                    credential_name=name,
+                    provider=_GITHUB_COPILOT_PROVIDER,
+                    connected=name in github_logins,
+                    github_login=github_logins.get(name),
+                    connected_at=connected_at.get(name),
+                )
+                for name in _per_user_credential_names()
+            ]
+        )
+    except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy error contract
+        raise handle_exception_on_proxy(e)
+
+
+@router.post(
+    "/credentials/{credential_name:path}/user_connection/start",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+    response_model=UserConnectionStartResponse,
+)
+@with_service_target("user_provider_connections")
+async def start_user_connection(
+    request: Request,
+    fastapi_response: Response,
+    credential_name: str = Path(..., description="The credential name, percent-decoded"),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+):
+    """Begin a GitHub device flow for the calling user's connection to a per-user credential."""
+    from litellm.llms.github_copilot.per_user_auth import astart_device_flow
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    try:
+        user_id: Final = _authenticated_user_id(user_api_key_dict)
+        _per_user_credential_or_404(credential_name)
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        flow: Final = await astart_device_flow()
+        await user_api_key_cache.async_set_cache(
+            _device_flow_cache_key(user_id, credential_name),
+            encrypt_value_helper(flow.device_code),
+            ttl=flow.expires_in,
+        )
+        return UserConnectionStartResponse(
+            user_code=flow.user_code,
+            verification_uri=flow.verification_uri,
+            expires_in=flow.expires_in,
+            interval=flow.interval,
+        )
+    except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy error contract
+        raise handle_exception_on_proxy(e)
+
+
+@router.post(
+    "/credentials/{credential_name:path}/user_connection/poll",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+    response_model=UserConnectionPollResponse,
+)
+@with_service_target("user_provider_connections")
+async def poll_user_connection(
+    request: Request,
+    fastapi_response: Response,
+    credential_name: str = Path(..., description="The credential name, percent-decoded"),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+):
+    """Poll the device flow once and persist the connection on completion."""
+    from litellm.llms.github_copilot.per_user_auth import (
+        acheck_copilot_seat,
+        afetch_github_login,
+        apoll_device_flow,
+    )
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    try:
+        user_id: Final = _authenticated_user_id(user_api_key_dict)
+        _per_user_credential_or_404(credential_name)
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        cache_key: Final = _device_flow_cache_key(user_id, credential_name)
+        encrypted_device_code: Final[object] = await user_api_key_cache.async_get_cache(cache_key)
+        device_code: Final = (
+            decrypt_value_helper(str(encrypted_device_code), key="device_code")
+            if isinstance(encrypted_device_code, str) and encrypted_device_code
+            else None
+        )
+        if not device_code:
+            return UserConnectionPollResponse(status="expired")
+
+        poll: Final = await apoll_device_flow(device_code)
+        if poll.status in ("expired", "denied"):
+            await user_api_key_cache.async_delete_cache(cache_key)
+            return UserConnectionPollResponse(status=poll.status, interval=poll.interval)
+        if poll.status in ("pending", "slow_down"):
+            return UserConnectionPollResponse(status=poll.status, interval=poll.interval)
+
+        github_token: Final = poll.access_token
+        if not github_token:
+            await user_api_key_cache.async_delete_cache(cache_key)
+            raise HTTPException(status_code=502, detail="GitHub device flow completed without a token")
+        try:
+            await acheck_copilot_seat(user_id=user_id, github_token=github_token, credential_name=credential_name)
+        except litellm.CallerCredentialAuthenticationError:
+            await user_api_key_cache.async_delete_cache(cache_key)
+            return UserConnectionPollResponse(status="no_copilot_seat")
+        github_login: Final = await afetch_github_login(github_token)
+        await upsert_user_provider_credential(
+            prisma_client,
+            user_id,
+            credential_name,
+            _GITHUB_COPILOT_PROVIDER,
+            GithubCopilotUserConnectionPayload(access_token=github_token, github_login=github_login),
+        )
+        await user_api_key_cache.async_delete_cache(cache_key)
+        await invalidate_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
+        return UserConnectionPollResponse(status="connected", github_login=github_login)
+    except litellm.CallerCredentialRateLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except Exception as e:  # noqa: BLE001  # every remaining failure maps to the proxy error shape
+        raise handle_exception_on_proxy(e)
+
+
+@router.delete(
+    "/credentials/{credential_name:path}/user_connection",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+    response_model=UserConnectionDeleteResponse,
+)
+@with_service_target("user_provider_connections")
+async def delete_user_connection(
+    request: Request,
+    fastapi_response: Response,
+    credential_name: str = Path(..., description="The credential name, percent-decoded"),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+):
+    """Disconnect the calling user's stored GitHub token for a per-user credential. Idempotent."""
+    from litellm.llms.github_copilot.per_user_auth import evict_copilot_user_session
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    try:
+        user_id: Final = _authenticated_user_id(user_api_key_dict)
+        _per_user_credential_or_404(credential_name)
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        prior: Final = await delete_user_provider_credential(prisma_client, user_id, credential_name)
+        await invalidate_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
+        await user_api_key_cache.async_delete_cache(_device_flow_cache_key(user_id, credential_name))
+        if prior is not None:
+            evict_copilot_user_session(user_id, prior.access_token)
+        return UserConnectionDeleteResponse(status="disconnected")
+    except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy error contract
+        raise handle_exception_on_proxy(e)
+
+
+@with_service_target("user_provider_connections")
+async def _purge_user_connections_for_credential(credential_name: str) -> None:
+    """Drop every user connection under a per-user credential and clear caches.
+
+    Shared cleanup for DELETE (credential removed) and PATCH (renamed or no
+    longer per-user)."""
+    from litellm.llms.github_copilot.per_user_auth import evict_copilot_user_session
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if prisma_client is None:
+        return
+    try:
+        prior_rows: Final = await list_user_provider_credentials_for_credential(prisma_client, credential_name)
+        user_ids: Final = await delete_user_provider_credentials_for_credential(prisma_client, credential_name)
+    except Exception:  # noqa: BLE001  # best-effort purge must not break credential deletion
+        verbose_proxy_logger.exception(
+            "_purge_user_connections_for_credential: failed to drop user connections for %s", credential_name
+        )
+        return
+    access_tokens: Final[dict[str, str]] = {}  # mutable-ok: accumulates one entry per deleted row
+    for row in prior_rows:
+        decoded = decode_user_provider_credential(row.credential_b64)
+        if decoded is not None:
+            access_tokens[row.user_id] = decoded.access_token
+    for user_id in user_ids:
+        await invalidate_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
+        await user_api_key_cache.async_delete_cache(_device_flow_cache_key(user_id, credential_name))
+        token = access_tokens.get(user_id)
+        if token:
+            evict_copilot_user_session(user_id, token)
+
+
 @router.delete(
     "/credentials/{credential_name:path}",
     dependencies=[Depends(user_api_key_auth)],
@@ -452,6 +743,7 @@ async def delete_credential(
 
         ## DELETE FROM LITELLM ##
         litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
+        await _purge_user_connections_for_credential(credential_name)
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
         raise handle_exception_on_proxy(e)
@@ -557,6 +849,14 @@ async def update_credential(
 
         # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
         _sync_in_memory_credential(patch, credential_name, merged_credential.credential_name)
+
+        merged_values: Final = merged_credential.credential_values
+        still_per_user: Final = (
+            isinstance(merged_values, Mapping)
+            and merged_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        )
+        if credential.credential_name != credential_name or not still_per_user:
+            await _purge_user_connections_for_credential(credential_name)
 
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:

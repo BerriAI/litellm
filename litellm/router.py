@@ -8607,6 +8607,7 @@ class Router:
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
                     requested_model_group=(get_litellm_metadata_from_kwargs(kwargs) or {}).get("model_group"),
+                    request_kwargs=kwargs,
                 )  # setting deployment_id in cooldown deployments
 
                 return result
@@ -9948,6 +9949,7 @@ class Router:
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
                 api_base=deployment.litellm_params.api_base,
+                litellm_params=deployment.litellm_params,
             )
             # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured
@@ -11357,6 +11359,7 @@ class Router:
                 litellm_model, llm_provider, _, _ = litellm.get_llm_provider(
                     model=litellm_params.model,
                     custom_llm_provider=litellm_params.custom_llm_provider,
+                    litellm_params=litellm_params,
                 )
             except litellm.exceptions.BadRequestError as e:
                 verbose_router_logger.error("litellm.router.py::get_model_group_info() - %s", e)
@@ -12332,6 +12335,7 @@ class Router:
             model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=deployment_params.get("model") or group,
                 custom_llm_provider=deployment_params.get("custom_llm_provider"),
+                litellm_params=LiteLLM_Params.model_validate(deployment_params),
             )
             supported: Final = litellm.get_supported_openai_params(
                 model=model,

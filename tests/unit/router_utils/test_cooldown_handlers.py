@@ -2,7 +2,6 @@ import asyncio
 import importlib
 import random
 import time
-from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -2463,3 +2462,49 @@ async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
     await asyncio.sleep(1)
     cooled_down = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
     assert len(cooled_down) == 1 and cooled_down[0] in {"123", "456"}
+
+
+@pytest.mark.parametrize(
+    "exception,status",
+    [
+        (litellm.CallerCredentialAuthenticationError(message="reconnect", llm_provider="github_copilot", model=""), 401),
+        (litellm.CallerCredentialRateLimitError(message="slow down", llm_provider="github_copilot", model=""), 429),
+    ],
+)
+def test_caller_credential_errors_never_cool_down_the_shared_deployment(single_deployment_router, exception, status):
+    """A per-user credential failure is scoped to one caller's stored token; cooling down the
+    shared deployment would punish every other user on the group."""
+    assert _should_run_cooldown_logic(single_deployment_router, "dep-1", status, exception) is False
+
+
+def test_per_user_session_upstream_errors_never_cool_down_the_shared_deployment(single_deployment_router):
+    """A 429/401 from the caller's own Copilot seat is scoped to that user; it must
+    not cool down the shared deployment for every other caller."""
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    session_kwargs = {
+        "github_copilot_user_session": GithubCopilotUserSession(
+            token="copilot-token", api_base="https://api.githubcopilot.com"
+        )
+    }
+    for exc, status in (
+        (litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o"), 429),
+        (litellm.AuthenticationError("copilot 401", "github_copilot", "gpt-4o"), 401),
+        (litellm.InternalServerError("copilot 500", "github_copilot", "gpt-4o"), 500),
+    ):
+        assert (
+            _should_run_cooldown_logic(
+                single_deployment_router, "dep-1", status, exc, request_kwargs=session_kwargs
+            )
+            is False
+        )
+
+
+def test_shared_mode_upstream_429_still_cools_down_the_deployment(single_deployment_router):
+    """Regression: without the session marker the same 429 is a deployment-health
+    signal and cools down exactly as before."""
+    exc = litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o")
+    assert _should_run_cooldown_logic(
+        single_deployment_router, "dep-1", 429, exc, request_kwargs={"model": "github_copilot/gpt-4o"}
+    ) is True
+    assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 429, exc) is True

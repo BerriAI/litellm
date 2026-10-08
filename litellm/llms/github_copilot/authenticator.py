@@ -45,6 +45,22 @@ _DEVICE_CODE: Final = TypeAdapter(_DeviceCode)
 _ACCESS_TOKEN_POLL: Final = TypeAdapter(_AccessTokenPoll)
 
 
+def github_api_headers(
+    access_token: str | None = None,
+) -> dict[str, str]:  # mutable-ok: returned straight into httpx handlers whose headers params require dict
+    headers: Final = {
+        "accept": "application/json",
+        "editor-version": "vscode/1.85.1",
+        "editor-plugin-version": "copilot/1.155.0",
+        "user-agent": "GithubCopilot/1.155.0",
+        "accept-encoding": "gzip,deflate,br",
+        "content-type": "application/json",
+    }
+    if access_token:
+        headers["authorization"] = f"token {access_token}"
+    return headers
+
+
 class Authenticator:
     def __init__(self) -> None:
         """Initialize the GitHub Copilot authenticator with configurable token paths."""
@@ -230,21 +246,7 @@ class Authenticator:
         Returns:
             Dict[str, str]: Headers for GitHub API requests.
         """
-        headers: Final = {
-            "accept": "application/json",
-            "editor-version": "vscode/1.85.1",
-            "editor-plugin-version": "copilot/1.155.0",
-            "user-agent": "GithubCopilot/1.155.0",
-            "accept-encoding": "gzip,deflate,br",
-        }
-
-        if access_token:
-            headers["authorization"] = f"token {access_token}"
-
-        if "content-type" not in headers:
-            headers["content-type"] = "application/json"
-
-        return headers
+        return github_api_headers(access_token)
 
     def _get_device_code(self) -> _DeviceCode:
         """

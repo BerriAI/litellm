@@ -6,6 +6,7 @@ layer; ``litellm.types.utils`` re-exports them for backwards compatibility.
 """
 
 from collections.abc import Mapping
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -43,3 +44,35 @@ class UpdateCredentialItem(LiteLLMBaseModel):
     credential_values: Mapping[str, object] | None = None
     model_id: str | None = None
     credential_values_to_delete: tuple[str, ...] | None = None
+
+
+class UserProviderConnection(LiteLLMBaseModel):
+    credential_name: str
+    provider: str
+    connected: bool
+    github_login: str | None = None
+    connected_at: str | None = None
+
+
+class UserProviderConnectionsResponse(LiteLLMBaseModel):
+    connections: list[UserProviderConnection]  # mutable-ok: pydantic response model field
+
+
+class UserConnectionStartResponse(LiteLLMBaseModel):
+    user_code: str
+    verification_uri: str
+    expires_in: int
+    interval: int
+
+
+UserConnectionPollStatus = Literal["pending", "slow_down", "expired", "denied", "connected", "no_copilot_seat"]
+
+
+class UserConnectionPollResponse(LiteLLMBaseModel):
+    status: UserConnectionPollStatus
+    interval: int | None = None
+    github_login: str | None = None
+
+
+class UserConnectionDeleteResponse(LiteLLMBaseModel):
+    status: str

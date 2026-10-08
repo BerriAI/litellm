@@ -31,6 +31,7 @@ from ..common_utils import (
     GetAPIKeyError,
     get_copilot_default_headers,
 )
+from ..per_user_auth import require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -199,22 +200,25 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - copilot-vision-request if vision content detected
         - User-provided extra_headers (merged with priority)
         """
+        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        default_headers: Final = get_copilot_default_headers(user_session.token) if user_session is not None else None
         try:
-            # Get GitHub Copilot API key via OAuth
-            api_key: Final = self.authenticator.get_api_key()
+            if default_headers is None:
+                # Get GitHub Copilot API key via OAuth
+                api_key: Final = self.authenticator.get_api_key()
 
-            if not api_key:
-                raise AuthenticationError(
-                    model=model,
-                    llm_provider="github_copilot",
-                    message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
-                )
+                if not api_key:
+                    raise AuthenticationError(
+                        model=model,
+                        llm_provider="github_copilot",
+                        message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
+                    )
 
             # Get default headers (from copilot-api configuration)
-            default_headers: Final = get_copilot_default_headers(api_key)
+            copilot_headers: Final = default_headers or get_copilot_default_headers(api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
-            merged_headers: Final = {**default_headers, **headers}
+            merged_headers: Final = {**copilot_headers, **headers}
 
             # Analyze input to determine additional headers
             input_param: Final = self._get_input_from_params(litellm_params)
@@ -249,9 +253,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
+        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
         effective_api_base = (
-            api_base
+            (user_session.api_base if user_session is not None else None)
+            or api_base
             or self.authenticator.get_api_base()
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE
