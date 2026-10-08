@@ -32,6 +32,7 @@ class TestUIRootPath(unittest.TestCase):
             '<script src="/litellm-asset-prefix/_next/app.js"></script>'
             '<img src="/ui/assets/logo.png"></body></html>'
         )
+        (source / "index.txt").write_text('[{"href":"/favicon.ico?version=1"}]')
         (source / "app.js").write_text('fetch("/litellm/.well-known/litellm-ui-config")')
         (source / "font.woff2").write_bytes(bytes(range(256)))
         return source
@@ -50,6 +51,7 @@ class TestUIRootPath(unittest.TestCase):
             self.assertIn('href="/services/llm/get_favicon"', (runtime / "index.html").read_text())
             self.assertIn('href="/services/llm/favicon.ico?version=1"', (runtime / "index.html").read_text())
             self.assertIn('src="/services/llm/ui/assets/logo.png"', (runtime / "index.html").read_text())
+            self.assertIn("/services/llm/favicon.ico?version=1", (runtime / "index.txt").read_text())
             self.assertEqual(runtime.stat().st_mode & 0o005, 0o005)
             self.assertEqual((runtime / "index.html").stat().st_mode & 0o004, 0o004)
             self.assertIn("/services/llm/.well-known/litellm-ui-config", (runtime / "app.js").read_text())
