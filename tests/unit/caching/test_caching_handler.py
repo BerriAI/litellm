@@ -2772,3 +2772,31 @@ def test_handle_kwargs_input_answers_400_for_a_single_object_input() -> None:
         caching_handler.handle_kwargs_input_list_or_str(
             {"model": "gemini/gemini-embedding-2-preview", "custom_llm_provider": "gemini", "input": clip_block}
         )
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_answers_400_for_a_single_object_embedding_input() -> None:
+    setup_cache()
+    fixed_start: Final = datetime(2026, 1, 1)
+    caching_handler: Final = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=fixed_start)
+    model: Final = "gemini/gemini-embedding-2-preview"
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id=str(uuid.uuid4()),
+        call_type=CallTypes.aembedding.value,
+        model=model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=fixed_start,
+    )
+    clip_block: Final = {"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAA"}}
+
+    with pytest.raises(litellm.BadRequestError, match="string or a list"):
+        await caching_handler.async_get_cache(
+            model=model,
+            original_function=aembedding,
+            logging_obj=logging_obj,
+            start_time=fixed_start,
+            call_type=CallTypes.aembedding.value,
+            kwargs={"model": model, "custom_llm_provider": "gemini", "input": clip_block, "caching": True},
+        )

@@ -857,10 +857,7 @@ class LLMCachingHandler:
         self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
         cached_result: object | None = None
         if call_type == CallTypes.aembedding.value:
-            if isinstance(new_kwargs["input"], str):
-                new_kwargs["input"] = [new_kwargs["input"]]
-            elif not isinstance(new_kwargs["input"], list):
-                raise ValueError("input must be a string or a list")
+            new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)
             tasks: Final[list[Awaitable[object]]] = []
             for idx, i in enumerate(new_kwargs["input"]):
                 preset_cache_key = litellm.cache.get_cache_key(**{**new_kwargs, "input": i})
