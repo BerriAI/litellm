@@ -7,6 +7,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
+from mcp.types import ErrorData, InputRequest, InputResponse, InputResponses
+
 from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -121,6 +123,10 @@ class ProgressCallback(Protocol):
     async def __call__(self, progress: float, total: float | None, /) -> None: ...
 
 
+class ClientInteraction(Protocol):
+    async def request(self, key: str, request: InputRequest) -> InputResponse | ErrorData: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AuthorizedToolCall:
     name: str
@@ -130,3 +136,5 @@ class AuthorizedToolCall:
     host_progress_callback: ProgressCallback | None
     guardrail_context: Mapping[str, object] | None
     logging_data: Mapping[str, object]
+    input_responses: InputResponses | None = None
+    request_state: str | None = None

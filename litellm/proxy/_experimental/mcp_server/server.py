@@ -131,12 +131,7 @@ def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
 
 
 def unsupported_protocol_version(scope: Scope) -> str | None:
-    """Return the unsupported ``MCP-Protocol-Version`` header value, if any.
-
-    SDK 2's ``StreamableHTTPSessionManager`` routes any version outside
-    ``HANDSHAKE_PROTOCOL_VERSIONS`` to the modern single-exchange path, which
-    bypasses litellm's session/auth model, so the ASGI entry rejects it.
-    """
+    """Admit configured HTTP revisions while keeping SSE on the legacy protocol."""
     from litellm.proxy._experimental.mcp_server.capabilities import configured_versions
 
     headers: Final[Iterable[tuple[bytes, bytes]]] = scope.get("headers") or ()
@@ -144,6 +139,8 @@ def unsupported_protocol_version(scope: Scope) -> str | None:
         raw.decode("latin-1").strip() for key, raw in headers if key.lower() == _MCP_PROTOCOL_VERSION_HEADER
     )
     for value in values:
+        if value == "2026-07-28" and scope.get("path", "").rstrip("/").endswith("/sse"):
+            return value
         if value and value not in configured_versions():
             return value
     return None
@@ -926,7 +923,9 @@ if MCP_AVAILABLE:
             verbose_logger.exception("Error in list_prompts endpoint: %s", exc)
             return ListPromptsResult(prompts=[])
 
-    async def get_prompt(ctx: ServerRequestContext, params: GetPromptRequestParams) -> GetPromptResult:
+    async def get_prompt(
+        ctx: ServerRequestContext, params: GetPromptRequestParams
+    ) -> GetPromptResult | InputRequiredResult:
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
         async with _legacy_operation_context(ctx, trace=False) as context:
@@ -964,7 +963,9 @@ if MCP_AVAILABLE:
             verbose_logger.exception("Error in list_resource_templates endpoint: %s", exc)
             return ListResourceTemplatesResult(resource_templates=[])
 
-    async def read_resource(ctx: ServerRequestContext, params: ReadResourceRequestParams) -> ReadResourceResult:
+    async def read_resource(
+        ctx: ServerRequestContext, params: ReadResourceRequestParams
+    ) -> ReadResourceResult | InputRequiredResult:
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
         async with _legacy_operation_context(ctx, trace=False) as context:
@@ -2027,6 +2028,10 @@ if MCP_AVAILABLE:
             ) = await extract_mcp_auth_context(scope, path)
             reject_disallowed_mcp_client(StarletteRequest(scope).headers, user_api_key_auth)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
+            request_headers: Final = StarletteRequest(scope).headers
+            defer_upstream_probes: Final = request_headers.get(
+                "mcp-protocol-version"
+            ) == "2026-07-28" and request_headers.get("mcp-method") in {"tools/call", "prompts/get", "resources/read"}
 
             # Extract client IP for MCP access control
             _client_ip: Final = IPAddressUtils.get_mcp_client_ip(StarletteRequest(scope))
@@ -2055,21 +2060,22 @@ if MCP_AVAILABLE:
             # from the fully-authorized server set: a passthrough server that
             # the active toolset excludes should not trigger an OAuth flow
             # for a server the caller will be 403'd on after authentication.
-            await _raise_preemptive_401_for_unauthenticated_servers(
-                scope=scope,
-                mcp_servers=mcp_servers,
-                oauth2_headers=oauth2_headers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                user_api_key_auth=user_api_key_auth,
-                client_ip=_client_ip,
-                allowed_server_ids=toolset_allowed_server_ids,
-                raw_headers=raw_headers,
-            )
+            if not defer_upstream_probes:
+                await _raise_preemptive_401_for_unauthenticated_servers(
+                    scope=scope,
+                    mcp_servers=mcp_servers,
+                    oauth2_headers=oauth2_headers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    user_api_key_auth=user_api_key_auth,
+                    client_ip=_client_ip,
+                    allowed_server_ids=toolset_allowed_server_ids,
+                    raw_headers=raw_headers,
+                )
 
-            # Pre-flight auth check for pass-through servers.  Must run after
-            # toolset scoping so the probe list is derived from the fully-authorized
-            # server set, not the raw user-supplied names.
-            await _check_passthrough_upstream_auth(scope, user_api_key_auth, mcp_servers, _client_ip)
+                # Pre-flight auth check for pass-through servers.  Must run after
+                # toolset scoping so the probe list is derived from the fully-authorized
+                # server set, not the raw user-supplied names.
+                await _check_passthrough_upstream_auth(scope, user_api_key_auth, mcp_servers, _client_ip)
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
             _debug_headers: Final = MCPDebug.maybe_build_debug_headers(
@@ -2279,12 +2285,16 @@ if MCP_AVAILABLE:
                         client_info=_extract_initialize_client_info(body),
                     )
 
-                async with _gateway_initialize_instructions_request_scope(
-                    user_api_key_auth,
-                    mcp_servers,
-                    _client_ip,
-                    scoped_server_endpoint=scoped_server_endpoint,
-                    is_initialize=is_initialize,
+                async with (
+                    contextlib.nullcontext()
+                    if defer_upstream_probes
+                    else _gateway_initialize_instructions_request_scope(
+                        user_api_key_auth,
+                        mcp_servers,
+                        _client_ip,
+                        scoped_server_endpoint=scoped_server_endpoint,
+                        is_initialize=is_initialize,
+                    )
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":

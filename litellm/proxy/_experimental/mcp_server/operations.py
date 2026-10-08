@@ -1,6 +1,7 @@
 """Shared MCP operation policy and dispatch."""
 
 import asyncio
+import time
 import traceback
 import types
 import uuid
@@ -12,7 +13,7 @@ from functools import partial
 from typing import Any, Final, NoReturn, TypeAlias, overload
 
 from fastapi import HTTPException
-from mcp import ReadResourceResult, Resource
+from mcp import MCPError, ReadResourceResult, Resource
 from mcp.types import (
     CallToolRequest,
     CallToolRequestParams,
@@ -23,6 +24,7 @@ from mcp.types import (
     GetPromptRequestParams,
     GetPromptResult,
     InputRequiredResult,
+    InputResponses,
     ListPromptsRequest,
     ListPromptsResult,
     ListResourcesRequest,
@@ -82,6 +84,12 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     ServerOutcome,
     classify_list_exception,
     outcome_wire_value,
+)
+from litellm.proxy._experimental.mcp_server.interactions import (
+    BoundInputRequiredResult,
+    open_continuation,
+    seal_continuation,
+    target_digest,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401  # legacy module exports
     MCPServerManager,
@@ -1862,6 +1870,8 @@ async def execute_mcp_tool(
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
     wire_compat: WireCompat = WireCompat.LEGACY,
+    input_responses: InputResponses | None = None,
+    request_state: str | None = None,
     **kwargs: object,  # kwargs-ok: preserves the existing REST and decorated logging call contract
 ) -> CallToolResult | InputRequiredResult:
     context: Final = prepare_context(
@@ -1881,6 +1891,8 @@ async def execute_mcp_tool(
         host_progress_callback=host_progress_callback,
         guardrail_context=guardrail_context,
         logging_data=types.MappingProxyType(kwargs),
+        input_responses=input_responses,
+        request_state=request_state,
     )
     return await GatewayOperations().execute(operation, context)
 
@@ -1899,6 +1911,8 @@ async def _execute_mcp_tool(
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
     wire_compat: WireCompat = WireCompat.LEGACY,
+    input_responses: InputResponses | None = None,
+    request_state: str | None = None,
     **kwargs: Any,
 ) -> CallToolResult | InputRequiredResult:
     """
@@ -2194,6 +2208,8 @@ async def _execute_mcp_tool(
             guardrail_context=guardrail_context,
             host_progress_callback=host_progress_callback,
             wire_compat=wire_compat,
+            input_responses=input_responses,
+            request_state=request_state,
         )
 
     # Fall back to local tool registry with original name (legacy support)
@@ -2435,6 +2451,8 @@ async def call_mcp_tool(
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
     wire_compat: WireCompat = WireCompat.LEGACY,
+    input_responses: InputResponses | None = None,
+    request_state: str | None = None,
     **kwargs: Any,
 ) -> CallToolResult | InputRequiredResult:
     """
@@ -2493,6 +2511,8 @@ async def call_mcp_tool(
             raw_headers=raw_headers,
             client_ip=client_ip,
             wire_compat=wire_compat,
+            input_responses=input_responses,
+            request_state=request_state,
             **kwargs,
         )
     except Exception as e:
@@ -2525,7 +2545,10 @@ async def mcp_get_prompt(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
-) -> GetPromptResult:
+    input_responses: InputResponses | None = None,
+    request_state: str | None = None,
+    allow_input_required: bool = False,
+) -> GetPromptResult | InputRequiredResult:
     """
     Fetch a specific MCP prompt, handling both prefixed and unprefixed names.
     """
@@ -2570,6 +2593,9 @@ async def mcp_get_prompt(
         extra_headers=extra_headers,
         raw_headers=raw_headers,
         client_ip=client_ip,
+        input_responses=input_responses,
+        request_state=request_state,
+        allow_input_required=allow_input_required,
     )
 
 
@@ -2582,7 +2608,10 @@ async def mcp_read_resource(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
-) -> ReadResourceResult:
+    input_responses: InputResponses | None = None,
+    request_state: str | None = None,
+    allow_input_required: bool = False,
+) -> ReadResourceResult | InputRequiredResult:
     """Read resource contents from upstream MCP servers."""
 
     allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
@@ -2623,6 +2652,9 @@ async def mcp_read_resource(
         extra_headers=extra_headers,
         raw_headers=raw_headers,
         client_ip=client_ip,
+        input_responses=input_responses,
+        request_state=request_state,
+        allow_input_required=allow_input_required,
     )
 
 
@@ -2671,6 +2703,8 @@ async def _handle_managed_mcp_tool(
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
     wire_compat: WireCompat = WireCompat.LEGACY,
+    input_responses: InputResponses | None = None,
+    request_state: str | None = None,
     *,
     catalog_auth_header: str | None,
 ) -> CallToolResult | InputRequiredResult:
@@ -2696,6 +2730,8 @@ async def _handle_managed_mcp_tool(
         litellm_logging_obj=litellm_logging_obj,
         guardrail_context=guardrail_context,
         wire_compat=wire_compat,
+        input_responses=input_responses,
+        request_state=request_state,
     )
     verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
     return call_tool_result
@@ -2917,6 +2953,8 @@ async def _execute_mcp_server_tool_call(
             client_ip=_client_ip,
             host_progress_callback=host_progress_callback,
             wire_compat=context.wire_compat,
+            input_responses=params.input_responses,
+            request_state=params.request_state,
             **data,  # for logging
         )
     except MCPMissingUserEnvVarsError as e:
@@ -3008,7 +3046,7 @@ async def _execute_list_prompts(
 
 async def _execute_get_prompt(
     context: OperationContext, params: GetPromptRequestParams, host_progress_callback: ProgressCallback | None = None
-) -> GetPromptResult:
+) -> GetPromptResult | InputRequiredResult:
     if context.mcp_proxy_mode:
         _reject_mcp_proxy_operation()
     (
@@ -3032,6 +3070,9 @@ async def _execute_get_prompt(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
         client_ip=_client_ip,
+        input_responses=params.input_responses,
+        request_state=params.request_state,
+        allow_input_required=context.wire_compat is WireCompat.MODERN,
     )
 
 
@@ -3093,7 +3134,7 @@ async def _execute_list_resource_templates(
 
 async def _execute_read_resource(
     context: OperationContext, params: ReadResourceRequestParams, host_progress_callback: ProgressCallback | None = None
-) -> ReadResourceResult:
+) -> ReadResourceResult | InputRequiredResult:
     if context.mcp_proxy_mode:
         _reject_mcp_proxy_operation()
     (
@@ -3115,6 +3156,9 @@ async def _execute_read_resource(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
         client_ip=_client_ip,
+        input_responses=params.input_responses,
+        request_state=params.request_state,
+        allow_input_required=context.wire_compat is WireCompat.MODERN,
     )
 
     return read_resource_result
@@ -3201,7 +3245,9 @@ class GatewayOperations:
     async def execute(self, operation: ListPromptsRequest, context: OperationContext) -> ListPromptsResult: ...
 
     @overload
-    async def execute(self, operation: GetPromptRequest, context: OperationContext) -> GetPromptResult: ...
+    async def execute(
+        self, operation: GetPromptRequest, context: OperationContext
+    ) -> GetPromptResult | InputRequiredResult: ...
 
     @overload
     async def execute(self, operation: ListResourcesRequest, context: OperationContext) -> ListResourcesResult: ...
@@ -3212,10 +3258,48 @@ class GatewayOperations:
     ) -> ListResourceTemplatesResult: ...
 
     @overload
-    async def execute(self, operation: ReadResourceRequest, context: OperationContext) -> ReadResourceResult: ...
+    async def execute(
+        self, operation: ReadResourceRequest, context: OperationContext
+    ) -> ReadResourceResult | InputRequiredResult: ...
 
     @catalog_operation(lambda: global_mcp_server_manager)
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
+        if not isinstance(operation, (CallToolRequest, GetPromptRequest, ReadResourceRequest)):
+            return await self._execute(operation, context)
+        if context.wire_compat is not WireCompat.MODERN:
+            if operation.params.request_state is not None or operation.params.input_responses:
+                raise MCPError(code=-32602, message="Continuations require the modern MCP protocol")
+            return await self._execute(operation, context)
+        state: Final = open_continuation(operation, context, now=int(time.time()))
+        if state is not None:
+            target: Final = global_mcp_server_manager.get_mcp_server_by_id(state.target_id)
+            if target is None or target_digest(target) != state.target_digest:
+                raise MCPError(code=-32602, message="MCP continuation target changed; start a fresh request")
+            if set(operation.params.input_responses or {}) & set(state.gateway_responses or {}):
+                raise MCPError(code=-32602, message="Cannot replace gateway input responses")
+        upstream: Final = operation.model_copy(
+            update={
+                "params": operation.params.model_copy(
+                    update={
+                        "request_state": state.upstream_state if state is not None else None,
+                        "input_responses": {
+                            **(state.gateway_responses or {}),
+                            **(operation.params.input_responses or {}),
+                        }
+                        if state is not None
+                        else None,
+                    }
+                )
+            }
+        )
+        result: Final = await self._execute(upstream, context)
+        if isinstance(result, BoundInputRequiredResult):
+            return seal_continuation(result, operation, context, now=int(time.time()), previous=state)
+        if isinstance(result, InputRequiredResult):
+            raise MCPError(code=-32602, message="MCP continuation target is unavailable")
+        return result
+
+    async def _execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
             case DiscoverRequest():
                 listings: Final = (
@@ -3282,6 +3366,8 @@ class GatewayOperations:
                     host_progress_callback=operation.host_progress_callback,
                     guardrail_context=operation.guardrail_context,
                     wire_compat=context.wire_compat,
+                    input_responses=operation.input_responses,
+                    request_state=operation.request_state,
                     **operation.logging_data,
                 )
             case ListToolsRequest(params=params):

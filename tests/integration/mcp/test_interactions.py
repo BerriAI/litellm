@@ -1,0 +1,260 @@
+import json
+from pathlib import Path
+from typing import Final
+
+import httpx
+import pytest
+import yaml
+from pydantic import JsonValue
+
+from integration._support.client import Gateway
+from integration._support.process import owned_proxy
+from integration._support.wire import Reply, Request, wire_server
+
+
+_KEY: Final = "sk-interaction-test"
+_META: Final = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientInfo": {"name": "continuation-test", "version": "1"},
+    "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}, "url": {}}},
+}
+
+
+def interaction_peer(request: Request) -> Reply:
+    if request.method != "POST":
+        return Reply(status=405)
+    body: Final = json.loads(request.body)
+    method: Final = body["method"]
+    params: Final = body.get("params", {})
+    if method == "server/discover":
+        result = {
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {"tools": {}, "prompts": {}, "resources": {}},
+            "cacheScope": "private",
+            "ttlMs": 0,
+        }
+    elif method == "tools/list":
+        result = {
+            "tools": [{"name": "confirm", "inputSchema": {"type": "object"}}],
+            "cacheScope": "private",
+            "ttlMs": 0,
+        }
+    elif method == "prompts/list":
+        result = {"prompts": [{"name": "confirm"}], "cacheScope": "private", "ttlMs": 0}
+    elif method == "resources/list":
+        result = {"resources": [{"name": "confirm", "uri": "test://confirm"}], "cacheScope": "private", "ttlMs": 0}
+    elif method == "resources/templates/list":
+        result = {"resourceTemplates": [], "cacheScope": "private", "ttlMs": 0}
+    elif not params.get("requestState"):
+        return Reply(
+            body=json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "resultType": "input_required",
+                        "requestState": "opaque:" + method,
+                        "inputRequests": {
+                            "consent": {
+                                "method": "elicitation/create",
+                                "params": {
+                                    "mode": "form",
+                                    "message": "Confirm",
+                                    "requestedSchema": {"type": "object", "properties": {}},
+                                },
+                            }
+                        },
+                    },
+                }
+            ).encode()
+        )
+    else:
+        assert params["requestState"] == "opaque:" + method
+        assert params["inputResponses"] == {"consent": {"action": "accept"}}
+        if method == "tools/call":
+            result = {"content": [{"type": "text", "text": "confirmed"}], "isError": False}
+        elif method == "prompts/get":
+            result = {"messages": [{"role": "user", "content": {"type": "text", "text": "confirmed"}}]}
+        else:
+            assert method == "resources/read"
+            result = {"contents": [{"uri": "test://confirm", "text": "confirmed"}]}
+    return Reply(
+        body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": {"resultType": "complete", **result}}).encode()
+    )
+
+
+def rpc(gateway: Gateway, method: str, params: dict[str, JsonValue], *, status: int = 200) -> dict:
+    response: Final = gateway.client.post(
+        "/mcp/",
+        headers={
+            "Authorization": "Bearer " + gateway.key,
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": method,
+            "Mcp-Name": str(params.get("name", params.get("uri", ""))),
+            "Accept": "application/json, text/event-stream",
+        },
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {**params, "_meta": _META}},
+    )
+    assert response.status_code == status, response.text
+    return response.json()
+
+
+@pytest.mark.parametrize("changed_target", [False, True])
+def test_continuations_resume_on_another_replica_and_reject_changed_operations(tmp_path: Path, changed_target: bool) -> None:
+    with wire_server(interaction_peer) as peer, httpx.Client() as client:
+        config: Final = tmp_path / "proxy.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [],
+                    "mcp_servers": {
+                        "mrtr": {
+                            "url": peer.url,
+                            "transport": "http",
+                            "protocol_version": "2026-07-28",
+                            "allow_elicitation": True,
+                        }
+                    },
+                    "general_settings": {
+                        "master_key": _KEY,
+                        "store_model_in_db": False,
+                        "mcp_advertised_versions": ["2025-11-25", "2026-07-28"],
+                    },
+                }
+            )
+        )
+        other_config: Final = tmp_path / "other-proxy.yaml"
+        other_config.write_text(config.read_text().replace(peer.url, peer.url + "/changed-target") if changed_target else config.read_text())
+        seed: Final = Gateway(client, _KEY, peer.url)
+        environment: Final = {
+            "STORE_MODEL_IN_DB": "False",
+            "DISABLE_SCHEMA_UPDATE": "true",
+            "LITELLM_SALT_KEY": "shared-interaction-test",
+        }
+        options: Final = {
+            "database_setup": (),
+            "remove_environment": (
+                "DATABASE_URL",
+                "DATABASE_URL_READ_REPLICA",
+                "LITELLM_LICENSE",
+                "LITELLM_LICENSE_PATH",
+                "REDIS_URL",
+                "REDIS_HOST",
+            ),
+        }
+        with (
+            owned_proxy(seed, tmp_path / "a", environment, config=config, **options) as first,
+            owned_proxy(seed, tmp_path / "b", environment, config=other_config, **options) as second,
+        ):
+            for method, params, terminal_field in (
+                ("tools/call", {"name": "mrtr-confirm", "arguments": {}}, "content"),
+                ("prompts/get", {"name": "mrtr-confirm", "arguments": {}}, "messages"),
+                ("resources/read", {"uri": "test://confirm"}, "contents"),
+            ):
+                initial: Final = rpc(first, method, params)
+                assert initial["result"]["resultType"] == "input_required", initial
+                state: Final = initial["result"]["requestState"]
+                assert state.startswith("mcp_state_v1."), initial
+                retry: Final = {**params, "requestState": state, "inputResponses": {"consent": {"action": "accept"}}}
+                if changed_target:
+                    peer.drain()
+                    refused: Final = rpc(second, method, retry, status=400)
+                    assert refused["error"]["code"] == -32602, refused
+                    assert peer.drain() == (), "Changed target must reject before upstream dispatch"
+                    continue
+                completed: Final = rpc(second, method, retry)
+                assert "confirmed" in json.dumps(completed["result"][terminal_field]), completed
+                assert rpc(first, method, retry) == completed
+                peer.drain()
+                changed: Final = {
+                    **retry,
+                    **({"uri": "test://other"} if method == "resources/read" else {"name": "mrtr-other"}),
+                }
+                rejected: Final = rpc(second, method, changed, status=400)
+                assert rejected["error"]["code"] == -32602, rejected
+                assert peer.drain() == (), "Rejected continuation must not contact the upstream"
+
+
+def test_continuation_reauthenticates_caller_and_rechecks_revoked_permissions(tmp_path: Path) -> None:
+    auth_module: Final = tmp_path / "interaction_auth.py"
+    auth_module.write_text(
+        "from pathlib import Path\n"
+        "from fastapi import HTTPException, Request\n"
+        "from litellm.proxy._types import UserAPIKeyAuth\n"
+        "async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:\n"
+        "    if api_key != 'sk-interaction-test':\n"
+        "        raise HTTPException(status_code=401, detail='Unknown test caller')\n"
+        "    return UserAPIKeyAuth.model_validate_json(Path(__file__).with_suffix('.json').read_text())\n"
+    )
+    identity: Final = {
+        "user_id": "alice",
+        "team_id": "team-a",
+        "user_role": "internal_user",
+        "object_permission": {"object_permission_id": "test-permission", "mcp_servers": ["interaction-server"]},
+    }
+    auth_state: Final = auth_module.with_suffix(".json")
+    auth_state.write_text(json.dumps(identity))
+    with wire_server(interaction_peer) as peer, httpx.Client() as client:
+        config: Final = tmp_path / "proxy.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [],
+                    "mcp_servers": {
+                        "mrtr": {
+                            "server_id": "interaction-server",
+                            "url": peer.url,
+                            "transport": "http",
+                            "protocol_version": "2026-07-28",
+                            "allow_elicitation": True,
+                        }
+                    },
+                    "general_settings": {
+                        "master_key": _KEY,
+                        "custom_auth": "interaction_auth.authenticate",
+                        "store_model_in_db": False,
+                        "mcp_advertised_versions": ["2025-11-25", "2026-07-28"],
+                    },
+                }
+            )
+        )
+        with owned_proxy(
+            Gateway(client, _KEY, peer.url),
+            tmp_path / "proxy",
+            {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "caller-test-salt"},
+            config=config,
+            database_setup=(),
+            remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "REDIS_URL", "REDIS_HOST"),
+        ) as gateway:
+            params: Final = {"name": "mrtr-confirm", "arguments": {}}
+            initial: Final = rpc(gateway, "tools/call", params)
+            assert initial["result"]["resultType"] == "input_required", initial
+            retry: Final = {
+                **params,
+                "requestState": initial["result"]["requestState"],
+                "inputResponses": {"consent": {"action": "accept"}},
+            }
+            for changed in ({"user_id": "bob"}, {"team_id": "team-b"}):
+                auth_state.write_text(json.dumps({**identity, **changed}))
+                peer.drain()
+                rejected: Final = rpc(gateway, "tools/call", retry, status=400)
+                assert rejected["error"]["code"] == -32602, rejected
+                assert peer.drain() == (), "Caller-bound state must reject before contacting upstream"
+            auth_state.write_text(json.dumps(identity))
+            resumed: Final = rpc(gateway, "tools/call", retry)
+            assert resumed["result"]["content"] == [{"type": "text", "text": "confirmed"}], resumed
+            auth_state.write_text(
+                json.dumps(
+                    {
+                        **identity,
+                        "object_permission": {
+                            "object_permission_id": "test-permission",
+                            "mcp_servers": ["denied-server"],
+                        },
+                    }
+                )
+            )
+            peer.drain()
+            revoked: Final = rpc(gateway, "tools/call", retry)
+            assert revoked["result"]["isError"] is True, revoked
+            assert peer.drain() == (), "Revoked access must reject a valid continuation before upstream dispatch"
