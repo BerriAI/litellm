@@ -24593,3 +24593,88 @@ class CompletionCustomHandler(
         except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
+
+
+_FALLBACK_WIRE_PRIMARY: Final = "http://primary.wire.test/v1"
+_FALLBACK_WIRE_BACKUP: Final = "http://backup.wire.test/v1"
+_FALLBACK_WIRE_BACKUP_REPLY: Final = {
+    "id": "chatcmpl-backup",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "pong"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _fallback_wire_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-primary",
+                    "api_base": _FALLBACK_WIRE_PRIMARY,
+                    "max_retries": 0,
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-backup",
+                    "api_base": _FALLBACK_WIRE_BACKUP,
+                    "max_retries": 0,
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+
+def _mock_fallback_wire(respx_mock: respx.MockRouter) -> tuple[respx.Route, respx.Route]:
+    primary = respx_mock.post(f"{_FALLBACK_WIRE_PRIMARY}/chat/completions").mock(
+        return_value=httpx.Response(500, json={"error": {"message": "primary overloaded", "type": "server_error"}})
+    )
+    backup = respx_mock.post(f"{_FALLBACK_WIRE_BACKUP}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_FALLBACK_WIRE_BACKUP_REPLY)
+    )
+    return primary, backup
+
+
+def _assert_fallback_errors_reached_the_caller_and_not_the_wire(
+    response: object, primary: respx.Route, backup: respx.Route
+) -> None:
+    for route in (primary, backup):
+        assert route.called
+        for call in route.calls:
+            assert "include_fallback_errors" not in json.loads(call.request.content)
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    headers = response._hidden_params["additional_headers"]
+    assert headers["x-litellm-attempted-fallbacks"] == 1
+    errors = json.loads(headers["x-litellm-fallback-errors"])
+    assert len(errors) == 1
+    assert "primary overloaded" in errors[0]["message"]
+
+
+def test_sync_completion_keeps_include_fallback_errors_off_the_wire_and_returns_the_errors():
+    with respx.mock(assert_all_called=True) as respx_mock:
+        primary, backup = _mock_fallback_wire(respx_mock)
+        response = _fallback_wire_router().completion(
+            model="primary", messages=[{"role": "user", "content": "hi"}], include_fallback_errors=True
+        )
+    _assert_fallback_errors_reached_the_caller_and_not_the_wire(response, primary, backup)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_keeps_include_fallback_errors_off_the_wire_and_returns_the_errors(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as respx_mock:
+        primary, backup = _mock_fallback_wire(respx_mock)
+        response = await _fallback_wire_router().acompletion(
+            model="primary", messages=[{"role": "user", "content": "hi"}], include_fallback_errors=True
+        )
+    _assert_fallback_errors_reached_the_caller_and_not_the_wire(response, primary, backup)
