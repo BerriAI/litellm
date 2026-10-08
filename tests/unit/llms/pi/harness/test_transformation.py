@@ -728,7 +728,7 @@ async def test_skills_copied_to_private_skills_path(tmp_path):
 
 
 async def test_skill_without_manifest_rejected(tmp_path):
-    with pytest.raises(ValueError, match="SKILL.md"):
+    with pytest.raises(ValueError, match=r"SKILL\.md"):
         await started(skills=[str(tmp_path)])
 
 
