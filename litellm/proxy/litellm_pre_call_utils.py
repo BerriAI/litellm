@@ -120,7 +120,7 @@ def _trace_id_from_otel_span(span: "OtelSpan | None") -> str | None:
     try:
         span_context: Final = span.get_span_context()
         is_valid: Final = span_context.is_valid
-        trace_id: Final = span_context.trace_id
+        trace_id: Final = cast(object, span_context.trace_id)  # cast-ok: trace_id is int at runtime; tests mock it
     except AttributeError:
         return None
     if not is_valid or not isinstance(trace_id, int):
@@ -2534,23 +2534,17 @@ async def add_litellm_data_to_request(
         if (
             general_settings is not None
             and general_settings.get("use_x_forwarded_for") is True
-            and request is not None
             and hasattr(request, "headers")
             and "x-forwarded-for" in request.headers
         ):
             requester_ip_address = request.headers["x-forwarded-for"]
-        elif (
-            request is not None
-            and hasattr(request, "client")
-            and hasattr(request.client, "host")
-            and request.client is not None
-        ):
+        elif hasattr(request, "client") and hasattr(request.client, "host") and request.client is not None:
             requester_ip_address = request.client.host
     data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
 
     # Add User-Agent
     user_agent = ""
-    if request is not None and hasattr(request, "headers") and "user-agent" in request.headers:
+    if hasattr(request, "headers") and "user-agent" in request.headers:
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
@@ -2733,7 +2727,7 @@ def _per_user_credential_names_for_groups(
     names: Final[list[str]] = []  # mutable-ok: accumulates one name per per-user deployment
     for group in model_groups:
         for deployment in llm_router.get_model_list(model_name=group) or ():
-            litellm_params = deployment.get("litellm_params")
+            litellm_params = cast(object, deployment.get("litellm_params"))  # cast-ok: deployment is dict-shaped here
             credential_name_obj: object = (
                 litellm_params.get("litellm_credential_name")
                 if isinstance(litellm_params, Mapping)
@@ -2744,11 +2738,10 @@ def _per_user_credential_names_for_groups(
             credential = CredentialAccessor.find_credential(credential_name_obj)
             if credential is None:
                 continue
-            values = credential.credential_values
-            if (
-                isinstance(values, Mapping)
-                and values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
-            ):
+            values = cast(  # cast-ok: credential_values is a plain dict at runtime
+                Mapping[object, object], credential.credential_values
+            )
+            if values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE:
                 names.append(credential_name_obj)
     return tuple(names)
 

@@ -11,7 +11,13 @@ import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Final, Literal, TypeAlias
+from typing import (
+    Final,
+    Literal,
+    Protocol,
+    TypeAlias,
+    cast,  # noqa: TID251  # casts pin the untyped litellm clients/caches to the local Protocols
+)
 from urllib.parse import urlparse
 
 import httpx
@@ -47,9 +53,48 @@ _DEVICE_FLOW_SCOPE: Final = "read:user"
 _SESSION_CACHE_MAX_SIZE: Final = 1000
 _SYNC_LOCK_COUNT: Final = 64
 
-_SESSION_CACHE: Final = InMemoryCache(
-    max_size_in_memory=_SESSION_CACHE_MAX_SIZE,
-    default_ttl=GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS,
+
+class _SessionCache(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: object, ttl: float | None = None) -> object: ...
+
+    def delete_cache(self, key: str) -> object: ...
+
+
+class _SyncGetClient(Protocol):
+    def get(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+    ) -> httpx.Response: ...
+
+
+class _AsyncGitHubClient(Protocol):
+    async def get(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+    ) -> httpx.Response: ...
+
+    async def post(
+        self,
+        url: str,
+        data: dict[str, str] | str | bytes | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+        json: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+        params: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+        headers: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
+    ) -> httpx.Response: ...
+
+
+_SESSION_CACHE: Final = cast(  # cast-ok: pins the untyped module cache to _SessionCache
+    _SessionCache,
+    InMemoryCache(
+        max_size_in_memory=_SESSION_CACHE_MAX_SIZE,
+        default_ttl=GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS,
+    ),
 )
 _EXCHANGE_LOCKS: Final = tuple(threading.Lock() for _ in range(_SYNC_LOCK_COUNT))
 _IN_FLIGHT: Final[  # mutable-ok: single-flight dedup registry mutated under its own locking
@@ -262,7 +307,10 @@ def _do_exchange(github_token: str, credential_name: str, cache_key: str) -> Git
     import litellm
 
     try:
-        response: Final = litellm.module_level_client.get(
+        client: Final = cast(  # cast-ok: pins the untyped litellm client to the local Protocol
+            _SyncGetClient, litellm.module_level_client
+        )
+        response: Final = client.get(
             DEFAULT_GITHUB_API_KEY_URL,
             headers=github_api_headers(github_token),
         )
@@ -278,7 +326,9 @@ def _do_exchange(github_token: str, credential_name: str, cache_key: str) -> Git
 async def _do_aexchange(github_token: str, credential_name: str, cache_key: str) -> GithubCopilotUserSession:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
-    client: Final = get_async_httpx_client(_LLM_PROVIDER)
+    client: Final = cast(  # cast-ok: pins the untyped litellm client to the local Protocol
+        _AsyncGitHubClient, get_async_httpx_client(_LLM_PROVIDER)
+    )
     try:
         response: Final = await client.get(
             DEFAULT_GITHUB_API_KEY_URL,
@@ -344,7 +394,9 @@ async def aexchange_github_token(
 async def astart_device_flow() -> GithubCopilotDeviceFlowStart:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
-    client: Final = get_async_httpx_client(_LLM_PROVIDER)
+    client: Final = cast(  # cast-ok: pins the untyped litellm client to the local Protocol
+        _AsyncGitHubClient, get_async_httpx_client(_LLM_PROVIDER)
+    )
     device_code_url: Final = os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL)
     client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
     try:
@@ -385,7 +437,9 @@ async def astart_device_flow() -> GithubCopilotDeviceFlowStart:
 async def apoll_device_flow(device_code: str) -> GithubCopilotDeviceFlowPoll:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
-    client: Final = get_async_httpx_client(_LLM_PROVIDER)
+    client: Final = cast(  # cast-ok: pins the untyped litellm client to the local Protocol
+        _AsyncGitHubClient, get_async_httpx_client(_LLM_PROVIDER)
+    )
     access_token_url: Final = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
     client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
     try:
@@ -452,7 +506,9 @@ def _poll_payload_from_response(response: httpx.Response) -> GithubCopilotDevice
 async def afetch_github_login(github_token: str) -> str:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
-    client: Final = get_async_httpx_client(_LLM_PROVIDER)
+    client: Final = cast(  # cast-ok: pins the untyped litellm client to the local Protocol
+        _AsyncGitHubClient, get_async_httpx_client(_LLM_PROVIDER)
+    )
     try:
         response: Final = await client.get(
             "https://api.github.com/user",
@@ -495,13 +551,18 @@ def github_copilot_auth_mode(litellm_credential_name: object, auth_type_value: o
     found; the request's own ``github_copilot_auth_type`` can never flip the
     mode either way on a named credential."""
     if isinstance(litellm_credential_name, str) and litellm_credential_name:
-        import litellm
+        from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 
-        credential: Final[object] = litellm.CredentialAccessor.find_credential(litellm_credential_name)
+        credential: Final = CredentialAccessor.find_credential(litellm_credential_name)
         if credential is not None:
             values: Final[object] = getattr(credential, "credential_values", None)
             return isinstance(values, Mapping) and (
-                values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+                cast(  # cast-ok: value is Mapping-checked or dict-shaped at runtime
+                    Mapping[object, object], values
+                ).get(
+                    GITHUB_COPILOT_AUTH_TYPE_KEY
+                )
+                == GITHUB_COPILOT_PER_USER_AUTH_TYPE
             )
         return auth_type_value == GITHUB_COPILOT_PER_USER_AUTH_TYPE
     if auth_type_value == GITHUB_COPILOT_PER_USER_AUTH_TYPE:
@@ -522,14 +583,24 @@ def _connect_error(credential_name: str) -> CallerCredentialAuthenticationError:
 
 
 def _caller_connection(kwargs: Mapping[str, object], credential_name: str) -> tuple[str, str]:
-    secret_fields: Final[object] = kwargs.get("secret_fields")
+    secret_fields_raw: Final[object] = kwargs.get("secret_fields")
+    secret_fields: Final = (
+        cast(Mapping[object, object], secret_fields_raw)  # cast-ok: value is Mapping-checked or dict-shaped at runtime
+        if isinstance(secret_fields_raw, Mapping)
+        else None
+    )
     user_id: Final[object] = (
-        secret_fields.get("user_provider_credentials_user_id") if isinstance(secret_fields, Mapping) else None
+        secret_fields.get("user_provider_credentials_user_id") if secret_fields is not None else None
     )
-    credentials: Final[object] = (
-        secret_fields.get("user_provider_credentials") if isinstance(secret_fields, Mapping) else None
+    credentials_raw: Final[object] = (
+        secret_fields.get("user_provider_credentials") if secret_fields is not None else None
     )
-    token: Final[object] = credentials.get(credential_name) if isinstance(credentials, Mapping) else None
+    credentials: Final = (
+        cast(Mapping[object, object], credentials_raw)  # cast-ok: value is Mapping-checked or dict-shaped at runtime
+        if isinstance(credentials_raw, Mapping)
+        else None
+    )
+    token: Final[object] = credentials.get(credential_name) if credentials is not None else None
     if not isinstance(user_id, str) or not user_id or not isinstance(token, str) or not token:
         raise _connect_error(credential_name)
     return user_id, token
@@ -537,7 +608,7 @@ def _caller_connection(kwargs: Mapping[str, object], credential_name: str) -> tu
 
 def _params_value(source: object, key: str) -> object:
     if isinstance(source, Mapping):
-        return source.get(key)
+        return cast(Mapping[object, object], source).get(key)  # cast-ok: isinstance above, Mapping values are object
     return getattr(source, key, None)
 
 
@@ -554,7 +625,9 @@ def github_copilot_user_session_from(source: object) -> GithubCopilotUserSession
     if source is None:
         return None
     candidate: Final = (
-        source.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY)
+        cast(Mapping[object, object], source).get(  # cast-ok: value is Mapping-checked or dict-shaped at runtime
+            GITHUB_COPILOT_USER_SESSION_KWARG_KEY
+        )
         if isinstance(source, Mapping)
         else getattr(source, GITHUB_COPILOT_USER_SESSION_KWARG_KEY, None)
     )

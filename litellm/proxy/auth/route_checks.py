@@ -676,7 +676,9 @@ class RouteChecks:
             return None
 
         try:
-            method: Final = request.method
+            method: Final = cast(  # cast-ok: request.method is str at runtime; tests hand a MagicMock
+                object, request.method
+            )
         except (AttributeError, KeyError):
             return None
         if not isinstance(method, str):
