@@ -347,3 +347,42 @@ def test_continuation_reauthenticates_caller_and_rechecks_revoked_permissions(tm
             )
             assert completed["result"]["contents"] == [{"uri": "test://confirm", "text": "confirmed"}], completed
             assert other_peer.drain() == (), "Expanded access must keep the continuation on its original target"
+
+
+def test_missing_continuation_key_reports_configuration_for_each_carrier(tmp_path: Path) -> None:
+    with wire_server(interaction_peer) as peer, httpx.Client() as client:
+        config: Final = tmp_path / "proxy.yaml"
+        config.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [],
+                    "mcp_servers": {"mrtr": {"url": peer.url, "transport": "http", "protocol_version": "2026-07-28"}},
+                    "general_settings": {
+                        "master_key": _KEY,
+                        "store_model_in_db": False,
+                        "mcp_advertised_versions": ["2025-11-25", "2026-07-28"],
+                    },
+                }
+            )
+        )
+        with owned_proxy(
+            Gateway(client, _KEY, peer.url),
+            tmp_path / "proxy",
+            {
+                "PYTHONPATH": _PROXY_PYTHONPATH,
+                "STORE_MODEL_IN_DB": "False",
+                "DISABLE_SCHEMA_UPDATE": "true",
+                "LITELLM_SALT_KEY": "",
+            },
+            config=config,
+            database_setup=(),
+            remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "REDIS_URL", "REDIS_HOST"),
+        ) as gateway:
+            for method, params in (
+                ("tools/call", {"name": "mrtr-confirm", "arguments": {}}),
+                ("prompts/get", {"name": "mrtr-confirm", "arguments": {}}),
+                ("resources/read", {"uri": "test://confirm"}),
+            ):
+                response: Final = rpc(gateway, method, params, status=400)
+                assert response["error"]["code"] == -32602, response
+                assert "LITELLM_SALT_KEY" in response["error"]["message"], response
