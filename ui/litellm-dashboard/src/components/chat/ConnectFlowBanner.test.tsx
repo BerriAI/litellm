@@ -74,7 +74,8 @@ describe("ConnectFlowBanner", () => {
     );
 
     expect(screen.getByText("Allow https://claude.ai to use alpha, beta")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Connect" })).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Connect alpha" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect beta" })).toBeInTheDocument();
     expect(startOAuthFlow).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /finish connecting/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
