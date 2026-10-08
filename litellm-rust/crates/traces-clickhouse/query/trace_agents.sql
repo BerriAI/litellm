@@ -1,10 +1,20 @@
-WITH runs AS (
+WITH candidates AS (
+SELECT TeamId, ApiKeyHash, TraceId
+FROM agent_traces_by_key
+WHERE StartTs >= fromUnixTimestamp64Milli({start_ms:Int64})
+  AND StartTs < fromUnixTimestamp64Milli({end_ms:Int64})
+  AND ({all_teams:UInt8} = 1
+       OR ({user_id:String} != '' AND UserIds = [{user_id:String}])
+       OR has({team_ids:Array(String)}, TeamId))
+),
+runs AS (
 SELECT TeamId, ApiKeyHash, TraceId,
        toUnixTimestamp64Milli(min(StartTs)) AS start_ms,
        min(StartTs) AS trace_start, max(EndTs) AS trace_end,
        sum(ErrorCount) > 0 AS failed
 FROM agent_traces_by_key
-WHERE ({all_teams:UInt8} = 1
+WHERE (TeamId, ApiKeyHash, TraceId) IN candidates
+  AND ({all_teams:UInt8} = 1
        OR ({user_id:String} != '' AND UserIds = [{user_id:String}])
        OR has({team_ids:Array(String)}, TeamId))
 GROUP BY TeamId, ApiKeyHash, TraceId
