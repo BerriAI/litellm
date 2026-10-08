@@ -244,11 +244,11 @@ def test_native_ocr_maps_provider_400_with_public_provider_details(ocr_server: R
     assert "invalid OCR request" in str(caught.value)
 
 
-def test_native_ocr_encodes_python_file_input_and_drops_unknown_arguments(ocr_server: RecordingServer) -> None:
+def test_native_ocr_encodes_python_file_input_and_forwards_unknown_arguments(ocr_server: RecordingServer) -> None:
     response: Final = call_native_ocr(
         ocr_server,
         document={"type": "file", "file": BytesIO(b"abc"), "mime_type": "image/png"},
-        opaque_extension=object(),
+        future_ocr_option={"mode": "new"},
     )
 
     assert response.pages[0].markdown == "native OCR response"
@@ -256,7 +256,15 @@ def test_native_ocr_encodes_python_file_input_and_drops_unknown_arguments(ocr_se
     assert ocr_server.requests[0].body == {
         "model": "mistral-ocr-latest",
         "document": {"type": "image_url", "image_url": "data:image/png;base64,YWJj"},
+        "future_ocr_option": {"mode": "new"},
     }
+
+
+def test_native_ocr_rejects_an_unknown_argument_it_cannot_send(ocr_server: RecordingServer) -> None:
+    ocr_server.expected_requests = 0
+
+    with pytest.raises(litellm.APIConnectionError, match="unsupported type object"):
+        call_native_ocr(ocr_server, document=OCR_DOCUMENT, opaque_extension=object())
 
 
 class TokenAbort(BaseException):
@@ -322,7 +330,6 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     from litellm.models.credentials import CredentialItem
 
     pages: Final = [0]
-    opaque: Final = object()
     monkeypatch.setenv("MISTRAL_API_KEY", "environment-key")
     monkeypatch.setattr(
         litellm,
@@ -336,7 +343,7 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
                     "api_key": "credential-key",
                     "api_base": ocr_server.base_url,
                     "pages": pages,
-                    "opaque": opaque,
+                    "future_credential_option": {"mode": "new"},
                 },
             ),
             CredentialItem(credential_name="ocr-test", credential_info={}, credential_values={"api_key": "later-key"}),
@@ -359,6 +366,7 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     assert response.pages[0].markdown == "native OCR response"
     assert ocr_server.requests[0].headers["authorization"] == f"Bearer {expected_key}"
     assert ocr_server.requests[0].body["pages"] == [0, 2]
+    assert ocr_server.requests[0].body["future_credential_option"] == {"mode": "new"}
 
 
 @pytest.mark.asyncio

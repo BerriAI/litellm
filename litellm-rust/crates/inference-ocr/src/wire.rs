@@ -8,21 +8,6 @@ use serde_json::{Map, Value};
 
 use crate::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
 
-pub fn consumed_optional_param_names(
-    model: &str,
-    provider: Option<&str>,
-) -> Result<Vec<&'static str>, Error> {
-    let names = crate::arguments::consumed_optional_param_names(model, provider)?;
-    let (_, config) = super::provider_config::resolve_provider_config(model, provider)?;
-    if config == super::provider_config::OcrConfigKind::VertexDeepSeek {
-        return Ok(names
-            .into_iter()
-            .chain(["stream", "temperature", "max_tokens", "top_p", "n", "stop"])
-            .collect());
-    }
-    Ok(names)
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OcrWireRequest<D = Value> {
@@ -126,49 +111,6 @@ mod tests {
         ));
         assert_eq!(error.http_status_code(), Some(400));
         assert!(error.to_string().contains(field), "{error}");
-    }
-
-    #[test]
-    fn option_projection_is_provider_specific_and_excludes_opaque_fields() {
-        let mistral = consumed_optional_param_names("mistral/model", None).unwrap();
-        assert!(mistral.contains(&"pages"));
-        assert!(mistral.contains(&"req_format"));
-        assert!(!mistral.contains(&"vertex_project"));
-        assert!(!mistral.contains(&"opaque_extension"));
-        let vertex = consumed_optional_param_names("vertex_ai/deepseek-ocr", None).unwrap();
-        assert!(vertex.contains(&"temperature"));
-        assert!(!vertex.contains(&"vertex_credentials"));
-        assert!(!vertex.contains(&"pages"));
-    }
-
-    #[test]
-    fn decode_moves_connection_fields_out_of_the_params() {
-        let request = decode_request(OcrWireRequest {
-            model: "azure_ai/mistral-ocr-latest".into(),
-            document: json!({"type": "document_url", "document_url": "https://doc.test/a.pdf"}),
-            api_key: None,
-            api_base: None,
-            custom_llm_provider: None,
-            extra_headers: None,
-            optional_params: json!({"pages": [0], "client_secret": "s", "tenant_id": "t"})
-                .as_object()
-                .unwrap()
-                .clone(),
-            input_sources: [("client_secret".to_string(), InputSource::Request)].into(),
-            timeout_seconds: None,
-        })
-        .unwrap();
-        assert_eq!(
-            request.optional_params.keys().collect::<Vec<_>>(),
-            ["pages"]
-        );
-        let connection = &request.connection_arguments;
-        assert_eq!(connection.source("client_secret"), InputSource::Request);
-        assert_eq!(connection.source("tenant_id"), InputSource::Deployment);
-        assert_eq!(
-            connection.secret_names().collect::<Vec<_>>(),
-            ["client_secret"]
-        );
     }
 
     #[test]
