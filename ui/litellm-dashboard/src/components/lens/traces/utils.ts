@@ -255,16 +255,6 @@ export function nearestVisibleSpanId(spans: readonly Span[], spanId: string, hid
 }
 
 /* ------------------------------------------------------------------ */
-/*  Trace-level rollups                                                */
-/* ------------------------------------------------------------------ */
-
-/** Earliest failing non-root span (the root just echoes its children), else the root. */
-export function firstErrorSpan(spans: readonly Span[]): Span | null {
-  const failed = spans.filter((s) => s.status === "error").sort(byStart);
-  return failed.find((s) => s.parent_span_id !== null) ?? failed[0] ?? null;
-}
-
-/* ------------------------------------------------------------------ */
 /*  Span detail payloads                                               */
 /* ------------------------------------------------------------------ */
 

@@ -183,6 +183,26 @@ describe("AgentTracesTable input cell", () => {
     );
     expect(screen.getByText("CURRENT USER REQUEST: - add feedback to Lens")).toBeInTheDocument();
   });
+
+  it("says no input was recorded instead of passing the run's model name off as its input", () => {
+    const template = (traceList as TracePage).data[0] as TraceSummary;
+    const run = { ...template, name: "chat openai/gpt-6-astra", input_preview: "" };
+    renderWithProviders(
+      inList(
+        <AgentTracesTable
+          traces={[run]}
+          findings={new Map()}
+          isLoading={false}
+          error={null}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
+    );
+    expect(screen.getByText("No input recorded")).toBeInTheDocument();
+    expect(screen.queryByText(run.name)).not.toBeInTheDocument();
+  });
 });
 
 describe("AgentTracesTable column picker", () => {

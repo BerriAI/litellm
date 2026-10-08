@@ -9,7 +9,6 @@ import {
   buildTreeRows,
   buildVisibleTree,
   errorSource,
-  firstErrorSpan,
   findTraceSteps,
   fmtMs,
   GROUP_PAGE_SIZE,
@@ -317,7 +316,7 @@ describe("buildTreeRows", () => {
 
 describe("revealSpanInState", () => {
   it("opens the path to a span nested in a folded group so the view can land on it", () => {
-    const failed = firstErrorSpan(swarm.spans) as Span;
+    const failed = swarm.spans.find((s) => s.status === "error" && s.parent_span_id !== null) as Span;
     const state = revealSpanInState(swarm.spans, STATE, failed.span_id);
     const rows = buildTreeRows(swarm.spans, state);
     expect(rows.some((r) => r.id === failed.span_id)).toBe(true);
@@ -345,13 +344,6 @@ describe("errorSource", () => {
 });
 
 describe("payload helpers", () => {
-  it("finds the earliest failing non-root span", () => {
-    const failed = firstErrorSpan(swarm.spans);
-    expect(failed?.status).toBe("error");
-    expect(failed?.parent_span_id).not.toBeNull();
-    expect(firstErrorSpan(deepAgent.spans)).toBeNull();
-  });
-
   it("parses llm message payloads and rejects non-message JSON", () => {
     expect(parseMessages('[{"role":"user","content":"hi"}]')).toEqual([{ role: "user", content: "hi" }]);
     expect(parseMessages('{"file_path":"/tmp/x"}')).toBeNull();

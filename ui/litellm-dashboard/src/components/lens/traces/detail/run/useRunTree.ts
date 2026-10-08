@@ -3,15 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { RunSelection } from "../../routing";
 import type { SpanTreeState, TreeRow } from "../../tree";
 import type { Trace } from "../../types";
-import {
-  buildTreeRows,
-  findTraceSteps,
-  firstErrorSpan,
-  GROUP_PAGE_SIZE,
-  isFrameworkSpan,
-  nearestVisibleSpanId,
-  revealSpanInState,
-} from "../../utils";
+import { buildTreeRows, findTraceSteps, GROUP_PAGE_SIZE, nearestVisibleSpanId, revealSpanInState } from "../../utils";
 
 const INITIAL_STATE: SpanTreeState = {
   hideFramework: true,
@@ -20,7 +12,7 @@ const INITIAL_STATE: SpanTreeState = {
   groupRevealCounts: {},
 };
 
-/** First failed span if the run has errors (with its tree path opened), otherwise the root agent. */
+/** The linked step when one is given, otherwise the root agent with nested agent branches folded. */
 export function initialRunSelection(
   trace: Trace,
   initialSpanId?: string,
@@ -30,22 +22,14 @@ export function initialRunSelection(
     const state = revealSpanInState(trace.spans, { ...INITIAL_STATE, hideFramework: false }, selectedId);
     return { selectedId, state };
   }
-  const initialState = {
+  const root = trace.spans.find((span) => span.parent_span_id === null);
+  const state = {
     ...INITIAL_STATE,
     collapsedSpanIds: new Set(
       trace.spans.filter((span) => span.type === "agent" && span.parent_span_id !== null).map((span) => span.span_id),
     ),
   };
-  const failed = firstErrorSpan(trace.spans);
-  if (!failed || failed.parent_span_id === null) {
-    const root = trace.spans.find((s) => s.parent_span_id === null);
-    return { selectedId: root?.span_id ?? "", state: initialState };
-  }
-  const visibleFailure = trace.spans
-    .filter((s) => s.status === "error" && s.parent_span_id !== null && !isFrameworkSpan(s))
-    .sort((a, b) => a.start_offset_ms - b.start_offset_ms)[0];
-  const selectedId = visibleFailure?.span_id ?? nearestVisibleSpanId(trace.spans, failed.span_id, true);
-  return { selectedId, state: revealSpanInState(trace.spans, initialState, selectedId) };
+  return { selectedId: root?.span_id ?? "", state };
 }
 
 const toggle = (set: ReadonlySet<string>, id: string): Set<string> => {

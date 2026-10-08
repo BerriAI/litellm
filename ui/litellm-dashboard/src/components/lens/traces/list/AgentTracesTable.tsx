@@ -20,7 +20,7 @@ import { SignalPills } from "../ui/SignalPills";
 import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
 import type { TraceSummary } from "../types";
 import { traceRefOf } from "../routing";
-import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "../utils";
+import { fmtMs, previewText, traceAgentNames } from "../utils";
 
 interface AgentTracesTableProps {
   traces: TraceSummary[];
@@ -103,11 +103,14 @@ function AgentCell({ run }: { run: TraceSummary }) {
 }
 
 function InputCell({ run }: { run: TraceSummary }) {
+  const input = singleLine(previewText(run.input_preview));
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <span className="truncate text-foreground">
-        {singleLine(previewText(run.input_preview)) || traceDisplayName(run)}
-      </span>
+      {input ? (
+        <span className="truncate text-foreground">{input}</span>
+      ) : (
+        <span className="truncate text-muted-foreground">No input recorded</span>
+      )}
       {run.resolution_limited && (
         <span
           className="shrink-0 text-xs text-muted-foreground"
