@@ -25,32 +25,6 @@ use crate::{
     openai_like::common_utils::{complete_openai_like_url, openai_compatible_provider_info},
 };
 
-const SUPPORTED_PARAMS: &[(&str, &str)] = &[
-    ("frequency_penalty", "frequency_penalty"),
-    ("logit_bias", "logit_bias"),
-    ("logprobs", "logprobs"),
-    ("top_logprobs", "top_logprobs"),
-    ("max_tokens", "max_tokens"),
-    ("max_completion_tokens", "max_completion_tokens"),
-    ("modalities", "modalities"),
-    ("prediction", "prediction"),
-    ("n", "n"),
-    ("presence_penalty", "presence_penalty"),
-    ("seed", "seed"),
-    ("stop", "stop"),
-    ("stream_options", "stream_options"),
-    ("temperature", "temperature"),
-    ("top_p", "top_p"),
-    ("audio", "audio"),
-    ("web_search_options", "web_search_options"),
-    ("service_tier", "service_tier"),
-    ("safety_identifier", "safety_identifier"),
-    ("prompt_cache_key", "prompt_cache_key"),
-    ("prompt_cache_retention", "prompt_cache_retention"),
-    ("store", "store"),
-    ("response_format", "response_format"),
-];
-
 /// Call configuration the caller may pass that never enters the request body.
 
 pub struct OpenAILikeChatConfig;
@@ -60,10 +34,6 @@ pub const OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG: OpenAILikeChatConfig = OpenAILike
 impl BaseConfig for OpenAILikeChatConfig {
     fn secret_names(&self) -> Vec<&'static str> {
         vec!["OPENAI_LIKE_API_KEY", "OPENAI_LIKE_API_BASE"]
-    }
-
-    fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
-        SUPPORTED_PARAMS
     }
 
     fn get_complete_url(

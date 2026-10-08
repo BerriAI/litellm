@@ -32,13 +32,6 @@ use crate::{
     },
 };
 
-const SUPPORTED_PARAMS: &[(&str, &str)] = &[
-    ("max_tokens", "max_tokens"),
-    ("temperature", "temperature"),
-    ("top_p", "top_p"),
-    ("stop", "stop_sequences"),
-];
-
 #[derive(Deserialize)]
 struct TextResponseProjection {
     model: String,
@@ -81,10 +74,6 @@ impl BaseConfig for AnthropicConfig {
             ANTHROPIC_API_BASE_ENV,
             ANTHROPIC_BASE_URL_ENV,
         ]
-    }
-
-    fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
-        SUPPORTED_PARAMS
     }
 
     fn get_complete_url(
