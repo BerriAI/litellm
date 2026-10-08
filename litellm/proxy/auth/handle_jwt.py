@@ -17,7 +17,7 @@ import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
+from typing import Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
 import jwt
