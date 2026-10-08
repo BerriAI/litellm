@@ -91,6 +91,7 @@ class ProviderConnection:
     token_exchange_profile: str | None = None
     token_exchange_scope: str | None = None
     token_exchange_audience: str | None = None
+    fireworks_forward_user_id: bool | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

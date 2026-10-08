@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::normalize::{HIDDEN_BLOCK_TYPES, MessagePayload, encode};
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ChatRole {
@@ -16,7 +16,7 @@ pub enum ChatRole {
     Tool,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[cfg_attr(feature = "schema", schemars(rename = "UIContent"))]
@@ -29,7 +29,7 @@ pub enum UiContent {
     Text { text: String },
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Debug, PartialEq)]
 #[cfg_attr(feature = "schema", schemars(rename = "UIMessage"))]
 pub struct UiMessage {
@@ -41,7 +41,7 @@ pub struct UiMessage {
     pub tool_calls: Option<Vec<UiToolCall>>,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Debug, PartialEq)]
 #[cfg_attr(feature = "schema", schemars(rename = "UIToolCall"))]
 pub struct UiToolCall {
@@ -49,7 +49,7 @@ pub struct UiToolCall {
     pub arguments: String,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Debug, PartialEq)]
 #[cfg_attr(feature = "schema", schemars(rename = "UIField"))]
 pub struct UiField {

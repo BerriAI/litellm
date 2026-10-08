@@ -5790,6 +5790,7 @@ def completion(
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+                    "fireworks_forward_user_id",
                 )
                 if key in kwargs
             },

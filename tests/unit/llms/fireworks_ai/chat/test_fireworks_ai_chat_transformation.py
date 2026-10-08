@@ -2008,3 +2008,126 @@ VISION_MODEL = next(
     for key, info in litellm.model_cost.items()
     if key.startswith("fireworks_ai/accounts/fireworks/models/") and info.get("supports_vision") is True
 )
+
+
+def _fireworks_chat_client() -> MagicMock:
+    body: Final = {
+        "id": "chat-user-attribution",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "accounts/fireworks/models/kimi-k3",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    raw_response: Final = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.text = json.dumps(body)
+    raw_response.json = lambda: body
+    client: Final = MagicMock(spec=HTTPHandler)
+    client.post.return_value = raw_response
+    return client
+
+
+@pytest.mark.parametrize(
+    "call_kwargs, expected_user",
+    [
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": "dev-alice"}},
+            "dev-alice",
+            id="opted-in-sends-litellm-user-id",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": "dev-alice"}, "user": "caller"},
+            "dev-alice",
+            id="litellm-user-id-replaces-caller-user",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "litellm_metadata": {"user_api_key_user_id": "dev-bob"}},
+            "dev-bob",
+            id="reads-litellm-metadata",
+        ),
+        pytest.param(
+            {
+                "fireworks_forward_user_id": True,
+                "metadata": {"tags": ["caller-tag"]},
+                "litellm_metadata": {"user_api_key_user_id": "dev-bob"},
+            },
+            "dev-bob",
+            id="reads-litellm-metadata-next-to-caller-metadata",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": ""}, "user": "caller"},
+            "caller",
+            id="empty-litellm-user-id-keeps-caller-user",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": None}, "user": "caller"},
+            "caller",
+            id="no-litellm-user-id-keeps-caller-user",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": None}},
+            None,
+            id="no-litellm-user-id-sends-no-user",
+        ),
+        pytest.param(
+            {"metadata": {"user_api_key_user_id": "dev-alice"}, "user": "caller"},
+            "caller",
+            id="not-opted-in-keeps-caller-user",
+        ),
+        pytest.param(
+            {"metadata": {"user_api_key_user_id": "dev-alice"}},
+            None,
+            id="not-opted-in-sends-no-user",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": "true", "metadata": {"user_api_key_user_id": "dev-alice"}},
+            None,
+            id="non-bool-flag-is-off",
+        ),
+        pytest.param(
+            {
+                "fireworks_forward_user_id": True,
+                "metadata": {"user_api_key_user_id": "dev-alice"},
+                "extra_body": {"user": "dev-bob", "prompt_cache_max_len": 1},
+            },
+            "dev-alice",
+            id="litellm-user-id-replaces-extra-body-user",
+        ),
+        pytest.param(
+            {"metadata": {"user_api_key_user_id": "dev-alice"}, "extra_body": {"user": "dev-bob"}},
+            "dev-bob",
+            id="not-opted-in-keeps-extra-body-user",
+        ),
+    ],
+)
+def test_completion_forwards_litellm_user_id_as_user(call_kwargs: dict[str, object], expected_user: str | None) -> None:
+    client: Final = _fireworks_chat_client()
+    litellm.completion(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fw-test-key",
+        client=client,
+        **call_kwargs,
+    )
+    request_body: Final = json.loads(client.post.call_args.kwargs["data"])
+    assert request_body.get("user") == expected_user
+    assert "fireworks_forward_user_id" not in request_body
+
+
+def test_completion_forwards_litellm_user_id_when_streaming() -> None:
+    client: Final = _fireworks_chat_client()
+    client.post.return_value.iter_lines = lambda: iter(())
+    litellm.completion(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fw-test-key",
+        client=client,
+        stream=True,
+        fireworks_forward_user_id=True,
+        metadata={"user_api_key_user_id": "dev-alice"},
+    )
+    request_body: Final = json.loads(client.post.call_args.kwargs["data"])
+    assert request_body["user"] == "dev-alice"
+    assert request_body["stream"] is True
