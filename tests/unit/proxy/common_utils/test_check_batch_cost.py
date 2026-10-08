@@ -30,11 +30,13 @@ def test_batch_output_file_object_derives_metadata():
         unified_file_id="unified-output",
         raw_file_id="s3://bucket/path/to/output.jsonl.out",
         size_bytes=4321,
+        fallback=False,
     )
     provider_file = _batch_output_file_object(
         unified_file_id="unified-provider",
         raw_file_id="file-abc",
         size_bytes=0,
+        fallback=False,
     )
 
     assert output_file.id == "unified-output"

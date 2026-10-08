@@ -346,6 +346,7 @@ def test_output_file_lists_with_basic_details_when_provider_file_lookup_fails(ga
         assert (output["purpose"], output["filename"]) == ("batch_output", f"file-out-{batch.scenario.scenario_id}"), (
             output
         )
+        assert "litellm_details_fallback" not in output, output
 
 
 def _tls_context(directory: Path) -> ssl.SSLContext:
