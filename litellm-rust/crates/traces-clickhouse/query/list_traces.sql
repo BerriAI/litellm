@@ -1,4 +1,29 @@
-WITH page AS (
+WITH candidates AS (
+SELECT TeamId, ApiKeyHash, TraceId
+FROM agent_traces_by_key
+WHERE StartTs >= fromUnixTimestamp64Milli({start_ms:Int64})
+  AND StartTs < fromUnixTimestamp64Milli({end_ms:Int64})
+  AND ({cursor_ms:Int64} = 0 OR toUnixTimestamp64Milli(StartTs) <= {cursor_ms:Int64})
+  AND ({all_teams:UInt8} = 1
+       OR ({user_id:String} != '' AND UserIds = [{user_id:String}])
+       OR has({team_ids:Array(String)}, TeamId))
+),
+keys AS (
+SELECT TeamId, ApiKeyHash, TraceId, min(StartTs) AS trace_start,
+       hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) AS trace_ref
+FROM agent_traces_by_key
+WHERE (TeamId, ApiKeyHash, TraceId) IN candidates
+  AND ({all_teams:UInt8} = 1
+       OR ({user_id:String} != '' AND UserIds = [{user_id:String}])
+       OR has({team_ids:Array(String)}, TeamId))
+GROUP BY TeamId, ApiKeyHash, TraceId
+HAVING trace_start >= fromUnixTimestamp64Milli({start_ms:Int64})
+   AND ({cursor_ms:Int64} = 0 OR (toUnixTimestamp64Milli(trace_start), trace_ref)
+        < ({cursor_ms:Int64}, {cursor_trace_id:String}))
+ORDER BY trace_start DESC, trace_ref DESC
+LIMIT {limit:UInt32}
+),
+page AS (
 SELECT TraceId AS trace_id,
        hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) AS trace_ref,
        if(length(groupUniqArrayArray(UserIds)) = 1, arrayElement(groupUniqArrayArray(UserIds), 1), '') AS user_id, TeamId AS team_id, ApiKeyHash AS api_key_hash,
@@ -15,16 +40,11 @@ SELECT TraceId AS trace_id,
                         arrayConcat(groupArrayArray(RequestIds), ['']),
                         groupArrayArray(RequestIds))) AS request_ids
 FROM agent_traces_by_key
-WHERE ({all_teams:UInt8} = 1
+WHERE (TeamId, ApiKeyHash, TraceId) IN (SELECT TeamId, ApiKeyHash, TraceId FROM keys)
+  AND ({all_teams:UInt8} = 1
        OR ({user_id:String} != '' AND UserIds = [{user_id:String}])
        OR has({team_ids:Array(String)}, TeamId))
 GROUP BY TeamId, ApiKeyHash, TraceId
-HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
-   AND min(StartTs) < fromUnixTimestamp64Milli({end_ms:Int64})
-   AND ({cursor_ms:Int64} = 0 OR (toUnixTimestamp64Milli(min(StartTs)), trace_ref)
-        < ({cursor_ms:Int64}, {cursor_trace_id:String}))
-ORDER BY start_ms DESC, trace_ref DESC
-LIMIT {limit:UInt32}
 )
 SELECT page.*,
        identities.agent_names AS agent_names, identities.agent_count AS agent_count,
