@@ -493,15 +493,21 @@ async def test_second_start_does_not_open_a_second_subscription() -> None:
     assert pubsub.subscribed_channels == [CONFIG_SYNC_CHANNEL]
 
 
-async def test_redis_error_leads_to_backoff_and_resubscribe() -> None:
+async def test_redis_error_resubscribes_then_resyncs_without_new_message() -> None:
     broken = _BrokenPubSub()
-    healthy = _QueuePubSub(initial_messages=[json.dumps({"object_type": "litellm_credentialstable"})])
+    healthy = _QueuePubSub()
     cache = _FakeRedisCache(_ScriptedPubSubRedisClient([broken, healthy]))
     resyncs: List[str] = []
     fired = asyncio.Event()
+
+    async def resync() -> None:
+        resyncs.append("resync")
+        if healthy.subscribed_channels == [CONFIG_SYNC_CHANNEL]:
+            fired.set()
+
     subscriber = ConfigSyncSubscriber(
         redis_cache=cache,
-        resync_callbacks=(_recording_callback(resyncs, "resync", fired),),
+        resync_callbacks=(resync,),
         debounce_seconds=0.01,
         jitter_max_seconds=0.0,
         backoff_initial_seconds=0.02,
