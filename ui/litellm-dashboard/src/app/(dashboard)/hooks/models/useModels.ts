@@ -286,9 +286,9 @@ export const useModelAccessGroupNames = (): ReadonlySet<string> | undefined => {
     enabled: Boolean(accessToken && userId && userRole),
   });
   return useMemo(() => {
+    if (data !== undefined) return new Set(data);
     if (isError) return new Set<string>();
-    if (data === undefined) return undefined;
-    return new Set(data);
+    return undefined;
   }, [data, isError]);
 };
 

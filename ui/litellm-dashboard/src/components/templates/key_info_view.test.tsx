@@ -645,6 +645,7 @@ describe("KeyInfoView", () => {
     beforeEach(() => {
       vi.mocked(useTeams).mockReturnValue({ teams: [mockTeam], setTeams: vi.fn() });
       vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+      vi.mocked(useModelAccessGroupNames).mockReturnValue(new Set());
     });
 
     it("links the key's team by alias, resolved from the teams list, to the team page", async () => {
