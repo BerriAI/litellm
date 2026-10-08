@@ -51,6 +51,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
     capture_message_content_from_env,
+    captures_span_content,
 )
 from litellm.integrations.otel.model.semconv import (
     DB,
@@ -599,7 +600,7 @@ def _tenant_resource(resource: Resource, defaults: Mapping[str, str], extra: Map
 def _for_destination(
     span: ReadableSpan,
     destination: "OtelDestination",
-    default_capture: CaptureMessageContent,
+    default_capture: str,
 ) -> ReadableSpan:
     """The view of ``span`` a tenant destination receives.
 
@@ -662,8 +663,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         shutdown_drain_seconds: float = _SHUTDOWN_DRAIN_SECONDS,
         operator_sinks: 'Mapping[_SinkKey, "OtelSpanScope"]' = MappingProxyType({}),
         excluded_db_systems: frozenset[str] = frozenset(),
-        default_capture: CaptureMessageContent = CaptureMessageContent.NO_CONTENT,
-        default_capture_by_backend: Mapping[str, CaptureMessageContent] = MappingProxyType({}),
+        default_capture: str = CaptureMessageContent.NO_CONTENT,
+        default_capture_by_backend: Mapping[str, str] = MappingProxyType({}),
         pending_drains: int = _MAX_PENDING_DRAINS,
         drain_pool: _DrainPool | None = None,
         sampling_draw: Callable[[], float] | None = None,
@@ -715,7 +716,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         for held_span, held_destination in self._settle(trace_id, failed):
             self._forward(held_span, held_destination)
 
-    def _default_capture_for(self, destination: "OtelDestination") -> CaptureMessageContent:
+    def _default_capture_for(self, destination: "OtelDestination") -> str:
         backend: Final = destination.callback_name
         return (
             self._default_capture_by_backend.get(backend, self._default_capture) if backend else self._default_capture
@@ -1081,7 +1082,7 @@ class _OverriddenBackendFilter(SpanProcessor):
             ),
             None,
         )
-        return explicit.captures_span if explicit is not None else self._global_captures
+        return captures_span_content(explicit) if explicit is not None else self._global_captures
 
     def _account_scope(self) -> "OtelSpanScope":
         if self._scope == "full" or self._sink is None:
@@ -1475,7 +1476,7 @@ def attach_tenant_fan_out(
         )
 
 
-def _operator_capture_mode(configs: Sequence[OpenTelemetryV2Config]) -> CaptureMessageContent:
+def _operator_capture_mode(configs: Sequence[OpenTelemetryV2Config]) -> str:
     """The mode of the operator's generic ``otel`` callback, so ``callback_settings.otel`` counts as the global default"""
     return next(
         (config.capture_message_content for config in configs if any(spec.owner is None for spec in config.exporters)),
@@ -1485,7 +1486,7 @@ def _operator_capture_mode(configs: Sequence[OpenTelemetryV2Config]) -> CaptureM
 
 def _owned_capture_modes(
     configs: Sequence[OpenTelemetryV2Config],
-) -> Iterator[tuple[str, CaptureMessageContent]]:
+) -> Iterator[tuple[str, str]]:
     for config in configs:
         for spec in config.exporters:
             if spec.owner is not None:

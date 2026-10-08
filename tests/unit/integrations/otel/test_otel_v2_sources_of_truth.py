@@ -1687,16 +1687,17 @@ def test_capture_message_content_normalizer_only_touches_strings():
         OpenTelemetryV2Config(capture_message_content=123)
 
 
-def test_unknown_capture_message_content_env_falls_back_without_raising(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_unknown_capture_message_content_env_is_kept_as_a_plain_string_that_captures_nothing(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "invalid-mode")
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "Invalid-Mode")
 
-    with caplog.at_level("WARNING", logger="LiteLLM"):
-        config: Final = OpenTelemetryV2Config()
+    config: Final = OpenTelemetryV2Config()
 
-    assert config.capture_message_content is CaptureMessageContent.NO_CONTENT
-    assert "invalid-mode" in caplog.text and "defaulting to no_content" in caplog.text
+    assert type(config.capture_message_content) is str
+    assert config.capture_message_content == "invalid-mode"
+    assert config.capture_span_content is False
+    assert config.model_dump()["capture_message_content"] == "invalid-mode"
 
 
 def test_v2_flag_is_off_by_default(monkeypatch):

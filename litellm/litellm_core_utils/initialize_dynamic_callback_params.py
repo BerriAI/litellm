@@ -6,9 +6,9 @@ from typing import Any, Final
 
 from litellm.types.utils import (
     ARIZE_OTLP_PROTOCOLS,
+    CAPTURE_MESSAGE_CONTENT_VALUES,
     OTEL_SPAN_SCOPES,
     TRUSTED_CALLBACK_VARS_FIELD,
-    CaptureMessageContent,
     StandardCallbackDynamicParams,
 )
 
@@ -93,13 +93,10 @@ def validate_arize_otlp_protocol_value(value: str) -> None:
 
 
 def validate_capture_message_content_value(value: str) -> None:
-    try:
-        CaptureMessageContent(value)
-    except ValueError:
+    if value not in CAPTURE_MESSAGE_CONTENT_VALUES:
         raise ValueError(
-            f"Invalid capture_message_content {value!r}: must be one of "
-            f"{sorted(option.value for option in CaptureMessageContent)}"
-        ) from None
+            f"Invalid capture_message_content {value!r}: must be one of {sorted(CAPTURE_MESSAGE_CONTENT_VALUES)}"
+        )
 
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict

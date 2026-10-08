@@ -82,6 +82,7 @@ from litellm.integrations.otel.plumbing.providers import (
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
+from litellm.types.utils import captures_span_content
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import MeterProvider
@@ -256,8 +257,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _capture_span_content(self) -> bool:
         return self.config.capture_span_content or any(
-            destination.capture_message_content is not None and destination.capture_message_content.captures_span
-            for destination in request_destinations()
+            captures_span_content(destination.capture_message_content) for destination in request_destinations()
         )
 
     # ====================================================================== #

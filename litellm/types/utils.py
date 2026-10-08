@@ -3655,18 +3655,26 @@ ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtoc
 CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
 
 
-class CaptureMessageContent(str, Enum):
+class CaptureMessageContent(str):
     NO_CONTENT = "no_content"
     SPAN_ONLY = "span_only"
     EVENT_ONLY = "event_only"
     SPAN_AND_EVENT = "span_and_event"
 
-    def __str__(self) -> str:
-        return self.value
 
-    @property
-    def captures_span(self) -> bool:
-        return self in (self.SPAN_ONLY, self.SPAN_AND_EVENT)
+CAPTURE_MESSAGE_CONTENT_VALUES: Final[frozenset[str]] = frozenset(
+    {
+        CaptureMessageContent.NO_CONTENT,
+        CaptureMessageContent.SPAN_ONLY,
+        CaptureMessageContent.EVENT_ONLY,
+        CaptureMessageContent.SPAN_AND_EVENT,
+    }
+)
+
+
+def captures_span_content(mode: str | None) -> bool:
+    """Whether a capture mode puts prompt and response content on spans"""
+    return mode in (CaptureMessageContent.SPAN_ONLY, CaptureMessageContent.SPAN_AND_EVENT)
 
 
 class StandardCallbackDynamicParams(TypedDict, total=False):

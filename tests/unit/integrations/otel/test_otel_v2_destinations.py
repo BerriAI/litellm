@@ -4584,12 +4584,12 @@ class TestCaptureMessageContent:
         [(CaptureMessageContent.NO_CONTENT, False), (CaptureMessageContent.SPAN_ONLY, True)],
     )
     def test_a_routed_provider_exports_content_only_when_the_global_setting_captures(
-        self, global_capture: CaptureMessageContent, content_exported: bool
+        self, global_capture: str, content_exported: bool
     ) -> None:
         """A sibling destination's span_only makes the logger collect content, and a request
         routed to this callback's team credentials must not carry it under a global no_content."""
         exporters: dict[ExporterOwner | None, InMemorySpanExporter] = {}
-        kind: Final = f"lit8244_routed_{global_capture.value}"
+        kind: Final = f"lit8244_routed_{global_capture}"
         register_exporter_factory(kind, lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()))
         config: Final = OpenTelemetryV2Config(
             capture_message_content=global_capture,
@@ -4666,6 +4666,34 @@ class TestCaptureMessageContent:
         provider.force_flush()
 
         assert carries_content(by_name(tenant)["chat gpt-4o"]), "the YAML value is the global default, not only the env"
+
+    def test_a_published_presets_capture_mode_is_the_default_for_an_unowned_destination(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """New Relic with record_content on puts content on every span it emits, and main forwarded those
+        spans to a key/team destination untouched, so an omitted setting must keep that content."""
+        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        tenant: Final = InMemorySpanExporter()
+        monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", lambda _spec: tenant)
+        newrelic: Final = OpenTelemetryV2Config(
+            capture_message_content=CaptureMessageContent.SPAN_ONLY,
+            exporters=[
+                ExporterSpec(kind="console"),
+                ExporterSpec(kind="in_memory", owner=ExporterOwner.NEWRELIC),
+            ],
+        )
+        provider: Final = TracerProvider()
+        attach_tenant_fan_out(provider, newrelic)
+        destination: Final = OtelDestination(
+            endpoint="http://team.local/api/public/otel",
+            headers=MappingProxyType({"Authorization": "Basic dA=="}),
+            callback_name="langfuse_otel",
+        )
+
+        self._run(provider, (destination,), mapped(_MODEL_CALL_WITH_CONTENT))
+        provider.force_flush()
+
+        assert carries_content(by_name(tenant)["chat gpt-4o"])
 
     @pytest.mark.usefixtures("allow_test_hosts")
     @pytest.mark.parametrize("setting", ["no_content", "span_only", "event_only", "span_and_event", None])

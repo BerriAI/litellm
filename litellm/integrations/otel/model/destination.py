@@ -11,7 +11,7 @@ from urllib.parse import quote
 from pydantic import ConfigDict, Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import CaptureMessageContent, OtelSpanScope
+from litellm.types.utils import OtelSpanScope, captures_span_content
 
 
 class OtelDestination(LiteLLMBaseModel):
@@ -50,7 +50,7 @@ class OtelDestination(LiteLLMBaseModel):
         default=None,
         description="Same, for the requests with a failed span in their tree; ``None`` forwards every one.",
     )
-    capture_message_content: CaptureMessageContent | None = Field(
+    capture_message_content: str | None = Field(
         default=None,
         description=(
             "An explicit mode overrides the global capture policy for this destination. "
@@ -58,9 +58,9 @@ class OtelDestination(LiteLLMBaseModel):
         ),
     )
 
-    def captures_content(self, default: CaptureMessageContent) -> bool:
+    def captures_content(self, default: str) -> bool:
         setting: Final = self.capture_message_content
-        return (default if setting is None else setting).captures_span
+        return captures_span_content(default if setting is None else setting)
 
     def header_string(self) -> str:
         """Render headers as the ``k=v,k2=v2`` form an ``ExporterSpec`` expects.
