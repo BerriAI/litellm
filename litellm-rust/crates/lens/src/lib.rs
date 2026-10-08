@@ -116,6 +116,7 @@ pub fn router(state: Arc<State>) -> Router {
             Router::new()
                 .route("/internal/read", post(read))
                 .route("/internal/spend", post(spend))
+                .route("/internal/feedback", post(feedback))
                 .route("/internal/credentials", post(credentials))
                 .route("/internal/status", get(status)),
         )
@@ -234,6 +235,23 @@ async fn spend(
     headers: HeaderMap,
     body: Body,
 ) -> Result<StatusCode, Error> {
+    insert(state, headers, body, InsertTable::SpendLogs).await
+}
+
+async fn feedback(
+    AppState(state): AppState<Arc<State>>,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<StatusCode, Error> {
+    insert(state, headers, body, InsertTable::LensFeedback).await
+}
+
+async fn insert(
+    state: Arc<State>,
+    headers: HeaderMap,
+    body: Body,
+    table: InsertTable,
+) -> Result<StatusCode, Error> {
     auth::authorize_service(&headers, &state.service_token)?;
     state.require_storage()?;
     let permit = state
@@ -256,7 +274,7 @@ async fn spend(
             &state.storage.client,
             state.storage.config.storage().writer(),
             state.storage.config.storage().database(),
-            InsertTable::SpendLogs,
+            table,
             rows,
         )
         .await?;

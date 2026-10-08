@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
 import { useTraceFindings } from "./useTraceFindings";
+import { useTraceFeedback } from "./useTraceFeedback";
 import { useTraceSignals } from "./useTraceSignals";
 import { useOptionalLensApi } from "../../data/LensServices";
 import { lensKeys } from "../../data/queries";
@@ -125,6 +126,7 @@ export function AgentTracesSection({
     [traces.traces, query, agent, status],
   );
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
+  const feedback = useTraceFeedback(accessToken, runs, isActive);
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
   const findings = useTraceFindings(accessToken, runs, isActive, canViewFindings);
   const signalSetup = useSignalSetup(isActive && canViewFindings !== false);
@@ -231,6 +233,7 @@ export function AgentTracesSection({
         <AgentTracesTable
           traces={runs}
           findings={findings}
+          feedback={feedback}
           canViewFindings={canViewFindings}
           signals={signals}
           showSignals={signalSetup.on}

@@ -168,7 +168,7 @@ async def test_gateway_cannot_relay_otlp_or_write_arbitrary_tables() -> None:
         await store.ensure_schema()
         with pytest.raises(RuntimeError, match="directly"):
             await store.ingest(b"{}", "application/json", {})
-        with pytest.raises(ValueError, match="request records"):
+        with pytest.raises(ValueError, match="request records and feedback"):
             await store.insert_rows("otel_traces", ())
 
 
@@ -185,3 +185,18 @@ async def test_request_records_use_the_internal_service_endpoint() -> None:
     request: Final = requests.get_nowait()
     assert request.url.path == "/internal/spend"
     assert json.loads(request.content) == [{"request_id": "r"}]
+
+
+@pytest.mark.asyncio
+async def test_feedback_rows_use_the_internal_feedback_endpoint() -> None:
+    requests: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        await RemoteTraceStore(client).insert_rows("lens_feedback", ({"TraceId": "t", "Score": 2},))
+    request: Final = requests.get_nowait()
+    assert request.url.path == "/internal/feedback"
+    assert json.loads(request.content) == [{"TraceId": "t", "Score": 2}]

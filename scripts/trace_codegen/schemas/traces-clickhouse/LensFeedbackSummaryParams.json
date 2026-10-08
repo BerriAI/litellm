@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "all_teams": {
+      "enum": [
+        0,
+        1
+      ],
+      "type": "integer"
+    },
+    "key_hash": {
+      "type": "string"
+    },
+    "team": {
+      "type": "string"
+    },
+    "trace_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "all_teams",
+    "team",
+    "key_hash",
+    "trace_ids"
+  ],
+  "title": "LensFeedbackSummaryParams",
+  "type": "object"
+}

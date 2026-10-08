@@ -12,7 +12,7 @@ import { filterRuns } from "./runSearch/runQuery";
 import type { RelativeRangeState } from "@/components/shared/timeRange/useRelativeRange";
 
 import { AgentTracesSection } from "./AgentTracesSection";
-import type { TraceFindingCount, TracePage, TraceSummary } from "../types";
+import type { TraceFeedbackSummary, TraceFindingCount, TracePage, TraceSummary } from "../types";
 
 vi.mock("../../../networking", () => ({
   apiClient: { get: vi.fn(), post: vi.fn() },
@@ -71,6 +71,26 @@ const renderWindowed = (timeControls?: RelativeRangeState) =>
     <AgentTracesSection accessToken="sk-test" isActive range={PINNED_DAY} timeControls={timeControls} />,
   );
 
+type TraceKey = { trace_id: string; trace_ref?: string };
+const unrated = (traces: TraceKey[]): TraceFeedbackSummary[] =>
+  traces.map((trace) => ({
+    trace_id: trace.trace_id,
+    trace_ref: trace.trace_ref ?? "",
+    count: 0,
+    average: null,
+    lowest: null,
+  }));
+
+/** Routes the shared POST mock: findings get `findings`, the feedback summary gets `feedback`. */
+const stubPost = (
+  findings: (traces: TraceKey[]) => Promise<unknown>,
+  feedback: (traces: TraceKey[]) => Promise<TraceFeedbackSummary[]> = async (traces) => unrated(traces),
+) =>
+  vi.mocked(apiClient.post).mockImplementation(async (path, options) => {
+    const traces = (options?.body as { traces: TraceKey[] }).traces;
+    return path === "/lens/feedback/summary" ? feedback(traces) : findings(traces);
+  });
+
 const bucketRunCounts = () =>
   screen.getAllByTestId("timeline-bucket").map((bucket) => Number(bucket.getAttribute("data-total")));
 
@@ -96,10 +116,7 @@ describe("AgentTracesSection", () => {
     testQueryClient.clear();
     vi.mocked(agentTraceListCall).mockReset();
     serveService(true);
-    vi.mocked(apiClient.post).mockImplementation(async (_path, options) => {
-      const body = options?.body as { traces: { trace_id: string; trace_ref?: string }[] };
-      return body.traces.map((trace) => ({ ...trace, finding_count: null }));
-    });
+    stubPost(async (traces) => traces.map((trace) => ({ ...trace, finding_count: null })));
   });
 
   it("loads the next page only once the list scrolls near its end, then stops at the last page", async () => {
@@ -316,12 +333,13 @@ describe("AgentTracesSection", () => {
     expect(screen.getByRole("columnheader", { name: "Findings" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Failed" })).not.toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Cost" })).toBeInTheDocument();
-    expect(within(failed).getByText("—")).toBeInTheDocument();
+    const costColumn = screen.getAllByRole("columnheader").findIndex((header) => header.textContent === "Cost");
+    expect(within(failed).getAllByRole("cell")[costColumn]).toHaveTextContent("—");
   });
 
   it("distinguishes uninvestigated traces, completed clean investigations, and findings", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs, next_cursor: null });
-    vi.mocked(apiClient.post).mockResolvedValue(
+    stubPost(async () =>
       runs.map((run, index) => ({
         trace_id: run.trace_id,
         trace_ref: run.trace_ref ?? "",
@@ -347,7 +365,7 @@ describe("AgentTracesSection", () => {
 
   it("does not present a failed findings lookup as an uninvestigated or clean trace", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs.slice(0, 1), next_cursor: null });
-    vi.mocked(apiClient.post).mockRejectedValue(new ApiError("Unavailable", 503, {}));
+    stubPost(() => Promise.reject(new ApiError("Unavailable", 503, {})));
     renderSection();
     expect(await screen.findByTitle("Could not load findings")).toHaveTextContent("Unavailable");
     expect(screen.queryByTitle("No conclusive investigation for this trace")).not.toBeInTheDocument();
@@ -357,7 +375,7 @@ describe("AgentTracesSection", () => {
     const user = userEvent.setup();
     const pending = Promise.withResolvers<TraceFindingCount[]>();
     vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs.slice(0, 1), next_cursor: null });
-    vi.mocked(apiClient.post).mockReturnValue(pending.promise);
+    stubPost(() => pending.promise);
     renderSection();
     expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Columns" }));
@@ -375,7 +393,7 @@ describe("AgentTracesSection", () => {
     renderSection(false);
     expect(await screen.findAllByTestId("agent-trace-row")).toHaveLength(runs.length);
     expect(screen.queryByRole("columnheader", { name: "Findings" })).not.toBeInTheDocument();
-    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(apiClient.post).not.toHaveBeenCalledWith("/lens/traces/findings", expect.anything());
   });
 
   it("shows the spend returned for a run", async () => {
@@ -519,6 +537,39 @@ describe("AgentTracesSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close trace (Esc)" }));
     await waitFor(() => expect(lastUrl(onUrlUpdate).has("trace")).toBe(false));
     expect(lastUrl(onUrlUpdate).has("fullscreen")).toBe(false);
+  });
+
+  it("shows each run's end-user score and flags the whole row when a user scored it low", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs, next_cursor: null });
+    const [low, good] = runs;
+    const score = (trace: TraceKey, average: number, lowest: number) => ({
+      trace_id: trace.trace_id,
+      trace_ref: trace.trace_ref ?? "",
+      count: 1,
+      average,
+      lowest,
+    });
+    stubPost(
+      async (traces) => traces.map((trace) => ({ ...trace, finding_count: null })),
+      async (traces) =>
+        traces.map((trace) => {
+          if (trace.trace_id === low.trace_id) return score(trace, 2, 2);
+          if (trace.trace_id === good.trace_id) return score(trace, 9, 9);
+          return unrated([trace])[0];
+        }),
+    );
+    renderSection();
+
+    await waitFor(() => expect(screen.getAllByTestId("feedback-score")).toHaveLength(2));
+    const rows = screen.getAllByTestId("agent-trace-row");
+    expect(rows).toHaveLength(runs.length);
+    const lowRow = rows.find((row) => within(row).queryByText("2/10"));
+    const goodRow = rows.find((row) => within(row).queryByText("9/10"));
+    expect(lowRow).toHaveAttribute("data-low-feedback", "true");
+    expect(lowRow).toHaveAttribute("data-flagged", "true");
+    expect(goodRow).not.toHaveAttribute("data-flagged");
+    expect(rows.filter((row) => row.hasAttribute("data-low-feedback"))).toHaveLength(1);
+    expect(screen.queryByRole("combobox", { name: "Filter traces by feedback" })).not.toBeInTheDocument();
   });
 
   it("narrows the list to the zoom window named in the URL and clears it on request", async () => {

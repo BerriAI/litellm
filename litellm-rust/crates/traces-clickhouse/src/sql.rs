@@ -37,6 +37,13 @@ pub async fn execute_named_read(
         ReadQuery::Sample => named_json::<LensSample>(client, connection, parameters).await,
         ReadQuery::Content => named_json::<LensContent>(client, connection, parameters).await,
         ReadQuery::Evidence => named_json::<LensEvidence>(client, connection, parameters).await,
+        ReadQuery::FeedbackTarget => {
+            named_json::<LensFeedbackTarget>(client, connection, parameters).await
+        }
+        ReadQuery::Feedback => named_json::<LensFeedback>(client, connection, parameters).await,
+        ReadQuery::FeedbackSummary => {
+            named_json::<LensFeedbackSummary>(client, connection, parameters).await
+        }
     }
 }
 

@@ -335,10 +335,10 @@ async fn concurrent_schema_setup_succeeds(
         &database,
         "SELECT count() AS tables FROM system.tables \
          WHERE database = 'trace_test' AND name IN \
-         ('otel_traces', 'agent_traces_by_key', 'spend_logs')",
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs', 'lens_feedback')",
     )
     .await?;
-    assert_eq!(tables["data"][0]["tables"].as_u64(), Some(3));
+    assert_eq!(tables["data"][0]["tables"].as_u64(), Some(4));
     assert_eq!(
         migration_ledger_versions(&database).await?,
         migration_versions()
@@ -1040,6 +1040,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
         tables["data"],
         serde_json::json!([
             {"name": "agent_traces_by_key"},
+            {"name": "lens_feedback"},
             {"name": "otel_traces"},
             {"name": "spend_logs"}
         ])
@@ -1057,7 +1058,13 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
         "start_time": old_timestamp_ms, "end_time": old_timestamp_ms + 1000
     }))?;
     insert_rows(&database, "otel_traces", vec![span]).await?;
+    let old_iso = old_time.format(&time::format_description::well_known::Rfc3339)?;
+    let feedback = serde_json::from_value(serde_json::json!({
+        "TeamId": "team-1", "ApiKeyHash": "", "TraceId": "expired", "Author": "admin",
+        "Score": 4, "Comment": "", "CreatedAt": old_iso, "UpdatedAt": old_iso, "IsDeleted": 0
+    }))?;
     insert_rows(&database, "spend_logs", vec![spend]).await?;
+    insert_rows(&database, "lens_feedback", vec![feedback]).await?;
     assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 1);
     ensure_schema(&database.client, &writer, "trace_test", 14).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
@@ -1087,6 +1094,8 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     )
     .await?;
     execute_write(&database, "OPTIMIZE TABLE trace_test.spend_logs FINAL").await?;
+    execute_write(&database, "OPTIMIZE TABLE trace_test.lens_feedback FINAL").await?;
+    assert_eq!(table_rows(&database, "lens_feedback").await?, 0);
     assert_eq!(table_rows(&database, "otel_traces").await?, 0);
     assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 0);
     assert_eq!(table_rows(&database, "spend_logs").await?, 0);
@@ -1109,7 +1118,7 @@ async fn retention_reconciliation_updates_each_table_ttl(
         &database,
         "SELECT name, create_table_query FROM system.tables \
          WHERE database = 'trace_test' AND name IN \
-         ('otel_traces', 'agent_traces_by_key', 'spend_logs') ORDER BY name",
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs', 'lens_feedback') ORDER BY name",
     )
     .await?;
     let ttl_queries = ttl_queries["data"].as_array().expect("retention tables");
@@ -1118,7 +1127,12 @@ async fn retention_reconciliation_updates_each_table_ttl(
             .iter()
             .map(|row| row["name"].as_str().expect("table name"))
             .collect::<Vec<_>>(),
-        ["agent_traces_by_key", "otel_traces", "spend_logs"]
+        [
+            "agent_traces_by_key",
+            "lens_feedback",
+            "otel_traces",
+            "spend_logs"
+        ]
     );
     for row in ttl_queries {
         let query = row["create_table_query"]
@@ -1135,7 +1149,7 @@ async fn retention_reconciliation_updates_each_table_ttl(
         &database,
         "SELECT name, create_table_query FROM system.tables \
          WHERE database = 'trace_test' AND name IN \
-         ('otel_traces', 'agent_traces_by_key', 'spend_logs') ORDER BY name",
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs', 'lens_feedback') ORDER BY name",
     )
     .await?;
     for row in ttl_queries["data"].as_array().expect("retention tables") {

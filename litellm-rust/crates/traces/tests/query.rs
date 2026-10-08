@@ -14,6 +14,9 @@ use rstest::rstest;
 #[case::sample("sample", ReadQuery::Sample)]
 #[case::content("content", ReadQuery::Content)]
 #[case::evidence("evidence", ReadQuery::Evidence)]
+#[case::feedback_target("feedback_target", ReadQuery::FeedbackTarget)]
+#[case::feedback("feedback", ReadQuery::Feedback)]
+#[case::feedback_summary("feedback_summary", ReadQuery::FeedbackSummary)]
 fn names_select_the_public_query(#[case] name: &str, #[case] query: ReadQuery) {
     assert_eq!(ReadQuery::parse(name).unwrap(), query);
     assert_eq!(query.as_ref(), name);
