@@ -2747,10 +2747,10 @@ def _per_user_credential_names_for_groups(
             )
             if not isinstance(credential_name_obj, str) or not credential_name_obj or credential_name_obj in names:
                 continue
-            credential = CredentialAccessor.find_credential(credential_name_obj)
+            credential: Final = CredentialAccessor.find_credential(credential_name_obj)
             if credential is None:
                 continue
-            values = cast(  # cast-ok: credential_values is a plain dict at runtime
+            values: Final = cast(  # cast-ok: credential_values is a plain dict at runtime
                 Mapping[object, object], credential.credential_values
             )
             if values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE:
