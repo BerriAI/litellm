@@ -16,11 +16,15 @@ _RESPONSE_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapte
 
 @dataclass(frozen=True, slots=True)
 class CloudflareDecisionsEndpoint:
-    api_key_env: tuple[str, ...] = ("CLOUDFLARE_API_KEY",)
-    api_base_env: str = "CLOUDFLARE_API_BASE"
     api_key_required: bool = True
 
-    def default_api_base(self) -> str | None:
+    def configured_api_key(self) -> str | None:
+        return get_secret_str("CLOUDFLARE_API_KEY") or None
+
+    def configured_api_base(self) -> str | None:
+        env_api_base: Final = get_secret_str("CLOUDFLARE_API_BASE")
+        if env_api_base:
+            return env_api_base
         account_id: Final = normalize_nonempty_secret_str(get_secret_str("CLOUDFLARE_ACCOUNT_ID"))
         if account_id is None:
             return None

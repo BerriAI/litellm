@@ -664,7 +664,9 @@ async def test_openai_decisions_translate_systemone_to_the_openai_wire_contract_
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
+    monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
     route: Final = respx_mock.post(url).respond(json=_OPENAI_RESPONSE)
 
     response: Final = await litellm.adecisions(
@@ -709,6 +711,57 @@ async def test_openai_decisions_translate_systemone_to_the_openai_wire_contract_
     )
     assert expected_cost > 0
     assert litellm.completion_cost(completion_response=response) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
+    ("settings", "env", "url", "authorization"),
+    (
+        ({"openai_key": "sdk-key"}, {}, "https://api.openai.com/v1/decisions", "Bearer sdk-key"),
+        (
+            {"api_key": "global-key", "openai_key": "sdk-key"},
+            {"OPENAI_API_KEY": "env-key"},
+            "https://api.openai.com/v1/decisions",
+            "Bearer global-key",
+        ),
+        (
+            {},
+            {"OPENAI_API_KEY": "env-key", "OPENAI_API_BASE": "https://legacy.example/v1"},
+            "https://legacy.example/v1/decisions",
+            "Bearer env-key",
+        ),
+        (
+            {"api_base": "https://sdk.example"},
+            {"OPENAI_API_KEY": "env-key", "OPENAI_BASE_URL": "https://env.example"},
+            "https://sdk.example/v1/decisions",
+            "Bearer env-key",
+        ),
+    ),
+    ids=("openai_key", "api_key_before_env", "openai_api_base_env", "api_base_before_env"),
+)
+def test_openai_decisions_use_the_same_settings_as_other_openai_calls(
+    settings: Mapping[str, str],
+    env: Mapping[str, str],
+    url: str,
+    authorization: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    for name in ("api_key", "openai_key", "api_base"):
+        monkeypatch.setattr(litellm, name, settings.get(name))
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    route: Final = respx_mock.post(url).respond(json=_OPENAI_RESPONSE)
+
+    litellm.decisions(
+        model="openai/gpt-6-luna",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == authorization
 
 
 @pytest.mark.asyncio

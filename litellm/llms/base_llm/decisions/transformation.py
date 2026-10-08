@@ -7,6 +7,7 @@ from typing import Final, Protocol
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     ChoiceAnswer,
     ChoiceQuestion,
@@ -299,8 +300,11 @@ class JevCompatibleDecisionsEndpoint:
     api_base_env: str
     api_key_required: bool = True
 
-    def default_api_base(self) -> str | None:
-        return self.default_api_base_value
+    def configured_api_key(self) -> str | None:
+        return next((key for key in (get_secret_str(name) for name in self.api_key_env) if key), None)
+
+    def configured_api_base(self) -> str | None:
+        return get_secret_str(self.api_base_env) or self.default_api_base_value
 
     def missing_api_base_message(self, provider: str) -> str:
         return f"api_base is required for Decisions provider '{provider}'"
@@ -325,15 +329,11 @@ class JevCompatibleDecisionsEndpoint:
 
 class DecisionsProviderConfig(Protocol):
     @property
-    def api_key_env(self) -> tuple[str, ...]: ...
-
-    @property
-    def api_base_env(self) -> str: ...
-
-    @property
     def api_key_required(self) -> bool: ...
 
-    def default_api_base(self) -> str | None: ...
+    def configured_api_key(self) -> str | None: ...
+
+    def configured_api_base(self) -> str | None: ...
 
     def missing_api_base_message(self, provider: str) -> str: ...
 

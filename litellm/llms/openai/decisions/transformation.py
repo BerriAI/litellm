@@ -5,7 +5,9 @@ from typing import Final
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
+import litellm
 from litellm.llms.base_llm.decisions.transformation import decisions_text
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     DecisionsIRAnswer,
     DecisionsIRChoiceAnswer,
@@ -271,12 +273,18 @@ def ir_to_openai_response(
 
 @dataclass(frozen=True, slots=True)
 class OpenAIDecisionsEndpoint:
-    api_key_env: tuple[str, ...] = ("OPENAI_API_KEY",)
-    api_base_env: str = "OPENAI_BASE_URL"
     api_key_required: bool = True
 
-    def default_api_base(self) -> str | None:
-        return "https://api.openai.com"
+    def configured_api_key(self) -> str | None:
+        return litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+
+    def configured_api_base(self) -> str | None:
+        return (
+            litellm.api_base
+            or get_secret_str("OPENAI_BASE_URL")
+            or get_secret_str("OPENAI_API_BASE")
+            or "https://api.openai.com"
+        )
 
     def missing_api_base_message(self, provider: str) -> str:
         return f"api_base is required for Decisions provider '{provider}'"
