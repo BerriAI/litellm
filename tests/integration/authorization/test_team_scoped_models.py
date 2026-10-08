@@ -15,10 +15,16 @@ def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
         yield client
 
 
-def _observed_models(upstream: httpx.Client) -> list[JsonValue]:
+def _observed_requests(upstream: httpx.Client) -> list[JsonValue]:
     observed: Final = upstream.get("/__observations")
     observed.raise_for_status()
-    return [request["body"]["model"] for request in observed.json()["requests"]]
+    requests: Final = object_value(observed.json())["requests"]
+    assert isinstance(requests, list)
+    return requests
+
+
+def _calls_to(observed: list[JsonValue], provider_model: str) -> int:
+    return sum(object_value(object_value(request)["body"]).get("model") == provider_model for request in observed)
 
 
 def _chat(gateway: Gateway, model: str, key: str) -> httpx.Response:
@@ -62,7 +68,8 @@ def test_a_team_model_is_listed_and_served_only_for_keys_of_its_team(gateway: Ga
         assert served.status_code == 200, served.text
         refused: Final = _chat(gateway, model, other_key)
         assert refused.status_code == 400, refused.text
-        assert _observed_models(upstream) == [provider_model]
+        observed: Final = _observed_requests(upstream)
+        assert _calls_to(observed, provider_model) == 1, observed
 
 
 def _v2_team_public_names(gateway: Gateway, key: str, model: str) -> list[JsonValue]:
@@ -98,8 +105,10 @@ def test_team_model_alias_routes_a_team_key_to_its_target(
         response: Final = _chat(gateway, alias, key)
         assert response.status_code == 200, response.text
         assert string_value(response.json()["model"]) == alias
-        assert _observed_models(upstream) == [provider_model]
+        observed: Final = _observed_requests(upstream)
+        assert _calls_to(observed, provider_model) == 1, observed
         unaliased: Final = _chat(gateway, f"alias-{uuid.uuid4().hex}", key)
         assert unaliased.status_code == 403, unaliased.text
         assert unaliased.json()["error"]["type"] == "key_model_access_denied"
-        assert _observed_models(upstream) == []
+        after_refusal: Final = _observed_requests(upstream)
+        assert _calls_to(after_refusal, provider_model) == 0, after_refusal

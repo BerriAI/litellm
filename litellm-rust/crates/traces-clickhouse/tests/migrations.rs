@@ -756,6 +756,145 @@ async fn listed_agent_names_preserve_scope_and_cursor(
 
 #[rstest]
 #[tokio::test]
+async fn trace_agents_count_runs_and_failures_within_scope_and_window(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let now = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let old = now - 3 * 86_400_000_000_000_i64;
+    for (team, trace, span, parent, agent, status, framework, timestamp) in [
+        (
+            "alpha",
+            "run-1",
+            "root",
+            "",
+            "moyai",
+            "STATUS_CODE_OK",
+            "pi",
+            now,
+        ),
+        (
+            "alpha",
+            "run-1",
+            "tool",
+            "root",
+            "moyai",
+            "STATUS_CODE_ERROR",
+            "pi",
+            now,
+        ),
+        (
+            "alpha",
+            "run-2",
+            "root",
+            "",
+            "moyai",
+            "STATUS_CODE_OK",
+            "",
+            now - 1_000_000,
+        ),
+        (
+            "alpha",
+            "run-3",
+            "root",
+            "",
+            "research",
+            "STATUS_CODE_OK",
+            "",
+            now - 2_000_000,
+        ),
+        (
+            "alpha",
+            "old-run",
+            "root",
+            "",
+            "moyai",
+            "STATUS_CODE_ERROR",
+            "",
+            old,
+        ),
+        (
+            "beta",
+            "other-team",
+            "root",
+            "",
+            "moyai",
+            "STATUS_CODE_ERROR",
+            "",
+            now,
+        ),
+        (
+            "beta",
+            "other-agent",
+            "root",
+            "",
+            "hidden_agent",
+            "STATUS_CODE_OK",
+            "",
+            now,
+        ),
+    ] {
+        insert_rows(
+            &database,
+            "otel_traces",
+            vec![serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp, "TraceId": trace, "SpanId": span, "ParentSpanId": parent,
+                "ServiceName": "app", "SpanName": span, "AgentName": agent, "UserId": "owner",
+                "StatusCode": status, "Framework": framework, "ObservationType": "agent",
+                "ResourceAttributes": {"litellm.team_id": team, "litellm.api_key_hash": "key"}
+            }))?],
+        )
+        .await?;
+    }
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("user_id".into(), Parameter::Text(String::new())),
+        ("team_ids".into(), Parameter::Strings(vec!["alpha".into()])),
+        (
+            "start_ms".into(),
+            Parameter::Integer(now / 1_000_000 - 86_400_000),
+        ),
+        ("end_ms".into(), Parameter::Integer(now / 1_000_000 + 1000)),
+        ("limit".into(), Parameter::Integer(10)),
+    ]);
+    let agents: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &connection,
+            ReadQuery::TraceAgents,
+            &parameters,
+        )
+        .await?,
+    )?;
+    let rows = agents["data"].as_array().ok_or("missing agents")?;
+    let summary = rows
+        .iter()
+        .map(|row| {
+            (
+                row["agent_name"].as_str().unwrap_or_default(),
+                (
+                    row["runs"].to_string().trim_matches('"').to_owned(),
+                    row["failed_runs"].to_string().trim_matches('"').to_owned(),
+                    row["frameworks"].clone(),
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        summary,
+        vec![
+            ("moyai", ("2".into(), "1".into(), serde_json::json!(["pi"]))),
+            ("research", ("1".into(), "0".into(), serde_json::json!([]))),
+        ]
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn rollup_merges_spans_across_days_without_losing_root_fields(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
@@ -1150,6 +1289,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         ("source".into(), Parameter::Text("traces".into())),
         ("id".into(), Parameter::Text("shared".into())),
         ("record_team".into(), Parameter::Text("team".into())),
+        ("start_time".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(first_ref.into())),
         ("cursor".into(), Parameter::Text(String::new())),
         ("offset".into(), Parameter::Integer(1)),
@@ -1177,6 +1317,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
         ("source".into(), Parameter::Text("traces".into())),
         ("id".into(), Parameter::Text("shared".into())),
         ("record_team".into(), Parameter::Text("team".into())),
+        ("start_time".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(first_ref.into())),
         ("span".into(), Parameter::Text("root".into())),
         ("quote".into(), Parameter::Text(opposite.into())),
@@ -1339,7 +1480,7 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
 #[case::traces("traces", 9)]
 #[case::requests("requests", 3)]
 #[tokio::test]
-async fn lens_content_keeps_original_span_and_request_timestamps(
+async fn lens_content_keeps_original_timestamps_with_start_time_slack(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
     #[case] source: &str,
     #[case] precision: usize,
@@ -1379,6 +1520,30 @@ async fn lens_content_keeps_original_span_and_request_timestamps(
     )
     .await?;
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let start_time_body = execute_read(
+        &database.client,
+        &connection,
+        "SELECT toString(fromUnixTimestamp64Nano({timestamp:Int64})) AS start_time FORMAT JSON",
+        &BTreeMap::from([(
+            "timestamp".into(),
+            Parameter::Integer(root_start + 86_400_000_000_000),
+        )]),
+    )
+    .await?;
+    let start_time: serde_json::Value = serde_json::from_str(&start_time_body)?;
+    let start_time = start_time["data"][0]["start_time"]
+        .as_str()
+        .ok_or("start time missing")?
+        .to_owned();
+    let parsed_time_body = execute_read(
+        &database.client,
+        &connection,
+        "SELECT toString(parseDateTime64BestEffortOrZero({start_time:String}, 9)) AS start_time FORMAT JSON",
+        &BTreeMap::from([("start_time".into(), Parameter::Text(start_time.clone()))]),
+    )
+    .await?;
+    let parsed_time: serde_json::Value = serde_json::from_str(&parsed_time_body)?;
+    assert_eq!(parsed_time["data"][0]["start_time"], start_time);
     let parameters = BTreeMap::from([
         ("source".into(), Parameter::Text(source.into())),
         ("all_teams".into(), Parameter::Integer(0)),
@@ -1386,6 +1551,7 @@ async fn lens_content_keeps_original_span_and_request_timestamps(
         ("record_team".into(), Parameter::Text("team".into())),
         ("key_hash".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(String::new())),
+        ("start_time".into(), Parameter::Text(start_time)),
         ("id".into(), Parameter::Text("run".into())),
         ("cursor".into(), Parameter::Text(String::new())),
         ("offset".into(), Parameter::Integer(1)),
@@ -1453,6 +1619,7 @@ async fn lens_content_keeps_output_visible_after_long_input(
         ("record_team".into(), Parameter::Text("team".into())),
         ("key_hash".into(), Parameter::Text(String::new())),
         ("trace_ref".into(), Parameter::Text(String::new())),
+        ("start_time".into(), Parameter::Text(String::new())),
         ("id".into(), Parameter::Text("request".into())),
         ("cursor".into(), Parameter::Text(String::new())),
         ("offset".into(), Parameter::Integer(1)),

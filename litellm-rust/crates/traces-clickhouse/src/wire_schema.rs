@@ -89,6 +89,8 @@ pub fn schemas() -> BTreeMap<&'static str, Schema> {
         ("PartRow", received::<lens::LensContentRow>()),
         ("CountRow", received::<lens::LensEvidenceRow>()),
         ("AgentRow", received::<lens::LensAgentsRow>()),
+        ("TraceAgentsParams", received::<lens::TraceAgentsParams>()),
+        ("TraceAgentRow", received::<lens::TraceAgentsRow>()),
         ("TraceQueryHelp", crate::query::help_schema()),
     ])
 }

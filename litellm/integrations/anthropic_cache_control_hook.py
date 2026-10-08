@@ -1029,7 +1029,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         AnthropicCacheControlHook.record_gateway_injection(kwargs, breakpoints_added)
         if openai_dialect and breakpoints_added > 0:
-            kwargs.setdefault("prompt_cache_options", PromptCacheOptions(mode="explicit"))
+            kwargs.setdefault("prompt_cache_options", PromptCacheOptions(mode="implicit"))
         if remaining:
             kwargs["cache_control_injection_points"] = remaining
         return messages, system

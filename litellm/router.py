@@ -3713,11 +3713,17 @@ class Router:
                     initial_kwargs["original_function"] = router_self._completion
                     initial_kwargs["messages"] = messages
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
-                    fallback_response = router_self.function_with_fallbacks(
-                        **initial_kwargs,
+                    fallback_response = run_async_function(
+                        router_self.async_function_with_fallbacks_common_utils,
+                        e=e,
+                        disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
                         content_policy_fallbacks=content_policy_fallbacks,
+                        model_group=model_group,
+                        args=(),
+                        kwargs=initial_kwargs,
+                        include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
                     )
 
                     if hasattr(fallback_response, "__iter__"):
@@ -4528,61 +4534,21 @@ class Router:
         stream=False,
         **kwargs,
     ):
-        parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-        ### FLOW ITEM ###
-        _request_id: Final = str(uuid.uuid4())
-        item: Final = FlowItem(
-            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
-            request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name=model,  # 👈 SAME as 'Router'
+        await self._wait_for_scheduler_turn(
+            model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
         )
-        ### [fin] ###
-
-        ## ADDS REQUEST TO QUEUE ##
-        await self.scheduler.add_request(request=item)
-
-        ## POLL QUEUE
-        end_time: Final = time.monotonic() + self.timeout
-        curr_time = time.monotonic()
-        poll_interval: Final = self.scheduler.polling_interval  # poll every 3ms
-        make_request = False
-
-        while curr_time < end_time:
-            _healthy_deployments, _ = await self._async_get_healthy_deployments(
-                model=model, parent_otel_span=parent_otel_span
-            )
-            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
-                id=item.request_id,
-                model_name=item.model_name,
-                health_deployments=_healthy_deployments,
-            )
-            if make_request:  ## IF TRUE -> MAKE REQUEST
-                break
-            else:  ## ELSE -> loop till default_timeout
-                await asyncio.sleep(poll_interval)
-                curr_time = time.monotonic()
-
-        if make_request:
-            try:
-                _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
-                response_hidden_params: Final = get_hidden_params(_response)
-                if response_hidden_params is not None:
-                    additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
-                        dict[str, object], response_hidden_params.setdefault("additional_headers", {})
-                    )
-                    additional_headers.update({"x-litellm-request-prioritization-used": True})
-                return _response
-            except Exception as e:
-                setattr(e, "priority", priority)
-                raise e
-        else:
-            # Clean up the request from the scheduler queue also before raising the timeout exception
-            await self.scheduler.remove_request(request_id=item.request_id, model_name=item.model_name)
-            raise litellm.Timeout(
-                message="Request timed out while polling queue",
-                model=model,
-                llm_provider="openai",
-            )
+        try:
+            _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
+            response_hidden_params: Final = get_hidden_params(_response)
+            if response_hidden_params is not None:
+                additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
+                    dict[str, object], response_hidden_params.setdefault("additional_headers", {})
+                )
+                additional_headers.update({"x-litellm-request-prioritization-used": True})
+            return _response
+        except Exception as e:
+            setattr(e, "priority", priority)
+            raise e
 
     async def _schedule_factory(
         self,
@@ -4592,61 +4558,32 @@ class Router:
         args: tuple[object, ...],
         kwargs: dict[str, object],
     ):
-        parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-        ### FLOW ITEM ###
-        _request_id: Final = str(uuid.uuid4())
-        item: Final = FlowItem(
-            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
-            request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name=model,  # 👈 SAME as 'Router'
+        await self._wait_for_scheduler_turn(
+            model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
         )
-        ### [fin] ###
+        try:
+            _response: Final = await original_function(*args, **kwargs)
+            response_hidden_params: Final = get_hidden_params(_response)
+            if response_hidden_params is not None:
+                additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
+                    dict[str, object], response_hidden_params.setdefault("additional_headers", {})
+                )
+                additional_headers.update({"x-litellm-request-prioritization-used": True})
+            return _response
+        except Exception as e:
+            setattr(e, "priority", priority)
+            raise e
 
-        ## ADDS REQUEST TO QUEUE ##
-        await self.scheduler.add_request(request=item)
+    async def _wait_for_scheduler_turn(self, model: str, priority: int, parent_otel_span: Span | None) -> None:
+        async def healthy_deployments() -> Sequence[object]:
+            deployments, _ = await self._async_get_healthy_deployments(model=model, parent_otel_span=parent_otel_span)
+            return deployments
 
-        ## POLL QUEUE
-        end_time: Final = time.monotonic() + self.timeout
-        curr_time = time.monotonic()
-        poll_interval: Final = self.scheduler.polling_interval  # poll every 3ms
-        make_request = False
-
-        while curr_time < end_time:
-            _healthy_deployments, _ = await self._async_get_healthy_deployments(
-                model=model, parent_otel_span=parent_otel_span
-            )
-            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
-                id=item.request_id,
-                model_name=item.model_name,
-                health_deployments=_healthy_deployments,
-            )
-            if make_request:  ## IF TRUE -> MAKE REQUEST
-                break
-            else:  ## ELSE -> loop till default_timeout
-                await asyncio.sleep(poll_interval)
-                curr_time = time.monotonic()
-
-        if make_request:
-            try:
-                _response: Final = await original_function(*args, **kwargs)
-                response_hidden_params: Final = get_hidden_params(_response)
-                if response_hidden_params is not None:
-                    additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
-                        dict[str, object], response_hidden_params.setdefault("additional_headers", {})
-                    )
-                    additional_headers.update({"x-litellm-request-prioritization-used": True})
-                return _response
-            except Exception as e:
-                setattr(e, "priority", priority)
-                raise e
-        else:
-            # Clean up the request from the scheduler queue also before raising the timeout exception
-            await self.scheduler.remove_request(request_id=item.request_id, model_name=item.model_name)
-            raise litellm.Timeout(
-                message="Request timed out while polling queue",
-                model=model,
-                llm_provider="openai",
-            )
+        await self.scheduler.wait_for_turn(
+            request=FlowItem(priority=priority, request_id=str(uuid.uuid4()), model_name=model),
+            timeout=self.timeout,
+            get_healthy_deployments=healthy_deployments,
+        )
 
     def _is_prompt_management_model(self, model: str) -> bool:
         model_list: Final = self.get_model_list(model_name=model)
@@ -14587,17 +14524,21 @@ class Router:
         to the deployment that actually served the request. Every attempt therefore
         writes or clears, never just writes.
         """
+        from litellm.router_utils.baseline_request import capture_baseline_parameters
         from litellm.types.router import BaselineRouteStamp
 
         phase_attributes(routing_decision_attributes(routing_decision))
         baseline_model: Final = routing_decision.get("savings_baseline_model") if routing_decision else None
         baseline_id: Final = routing_decision.get("savings_baseline_deployment_id") if routing_decision else None
         router_name: Final = routing_decision.get("router_model_name") if routing_decision else None
+        caller_parameters: Final = (
+            capture_baseline_parameters(request_kwargs) if router_name and baseline_model else None
+        )
         Router._stamp_or_clear_metadata_key(
             request_kwargs=request_kwargs,
             key="_autorouter_baseline_route",
             value=(
-                BaselineRouteStamp(router_name, baseline_model, baseline_id)
+                BaselineRouteStamp(router_name, baseline_model, baseline_id, caller_parameters)
                 if router_name and baseline_model and baseline_id
                 else None
             ),

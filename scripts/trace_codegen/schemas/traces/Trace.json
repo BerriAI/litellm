@@ -60,6 +60,38 @@
       ],
       "type": "object"
     },
+    "RunSource": {
+      "description": "The conversation that started the run, from the `agent.source.*` span attributes.",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/RunSourceType"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "url",
+        "title"
+      ],
+      "type": "object"
+    },
+    "RunSourceType": {
+      "enum": [
+        "slack",
+        "teams",
+        "discord",
+        "linear",
+        "github",
+        "jira",
+        "custom"
+      ],
+      "type": "string"
+    },
     "Span": {
       "properties": {
         "agent": {
@@ -292,6 +324,17 @@
         },
         "service": {
           "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-python-optional": true
         },
         "span_count": {
           "format": "uint64",

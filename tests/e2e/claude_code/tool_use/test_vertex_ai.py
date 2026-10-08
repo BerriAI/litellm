@@ -19,6 +19,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -62,6 +63,16 @@ def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
 
 
 @pytest.mark.covers("llm.messages.vertex.tool_use.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.VERTEX_AI,),
+        models=tuple(VERTEX_AI_MODELS),
+        capabilities=(Capability.FUNCTION_CALLING,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tool_use_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     tool call was emitted on the wire."""

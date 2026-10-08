@@ -5,6 +5,8 @@ export type Lens = components["schemas"]["Lens"];
 export type Settings = components["schemas"]["LensSettings"];
 
 export type LensList = components["schemas"]["LensList"];
+export type SignalConfig = components["schemas"]["SignalConfig"];
+export type Signal = NonNullable<SignalConfig["signals"]>[number];
 
 export type Finding = components["schemas"]["Finding"];
 
