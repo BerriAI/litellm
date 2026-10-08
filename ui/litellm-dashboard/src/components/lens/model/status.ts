@@ -162,6 +162,28 @@ export function nextCheckStatus(lens: Lens, now: number): string | null {
   return `Next check ${time} · ${relative}`;
 }
 
+export interface InvestigationSummary {
+  readonly total: number;
+  readonly watching: number;
+  readonly openFindings: number;
+  readonly failedLastRun: number;
+  readonly spentThisMonth: number;
+}
+
+export function investigationSummary(lenses: readonly Lens[], now = new Date()): InvestigationSummary {
+  const month = now.toISOString().slice(0, 7);
+  return {
+    total: lenses.length,
+    watching: lenses.filter((lens) => lens.settings.enabled).length,
+    openFindings: lenses.reduce(
+      (total, lens) => total + lens.findings.filter((f) => f.status === "open" && f.kind === "issue").length,
+      0,
+    ),
+    failedLastRun: lenses.filter((lens) => lens.jobs[0]?.status === "failed").length,
+    spentThisMonth: lenses.reduce((total, lens) => total + (lens.budget_month === month ? lens.spent ?? 0 : 0), 0),
+  };
+}
+
 export type InvestigationActivity = "running" | "queued" | "idle";
 
 export function investigationActivity(lenses: readonly Lens[]): InvestigationActivity {

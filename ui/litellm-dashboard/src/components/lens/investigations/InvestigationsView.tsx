@@ -43,14 +43,13 @@ const assertNever = (value: never): never => {
 interface BannersProps {
   readonly error: Error | null | undefined;
   readonly activityReady: boolean | null;
-  readonly flush: boolean;
   readonly refresh: () => void;
 }
 
-function Banners({ error, activityReady, flush, refresh }: BannersProps) {
+function Banners({ error, activityReady, refresh }: BannersProps) {
   if (!error && activityReady === null) return null;
   return (
-    <div className={cn("flex flex-col gap-3", flush && "p-2 pb-0")}>
+    <div className="flex flex-col gap-3">
       {error && <InvestigationError message={error.message} refresh={refresh} />}
       {activityReady !== null && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}
     </div>
@@ -199,14 +198,9 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
   return (
     <section
       aria-label="Investigations"
-      className={cn("flex w-full min-w-0 flex-1 flex-col", !browsing && "gap-3 p-4")}
+      className={cn("flex w-full min-w-0 flex-1 flex-col gap-3", !browsing && "p-4")}
     >
-      <Banners
-        error={bannerError}
-        activityReady={showReadiness ? status.activityReady : null}
-        flush={browsing}
-        refresh={refresh}
-      />
+      <Banners error={bannerError} activityReady={showReadiness ? status.activityReady : null} refresh={refresh} />
       {content(screen)}
       {dialog === "run_now" && dialogLens && (
         <RunNowDialog

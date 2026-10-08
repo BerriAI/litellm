@@ -13,13 +13,15 @@ import { ChevronRight, Pencil, Play } from "lucide-react";
 import { useMediaQuery } from "usehooks-ts";
 import { useNow } from "@/hooks/useNow";
 import { Inspector } from "@/components/shared/Inspector";
+import { Panel } from "../ui/Panel";
+import { StatCell, StatStrip } from "../ui/StatStrip";
 import { InspectorTable } from "@/components/shared/InspectorTable";
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
 import { agoLabel, scopeLabel } from "../model/format";
 
 import { findingKey, openFindings, scheduleLabel } from "../model/inbox";
-import { lensStatus } from "../model/status";
+import { investigationSummary, lensStatus } from "../model/status";
 import { SearchBox } from "@/components/shared/search/SearchBox";
 import { itemValues } from "@/components/shared/search/valueSource";
 import { type Finding, type Lens } from "../model/types";
@@ -113,6 +115,43 @@ function FindingCount({ row: { original: item } }: Cell) {
   );
 }
 
+function InvestigationStats({ lenses }: { lenses: readonly Lens[] }) {
+  const summary = investigationSummary(lenses);
+  const paused = summary.total - summary.watching;
+  return (
+    <StatStrip>
+      <StatCell
+        label="Watching"
+        value={summary.watching.toLocaleString()}
+        hint={
+          paused > 0
+            ? `${paused.toLocaleString()} paused of ${summary.total.toLocaleString()}`
+            : "All investigations on"
+        }
+      />
+      <StatCell
+        label="Open findings"
+        value={summary.openFindings.toLocaleString()}
+        hint={`Across ${summary.total.toLocaleString()} ${summary.total === 1 ? "investigation" : "investigations"}`}
+      />
+      <StatCell
+        label="Failed last run"
+        value={
+          <span className={summary.failedLastRun > 0 ? "text-destructive" : undefined}>
+            {summary.failedLastRun.toLocaleString()}
+          </span>
+        }
+        hint={summary.failedLastRun > 0 ? "Open one to see why" : "Every last run finished"}
+      />
+      <StatCell
+        label="Analysis spend"
+        value={`$${summary.spentThisMonth.toFixed(2)}`}
+        hint="This month, all investigations"
+      />
+    </StatStrip>
+  );
+}
+
 function ActionsCell({ row: { original: item } }: Cell) {
   const { readOnly, demo, onEdit, onRunNow } = useList();
   if (item.kind === "finding")
@@ -154,8 +193,8 @@ function ActionsCell({ row: { original: item } }: Cell) {
 const COLUMNS: ColumnDef<InvestigationRow>[] = [
   { id: "name", header: "Investigation", cell: NameCell },
   { id: "agent", size: 160, header: "Agent", cell: AgentCell },
-  { id: "schedule", size: 180, header: "Schedule", cell: ScheduleCell },
-  { id: "status", size: 200, header: "Last run", cell: StatusCell },
+  { id: "schedule", size: 190, header: "Schedule", cell: ScheduleCell },
+  { id: "status", size: 230, header: "Last run", cell: StatusCell },
   { id: "findings", size: 64, header: "Open", cell: FindingCount, meta: { numeric: true } },
   {
     id: "actions",
@@ -216,50 +255,53 @@ export function InvestigationList({
       noun={noun}
       storageKey={FINDING_PANEL_WIDTH_KEY}
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
-        <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card p-2">
-          <SearchBox.Root
-            className="sm:max-w-96"
-            language={INVESTIGATION_QUERY}
-            values={itemValues(INVESTIGATION_INDEX, lenses)}
-            value={search}
-            onValueChange={setSearch}
-            label="Search investigations"
-          >
-            <SearchBox.Input className="rounded-md" placeholder="Search investigations" />
-            <SearchBox.Suggestions />
-          </SearchBox.Root>
-          {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}
-        </div>
-        <ListContext.Provider value={{ now, connected, readOnly, demo, onEdit, onRunNow }}>
-          <InspectorTable.Root table={table}>
-            <InspectorTable.Grid aria-label="Investigations" className="text-xs md:min-w-[860px]">
-              <InspectorTable.Header />
-              <InspectorTable.Body<InvestigationRow> rowHeight={() => (desktop ? INVESTIGATION_HEIGHT : 48)}>
-                {(row) => (
-                  <InspectorTable.Row
-                    row={row}
-                    item={row.original}
-                    tabIndex={0}
-                    aria-label={
-                      row.original.kind === "finding" ? row.original.finding.title : row.original.lens.settings.name
-                    }
-                    className="group h-12 md:h-9"
-                  />
-                )}
-              </InspectorTable.Body>
-            </InspectorTable.Grid>
-            {!shown.length && (
-              <div className="py-16 text-center text-xs text-muted-foreground">
-                No investigations match your search.
-              </div>
-            )}
-          </InspectorTable.Root>
-        </ListContext.Provider>
-        <footer className="flex h-9 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
-          {shown.length} {shown.length === 1 ? "investigation" : "investigations"} ·{" "}
-          {shown.filter((lens) => lens.settings.enabled).length} watching
-        </footer>
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <InvestigationStats lenses={lenses} />
+        <Panel className="flex-1">
+          <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+            <SearchBox.Root
+              className="sm:max-w-96"
+              language={INVESTIGATION_QUERY}
+              values={itemValues(INVESTIGATION_INDEX, lenses)}
+              value={search}
+              onValueChange={setSearch}
+              label="Search investigations"
+            >
+              <SearchBox.Input className="rounded-md" placeholder="Search investigations" />
+              <SearchBox.Suggestions />
+            </SearchBox.Root>
+            {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}
+          </div>
+          <ListContext.Provider value={{ now, connected, readOnly, demo, onEdit, onRunNow }}>
+            <InspectorTable.Root table={table}>
+              <InspectorTable.Grid aria-label="Investigations" className="text-sm md:min-w-[860px]">
+                <InspectorTable.Header />
+                <InspectorTable.Body<InvestigationRow> rowHeight={() => (desktop ? INVESTIGATION_HEIGHT : 48)}>
+                  {(row) => (
+                    <InspectorTable.Row
+                      row={row}
+                      item={row.original}
+                      tabIndex={0}
+                      aria-label={
+                        row.original.kind === "finding" ? row.original.finding.title : row.original.lens.settings.name
+                      }
+                      className="group h-12 md:h-9"
+                    />
+                  )}
+                </InspectorTable.Body>
+              </InspectorTable.Grid>
+              {!shown.length && (
+                <div className="py-16 text-center text-xs text-muted-foreground">
+                  No investigations match your search.
+                </div>
+              )}
+            </InspectorTable.Root>
+          </ListContext.Provider>
+          <footer className="flex h-9 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
+            {shown.length} {shown.length === 1 ? "investigation" : "investigations"} ·{" "}
+            {shown.filter((lens) => lens.settings.enabled).length} watching
+          </footer>
+        </Panel>
       </div>
       <Inspector.Panel label={ROW_LABEL[noun]} testId="investigation-panel">
         {children}

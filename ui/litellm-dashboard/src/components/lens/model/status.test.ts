@@ -5,6 +5,7 @@ import {
   lensStatus,
   runStatus,
   investigationActivity,
+  investigationSummary,
   listPollInterval,
   nextCheckStatus,
   queueReason,
@@ -285,5 +286,43 @@ describe("time left reading", () => {
   it("has no estimate before the first review or once every trace is read", () => {
     expect(secondsToFinishReading({ ...started, reviewed: 0 }, now)).toBeNull();
     expect(secondsToFinishReading({ ...started, reviewed: 328 }, now)).toBeNull();
+  });
+});
+
+describe("investigationSummary", () => {
+  const summaryLens = (overrides: {
+    enabled?: boolean;
+    findings?: { status: string; kind: string }[];
+    lastJob?: Job["status"];
+    spent?: number;
+    month?: string;
+  }): Lens =>
+    ({
+      settings: { enabled: overrides.enabled ?? true },
+      findings: overrides.findings ?? [],
+      jobs: overrides.lastJob ? [{ status: overrides.lastJob }] : [],
+      spent: overrides.spent ?? 0,
+      budget_month: overrides.month ?? "2026-10",
+    }) as unknown as Lens;
+
+  it("counts watching lenses, open issue findings, failed last runs and this month's spend", () => {
+    const failing = {
+      findings: [
+        { status: "open", kind: "issue" },
+        { status: "open", kind: "pattern" },
+        { status: "resolved", kind: "issue" },
+      ],
+      lastJob: "failed" as const,
+      spent: 1.5,
+    };
+    const paused = {
+      enabled: false,
+      findings: [{ status: "open", kind: "issue" }],
+      lastJob: "completed" as const,
+      spent: 2,
+    };
+    const lenses = [summaryLens(failing), summaryLens(paused), summaryLens({ spent: 9, month: "2026-09" })];
+    const expected = { total: 3, watching: 2, openFindings: 2, failedLastRun: 1, spentThisMonth: 3.5 };
+    expect(investigationSummary(lenses, new Date("2026-10-08T00:00:00Z"))).toEqual(expected);
   });
 });
