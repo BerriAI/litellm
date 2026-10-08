@@ -202,7 +202,7 @@ async def test_a_batch_polled_within_every_budget_window_is_never_charged_again(
 async def test_batch_line_item_events_do_not_charge_the_model_budget():
     """Line events carry batch_parent_id; the aggregate aretrieve_batch event is
     the one that already bills the batch, so children must not double-charge."""
-    limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
 
     line_event = _event("acompletion", CHAT_COST)
     line_event["litellm_params"]["batch_parent_id"] = "batch_first"

@@ -2774,7 +2774,7 @@ async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_
 
 @pytest.mark.asyncio
 async def test_batch_line_item_event_never_updates_spend():  # test-quality-ok: the observable contract is exactly that the spend path is never invoked
-    logger: Final = _ProxyDBLogger()
+    logger: Final = ProxyDBLogger()
     kwargs: Final = {
         "litellm_params": {"batch_parent_id": "batch_1", "metadata": {}},
         "model": "gpt-4o",
