@@ -1,8 +1,10 @@
 use litellm_llms_types::formats::messages::{
-    ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest, SystemPrompt,
+    ContentBlock, ContentBlockType, Message, MessageContent, MessagesOptionalParams,
+    MessagesRequest, SystemPrompt,
 };
 
 const SYSTEM_ROLE: &str = "system";
+const BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
 
 fn content_into_blocks(content: MessageContent) -> Vec<ContentBlock> {
     match content {
@@ -42,6 +44,31 @@ pub fn fold_system_role_messages(request: MessagesRequest) -> MessagesRequest {
         messages: chat_messages,
         params: MessagesOptionalParams {
             system: (!folded_system.is_empty()).then_some(SystemPrompt::Blocks(folded_system)),
+            ..request.params
+        },
+        ..request
+    }
+}
+
+fn is_billing_metadata_block(block: &ContentBlock) -> bool {
+    block.is_type(ContentBlockType::Text)
+        && block
+            .text
+            .as_deref()
+            .is_some_and(|text| text.starts_with(BILLING_HEADER_PREFIX))
+}
+
+pub fn strip_billing_metadata(request: MessagesRequest) -> MessagesRequest {
+    let Some(SystemPrompt::Blocks(blocks)) = request.params.system else {
+        return request;
+    };
+    let kept: Vec<ContentBlock> = blocks
+        .into_iter()
+        .filter(|block| !is_billing_metadata_block(block))
+        .collect();
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            system: (!kept.is_empty()).then_some(SystemPrompt::Blocks(kept)),
             ..request.params
         },
         ..request

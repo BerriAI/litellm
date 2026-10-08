@@ -140,7 +140,7 @@ fn legacy_reasoning_effort(
     }
 }
 
-fn translate_reasoning_effort(
+pub(crate) fn translate_reasoning_effort(
     request: MessagesRequest,
     context: &ThinkingContext,
 ) -> Result<MessagesRequest, Error> {
