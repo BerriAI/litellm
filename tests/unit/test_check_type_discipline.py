@@ -599,6 +599,37 @@ def test_configdict_frozen_true_is_clean(tmp_path):
     assert "LIT015" not in _codes(tmp_path, src)
 
 
+def test_shared_frozen_configdict_constant_is_clean(tmp_path):
+    src: Final = (
+        "from typing import Final\n"
+        "from pydantic import BaseModel, ConfigDict\n"
+        "_RESPONSE_CONFIG: Final = ConfigDict(frozen=True)\n"
+        "class Foo(BaseModel):\n"
+        "    model_config = _RESPONSE_CONFIG\n"
+        "    x: int\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_last_shared_non_frozen_configdict_assignment_is_flagged(tmp_path):
+    src: Final = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "_RESPONSE_CONFIG = ConfigDict(frozen=True)\n"
+        "_RESPONSE_CONFIG = ConfigDict(frozen=False)\n"
+        "class Foo(BaseModel):\n"
+        "    model_config = _RESPONSE_CONFIG\n"
+        "    x: int\n"
+    )
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_unknown_model_config_name_is_flagged(tmp_path):
+    src: Final = (
+        "from pydantic import BaseModel\nclass Foo(BaseModel):\n    model_config = UNKNOWN_CONFIG\n    x: int\n"
+    )
+    assert "LIT015" in _codes(tmp_path, src)
+
+
 def test_dict_literal_model_config_frozen_true_is_clean(tmp_path):
     src = "from pydantic import BaseModel\nclass P(BaseModel):\n    model_config = {'frozen': True, 'extra': 'allow'}\n"
     assert "LIT015" not in _codes(tmp_path, src)

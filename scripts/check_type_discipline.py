@@ -880,14 +880,25 @@ def _bool_constant(value: ast.expr) -> bool | None:
     return value.value if isinstance(value, ast.Constant) and isinstance(value.value, bool) else None
 
 
-def _model_config_frozen(value: ast.expr) -> bool | None:
-    if isinstance(value, ast.Call) and _head_name(value.func) in PYDANTIC_CONFIG_FACTORIES:
-        flags: Final = tuple(_bool_constant(kw.value) for kw in value.keywords if kw.arg == "frozen")
+def _module_assignment_items(tree: ast.AST) -> Iterator[tuple[str, ast.expr]]:
+    if not isinstance(tree, ast.Module):
+        return
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            yield from ((target.id, stmt.value) for target in stmt.targets if isinstance(target, ast.Name))
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and stmt.value is not None:
+            yield stmt.target.id, stmt.value
+
+
+def _model_config_frozen(value: ast.expr, module_assignments: Mapping[str, ast.expr]) -> bool | None:
+    config: Final = module_assignments.get(value.id) if isinstance(value, ast.Name) else value
+    if isinstance(config, ast.Call) and _head_name(config.func) in PYDANTIC_CONFIG_FACTORIES:
+        flags: Final = tuple(_bool_constant(kw.value) for kw in config.keywords if kw.arg == "frozen")
         return flags[-1] if flags else None
-    if isinstance(value, ast.Dict):
+    if isinstance(config, ast.Dict):
         flags: Final = tuple(
             _bool_constant(item)
-            for key, item in zip(value.keys, value.values)
+            for key, item in zip(config.keys, config.values)
             if isinstance(key, ast.Constant) and key.value == "frozen"
         )
         return flags[-1] if flags else None
@@ -910,27 +921,28 @@ def _config_class_frozen(node: ast.ClassDef) -> bool | None:
     return flags[-1] if flags else None
 
 
-def _stmt_frozen_flag(stmt: ast.stmt) -> bool | None:
+def _stmt_frozen_flag(stmt: ast.stmt, module_assignments: Mapping[str, ast.expr]) -> bool | None:
     config_value: Final = _assigns_name(stmt, "model_config")
     if config_value is not None:
-        return _model_config_frozen(config_value)
+        return _model_config_frozen(config_value, module_assignments)
     if isinstance(stmt, ast.ClassDef) and stmt.name == "Config":
         return _config_class_frozen(stmt)
     return None
 
 
-def _class_frozen_override(cls: ast.ClassDef) -> bool | None:
+def _class_frozen_override(cls: ast.ClassDef, module_assignments: Mapping[str, ast.expr]) -> bool | None:
     keyword_flags: Final = tuple(_bool_constant(keyword.value) for keyword in cls.keywords if keyword.arg == "frozen")
     if keyword_flags:
         return keyword_flags[-1]
-    body_flags: Final = tuple(flag for flag in map(_stmt_frozen_flag, cls.body) if flag is not None)
-    return body_flags[-1] if body_flags else None
+    body_flags: Final = tuple(_stmt_frozen_flag(stmt, module_assignments) for stmt in cls.body)
+    return next((flag for flag in reversed(body_flags) if flag is not None), None)
 
 
 def iter_pydantic_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
+    module_assignments: Final = MappingProxyType(dict(_module_assignment_items(tree)))
     models: Final = _pydantic_classes(tree)
     bases_of: Final = {cls: _base_names(cls) for cls in models}
-    override_of: Final = {cls: _class_frozen_override(cls) for cls in models}
+    override_of: Final = {cls: _class_frozen_override(cls, module_assignments) for cls in models}
 
     def frozen(known: frozenset[str]) -> frozenset[str]:
         grown: Final = known | frozenset(

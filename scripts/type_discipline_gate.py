@@ -203,7 +203,7 @@ def cmd_check(base: str) -> None:
         "`# pyright: ignore[rule]  # <reason>`, `# mutable-ok: <reason>`, "
         "`# cast-ok: <reason>`, `# guard-ok: <reason>`, `# kwargs-ok: <reason>`, "
         "`# rebind-ok: <reason>`, `# writable-ok: <reason>`, "
-        "`# comprehension-ok: <reason>`), or remove an equal "
+        "`# comprehension-ok: <reason>`, `# frozen-ok: <reason>`), or remove an equal "
         "number elsewhere; the ceiling "
         "is the limit in type-discipline-budget.json."
     )
