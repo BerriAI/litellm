@@ -30,6 +30,7 @@ from litellm.harness.options import (
     CodexOptions,
     DeepAgentsOptions,
     OpenCodeOptions,
+    PiOptions,
     ToolLoopOptions,
 )
 from litellm.harness.runtime import (
@@ -78,6 +79,7 @@ __all__ = (
     "OpenCodeOptions",
     "OptionsMismatch",
     "OutputInvalid",
+    "PiOptions",
     "Reasoning",
     "Result",
     "SandboxError",

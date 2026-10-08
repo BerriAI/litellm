@@ -1,0 +1,365 @@
+"""
+pi harness config: `pi --mode json` (JSONL session events), once per turn.
+
+Every model call goes to one custom provider (`litellm`, api=openai-completions) declared in
+the models.json of a LiteLLM-owned PI_CODING_AGENT_DIR, so the user's own pi settings, auth,
+extensions, MCP servers and skills are never read. The provider's apiKey is the `$`-reference
+pi resolves from LITELLM_HARNESS_TOKEN, so the token is never in argv or on disk. pi exits 0
+after a failed provider call, so failure is read from the last assistant message instead.
+Verified against @earendil-works/pi-coding-agent 1.1.0.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from litellm.harness.errors import CapabilityUnsupported, HarnessError
+from litellm.harness.options import PiOptions
+from litellm.harness.types import (
+    Capabilities,
+    Event,
+    Harness,
+    PermissionMode,
+    Reasoning,
+    Text,
+    ToolCall,
+    ToolResult,
+)
+from litellm.llms.base_llm.harness.transformation import (
+    BaseCLIHarnessConfig,
+    HarnessSessionSetup,
+    HarnessTurnError,
+    HarnessTurnRequest,
+    HarnessTurnResponse,
+    event_list,
+)
+from litellm.llms.base_llm.harness.utils import (
+    build_instructions,
+    last_json_object,
+    native_tool_names,
+    normalize_tool_name,
+    stderr_tail_text,
+    turn_prompt,
+)
+
+if TYPE_CHECKING:
+    from litellm.harness.context import SessionContext
+
+PI_BINARY: Final = "pi"
+PI_PROVIDER_ID: Final = "litellm"
+PI_TOKEN_ENV: Final = "LITELLM_HARNESS_TOKEN"
+AGENT_DIRNAME: Final = "agent"
+SESSIONS_DIRNAME: Final = "sessions"
+SKILLS_DIRNAME: Final = "skills"
+INSTRUCTIONS_FILENAME: Final = "instructions.md"
+MODELS_FILENAME: Final = f"{AGENT_DIRNAME}/models.json"
+
+PI_ISOLATION_ENV: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "PI_OFFLINE": "1",
+        "PI_SKIP_VERSION_CHECK": "1",
+        "PI_TELEMETRY": "0",
+    }
+)
+
+PERMISSION_TOOLS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "read-only": ("read", "grep", "find", "ls"),
+        "edit": ("read", "edit", "write", "grep", "find", "ls"),
+        "full": ("read", "bash", "edit", "write", "grep", "find", "ls"),
+    }
+)
+
+NORMALIZED_TO_NATIVE: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "read": ("read",),
+        "write": ("write",),
+        "edit": ("edit",),
+        "bash": ("bash", "powershell"),
+        "glob": ("find",),
+        "grep": ("grep",),
+        "ls": ("ls",),
+    }
+)
+
+NATIVE_TO_NORMALIZED: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "read": "read",
+        "write": "write",
+        "edit": "edit",
+        "bash": "bash",
+        "powershell": "bash",
+        "find": "glob",
+        "grep": "grep",
+        "ls": "ls",
+    }
+)
+
+PI_BUILTIN_TOOLS: Final = frozenset({*NATIVE_TO_NORMALIZED, "codemode", "tool_search"})
+FAILED_STOP_REASONS: Final = frozenset({"error", "aborted"})
+
+
+class _Frozen(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+
+class _ContentBlock(_Frozen):
+    type: str
+    text: str = ""
+
+
+class _Role(_Frozen):
+    role: str = ""
+
+
+class _AssistantMessage(_Frozen):
+    content: tuple[_ContentBlock, ...] = ()
+    stop_reason: str | None = Field(default=None, alias="stopReason")
+    error_message: str | None = Field(default=None, alias="errorMessage")
+
+
+class _ToolOutput(_Frozen):
+    content: tuple[_ContentBlock, ...] = ()
+
+
+class _ToolStart(_Frozen):
+    tool_call_id: str = Field(alias="toolCallId")
+    tool_name: str = Field(alias="toolName")
+    args: Mapping[str, object] = Field(default_factory=lambda: MappingProxyType({}))
+
+
+class _ToolEnd(_Frozen):
+    tool_call_id: str = Field(alias="toolCallId")
+    result: _ToolOutput | str | None = None
+    is_error: bool = Field(default=False, alias="isError")
+
+
+class _MessageUpdate(_Frozen):
+    type: str
+    delta: str = ""
+
+
+@dataclass
+class PiStreamState:
+    """What the parser has learned from one `pi --mode json` run."""
+
+    session_id: str | None = None
+    final_text: str = ""
+    stop_reason: str | None = None
+    error: str | None = None
+
+    def record_session(self, session_id: object) -> None:
+        if isinstance(session_id, str) and self.session_id is None:
+            self.session_id = session_id
+
+    def record_message_end(self, message: object) -> None:
+        if _Role.model_validate(message).role != "assistant":
+            return
+        assistant: Final = _AssistantMessage.model_validate(message)
+        self.final_text = _text_of(assistant.content)
+        self.stop_reason = assistant.stop_reason
+        self.error = assistant.error_message
+
+    def mark_aborted(self) -> None:
+        self.stop_reason = "aborted"
+
+
+def _text_of(blocks: Sequence[_ContentBlock]) -> str:
+    return "".join(block.text for block in blocks if block.type == "text")
+
+
+def _tool_output_text(result: _ToolOutput | str | None) -> str:
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        return result
+    return _text_of(result.content)
+
+
+def _message_update_events(update: object) -> Sequence[Event]:
+    try:
+        event: Final = _MessageUpdate.model_validate(update)
+    except ValidationError:
+        return event_list()
+    if not event.delta:
+        return event_list()
+    if event.type == "text_delta":
+        return event_list(Text(delta=event.delta))
+    if event.type == "thinking_delta":
+        return event_list(Reasoning(delta=event.delta))
+    return event_list()
+
+
+def _tool_start_events(line: Mapping[str, object]) -> Sequence[Event]:
+    start: Final = _ToolStart.model_validate(line)
+    return event_list(
+        ToolCall(
+            id=start.tool_call_id,
+            name=normalize_tool_name(start.tool_name, NATIVE_TO_NORMALIZED),
+            native_name=start.tool_name,
+            input=start.args,
+            builtin=start.tool_name in PI_BUILTIN_TOOLS,
+        )
+    )
+
+
+def _tool_end_events(line: Mapping[str, object]) -> Sequence[Event]:
+    end: Final = _ToolEnd.model_validate(line)
+    return event_list(ToolResult(id=end.tool_call_id, output=_tool_output_text(end.result), is_error=end.is_error))
+
+
+def tool_args(permissions: PermissionMode, disable_tools: Sequence[str]) -> tuple[str, ...]:
+    """`--tools` allowlist for a permission mode, plus `--exclude-tools` for disable_tools."""
+    if permissions not in PERMISSION_TOOLS:
+        raise CapabilityUnsupported(
+            f"Harness.PI does not support permissions={permissions!r} (supported: {sorted(PERMISSION_TOOLS)})"
+        )
+    denied: Final = native_tool_names(disable_tools, NORMALIZED_TO_NATIVE)
+    exclude: Final = ("--exclude-tools", ",".join(denied)) if denied else ()
+    return ("--tools", ",".join(PERMISSION_TOOLS[permissions]), *exclude)
+
+
+def build_models_json(model: str, base_url: str) -> str:
+    provider: Final = MappingProxyType(
+        {
+            "baseUrl": base_url,
+            "api": "openai-completions",
+            "apiKey": f"${PI_TOKEN_ENV}",
+            "models": ({"id": model},),
+        }
+    )
+    return json.dumps({"providers": {PI_PROVIDER_ID: dict(provider)}})
+
+
+class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
+    harness = Harness.PI
+    options_type = PiOptions
+    capabilities = Capabilities(
+        structured_output=True,
+        tool_approval=False,
+        tool_filtering=True,
+        history=False,
+        custom_tools=False,
+        skills=True,
+        resume=True,
+        permission_modes=frozenset(PERMISSION_TOOLS),
+    )
+
+    def get_binary(self) -> str:
+        return PI_BINARY
+
+    def get_install_hint(self) -> str:
+        return "npm install -g @earendil-works/pi-coding-agent"
+
+    def validate_environment(self, ctx: SessionContext) -> None:
+        self.get_options(ctx)
+        tool_args(ctx.permissions, ctx.disable_tools)
+
+    def transform_session_setup(self, ctx: SessionContext, private_dir: str) -> HarnessSessionSetup:
+        if ctx.endpoint is None:
+            raise HarnessError("pi needs the session model endpoint")
+        model: Final = ctx.model or ctx.endpoint.model
+        if not model:
+            raise ValueError("Harness.PI needs model= (a gateway model group or litellm model)")
+        options: Final = self.get_options(ctx)
+        base_url: Final = ctx.sandbox.host_url(ctx.endpoint.port).rstrip("/") + "/v1"
+        models_file: Final = (MODELS_FILENAME, build_models_json(model, base_url).encode("utf-8"))
+        instructions: Final = build_instructions(ctx)
+        instructions_file: Final = (
+            ((INSTRUCTIONS_FILENAME, instructions.encode("utf-8")),) if instructions is not None else ()
+        )
+        return HarnessSessionSetup(
+            files=MappingProxyType(dict((models_file, *instructions_file))),
+            persisted_dirs=((SESSIONS_DIRNAME, "pi/sessions"),),
+            skills_dir=SKILLS_DIRNAME,
+            env=MappingProxyType(
+                {
+                    **PI_ISOLATION_ENV,
+                    **options.env,
+                    "PI_CODING_AGENT_DIR": f"{private_dir}/{AGENT_DIRNAME}",
+                    PI_TOKEN_ENV: ctx.endpoint.token,
+                }
+            ),
+        )
+
+    def transform_turn_request(
+        self,
+        ctx: SessionContext,
+        setup: HarnessSessionSetup,
+        private_dir: str,
+        prompt: str,
+        native_session_id: str | None,
+    ) -> HarnessTurnRequest:
+        options: Final = self.get_options(ctx)
+        model: Final = ctx.model or (ctx.endpoint.model if ctx.endpoint else None)
+        # --no-approve: a repo's .pi/extensions would otherwise run as the host user at startup.
+        # --no-skills: ~/.agents/skills is discovered outside PI_CODING_AGENT_DIR.
+        argv: Final = (
+            PI_BINARY,
+            "--mode",
+            "json",
+            "--no-approve",
+            "--no-skills",
+            "--provider",
+            PI_PROVIDER_ID,
+            "--model",
+            str(model),
+            "--session-dir",
+            f"{private_dir}/{SESSIONS_DIRNAME}",
+            *(("--session", native_session_id) if native_session_id else ()),
+            *tool_args(ctx.permissions, ctx.disable_tools),
+            *(("--thinking", options.thinking) if options.thinking else ()),
+            *(("--skill", f"{private_dir}/{SKILLS_DIRNAME}") if ctx.skills else ()),
+            *(
+                ("--append-system-prompt", f"{private_dir}/{INSTRUCTIONS_FILENAME}")
+                if INSTRUCTIONS_FILENAME in setup.files
+                else ()
+            ),
+        )
+        # The prompt goes on stdin; pi prepends piped stdin to the (empty) first message.
+        return HarnessTurnRequest(argv=argv, env=setup.env, stdin=turn_prompt(ctx, prompt), cwd=ctx.sandbox.workdir)
+
+    def create_stream_state(self) -> PiStreamState:
+        return PiStreamState()
+
+    def transform_stream_line(self, line: Mapping[str, object], state: PiStreamState) -> Sequence[Event]:
+        """Usage on message_update is ignored on purpose: the session endpoint accounts it."""
+        event_type: Final = line.get("type")
+        if event_type == "session":
+            state.record_session(line.get("id"))
+            return event_list()
+        if event_type == "message_update":
+            return _message_update_events(line.get("assistantMessageEvent"))
+        if event_type == "message_end":
+            state.record_message_end(line.get("message"))
+            return event_list()
+        if event_type == "tool_execution_start":
+            return _tool_start_events(line)
+        if event_type == "tool_execution_end":
+            return _tool_end_events(line)
+        if event_type == "agent_settled" and line.get("aborted") is True:
+            state.mark_aborted()
+        return event_list()
+
+    def get_native_session_id(self, state: PiStreamState) -> str | None:
+        return state.session_id
+
+    def transform_turn_response(
+        self,
+        ctx: SessionContext,
+        state: PiStreamState,
+        exit_code: int,
+        stderr_tail: Sequence[str],
+    ) -> HarnessTurnResponse:
+        if state.stop_reason in FAILED_STOP_REASONS:
+            raise HarnessTurnError(f"pi turn failed: {state.error or state.stop_reason}")
+        if exit_code != 0:
+            raise HarnessTurnError(f"pi exited with code {exit_code}: {stderr_tail_text(stderr_tail) or 'no output'}")
+        output_json: Final = last_json_object(state.final_text) if ctx.output is not None else None
+        return HarnessTurnResponse(final_text=state.final_text, output_json=output_json)
