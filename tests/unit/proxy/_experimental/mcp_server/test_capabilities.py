@@ -112,9 +112,14 @@ def test_modern_discovery_requires_opt_in_and_keeps_unsupported_features_disable
 
     configured: Final = TypeAdapter(MCPAdvertisedVersions).validate_python(["2026-07-28"])
     result: Final = build_discovery(
-        configured=configured, revision="2026-07-28", transport=MCPTransport.http,
-        authorized_operations=GATEWAY_OPERATIONS, upstream_versions=frozenset({"2026-07-28"}),
-        capabilities=ServerCapabilities(tools=ToolsCapability(), prompts=PromptsCapability(), resources=ResourcesCapability()),
+        configured=configured,
+        revision="2026-07-28",
+        transport=MCPTransport.http,
+        authorized_operations=GATEWAY_OPERATIONS,
+        upstream_versions=frozenset({"2026-07-28"}),
+        capabilities=ServerCapabilities(
+            tools=ToolsCapability(), prompts=PromptsCapability(), resources=ResourcesCapability()
+        ),
     )
     assert result.supported_versions == ["2026-07-28"]
     assert result.capabilities.tools is not None
@@ -131,4 +136,7 @@ def test_modern_protocol_is_rejected_on_legacy_sse_paths(path, monkeypatch):
 
     monkeypatch.setitem(proxy_server.general_settings, "mcp_advertised_versions", ["2025-11-25", "2026-07-28"])
     assert unsupported_protocol_version({"path": "/mcp", "headers": [(b"mcp-protocol-version", b"2026-07-28")]}) is None
-    assert unsupported_protocol_version({"path": path, "headers": [(b"mcp-protocol-version", b"2026-07-28")]}) == "2026-07-28"
+    assert (
+        unsupported_protocol_version({"path": path, "headers": [(b"mcp-protocol-version", b"2026-07-28")]})
+        == "2026-07-28"
+    )

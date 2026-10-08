@@ -1086,6 +1086,9 @@ async def test_mcp_get_prompt_success():
         extra_headers={"X-Test": "1"},
         raw_headers=None,
         client_ip=None,
+        input_responses=None,
+        request_state=None,
+        allow_input_required=False,
     )
     assert result is prompt_result
 
@@ -1149,6 +1152,9 @@ async def test_mcp_read_resource_success():
         extra_headers={"X-Test": "1"},
         raw_headers=None,
         client_ip=None,
+        input_responses=None,
+        request_state=None,
+        allow_input_required=False,
     )
     assert result is read_result
 

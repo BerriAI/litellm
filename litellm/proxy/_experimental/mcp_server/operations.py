@@ -7,7 +7,7 @@ import types
 import uuid
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
 from typing import Any, Final, NoReturn, TypeAlias, overload
@@ -3292,7 +3292,8 @@ class GatewayOperations:
                 )
             }
         )
-        result: Final = await self._execute(upstream, context)
+        dispatch_context: Final = replace(context, mcp_servers=(state.target_id,)) if state is not None else context
+        result: Final = await self._execute(upstream, dispatch_context)
         if isinstance(result, BoundInputRequiredResult):
             return seal_continuation(result, operation, context, now=int(time.time()), previous=state)
         if isinstance(result, InputRequiredResult):

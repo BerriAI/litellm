@@ -69,29 +69,58 @@ async def test_tool_continuation_reaches_modern_upstream() -> None:
         payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
         assert isinstance(payload, JSONRPCRequest)
         if payload.method == "server/discover":
-            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {
-                "supportedVersions": ["2026-07-28"], "capabilities": {"tools": {}},
-                "resultType": "complete", "cacheScope": "private", "ttlMs": 0,
-            }})
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "supportedVersions": ["2026-07-28"],
+                        "capabilities": {"tools": {}},
+                        "resultType": "complete",
+                        "cacheScope": "private",
+                        "ttlMs": 0,
+                    },
+                },
+            )
         if payload.method == "tools/list":
-            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {
-                "tools": [{"name": "confirm", "inputSchema": {"type": "object"}}],
-                "resultType": "complete", "cacheScope": "private", "ttlMs": 0,
-            }})
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "tools": [{"name": "confirm", "inputSchema": {"type": "object"}}],
+                        "resultType": "complete",
+                        "cacheScope": "private",
+                        "ttlMs": 0,
+                    },
+                },
+            )
         assert payload.method == "tools/call"
         assert payload.params is not None
         assert payload.params.get("requestState") == "opaque-upstream-state"
         assert payload.params.get("inputResponses") == {"confirmation": {"action": "accept"}}
-        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {
-            "resultType": "complete", "content": [{"type": "text", "text": "confirmed"}], "isError": False,
-        }})
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    "resultType": "complete",
+                    "content": [{"type": "text", "text": "confirmed"}],
+                    "isError": False,
+                },
+            },
+        )
 
-    client: Final = _MockTransportClient(
-        respond, server_url="https://example.com/mcp", protocol_version="2026-07-28"
-    )
+    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", protocol_version="2026-07-28")
     result: Final = await client.call_tool(
-        CallToolRequestParams(name="confirm", request_state="opaque-upstream-state",
-                              input_responses={"confirmation": ElicitResult(action="accept")}),
+        CallToolRequestParams(
+            name="confirm",
+            request_state="opaque-upstream-state",
+            input_responses={"confirmation": ElicitResult(action="accept")},
+        ),
         raise_on_error=True,
     )
     assert isinstance(result, CallToolResult)
@@ -101,14 +130,26 @@ async def test_tool_continuation_reaches_modern_upstream() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("modern_caller", [False, True])
-@pytest.mark.parametrize("elicitation_mode,sampling", [("form", False), ("form", True), ("url", False), ("url", True), ("none", True)])
-async def test_modern_input_request_uses_existing_elicitation_callback(modern_caller: bool, sampling: bool, elicitation_mode: str) -> None:
+@pytest.mark.parametrize(
+    "elicitation_mode,sampling", [("form", False), ("form", True), ("url", False), ("url", True), ("none", True)]
+)
+async def test_modern_input_request_uses_existing_elicitation_callback(
+    modern_caller: bool, sampling: bool, elicitation_mode: str
+) -> None:
     from queue import SimpleQueue
-    from mcp.types import ElicitResult, ElicitRequestParams, TextContent, CreateMessageRequestParams, CreateMessageResult
+    from mcp.types import (
+        ElicitResult,
+        ElicitRequestParams,
+        TextContent,
+        CreateMessageRequestParams,
+        CreateMessageResult,
+    )
     from litellm.proxy._experimental.mcp_server.interactions import BoundInputRequiredResult
 
     observed: Final[SimpleQueue[str]] = SimpleQueue()
-    sampled: Final = CreateMessageResult(role="assistant", content=TextContent(type="text", text="sampled"), model="test")
+    sampled: Final = CreateMessageResult(
+        role="assistant", content=TextContent(type="text", text="sampled"), model="test"
+    )
     expected_responses: Final = {
         **({"consent": {"action": "accept"}} if elicitation_mode != "none" else {}),
         **({"sample": sampled.model_dump(by_alias=True, exclude_none=True)} if sampling else {}),
@@ -129,39 +170,87 @@ async def test_modern_input_request_uses_existing_elicitation_callback(modern_ca
         payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
         assert isinstance(payload, JSONRPCRequest)
         if payload.method == "server/discover":
-            result = {"supportedVersions": ["2026-07-28"], "capabilities": {"tools": {}},
-                      "resultType": "complete", "cacheScope": "private", "ttlMs": 0}
+            result = {
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {"tools": {}},
+                "resultType": "complete",
+                "cacheScope": "private",
+                "ttlMs": 0,
+            }
         elif payload.method == "tools/list":
-            result = {"tools": [{"name": "confirm", "inputSchema": {"type": "object"}}],
-                      "resultType": "complete", "cacheScope": "private", "ttlMs": 0}
+            result = {
+                "tools": [{"name": "confirm", "inputSchema": {"type": "object"}}],
+                "resultType": "complete",
+                "cacheScope": "private",
+                "ttlMs": 0,
+            }
         elif not (payload.params or {}).get("requestState"):
-            result = {"resultType": "input_required", "requestState": "pending",
-                      "inputRequests": {
-                          **({"consent": {"method": "elicitation/create", "params": {"message": "Confirm operation", **({"mode": "form", "requestedSchema": {"type": "object", "properties": {}}} if elicitation_mode == "form" else {"mode": "url", "url": "https://example.com/confirm"})}}} if elicitation_mode != "none" else {}),
-                          **({"sample": {"method": "sampling/createMessage", "params": {"messages": [], "maxTokens": 10}}} if sampling else {}),
-                      }}
+            result = {
+                "resultType": "input_required",
+                "requestState": "pending",
+                "inputRequests": {
+                    **(
+                        {
+                            "consent": {
+                                "method": "elicitation/create",
+                                "params": {
+                                    "message": "Confirm operation",
+                                    **(
+                                        {"mode": "form", "requestedSchema": {"type": "object", "properties": {}}}
+                                        if elicitation_mode == "form"
+                                        else {"mode": "url", "url": "https://example.com/confirm"}
+                                    ),
+                                },
+                            }
+                        }
+                        if elicitation_mode != "none"
+                        else {}
+                    ),
+                    **(
+                        {"sample": {"method": "sampling/createMessage", "params": {"messages": [], "maxTokens": 10}}}
+                        if sampling
+                        else {}
+                    ),
+                },
+            }
         else:
             assert (payload.params or {}).get("requestState") == "pending"
             assert (payload.params or {}).get("inputResponses") == expected_responses
             result = {"resultType": "complete", "content": [{"type": "text", "text": "confirmed"}], "isError": False}
         return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
 
-    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp",
-        protocol_version="2026-07-28", elicitation_callback=elicit, sampling_callback=sample)
-    result: Final = await client.call_tool(CallToolRequestParams(name="confirm", arguments={}), raise_on_error=True, allow_input_required=modern_caller)
+    client: Final = _MockTransportClient(
+        respond,
+        server_url="https://example.com/mcp",
+        protocol_version="2026-07-28",
+        elicitation_callback=elicit,
+        sampling_callback=sample,
+    )
+    result: Final = await client.call_tool(
+        CallToolRequestParams(name="confirm", arguments={}), raise_on_error=True, allow_input_required=modern_caller
+    )
     if modern_caller and elicitation_mode != "none":
         assert isinstance(result, BoundInputRequiredResult)
         assert tuple(result.input_requests or {}) == ("consent",)
         assert result.gateway_responses == ({"sample": sampled} if sampling else None)
-        resumed: Final = await client.call_tool(CallToolRequestParams(name="confirm", arguments={}, request_state=result.request_state,
-            input_responses={"consent": ElicitResult(action="accept"), **(result.gateway_responses or {})}), raise_on_error=True, allow_input_required=True)
+        resumed: Final = await client.call_tool(
+            CallToolRequestParams(
+                name="confirm",
+                arguments={},
+                request_state=result.request_state,
+                input_responses={"consent": ElicitResult(action="accept"), **(result.gateway_responses or {})},
+            ),
+            raise_on_error=True,
+            allow_input_required=True,
+        )
         assert isinstance(resumed, CallToolResult)
         assert resumed.content == [TextContent(type="text", text="confirmed")]
     else:
         assert isinstance(result, CallToolResult)
         assert result.content == [TextContent(type="text", text="confirmed")]
     assert sorted(observed.get_nowait() for _ in range(observed.qsize())) == sorted(
-        ([] if modern_caller or elicitation_mode == "none" else ["Confirm operation"]) + (["sample"] if sampling else [])
+        ([] if modern_caller or elicitation_mode == "none" else ["Confirm operation"])
+        + (["sample"] if sampling else [])
     )
 
 
@@ -3725,13 +3814,22 @@ def test_prompt_continuation_polling_respects_the_original_deadline() -> None:
         payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
         assert isinstance(payload, JSONRPCRequest)
         result: Final = (
-            {"supportedVersions": ["2026-07-28"], "capabilities": {"prompts": {}}, "resultType": "complete", "cacheScope": "private", "ttlMs": 0}
-            if payload.method == "server/discover" else {"resultType": "input_required", "requestState": "pending"}
+            {
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {"prompts": {}},
+                "resultType": "complete",
+                "cacheScope": "private",
+                "ttlMs": 0,
+            }
+            if payload.method == "server/discover"
+            else {"resultType": "input_required", "requestState": "pending"}
         )
         return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
 
     loop: Final = _AutojumpClockLoop()
-    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", protocol_version="2026-07-28", timeout=0.12)
+    client: Final = _MockTransportClient(
+        respond, server_url="https://example.com/mcp", protocol_version="2026-07-28", timeout=0.12
+    )
     try:
         with pytest.raises(TimeoutError):
             loop.run_until_complete(client.get_prompt(GetPromptRequestParams(name="pending")))

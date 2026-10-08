@@ -164,7 +164,9 @@ async def test_elicitation_callback_keeps_initiating_session():
     request = AsyncMock(return_value=accepted)
     initiating = SimpleNamespace(client_params=SimpleNamespace(capabilities=capabilities), elicit_form=request)
     token = legacy_server.active_mcp_session_var.set(initiating)
-    request_token = active_mcp_request_ctx_var.set(SimpleNamespace(session=initiating, request_id="initiating-call", protocol_version="2025-11-25"))
+    request_token = active_mcp_request_ctx_var.set(
+        SimpleNamespace(session=initiating, request_id="initiating-call", protocol_version="2025-11-25")
+    )
     try:
         callback = _create_elicitation_callback()
         legacy_server.active_mcp_session_var.set(SimpleNamespace())
@@ -19289,12 +19291,16 @@ async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_con
 
     session = SimpleNamespace(client_params=None)
     session_token = legacy_server.active_mcp_session_var.set(session)
-    request_token = active_mcp_request_ctx_var.set(SimpleNamespace(session=session, request_id="modern-call", protocol_version="2026-07-28"))
+    request_token = active_mcp_request_ctx_var.set(
+        SimpleNamespace(session=session, request_id="modern-call", protocol_version="2026-07-28")
+    )
     relay = AsyncMock()
     try:
         callback = create_elicitation_callback()
         with patch("litellm.proxy._experimental.mcp_server.elicitation_handler.handle_elicitation_request", relay):
-            result = await callback(None, ElicitRequestFormParams(message="Confirm", requested_schema={"type": "object"}))
+            result = await callback(
+                None, ElicitRequestFormParams(message="Confirm", requested_schema={"type": "object"})
+            )
         assert isinstance(result, ErrorData)
         assert result.code == -32602
         assert "may have partially completed" in result.message

@@ -100,7 +100,9 @@ def rpc(gateway: Gateway, method: str, params: dict[str, JsonValue], *, status: 
 
 
 @pytest.mark.parametrize("changed_target", [False, True])
-def test_continuations_resume_on_another_replica_and_reject_changed_operations(tmp_path: Path, changed_target: bool) -> None:
+def test_continuations_resume_on_another_replica_and_reject_changed_operations(
+    tmp_path: Path, changed_target: bool
+) -> None:
     with wire_server(interaction_peer) as peer, httpx.Client() as client:
         config: Final = tmp_path / "proxy.yaml"
         config.write_text(
@@ -124,7 +126,9 @@ def test_continuations_resume_on_another_replica_and_reject_changed_operations(t
             )
         )
         other_config: Final = tmp_path / "other-proxy.yaml"
-        other_config.write_text(config.read_text().replace(peer.url, peer.url + "/changed-target") if changed_target else config.read_text())
+        other_config.write_text(
+            config.read_text().replace(peer.url, peer.url + "/changed-target") if changed_target else config.read_text()
+        )
         seed: Final = Gateway(client, _KEY, peer.url)
         environment: Final = {
             "STORE_MODEL_IN_DB": "False",
@@ -194,7 +198,7 @@ def test_continuation_reauthenticates_caller_and_rechecks_revoked_permissions(tm
     }
     auth_state: Final = auth_module.with_suffix(".json")
     auth_state.write_text(json.dumps(identity))
-    with wire_server(interaction_peer) as peer, httpx.Client() as client:
+    with wire_server(interaction_peer) as peer, wire_server(interaction_peer) as other_peer, httpx.Client() as client:
         config: Final = tmp_path / "proxy.yaml"
         config.write_text(
             yaml.safe_dump(
@@ -207,7 +211,14 @@ def test_continuation_reauthenticates_caller_and_rechecks_revoked_permissions(tm
                             "transport": "http",
                             "protocol_version": "2026-07-28",
                             "allow_elicitation": True,
-                        }
+                        },
+                        "other": {
+                            "server_id": "other-server",
+                            "url": other_peer.url,
+                            "transport": "http",
+                            "protocol_version": "2026-07-28",
+                            "allow_elicitation": True,
+                        },
                     },
                     "general_settings": {
                         "master_key": _KEY,
@@ -258,3 +269,71 @@ def test_continuation_reauthenticates_caller_and_rechecks_revoked_permissions(tm
             revoked: Final = rpc(gateway, "tools/call", retry)
             assert revoked["result"]["isError"] is True, revoked
             assert peer.drain() == (), "Revoked access must reject a valid continuation before upstream dispatch"
+
+            auth_state.write_text(json.dumps(identity))
+            resource: Final = rpc(gateway, "resources/read", {"uri": "test://confirm"})
+            assert resource["result"]["resultType"] == "input_required", resource
+            auth_state.write_text(
+                json.dumps(
+                    {
+                        **identity,
+                        "object_permission": {
+                            "object_permission_id": "test-permission",
+                            "mcp_servers": ["other-server"],
+                        },
+                    }
+                )
+            )
+            peer.drain()
+            other_peer.drain()
+            response: Final = gateway.client.post(
+                "/mcp/",
+                headers={
+                    "Authorization": "Bearer " + gateway.key,
+                    "MCP-Protocol-Version": "2026-07-28",
+                    "Mcp-Method": "resources/read",
+                    "Mcp-Name": "test://confirm",
+                    "Accept": "application/json, text/event-stream",
+                },
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "resources/read",
+                    "params": {
+                        "uri": "test://confirm",
+                        "_meta": _META,
+                        "requestState": resource["result"]["requestState"],
+                        "inputResponses": {"consent": {"action": "accept"}},
+                    },
+                },
+            )
+            other_requests: Final = tuple(
+                (json.loads(request.body)["method"], json.loads(request.body).get("params", {}).get("requestState"))
+                for request in other_peer.drain()
+            )
+            assert other_requests == (), "Continuation must never send upstream state to another authorized server"
+            assert peer.drain() == (), "Revoked original target must not receive a retry"
+            assert response.status_code >= 400 or "error" in response.json(), response.text
+
+            auth_state.write_text(
+                json.dumps(
+                    {
+                        **identity,
+                        "object_permission": {
+                            "object_permission_id": "test-permission",
+                            "mcp_servers": ["interaction-server", "other-server"],
+                        },
+                    }
+                )
+            )
+            completed: Final = rpc(
+                gateway,
+                "resources/read",
+                {
+                    "uri": "test://confirm",
+                    "requestState": resource["result"]["requestState"],
+                    "inputResponses": {"consent": {"action": "accept"}},
+                },
+            )
+            assert completed["result"]["contents"] == [{"uri": "test://confirm", "text": "confirmed"}], completed
+            assert other_peer.drain() == (), "Expanded access must keep the continuation on its original target"
