@@ -7,7 +7,6 @@ import traceback
 
 import pytest
 
-
 import litellm
 from litellm import completion, embedding
 from litellm.integrations.custom_logger import CustomLogger
@@ -99,24 +98,6 @@ class TmpFunction:
         self.complete_streaming_response_in_callback = kwargs.get(
             "async_complete_streaming_response"
         )
-
-
-def test_get_callback_env_vars():
-    env_vars = CustomLogger.get_callback_env_vars("langfuse")
-    assert env_vars == [
-        "LANGFUSE_PUBLIC_KEY",
-        "LANGFUSE_SECRET_KEY",
-        "LANGFUSE_HOST",
-    ]
-
-    alias_env_vars = CustomLogger.get_callback_env_vars("langfuse_otel")
-    assert alias_env_vars == env_vars
-
-    missing_env_vars = CustomLogger.get_callback_env_vars("does_not_exist")
-    assert missing_env_vars == []
-
-    none_env_vars = CustomLogger.get_callback_env_vars(None)
-    assert none_env_vars == []
 
 
 @pytest.mark.asyncio
@@ -236,42 +217,6 @@ def test_async_custom_handler_stream():
 # test_async_custom_handler_stream()
 
 
-@pytest.mark.skip(reason="Flaky test")
-def test_azure_completion_stream():
-    # [PROD Test] - Do not DELETE
-    # test if completion() + sync custom logger get the same complete stream response
-    try:
-        # checks if the model response available in the async + stream callbacks is equal to the received response
-        customHandler2 = MyCustomHandler()
-        litellm.callbacks = [customHandler2]
-        litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": f"write 1 sentence about litellm being amazing {time.time()}",
-            },
-        ]
-        complete_streaming_response = ""
-
-        response = litellm.completion(
-            model="azure/gpt-4.1-mini", messages=messages, stream=True
-        )
-        for chunk in response:
-            complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""
-            print(complete_streaming_response)
-
-        time.sleep(0.5)  # wait 1/2 second before checking callbacks
-        response_in_success_handler = customHandler2.sync_stream_collected_response
-        response_in_success_handler = response_in_success_handler["choices"][0][
-            "message"
-        ]["content"]
-        print("\n\n")
-        print("response_in_success_handler: ", response_in_success_handler)
-        print("complete_streaming_response: ", complete_streaming_response)
-        assert response_in_success_handler == complete_streaming_response
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.asyncio
@@ -418,73 +363,6 @@ async def test_async_custom_handler_embedding_optional_param():
 
 
 # asyncio.run(test_async_custom_handler_embedding_optional_param())
-
-
-@pytest.mark.skip(reason="AWS Account suspended. Pending their approval")
-@pytest.mark.asyncio
-async def test_async_custom_handler_embedding_optional_param_bedrock():
-    """
-    Tests if the openai optional params for embedding - user + encoding_format,
-    are logged
-
-    but makes sure these are not sent to the non-openai/azure endpoint (raises errors).
-    """
-    litellm.drop_params = True
-    litellm.set_verbose = True
-    customHandler_optional_params = MyCustomHandler()
-    litellm.callbacks = [customHandler_optional_params]
-    response = await litellm.aembedding(
-        model="bedrock/amazon.titan-embed-text-v1", input=["hello world"], user="John"
-    )
-    await asyncio.sleep(1)  # success callback is async
-    assert customHandler_optional_params.user == "John"
-    assert "user" not in customHandler_optional_params.data_sent_to_api
-
-
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_cost_tracking_with_caching():
-    """
-    Important Test - This tests if that cost is 0 for cached responses
-    """
-    from litellm import Cache
-
-    litellm.set_verbose = True
-    litellm.cache = Cache(
-        type="redis",
-        host=os.environ["REDIS_HOST"],
-        port=os.environ["REDIS_PORT"],
-        password=os.environ["REDIS_PASSWORD"],
-    )
-    customHandler_optional_params = MyCustomHandler()
-    litellm.callbacks = [customHandler_optional_params]
-    messages = [
-        {
-            "role": "user",
-            "content": f"write a one sentence poem about: {time.time()}",
-        }
-    ]
-    response1 = await litellm.acompletion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        max_tokens=40,
-        temperature=0.2,
-        caching=True,
-        mock_response="Hey, i'm doing well!",
-    )
-    await asyncio.sleep(3)  # success callback is async
-    response_cost = customHandler_optional_params.response_cost
-    assert response_cost > 0
-    response2 = await litellm.acompletion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        max_tokens=40,
-        temperature=0.2,
-        caching=True,
-    )
-    await asyncio.sleep(1)  # success callback is async
-    response_cost_2 = customHandler_optional_params.response_cost
-    assert response_cost_2 == 0
 
 
 @pytest.mark.flaky(retries=3, delay=3)

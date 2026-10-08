@@ -536,7 +536,7 @@ impl LegacyLogging {
             head.bind(py).set_item("cache_key", key)?;
             head.bind(py).set_item("cache_hit", true)?;
         }
-        Streaming::Opened.call(py, (self.logger()?.object(py),))?;
+        Streaming::Opened.call(py, (self.logger()?.object(py), head.bind(py)))?;
         self.stream = Some(DeliveredStream {
             chunks: PyList::empty(py).unbind(),
             first_chunk: None,
@@ -936,9 +936,6 @@ mod payload_tests {
     /// The payload phases of `Logging` on top of `StubLogger`, with `pre_call` handing the
     /// payload to the case's `on_pre_call`.
     const PAYLOAD_LOGGER: &CStr = c"
-class Request:
-    pass
-
 class PayloadLogger(StubLogger):
     def update_from_kwargs(self, **update):
         self.update = update
@@ -954,7 +951,7 @@ class PayloadLogger(StubLogger):
         self.record('post_call', None)
         self.post = (original_response, api_key, additional_args)
 
-request = Request()
+bound = {}
 kwargs = {}
 logger = PayloadLogger()
 on_pre_call = lambda additional_args: None
@@ -1225,10 +1222,10 @@ on_pre_call = lambda args: observed.append(
 def check():
     assert observed == [(True, True)], observed
 ")]
-    #[case::request_attribute_behind_an_omitted_keyword(c"
+    #[case::bound_value_behind_an_omitted_keyword(c"
 document = {'type': 'document_url', 'document_url': 'data:application/pdf;base64,YWJj'}
 pages = [0]
-request.document = document
+bound['document'] = document
 kwargs = {'pages': pages}
 observed = []
 on_pre_call = lambda args: observed.append(
@@ -1768,13 +1765,13 @@ assert logger.calls[1][1] is response
     fn stream_bindings_deliver_collected_chunks_in_order_without_success_fan_out() {
         Python::initialize();
         Python::attach(|py| {
-            let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None");
+            let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None\nhead = {'additional_headers': {'request-id': 'req_native'}}");
             let mut logging = LegacyLogging {
                 operation: crate::LoggingOperation::Messages,
                 ..logged(py, &locals, true)
             };
             logging
-                .on_stream_open(py, &pyo3::types::PyDict::new(py).into_any().unbind())
+                .on_stream_open(py, &local(&locals, "head").unbind())
                 .unwrap();
             logging
                 .on_stream_chunk(py, &local(&locals, "first").unbind())
@@ -1791,6 +1788,7 @@ assert logger.calls[1][1] is response
                 &locals,
                 c"
 assert logger.names() == ['stream_opened', 'stream_success'], logger.calls
+assert logger.calls[0][1] is head
 chunks = logger.calls[1][1]
 assert len(chunks) == 2
 assert chunks[0] is first

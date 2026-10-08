@@ -1,5 +1,5 @@
-import { fireEvent, screen, within } from "@testing-library/react";
-import { beforeEach, expect, it } from "vitest";
+import { act, fireEvent, screen, within } from "@testing-library/react";
+import { beforeEach, expect, it, vi } from "vitest";
 
 import { renderWithLens, stubGateway } from "@/../tests/lens-test-utils";
 import { testQueryClient } from "@/../tests/test-utils";
@@ -62,6 +62,28 @@ function activity(overrides: Partial<Activity> = {}): Activity {
   };
 }
 
+it("keeps completed trace rows idle while the reading clock advances", async () => {
+  vi.useFakeTimers();
+  const parseTime = vi.spyOn(Date, "parse");
+  const reviewed = review();
+  const active = job({ stage: "Reading executions", activities: [], reading: [] });
+  const { unmount } = renderWithLens(<LiveRun job={active} reviews={[reviewed]} name="Tool quality" />);
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "View run" }));
+    const traces = within(screen.getByRole("list", { name: "Reviewed traces" }));
+    expect(traces.getByRole("button", { name: /research-agent/ })).toBeVisible();
+    parseTime.mockClear();
+    await act(async () => vi.advanceTimersByTime(500));
+    expect(parseTime.mock.calls.filter(([value]) => value === reviewed.at)).toHaveLength(0);
+    fireEvent.click(traces.getByRole("button", { name: /research-agent/ }));
+    expect(traces.getByText("Tool calls: Read × 2 · Python × 1")).toBeVisible();
+  } finally {
+    unmount();
+    parseTime.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
 it("shows real candidate and grouping activity, durable tool counts, and preliminary review scope", async () => {
   const reviewed = review();
   const grouping: Partial<Activity> = {
@@ -116,4 +138,27 @@ it("keeps older workers' reading lanes but stops calling grouping work reading",
   rerender(view({ ...active, stage: "Grouping observations", reading: [] }));
   expect(drawer.queryByRole("region", { name: "Now reading" })).not.toBeInTheDocument();
   expect(drawer.getByRole("status")).toHaveTextContent("Grouping observations");
+});
+
+it.each([
+  ["completed", 35, 30],
+  ["cancelled", 5, 2],
+  ["failed", 5, 2],
+] as const)("shows planned reuse and actual reviews once %s", (status, reviewed, reused) => {
+  const initial = job();
+  const plan: Partial<Job> = {
+    stage: "Reuse plan ready",
+    reviewed: 0,
+    cost: 0,
+    coverage: { ...initial.coverage, selected: 38, reusable: 30, reused: 0 },
+  };
+  const planned = job(plan);
+  const { rerender } = renderWithLens(<LiveRun job={planned} reviews={[]} name="Task quality" />);
+  const strip = within(screen.getByRole("region", { name: "Live trace results" }));
+  expect(strip.getByText("30 eligible for reuse · 8 need review")).toBeVisible();
+  expect(strip.getByText(/0 of 38 traces/)).toHaveTextContent("$0");
+  const finished = { ...planned, status, reviewed, coverage: { ...planned.coverage, screened: reviewed, reused } };
+  rerender(<LiveRun job={finished} reviews={[]} name="Task quality" />);
+  expect(strip.getByText(`${reused} reused without review cost · ${reviewed - reused} newly reviewed`)).toBeVisible();
+  expect(strip.queryByText(/need review/)).not.toBeInTheDocument();
 });

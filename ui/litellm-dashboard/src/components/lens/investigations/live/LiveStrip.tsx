@@ -77,6 +77,8 @@ export function LiveStrip({
   reviews,
   reviewed,
   selected,
+  reused = 0,
+  reusable = 0,
   issues,
   cost,
   waiting,
@@ -89,6 +91,8 @@ export function LiveStrip({
   reviews: readonly Review[];
   reviewed: number;
   selected: number;
+  reused?: number;
+  reusable?: number;
   issues: IssueCount;
   cost: number;
   onOpen: () => void;
@@ -96,6 +100,7 @@ export function LiveStrip({
 }) {
   const now = useNow(5000);
   const recent = newestFirst(reviews, RECENT);
+  const finished = state.kind === "done" || state.kind === "failed";
   return (
     <section
       aria-label="Live trace results"
@@ -108,6 +113,13 @@ export function LiveStrip({
           <span className="tabular-nums">
             {reviewed} of {selected} traces · {issueLabel(issues)} · {money(cost)}
           </span>
+          {(reused > 0 || reusable > 0) && (
+            <span>
+              {finished
+                ? `${reused} reused without review cost · ${Math.max(0, reviewed - reused)} newly reviewed`
+                : `${reusable} eligible for reuse · ${Math.max(0, selected - reusable)} need review`}
+            </span>
+          )}
         </div>
         <Button
           variant="outline"
