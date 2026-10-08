@@ -43,6 +43,7 @@ from ..common_utils import (
     FIREROUTER,
     FireworksAIException,
     FireworksAIMixin,
+    get_fireworks_forwarded_user_id,
     resolve_fireworks_resource_name,
 )
 
@@ -674,13 +675,15 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                     **stream_options,
                     "include_usage": True,
                 }
-        return super().transform_request(
+        request: Final = super().transform_request(
             model=resolved_model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )
+        forwarded_user_id: Final = get_fireworks_forwarded_user_id(litellm_params)
+        return request if forwarded_user_id is None else {**request, "user": forwarded_user_id}
 
     def _handle_message_content_with_tool_calls(
         self,
