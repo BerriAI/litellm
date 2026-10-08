@@ -538,6 +538,54 @@ async def test_update_daily_spend_retries_connect_errors(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_daily_spend_retries_lock_timeout_errors(monkeypatch):
+    # Regression for the dropped final flush: lock_timeout (SQLSTATE 55P03)
+    # cancels the upsert before it takes its lock, so nothing applied and the
+    # batch is safe to resend. Without the retry the row only goes back on the
+    # queue, where a shutdown flush never gets a next tick to write it.
+    def _lock_timeout_error() -> PrismaDataError:
+        return PrismaDataError(
+            data={
+                "user_facing_error": {
+                    "is_panic": False,
+                    "message": "Error querying the database: canceling statement due to lock timeout",
+                    "meta": {"code": "55P03", "message": "canceling statement due to lock timeout"},
+                }
+            }
+        )
+
+    outcomes = iter([_lock_timeout_error(), None])
+
+    def first_attempt_locks_out():
+        outcome = next(outcomes)
+        if outcome is not None:
+            raise outcome
+        return 1
+
+    prisma_client = _RecordingPrisma(execute_raw=first_attempt_locks_out)
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    async def fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", fake_sleep)
+    daily_spend_transactions = {"k1": _daily_txn()}
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=3,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging,
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="user",
+        entity_id_field="user_id",
+    )
+
+    assert len(prisma_client.db.statements) == 2
+    assert daily_spend_transactions == {}
+    proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_sorting():
     """
     Test that table.upsert is called with events sorted
