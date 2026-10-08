@@ -445,7 +445,9 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
+    monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
         "llm_router",
