@@ -121,7 +121,7 @@ PRIMARY_DEPLOYMENT_ID: Final = "team-primary-id"
 FALLBACK_DEPLOYMENT_ID: Final = "team-fallback-id"
 
 FallbackRules = list[dict[str, list[str]] | dict[str, object] | str]
-RouterSettings = dict[str, FallbackRules]
+RouterSettings = dict[str, FallbackRules | None]
 
 
 def _litellm_params(mock_response: str | None) -> LiteLLMParamsTypedDict:
