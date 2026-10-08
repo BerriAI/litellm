@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -3336,11 +3336,11 @@ class _RedisDown:
         raise ConnectionError("redis is down")
 
 
-async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_outage():
+async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_outage() -> None:
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import _config_cache_key, evict_config_param
 
-    cache = DualCache(redis_cache=_RedisDown())
+    cache: Final = DualCache(redis_cache=_RedisDown())
     await cache.in_memory_cache.async_set_cache(
         _config_cache_key("router_settings"), {"param_name": "router_settings", "param_value": {"fallbacks": []}}
     )

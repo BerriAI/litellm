@@ -120,7 +120,7 @@ FALLBACK_INTERNAL_NAME: Final = f"model_name_{TEAM_ID}_83151607-5556-4bbf-ac65-c
 PRIMARY_DEPLOYMENT_ID: Final = "team-primary-id"
 FALLBACK_DEPLOYMENT_ID: Final = "team-fallback-id"
 
-FallbackRules = list[dict[str, list[str]]]
+FallbackRules = list[dict[str, list[str]] | dict[str, object] | str]
 RouterSettings = dict[str, FallbackRules]
 
 
@@ -283,6 +283,10 @@ class _StoredRouterSettings:
 
 TEAM_RULE: Final = {"team-primary": ["team-fallback"]}
 GATEWAY_RULE: Final = {"gpt-5.4-mini": ["team-fallback"]}
+NON_STANDARD_RULES: Final = [
+    "claude-3-haiku",
+    {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "retry"}]},
+]
 
 
 class TestFallbackWritesSeeTheLatestStoredRules:
@@ -339,6 +343,15 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         assert stored.stored_fallbacks() == [GATEWAY_RULE]
         assert await stored.cached_fallbacks() == [GATEWAY_RULE]
+
+    async def test_writes_keep_the_non_standard_rules_the_router_accepts(self) -> None:
+        stored: Final = _StoredRouterSettings({"fallbacks": [*NON_STANDARD_RULES, TEAM_RULE]})
+
+        await self._create(FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), stored)
+        assert stored.stored_fallbacks() == [*NON_STANDARD_RULES, TEAM_RULE, GATEWAY_RULE]
+
+        await self._delete("team-primary", stored)
+        assert stored.stored_fallbacks() == [*NON_STANDARD_RULES, GATEWAY_RULE]
 
 
 @pytest.mark.asyncio

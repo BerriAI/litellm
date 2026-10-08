@@ -12,9 +12,9 @@ DELETE /fallback/{model} - Delete fallbacks for a specific model
 
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Final, Literal
 
-from pydantic import TypeAdapter
+from pydantic import Field, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -44,7 +44,13 @@ from litellm.types.management_endpoints.router_settings_endpoints import (
 router: Final = APIRouter()
 
 ROUTER_SETTINGS_PARAM: Final = "router_settings"
-_FALLBACK_RULES: Final = TypeAdapter(list[dict[str, list[str]]])
+FallbackRule = dict[str, list[str]]
+StoredFallback = Annotated[FallbackRule | dict[str, object] | str, Field(union_mode="left_to_right")]
+_STORED_FALLBACKS: Final = TypeAdapter(list[StoredFallback])
+
+
+def _rule_covers(entry: StoredFallback, model: str) -> bool:
+    return isinstance(entry, dict) and isinstance(entry.get(model), list)
 
 
 async def _router_settings_fresh_from_db(proxy_config: "ProxyConfig") -> dict[str, object]:
@@ -159,12 +165,12 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final = _FALLBACK_RULES.validate_python(router_settings.get(fallback_key, []))
+        existing_fallbacks: Final = _STORED_FALLBACKS.validate_python(router_settings.get(fallback_key, []))
 
         # Update or add the fallback configuration
         fallback_updated = False
-        for i, fallback_dict in enumerate(existing_fallbacks):
-            if data.model in fallback_dict:
+        for i, rule in enumerate(existing_fallbacks):
+            if _rule_covers(rule, data.model):
                 # Update existing fallback
                 existing_fallbacks[i] = {data.model: data.fallback_models}
                 fallback_updated = True
@@ -315,14 +321,14 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final = _FALLBACK_RULES.validate_python(router_settings.get(fallback_key, []))
+        existing_fallbacks: Final = _STORED_FALLBACKS.validate_python(router_settings.get(fallback_key, []))
 
         # Find and remove the fallback configuration
         fallback_found = False
         updated_fallbacks: Final = []
-        for fallback_dict in existing_fallbacks:
-            if model not in fallback_dict:
-                updated_fallbacks.append(fallback_dict)
+        for rule in existing_fallbacks:
+            if not _rule_covers(rule, model):
+                updated_fallbacks.append(rule)
             else:
                 fallback_found = True
 
