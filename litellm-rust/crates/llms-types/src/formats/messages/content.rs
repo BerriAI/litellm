@@ -179,3 +179,53 @@ pub struct SearchResultCitation {
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct ContentBlockPayload {
+    pub tool: Option<Box<ContentBlock>>,
+    pub text: Option<String>,
+    pub thinking: Option<String>,
+    pub signature: Option<String>,
+    pub data: Option<String>,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub input: Option<Map<String, Value>>,
+    pub content: Option<BlockContent>,
+    pub provider_specific_fields: Option<Map<String, Value>>,
+    pub source: Option<ContentSource>,
+    pub citations: Option<Citations>,
+    pub caller: Option<ToolCaller>,
+    pub is_error: Option<bool>,
+    pub file_id: Option<String>,
+    pub title: Option<String>,
+    pub context: Option<String>,
+    pub tool_name: Option<String>,
+    pub url: Option<String>,
+    pub page_age: Option<String>,
+    pub encrypted_content: Option<String>,
+    pub snippet: Option<String>,
+    pub prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+    pub return_code: Option<i64>,
+    pub encrypted_stdout: Option<String>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub retrieved_at: Option<String>,
+    pub server_name: Option<String>,
+    pub tool_references: Option<Vec<super::ContentBlock>>,
+    pub file_type: Option<String>,
+    pub num_lines: Option<u64>,
+    pub start_line: Option<u64>,
+    pub total_lines: Option<u64>,
+    pub is_file_update: Option<bool>,
+    pub lines: Option<Vec<String>>,
+    pub new_lines: Option<u64>,
+    pub new_start: Option<u64>,
+    pub old_lines: Option<u64>,
+    pub old_start: Option<u64>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}

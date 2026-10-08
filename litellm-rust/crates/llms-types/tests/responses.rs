@@ -1,5 +1,6 @@
 use litellm_llms_types::formats::responses::{
-    ResponsesOutputItem, streaming_websocket::ResponsesWsEventType,
+    ResponsesOutputItem,
+    streaming_websocket::{ResponsesEventResponse, ResponsesWsEventType},
 };
 use rstest::rstest;
 use serde::{Serialize, de::DeserializeOwned};
@@ -71,4 +72,34 @@ fn websocket_event_type_schema_is_open_string() {
 #[case::mcp(json!({"type":"mcp_call","server_label":"server","name":"lookup","arguments":"{}","output":"done"}))]
 fn output_items_round_trip(#[case] wire: Value) {
     round_trip::<ResponsesOutputItem>(wire);
+}
+
+#[rstest]
+fn nested_event_response_exposes_typed_output_and_preserves_extensions() {
+    let wire = json!({
+        "id":"response_1",
+        "model":"example-model",
+        "status":"completed",
+        "output":[{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}","extension":true}],
+        "extension":{"nested":[1,null]}
+    });
+    let response: ResponsesEventResponse = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(response.id.as_deref(), Some("response_1"));
+    assert_eq!(response.model.as_deref(), Some("example-model"));
+    let Some(output) = &response.output else {
+        panic!("expected typed output");
+    };
+    let [ResponsesOutputItem::FunctionCall(call)] = output.as_slice() else {
+        panic!("expected function call");
+    };
+    assert_eq!(call.name.as_deref(), Some("lookup"));
+    assert_eq!(call.arguments.as_deref(), Some("{}"));
+    assert_eq!(serde_json::to_value(response).unwrap(), wire);
+}
+
+#[rstest]
+#[case::empty(json!({}))]
+#[case::partial(json!({"id":"response_1","output":[]}))]
+fn nested_event_response_accepts_partial_metadata(#[case] wire: Value) {
+    round_trip::<ResponsesEventResponse>(wire);
 }

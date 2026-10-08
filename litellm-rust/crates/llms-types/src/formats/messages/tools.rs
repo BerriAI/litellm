@@ -69,3 +69,78 @@ pub enum ToolChoiceType {
     Tool,
     None,
 }
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(try_from = "ToolDefinition")]
+pub struct CustomTool {
+    #[serde(flatten)]
+    pub definition: ToolDefinition,
+}
+
+impl TryFrom<ToolDefinition> for CustomTool {
+    type Error = serde::de::value::Error;
+
+    fn try_from(definition: ToolDefinition) -> Result<Self, Self::Error> {
+        if definition.extra.contains_key("type") || definition.name.is_none() {
+            return Err(serde::de::Error::custom(
+                "expected a custom tool with a string name and no type",
+            ));
+        }
+        Ok(Self { definition })
+    }
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type")]
+pub enum BuiltinMessagesTool {
+    #[serde(rename = "advisor_20260301")]
+    Advisor(ToolDefinition),
+    #[serde(rename = "tool_search_tool_regex_20251119")]
+    ToolSearchRegex(ToolDefinition),
+    #[serde(rename = "tool_search_tool_bm25_20251119")]
+    ToolSearchBm25(ToolDefinition),
+    #[serde(rename = "custom")]
+    Custom(ToolDefinition),
+    #[serde(rename = "web_search_20250305")]
+    WebSearch(ToolDefinition),
+    #[serde(rename = "computer_20250124")]
+    Computer(ToolDefinition),
+    #[serde(rename = "bash_20250124")]
+    Bash(ToolDefinition),
+    #[serde(rename = "text_editor_20250728")]
+    TextEditor(ToolDefinition),
+    #[serde(rename = "code_execution_20250825")]
+    CodeExecution(ToolDefinition),
+    #[serde(rename = "web_search_20260209")]
+    WebSearch20260209(ToolDefinition),
+    #[serde(rename = "computer_20241022")]
+    Computer20241022(ToolDefinition),
+    #[serde(rename = "bash_20241022")]
+    Bash20241022(ToolDefinition),
+    #[serde(rename = "text_editor_20241022")]
+    TextEditor20241022(ToolDefinition),
+    #[serde(rename = "text_editor_20250124")]
+    TextEditor20250124(ToolDefinition),
+    #[serde(rename = "code_execution_20250522")]
+    CodeExecution20250522(ToolDefinition),
+    #[serde(rename = "memory_20250818")]
+    Memory(ToolDefinition),
+    #[serde(rename = "web_fetch_20250910")]
+    WebFetch(ToolDefinition),
+    #[serde(rename = "web_fetch_20260209")]
+    WebFetch20260209(ToolDefinition),
+    #[serde(rename = "web_fetch_20260309")]
+    WebFetch20260309(ToolDefinition),
+    #[serde(rename = "web_fetch_20260318")]
+    WebFetch20260318(ToolDefinition),
+    #[serde(rename = "web_search_20260318")]
+    WebSearch20260318(ToolDefinition),
+    #[serde(rename = "code_execution_20260120")]
+    CodeExecution20260120(ToolDefinition),
+    #[serde(rename = "code_execution_20260521")]
+    CodeExecution20260521(ToolDefinition),
+    #[serde(rename = "computer_20251124")]
+    Computer20251124(ToolDefinition),
+    #[serde(rename = "text_editor_20250429")]
+    TextEditor20250429(ToolDefinition),
+}
