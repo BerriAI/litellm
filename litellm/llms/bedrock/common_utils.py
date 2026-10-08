@@ -1329,6 +1329,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
     all_global_regions = global_config.get_all_regions()
 
     def __init__(self, client: HTTPHandler | None = None) -> None:
+        super().__init__()
         self._client: Final = client
 
     @staticmethod
