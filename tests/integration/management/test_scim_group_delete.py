@@ -10,16 +10,19 @@ import os
 import re
 import signal
 import uuid
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
+import httpx
 import psutil
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value
+from integration._support.client import GATEWAY_LIMITS, JSON_OBJECT, Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.scim import (
@@ -44,6 +47,8 @@ from integration._support.scim import (
     waiters_on_rows_locked_by,
 )
 from pydantic import JsonValue, TypeAdapter
+
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 
 PROXY_ADMIN: Final = "proxy_admin"
 DEMOTED_ROLE: Final = "internal_user_viewer"
@@ -94,6 +99,14 @@ def _worker_startups(log: Path) -> tuple[tuple[int, ...], int]:
     return _WORKER_PIDS.validate_python(_STARTED_WORKER.findall(text)), text.count("Application startup complete.")
 
 
+@contextmanager
+def _fresh_connection(candidate: Gateway) -> Iterator[Gateway]:
+    with httpx.Client(
+        base_url=candidate.client.base_url, timeout=candidate.client.timeout, trust_env=False, limits=GATEWAY_LIMITS
+    ) as client:
+        yield Gateway(client, candidate.key, candidate.upstream_url)
+
+
 def test_deleting_one_group_leaves_the_members_other_group_intact(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         users: Final = seed_users(scenario, 3)
@@ -139,7 +152,7 @@ def test_deleting_the_admin_group_demotes_its_members_and_writes_an_audit_row_na
         assert_gone(candidate, team, users, key)
         assert _roles_of(candidate, users) == frozenset({DEMOTED_ROLE})
         rows: Final = eventually(lambda: _deleted_audit_rows(team, _hashed(key)), lambda found: len(found) >= 2, 30)
-        caller: Final = {"changed_by": MASTER_KEY_USER, "changed_by_api_key": _hashed(candidate.key)}
+        caller: Final = {"changed_by": MASTER_KEY_USER, "changed_by_api_key": LITELLM_PROXY_MASTER_KEY_ALIAS}
         assert rows == [
             {"table_name": "LiteLLM_TeamTable", "action": "deleted", "object_id": team, **caller},
             {"table_name": "LiteLLM_VerificationToken", "action": "deleted", "object_id": _hashed(key), **caller},
@@ -336,11 +349,12 @@ def test_group_delete_after_a_worker_was_killed_still_completes(gateway: Gateway
         victim: Final = psutil.Process(workers[0])
         victim.suspend()
         victim.send_signal(signal.SIGKILL)
-        deleted_first: Final = delete_group(candidate, first)
-        assert deleted_first.status_code == 204, deleted_first.text
-        assert_gone(candidate, first, first_users, first_key)
+        with _fresh_connection(candidate) as survivor:
+            deleted_first: Final = delete_group(survivor, first)
+            assert deleted_first.status_code == 204, deleted_first.text
+            assert_gone(survivor, first, first_users, first_key)
 
-        eventually(lambda: _worker_startups(owned.log), lambda found: len(found[0]) == 3 and found[1] == 3, 180)
-        deleted_second: Final = delete_group(candidate, second)
-        assert deleted_second.status_code == 204, deleted_second.text
-        assert_gone(candidate, second, second_users, second_key)
+            eventually(lambda: _worker_startups(owned.log), lambda found: len(found[0]) == 3 and found[1] == 3, 180)
+            deleted_second: Final = delete_group(survivor, second)
+            assert deleted_second.status_code == 204, deleted_second.text
+            assert_gone(survivor, second, second_users, second_key)
