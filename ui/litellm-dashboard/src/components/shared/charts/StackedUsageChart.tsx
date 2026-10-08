@@ -25,17 +25,13 @@ export type StackedUsageScale = "linear" | "log";
 
 export interface StackedUsageChartProps {
   data: readonly Record<string, unknown>[];
-  /** Series keys, bottom of the stack first. */
+  /** Bottom of the stack first. */
   series: readonly string[];
-  /** Display names for `series`, same order; defaults to the keys. */
   labels?: readonly string[];
-  /** Overrides the palette per series, e.g. to grey out an "Other" bucket. */
   colors?: readonly string[];
   xKey: string;
-  /** Turns an `xKey` value into its tick and tooltip text, e.g. an ISO date into "Oct 3". */
   xLabel?: (value: string) => string;
   format: (value: number) => string;
-  /** Appended to the tooltip header as "· Total …" for the hovered bucket, looked up by its `xKey` value. */
   totalFor?: (xValue: string) => number | undefined;
   totalLabel?: string;
   scale?: StackedUsageScale;
