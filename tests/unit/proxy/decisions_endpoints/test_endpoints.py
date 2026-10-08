@@ -388,6 +388,29 @@ def test_openai_format_decisions_translate_through_systemone(
 
 
 @pytest.mark.parametrize(
+    ("endpoint", "request_body", "upstream_response"),
+    (
+        ("/v1/systemone", _REQUEST, _RESPONSE),
+        ("/v1/decisions", _OPENAI_FORMAT_REQUEST, _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST),
+    ),
+    ids=("systemone", "openai_format"),
+)
+def test_decisions_return_guardrail_information_when_requested(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    request_body: Mapping[str, object],
+    upstream_response: Mapping[str, object],
+) -> None:
+    respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=upstream_response)
+
+    response: Final = client.post(endpoint, json={**request_body, "include_guardrail_response": True})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["guardrail_information"] == []
+
+
+@pytest.mark.parametrize(
     "request_body",
     (
         _REQUEST,
