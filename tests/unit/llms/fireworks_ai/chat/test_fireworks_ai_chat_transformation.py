@@ -11,6 +11,7 @@ from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
+from litellm.llms.fireworks_ai.common_utils import absorb_shared_affinity_param
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Function,
@@ -220,25 +221,162 @@ def test_validate_environment_raises_without_api_key(monkeypatch):
 def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
     assert (
         get_fireworks_session_id(
-            {"litellm_session_id": "session-123", "litellm_trace_id": "trace-123"}
+            {"litellm_session_id": "session-123", "litellm_trace_id": "trace-123"},
+            {},
         )
         == "session-123"
     )
 
 
-def test_get_fireworks_session_id_ignores_proxy_generated_session_id():
-    """general_settings.missing_session_id: generate stamps a fresh id per request; sending it
-    as x-session-affinity would pin every request to a different node."""
+def test_get_fireworks_session_id_ignores_proxy_generated_session_id_without_shared_affinity():
+    """Without shared affinity, a generated session id must be ignored."""
     assert (
         get_fireworks_session_id(
             {
                 "litellm_session_id": "generated-1",
                 "litellm_trace_id": "generated-1",
                 "metadata": {"session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True},
-            }
+            },
+            {},
         )
         is None
     )
+
+
+def test_get_fireworks_session_id_uses_shared_affinity_even_with_generated_id():
+    """With shared affinity, we use the stable hash even if the proxy generated a fresh ID."""
+    litellm_params = {
+        "litellm_session_id": "generated-1",
+        "metadata": {
+            "session_id": "generated-1",
+            SESSION_ID_GENERATED_METADATA_KEY: True,
+            "fireworks_shared_session_affinity": True,
+            "user_api_key_hash": "stable-user-hash",
+        },
+    }
+    assert get_fireworks_session_id(litellm_params, {}) == "litellm-user-stable-user-hash"
+
+
+def test_get_fireworks_session_id_falls_back_to_api_key_hash():
+    litellm_params = {
+        "metadata": {
+            "fireworks_shared_session_affinity": True,
+        },
+    }
+    headers = {"Authorization": "Bearer fw-api-key"}
+    import hashlib
+
+    expected = hashlib.sha256(b"fw-api-key").hexdigest()
+    assert get_fireworks_session_id(litellm_params, headers) == expected
+
+
+def test_get_fireworks_session_id_uses_top_level_shared_affinity():
+    litellm_params = {
+        "fireworks_shared_session_affinity": True,
+        "metadata": {
+            "user_api_key_hash": "stable-user-hash",
+        },
+    }
+    assert get_fireworks_session_id(litellm_params, {}) == "litellm-user-stable-user-hash"
+
+
+def test_get_fireworks_session_id_explicit_overrides_shared():
+    litellm_params = {
+        "litellm_session_id": "explicit-session",
+        "metadata": {
+            "fireworks_shared_session_affinity": True,
+            "user_api_key_hash": "stable-user-hash",
+        },
+    }
+    assert get_fireworks_session_id(litellm_params, {}) == "explicit-session"
+
+
+def test_absorb_shared_affinity_param_moves_top_level_flag_into_metadata():
+    """A top-level `fireworks_shared_session_affinity` kwarg is a LiteLLM routing hint,
+    not a Fireworks API field: if left in optional_params it would be serialized into the
+    request body and rejected by Fireworks ("Extra inputs are not permitted")."""
+    litellm_params: dict = {"metadata": {"user_api_key_hash": "stable-user-hash"}}
+    optional_params: dict = {"fireworks_shared_session_affinity": True, "temperature": 0.5}
+
+    absorb_shared_affinity_param(litellm_params, optional_params)
+
+    assert litellm_params["metadata"]["fireworks_shared_session_affinity"] is True
+    assert "fireworks_shared_session_affinity" not in optional_params
+    assert optional_params["temperature"] == 0.5  # untouched
+
+
+def test_absorb_shared_affinity_param_creates_metadata_when_missing():
+    litellm_params: dict = {}
+    optional_params: dict = {"fireworks_shared_session_affinity": True}
+
+    absorb_shared_affinity_param(litellm_params, optional_params)
+
+    assert litellm_params["metadata"] == {"fireworks_shared_session_affinity": True}
+    assert "fireworks_shared_session_affinity" not in optional_params
+
+
+def test_absorb_shared_affinity_param_noop_when_absent():
+    litellm_params: dict = {"metadata": {"session_id": "s1"}}
+    optional_params: dict = {"temperature": 0.5}
+
+    absorb_shared_affinity_param(litellm_params, optional_params)
+
+    assert litellm_params["metadata"] == {"session_id": "s1"}
+
+
+def test_absorb_shared_affinity_param_reads_extra_body_nested_flag():
+    """OpenAI-compatible param handling stashes unknown top-level kwargs inside
+    optional_params.extra_body; the absorb helper must read and strip it there too."""
+    litellm_params: dict = {"metadata": {"user_api_key_hash": "stable-user-hash"}}
+    optional_params: dict = {"extra_body": {"fireworks_shared_session_affinity": True}}
+
+    absorb_shared_affinity_param(litellm_params, optional_params)
+
+    assert litellm_params["metadata"]["fireworks_shared_session_affinity"] is True
+    assert optional_params["extra_body"] == {}
+
+
+def test_top_level_shared_affinity_kwarg_sets_header_without_body_leak():
+    """Full pipeline: litellm.completion(fireworks_shared_session_affinity=True) must set
+    x-session-affinity (hashed off the Fireworks credential) and must NOT put the flag
+    into the request body — Fireworks rejects unknown body fields."""
+    import hashlib
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler as _HTTPHandler
+
+    model = "accounts/fireworks/models/llama-v3p1-8b-instruct"
+    reply = {
+        "id": "c1", "object": "chat.completion", "created": 1, "model": model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.text = json.dumps(reply)
+    raw_response.json = lambda: reply
+
+    captured: dict = {}
+    client = MagicMock(spec=_HTTPHandler)
+
+    def post(*args, **kwargs):
+        captured["headers"] = dict(kwargs.get("headers") or {})
+        captured["body"] = json.loads(kwargs.get("data") or "{}")
+        return raw_response
+
+    client.post.side_effect = post
+
+    litellm.completion(
+        model=f"fireworks_ai/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fw-test-key",
+        client=client,
+        fireworks_shared_session_affinity=True,
+    )
+
+    headers = {k.lower(): v for k, v in captured["headers"].items()}
+    assert headers.get("x-session-affinity") == hashlib.sha256(b"fw-test-key").hexdigest()
+    assert "fireworks_shared_session_affinity" not in captured["body"]
 
 
 def test_handle_message_content_with_tool_calls():

@@ -39,6 +39,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
             "response_format",
             "stream",
             "user",
+            "fireworks_shared_session_affinity",
         ]
 
     def map_openai_params(
