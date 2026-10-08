@@ -410,6 +410,69 @@ class TestCheckResponsesCost:
         assert update_many.call_args.kwargs["data"] == {"status": "stale_expired"}
 
     @pytest.mark.asyncio
+    async def test_check_responses_cost_marks_mapped_provider_404_stale_expired(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """The provider's own 404 body, mapped the way the GET path maps it, still expires the row."""
+        import json
+
+        import openai
+
+        import litellm
+        from litellm.llms.openai.common_utils import OpenAIError
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-404-mapped",
+            response_id="resp_upstream_404_mapped",
+        )
+        provider_body = json.dumps(
+            {
+                "error": {
+                    "message": "Response with id 'resp_upstream_404_mapped' not found.",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                }
+            }
+        )
+        with pytest.raises(openai.APIStatusError) as mapped:
+            raise litellm.exception_type(
+                model="gpt-5.5",
+                custom_llm_provider="openai",
+                original_exception=OpenAIError(message=provider_body, status_code=404),
+                completion_kwargs={},
+                extra_kwargs={},
+            )
+        assert mapped.value.status_code == 404
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encoded_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-404-mapped"
+        mock_job.file_object = {"model": "gpt-5.5", "id": encoded_response_id}
+
+        mock_llm_router.get_deployment.return_value = {"model_id": "deployment-404-mapped"}
+        mock_llm_router.aget_responses = AsyncMock(side_effect=mapped.value)
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=1
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_not_called()
+        update_many = mock_prisma_client.db.litellm_managedobjecttable.update_many
+        update_many.assert_awaited_once()
+        assert update_many.call_args.kwargs["where"] == {"id": {"in": ["job-404-mapped"]}}
+        assert update_many.call_args.kwargs["data"] == {"status": "stale_expired"}
+
+    @pytest.mark.asyncio
     async def test_check_responses_cost_404_without_router_deployment_keeps_row_for_retry(
         self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
