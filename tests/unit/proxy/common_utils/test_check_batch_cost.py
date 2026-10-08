@@ -1063,6 +1063,7 @@ class TestCheckBatchCost:
             owner=mock_hook.store_batch_output_file.await_args.kwargs["owner"],
             litellm_parent_otel_span=None,
             size_bytes=None,
+            fetch_provider_details=True,
         )
         owner = mock_hook.store_batch_output_file.await_args.kwargs["owner"]
         assert owner.user_id == "user-1"
@@ -1643,6 +1644,10 @@ class TestCheckBatchCost:
             model_name="gpt-5-batch",
         )
         assert mock_hook.store_batch_output_file.await_count == 2
+        assert {
+            call.kwargs["model_name"]
+            for call in mock_hook.store_batch_output_file.await_args_list
+        } == {"gpt-5-batch"}
         stored = {
             c.kwargs["provider_file_id"]: c.kwargs["unified_file_id"]
             for c in mock_hook.store_batch_output_file.call_args_list

@@ -125,6 +125,7 @@ class ManagedBatchOutputFileWriter(Protocol):
         owner: "UserAPIKeyAuth",
         litellm_parent_otel_span: "Span | None",
         size_bytes: int | None = None,
+        fetch_provider_details: bool = True,
     ) -> None: ...
 
 
@@ -1313,6 +1314,8 @@ async def ensure_batch_response_managed_file_ids(
     user_api_key_dict: "UserAPIKeyAuth | None" = None,
     db_batch_object: object | None = None,
     unified_batch_id: str | Literal[False] | None = None,
+    *,
+    fetch_provider_details: bool = True,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before DB persistence."""
     await resolve_input_file_id_to_unified(response, prisma_client)
@@ -1352,6 +1355,7 @@ async def ensure_batch_response_managed_file_ids(
                 owner=effective_auth,
                 litellm_parent_otel_span=effective_auth.parent_otel_span,
                 size_bytes=None,
+                fetch_provider_details=fetch_provider_details,
             )
             setattr(response, file_attr, new_unified_file_id)
             verbose_proxy_logger.debug("Converted batch %s %r to managed ID before DB write", file_attr, raw_file_id)

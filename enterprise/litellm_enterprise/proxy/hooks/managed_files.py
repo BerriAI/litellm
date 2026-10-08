@@ -213,14 +213,38 @@ def _provider_file_retrieve_credentials(
     return cast(Mapping[str, object], credentials) if credentials else None
 
 
+_PROVIDER_FILE_RETRIEVE_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {
+        "openai",
+        "azure",
+        "gemini",
+        "vertex_ai",
+        "bedrock",
+        "hosted_vllm",
+        "litellm_proxy",
+        "manus",
+        "anthropic",
+        "mistral",
+        "xai",
+    }
+)
+
+
+def _model_name_file_retrieve_provider(model_name: str | None) -> FileRetrieveProvider | None:
+    if model_name is None:
+        return None
+    provider, separator, _ = model_name.partition("/")
+    if not separator or provider not in _PROVIDER_FILE_RETRIEVE_PROVIDERS:
+        return None
+    return cast(FileRetrieveProvider, provider)
+
+
 def _has_provider_file_retrieve_route(
     *,
     router_credentials: Mapping[str, object] | None,
     model_name: str | None,
 ) -> bool:
-    return bool(router_credentials) or (
-        model_name is not None and "/" in model_name
-    )
+    return bool(router_credentials) or _model_name_file_retrieve_provider(model_name) is not None
 
 
 class _ManagedFileRow(Protocol):
@@ -733,6 +757,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         model_name: str | None,
         llm_router: Router | None = None,
         raise_on_failure: bool = False,
+        allow_default_provider: bool = False,
     ) -> tuple[OpenAIFileObject | None, bool]:
         route_llm_router: Final = llm_router if llm_router is not None else _proxy_llm_router()
         router_credentials: Final = _provider_file_retrieve_credentials(
@@ -744,7 +769,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             router_credentials=router_credentials,
             model_name=model_name,
         )
-        if not fetch_route_available:
+        default_provider_route: Final = allow_default_provider and route_llm_router is not None
+        if not fetch_route_available and not default_provider_route:
             return None, False
 
         try:
@@ -767,9 +793,19 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     timeout=BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
                 )
                 return (
-                    provider_file_object_by_model_name.model_copy(
-                        update={"id": unified_file_id}
+                    provider_file_object_by_model_name.model_copy(update={"id": unified_file_id}),
+                    True,
+                )
+            if default_provider_route:
+                provider_file_object_by_default_route: Final = await asyncio.wait_for(
+                    self._afile_retrieve_with_retries(
+                        provider_file_id=provider_file_id,
+                        call_options=router_credentials or {},
                     ),
+                    timeout=BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
+                )
+                return (
+                    provider_file_object_by_default_route.model_copy(update={"id": unified_file_id}),
                     True,
                 )
             return None, False
@@ -779,6 +815,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 f"{type(error).__name__} {error}"
             )
             if raise_on_failure:
+                if isinstance(error, TimeoutError) and not str(error):
+                    raise TimeoutError(
+                        "Provider file retrieve timed out "
+                        f"after {BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS} seconds"
+                    ) from error
                 raise
             return None, True
 
@@ -811,9 +852,34 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         owner: UserAPIKeyAuth,
         litellm_parent_otel_span: Span | None,
         size_bytes: int | None = None,
+        fetch_provider_details: bool = True,
     ) -> None:
         stored_file: Final = await self.get_unified_file_id(unified_file_id, litellm_parent_otel_span)
         stored_object: Final = stored_file.file_object if stored_file is not None else None
+        if not fetch_provider_details:
+            if stored_file is not None:
+                return
+            router_credentials: Final = _provider_file_retrieve_credentials(
+                llm_router=_proxy_llm_router(),
+                model_id=model_id,
+            )
+            file_object_without_provider_details: Final = _batch_output_file_object(
+                unified_file_id,
+                provider_file_id,
+                size_bytes or 0,
+                fallback=_has_provider_file_retrieve_route(
+                    router_credentials=router_credentials,
+                    model_name=model_name,
+                ),
+            )
+            await self.store_unified_file_id(
+                file_id=unified_file_id,
+                file_object=file_object_without_provider_details,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+                model_mappings={model_id: provider_file_id} if model_id else {},
+                user_api_key_dict=owner,
+            )
+            return
         if stored_object is not None and not stored_object.litellm_details_fallback:
             return
 
@@ -832,8 +898,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         )
         provider_object, fetch_route_available = provider_fetch_result
-        if stored_object is not None and provider_object is None and (
-            size_bytes is None or stored_object.bytes == size_bytes
+        if (
+            stored_file is not None
+            and provider_object is None
+            and (size_bytes is None or (stored_object is not None and stored_object.bytes == size_bytes))
         ):
             return
 
@@ -851,6 +919,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
             )
         )
+
+        if stored_file is not None:
+            await self._save_refreshed_file_object(stored_file, file_object)
+            return
 
         await self.store_unified_file_id(
             file_id=unified_file_id,
@@ -1002,6 +1074,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 user_api_key_dict=user_api_key_dict,
                 db_batch_object=row,
                 unified_batch_id=_is_base64_encoded_unified_file_id(row.unified_object_id),
+                fetch_provider_details=False,
             )
         except Exception as e:
             verbose_logger.warning(f"Failed to resolve managed file ids for batch {row.unified_object_id}: {e}")
@@ -1874,8 +1947,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         model_mapping: Final = next(iter(stored_file_object.model_mappings.items()), None)
         if model_mapping is None:
             raise Exception(
-                f"LiteLLM Managed File object with id={file_id} has no file_object "
-                f"and llm_router is required to fetch from provider"
+                f"LiteLLM Managed File object with id={file_id} has no file_object and no provider route to fetch it"
             )
 
         model_id, model_file_id = model_mapping
@@ -1887,13 +1959,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 model_name=model_id,
                 llm_router=llm_router,
                 raise_on_failure=True,
+                allow_default_provider=True,
             )
         except Exception as e:
             raise Exception(f"Failed to retrieve file {file_id} from provider: {str(e)}") from e
         if not fetch_route_available:
             raise Exception(
-                f"LiteLLM Managed File object with id={file_id} has no file_object "
-                f"and llm_router is required to fetch from provider"
+                f"LiteLLM Managed File object with id={file_id} has no file_object and no provider route to fetch it"
             )
         if response is None:
             raise ValueError("Provider file details could not be retrieved")
