@@ -393,6 +393,50 @@ class TestContentFilterGuardrail:
         assert result is not None
         assert result[1] == "aws_access_key"
 
+    def test_aws_secret_key_patterns(self):
+        """
+        Test AWS Secret Key pattern detection for actual key
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="aws_secret_key",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-aws-secret-key",
+            patterns=patterns,
+        )
+
+        # Test AWS Secret Key
+        result = guardrail._check_patterns("My key is wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+        assert result is not None
+        assert result[1] == "aws_secret_key"
+
+    def test_aws_secret_key_patterns_filepath(self):
+        """
+        Test AWS Secret Key pattern detection to ensure it doesn't match long filepaths
+        """
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="aws_secret_key",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-aws-secret-key-filepath",
+            patterns=patterns,
+        )
+
+        # Test AWS Secret Key in file path
+        result = guardrail._check_patterns("Please read the file at " +
+                                       "coding/projects/files/others/file/coders.txt")
+        assert result is None  # Should not match as AWS Secret Key
+
     @pytest.mark.asyncio
     async def test_streaming_hook_mask(self):
         """
