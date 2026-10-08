@@ -31,16 +31,9 @@ class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
             api_version="2024-02-15-preview",
         )
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
     def test_basic_tool_calling(self):
         pass
 
-    def test_prompt_caching(self):
-        """Temporary override. o1 prompt caching is not working."""
-        pass
 
 
 class TestAzureOpenAIO3(BaseOSeriesModelsTest):

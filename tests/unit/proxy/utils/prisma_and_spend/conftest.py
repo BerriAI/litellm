@@ -359,7 +359,7 @@ def proxy_logging_with_redis(fake_redis: FakeRedisList) -> MagicMock:
     proxy_logging.db_spend_update_writer = MagicMock()
     proxy_logging.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
     buffer = RedisUpdateBuffer(redis_cache=fake_redis)
-    buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
     proxy_logging.db_spend_update_writer.redis_update_buffer = buffer
     return proxy_logging
 

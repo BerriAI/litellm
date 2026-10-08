@@ -32,9 +32,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: F401  # legacy module exports
     MCPRequestHandler,
-    _is_mcp_admitted_user_subject,
+    _is_mcp_admitted_user_subject,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    is_mcp_admitted_user_subject,
 )
 from litellm.proxy._experimental.mcp_server.client_allowlist import (
     MCPClientAllowlist,
@@ -47,13 +48,16 @@ from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
-from litellm.proxy._experimental.mcp_server.mcp_context import (
-    _mcp_active_toolset_id,
-    _mcp_gateway_initialize_instructions,
-    _mcp_gateway_server_name,
+from litellm.proxy._experimental.mcp_server.mcp_context import (  # noqa: F401  # legacy module exports
+    _mcp_active_toolset_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _mcp_gateway_initialize_instructions,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _mcp_gateway_server_name,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # server-owned request mode
     active_mcp_request_ctx_var,
     get_active_mcp_request_ctx,
+    mcp_active_toolset_id,
+    mcp_gateway_initialize_instructions,
+    mcp_gateway_server_name,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCP_AUTH_DIAGNOSTICS_SCOPE_KEY,
@@ -61,9 +65,9 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCPDebug,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
-    _redact_mcp_resource_url,
     get_passthrough_www_authenticate,
     get_route_relative_request_path,
+    redact_mcp_resource_url,
     well_known_root_suffix,
 )
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
@@ -97,6 +101,8 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 if TYPE_CHECKING:
     from mcp.server.session import ServerSession as _McpServerSession
 
+
+_redact_mcp_resource_url: Final = redact_mcp_resource_url
 
 _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS: Final = 30 * 60
 # Upper bound on concurrent stateful sessions a single caller may hold. Each
@@ -486,6 +492,7 @@ if MCP_AVAILABLE:
         "mcp_get_prompt",
         "mcp_read_resource",
         "raise_denied_scoped_mcp_access",
+        "redact_mcp_resource_url",
     )
     from mcp.server import Server
 
@@ -579,10 +586,10 @@ if MCP_AVAILABLE:
             else base_options
         )
         updates: Final[dict[str, str]] = {}
-        merged: Final = _mcp_gateway_initialize_instructions.get()
+        merged: Final = mcp_gateway_initialize_instructions.get()
         if merged is not None:
             updates["instructions"] = merged
-        scoped_server_name: Final = _mcp_gateway_server_name.get()
+        scoped_server_name: Final = mcp_gateway_server_name.get()
         if scoped_server_name is not None:
             updates["server_name"] = scoped_server_name
         return opts.model_copy(update=updates) if updates else opts
@@ -1028,7 +1035,7 @@ if MCP_AVAILABLE:
             # cancel sibling probes or 500 the gateway initialize request.
             await asyncio.gather(
                 *[
-                    operations.global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(s)
+                    operations.global_mcp_server_manager.ensure_upstream_initialize_instructions_cached(s)
                     for s in allowed
                     if s is not None
                 ],
@@ -1041,13 +1048,13 @@ if MCP_AVAILABLE:
             scoped_server_name = (
                 scoped_server.alias or scoped_server.server_name or scoped_server.name or scoped_server.server_id
             )
-        instructions_token: Final = _mcp_gateway_initialize_instructions.set(merged)
-        server_name_token: Final = _mcp_gateway_server_name.set(scoped_server_name)
+        instructions_token: Final = mcp_gateway_initialize_instructions.set(merged)
+        server_name_token: Final = mcp_gateway_server_name.set(scoped_server_name)
         try:
             yield
         finally:
-            _mcp_gateway_initialize_instructions.reset(instructions_token)
-            _mcp_gateway_server_name.reset(server_name_token)
+            mcp_gateway_initialize_instructions.reset(instructions_token)
+            mcp_gateway_server_name.reset(server_name_token)
 
     from litellm.proxy._experimental.mcp_server.operations import (
         _MCP_CREDENTIAL_REQUEST_FIELDS,
@@ -1524,7 +1531,7 @@ if MCP_AVAILABLE:
         scope["headers"] = [(k, v) for k, v in _headers if _normalize_header_name(k) != _mcp_session_header]
         return False
 
-    async def _apply_toolset_scope(
+    async def apply_toolset_scope(
         user_api_key_auth: UserAPIKeyAuth,
         toolset_id: str,
         acting_user: ActingUser = acting_user_auth,
@@ -1544,7 +1551,7 @@ if MCP_AVAILABLE:
         of its grant sources. Admins always pass.
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-        from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+        from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
 
         # A key scoped to no MCP servers opts out of every MCP path. Enforce it
         # here too, since toolset scoping replaces mcp_servers and would otherwise
@@ -1558,13 +1565,13 @@ if MCP_AVAILABLE:
             )
 
         acting: Final = await acting_user(user_api_key_auth)
-        is_admin: Final = _user_has_admin_view(acting)
+        is_admin: Final = user_api_key_has_admin_view(acting)
         if not is_admin and toolset_id not in await granted(acting):
             raise HTTPException(
                 status_code=403,
                 detail=f"API key does not have access to toolset '{toolset_id}'.",
             )
-        if _is_mcp_admitted_user_subject(acting):
+        if is_mcp_admitted_user_subject(acting):
             resource_server_ids: Final = acting.mcp_session_resource_server_ids
             if resource_server_ids is not None and frozenset(resource_server_ids).isdisjoint(
                 await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(
@@ -1599,6 +1606,8 @@ if MCP_AVAILABLE:
                 mcp_tool_permissions=tool_permissions,
             )
         return acting.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
+
+    _apply_toolset_scope: Final = apply_toolset_scope
 
     async def _toolset_server_ids(toolset_id: str) -> set[str]:
         return set(
@@ -1674,7 +1683,7 @@ if MCP_AVAILABLE:
                     if await operations.global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth):
                         continue
 
-                    if _is_mcp_admitted_user_subject(user_api_key_auth):
+                    if is_mcp_admitted_user_subject(user_api_key_auth):
                         raise HTTPException(
                             status_code=401,
                             detail="Unauthorized",
@@ -2033,10 +2042,12 @@ if MCP_AVAILABLE:
 
             # Apply toolset scope if set server-side via ContextVar (set by
             # /toolset/{name}/mcp and /{name}/mcp route handlers in proxy_server.py).
-            active_toolset_id: Final = _mcp_active_toolset_id.get()
+            active_toolset_id: Final = mcp_active_toolset_id.get()
             toolset_allowed_server_ids: set[str] | None = None
             if active_toolset_id and user_api_key_auth is not None:
-                user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
+                user_api_key_auth = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                    await apply_toolset_scope(user_api_key_auth, active_toolset_id)
+                )
                 toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
             operations.raise_if_unscoped_aggregate_request(
@@ -2386,10 +2397,12 @@ if MCP_AVAILABLE:
             # Apply toolset scope if set server-side via ContextVar so the
             # downstream probe list matches the fully-authorized server set
             # (mirrors the streamable HTTP handler).
-            active_toolset_id: Final = _mcp_active_toolset_id.get()
+            active_toolset_id: Final = mcp_active_toolset_id.get()
             toolset_allowed_server_ids: set[str] | None = None
             if active_toolset_id and user_api_key_auth is not None:
-                user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
+                user_api_key_auth = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                    await apply_toolset_scope(user_api_key_auth, active_toolset_id)
+                )
                 toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
             operations.raise_if_unscoped_aggregate_request(

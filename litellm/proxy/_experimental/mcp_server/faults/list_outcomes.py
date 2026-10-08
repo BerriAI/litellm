@@ -66,6 +66,7 @@ class AggregateToolListing(NamedTuple):
     tools: list[MCPTool]
     outcomes: dict[str, ServerOutcome]
     next_cursor: str | None = None
+    ttl_ms: int = 0
 
 
 def _iter_upstream_responses(exc: BaseException) -> Iterator[httpx.Response | httpx2.Response]:

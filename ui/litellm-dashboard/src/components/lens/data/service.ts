@@ -186,7 +186,7 @@ export function liveLensApi(client: LensClient, apiClient: ApiClient, accessToke
       required(
         client.POST("/lens/workers/register", {
           headers,
-          body: { name: "Lens worker", analysis_key_id: analysisKeyId },
+          body: { name: "Lens worker", analysis_key_id: analysisKeyId, managed: true },
         }),
       ),
     setWorkerBillingKey: (workerId, analysisKeyId) =>

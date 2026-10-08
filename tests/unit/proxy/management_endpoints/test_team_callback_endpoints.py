@@ -89,7 +89,7 @@ def stub_team_cache_refresh():
     test_disable_team_logging_refreshes_cached_team.
     """
     with patch(
-        "litellm.proxy.management_endpoints.team_callback_endpoints._refresh_cached_team",
+        "litellm.proxy.management_endpoints.team_callback_endpoints.refresh_cached_team",
         new_callable=AsyncMock,
     ) as refresh:
         yield refresh
@@ -614,7 +614,7 @@ async def test_get_team_callbacks_decrypts_vars_stored_under_non_sensitive_keys(
     encrypted at rest under a key that later stops being masked on read. Without
     the decrypt step that value comes back as an unusable litellm_enc:: blob.
     """
-    from litellm.proxy.common_utils.callback_utils import _CALLBACK_VAR_ENCRYPTED_PREFIX, is_sensitive_callback_key
+    from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX, is_sensitive_callback_key
     from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
@@ -626,7 +626,7 @@ async def test_get_team_callbacks_decrypts_vars_stored_under_non_sensitive_keys(
                 "callback_name": "langsmith",
                 "callback_type": "success",
                 "callback_vars": {
-                    "langsmith_project": _CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper("tenant-project"),
+                    "langsmith_project": CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper("tenant-project"),
                 },
             }
         ]
@@ -655,11 +655,11 @@ async def test_get_team_callbacks_masks_values_that_fail_to_decrypt(monkeypatch)
     classified as sensitive it would otherwise reach the caller as an opaque
     blob that is indistinguishable from a real value.
     """
-    from litellm.proxy.common_utils.callback_utils import _CALLBACK_VAR_ENCRYPTED_PREFIX
+    from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
     from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
-    stale = _CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper("tenant-project")
+    stale = CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper("tenant-project")
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-bbbbbbbbbbbbbb")
 
     metadata = {
@@ -685,7 +685,7 @@ async def test_get_team_callbacks_masks_values_that_fail_to_decrypt(monkeypatch)
 
     assert response["data"]["success_callbacks"] == ["langsmith"]
     assert response["data"]["callback_vars"]["langsmith_project"] == "***REDACTED***"
-    assert _CALLBACK_VAR_ENCRYPTED_PREFIX not in json.dumps(response)
+    assert CALLBACK_VAR_ENCRYPTED_PREFIX not in json.dumps(response)
 
 
 @pytest.mark.asyncio
@@ -752,7 +752,7 @@ async def test_disable_team_logging_stops_callbacks_registered_via_api():
     the endpoint and then asks the real request-time resolver what the written
     row would do.
     """
-    from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+    from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
 
     metadata = {
         "logging": [
@@ -780,7 +780,7 @@ async def test_disable_team_logging_stops_callbacks_registered_via_api():
     written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
     assert written["logging"] == []
 
-    resolved = _get_dynamic_logging_metadata(
+    resolved = get_dynamic_logging_metadata(
         UserAPIKeyAuth(api_key="hashed", team_id="team-1", team_metadata=written),
         proxy_config=MagicMock(**{"load_team_config.return_value": {}}),
     )
@@ -859,7 +859,7 @@ async def test_add_team_callbacks_refreshes_cached_team(stub_team_cache_refresh)
 @pytest.mark.asyncio
 async def test_disable_team_logging_clears_both_metadata_shapes():
     """A team carrying both shapes ends up with neither active."""
-    from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+    from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
 
     metadata = {
         "logging": [
@@ -893,7 +893,7 @@ async def test_disable_team_logging_clears_both_metadata_shapes():
     assert written["callback_settings"]["success_callback"] == []
     assert written["callback_settings"]["failure_callback"] == []
 
-    resolved = _get_dynamic_logging_metadata(
+    resolved = get_dynamic_logging_metadata(
         UserAPIKeyAuth(api_key="hashed", team_id="team-1", team_metadata=written),
         proxy_config=MagicMock(**{"load_team_config.return_value": {}}),
     )
@@ -1023,7 +1023,7 @@ async def test_delete_team_callback_leaves_the_other_callback_firing():
     Asks the real request-time resolver what the written row would do, the same
     way the disable_logging regression test does.
     """
-    from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+    from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
 
     mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata=_two_callback_metadata()))
 
@@ -1040,7 +1040,7 @@ async def test_delete_team_callback_leaves_the_other_callback_firing():
         )
 
     written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
-    resolved = _get_dynamic_logging_metadata(
+    resolved = get_dynamic_logging_metadata(
         UserAPIKeyAuth(api_key="hashed", team_id="team-1", team_metadata=written),
         proxy_config=MagicMock(**{"load_team_config.return_value": {}}),
     )
@@ -1219,7 +1219,7 @@ async def test_delete_team_callback_keeps_last_removal_from_reviving_legacy_shap
     dropping the key would fall through to a legacy callback_settings block and
     silently re-enable a destination the caller just removed.
     """
-    from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+    from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
 
     metadata = {
         "logging": [
@@ -1253,7 +1253,7 @@ async def test_delete_team_callback_keeps_last_removal_from_reviving_legacy_shap
     assert written["logging"] == []
     assert response.data.success_callbacks == ()
 
-    resolved = _get_dynamic_logging_metadata(
+    resolved = get_dynamic_logging_metadata(
         UserAPIKeyAuth(api_key="hashed", team_id="team-1", team_metadata=written),
         proxy_config=MagicMock(**{"load_team_config.return_value": {}}),
     )
