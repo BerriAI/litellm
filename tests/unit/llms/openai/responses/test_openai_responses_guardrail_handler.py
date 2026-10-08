@@ -2480,6 +2480,7 @@ class CustomToolCallRewriteGuardrail(CustomGuardrail):
             **tool_call,
             "function": {
                 **function,
+                "name": "safe_exec",
                 "arguments": json.dumps({"content": "echo [REDACTED]"}),
             },
         }
@@ -2672,13 +2673,23 @@ class TestStructuredMessagesWriteBack:
             "call_id": "call_exec",
             "name": "exec",
             "input": "echo sensitive-value",
+            "arguments": json.dumps({"content": "echo sensitive-value"}),
             "status": "completed",
         }
         data: Final = {"model": "gpt-5.6", "input": [custom_tool_call_item]}
 
         result: Final = await handler.process_input_messages(data, CustomToolCallRewriteGuardrail())
 
-        assert result["input"] == [{**custom_tool_call_item, "input": "echo [REDACTED]"}]
+        assert result["input"] == [
+            {
+                "id": "ctc_456",
+                "type": "custom_tool_call",
+                "call_id": "call_exec",
+                "name": "safe_exec",
+                "input": "echo [REDACTED]",
+                "status": "completed",
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_consecutive_custom_tool_calls_keep_their_type(self):
@@ -2689,6 +2700,7 @@ class TestStructuredMessagesWriteBack:
             "call_id": "call_1",
             "name": "exec",
             "input": "echo sensitive-value",
+            "arguments": json.dumps({"content": "echo sensitive-value"}),
             "status": "completed",
         }
         second_call: Final = {
@@ -2697,6 +2709,7 @@ class TestStructuredMessagesWriteBack:
             "call_id": "call_2",
             "name": "exec",
             "input": "echo public-value",
+            "arguments": json.dumps({"content": "echo public-value"}),
             "status": "completed",
         }
         data: Final = {"model": "gpt-5.6", "input": [first_call, second_call]}
@@ -2704,8 +2717,22 @@ class TestStructuredMessagesWriteBack:
         result: Final = await handler.process_input_messages(data, CustomToolCallRewriteGuardrail())
 
         assert result["input"] == [
-            {**first_call, "input": "echo [REDACTED]"},
-            second_call,
+            {
+                "id": "ctc_1",
+                "type": "custom_tool_call",
+                "call_id": "call_1",
+                "name": "safe_exec",
+                "input": "echo [REDACTED]",
+                "status": "completed",
+            },
+            {
+                "id": "ctc_2",
+                "type": "custom_tool_call",
+                "call_id": "call_2",
+                "name": "exec",
+                "input": "echo public-value",
+                "status": "completed",
+            },
         ]
 
     @pytest.mark.asyncio

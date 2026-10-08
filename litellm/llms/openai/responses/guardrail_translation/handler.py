@@ -151,6 +151,17 @@ def _object_list(value: object) -> tuple[object, ...] | None:
         return None
 
 
+def _rewritten_custom_tool_call_item(
+    item: Mapping[str, object], *, input_value: str, name: str | None
+) -> Mapping[str, object]:
+    retained_fields: Final = {key: value for key, value in item.items() if key != "arguments"}
+    return {
+        **retained_fields,
+        **({"name": name} if name is not None else {}),
+        "input": input_value,
+    }
+
+
 def _tool_call_shapes(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> tuple[_ToolCallShape, ...]:
     return tuple(
         _ToolCallShape(name=tool_call["function"].get("name"), arguments=tool_call["function"].get("arguments", ""))
@@ -298,7 +309,11 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
             arguments: Final = _CustomToolCallArguments.model_validate_json(rewritten_tool_call.arguments)
         except ValidationError:
             return None
-        return {**item, "input": arguments.content}
+        return _rewritten_custom_tool_call_item(
+            item,
+            input_value=arguments.content,
+            name=rewritten_tool_call.name,
+        )
     field: Final = _item_rewrite_field(item)
     if field is None or rewritten_mapping is None:
         return None
@@ -326,9 +341,14 @@ def _restore_custom_tool_call_item(item: object, custom_tool_calls: Mapping[str,
         return item
     call_id: Final = item_fields.get("call_id")
     arguments: Final = item_fields.get("arguments")
+    rewritten_name: Final = item_fields.get("name")
     original: Final = custom_tool_calls.get(call_id) if isinstance(call_id, str) else None
     return (
-        {**original, "input": unwrap_custom_tool_arguments(arguments)}
+        _rewritten_custom_tool_call_item(
+            original,
+            input_value=unwrap_custom_tool_arguments(arguments),
+            name=rewritten_name if isinstance(rewritten_name, str) else None,
+        )
         if original is not None and isinstance(arguments, str)
         else item
     )
