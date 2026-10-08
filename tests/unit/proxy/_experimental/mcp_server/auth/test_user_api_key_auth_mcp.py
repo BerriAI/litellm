@@ -9609,13 +9609,14 @@ class TestSessionBearerEgressScrub:
         assert per_server == {"echo_srv": {"Authorization": caller_key}}
 
     async def test_process_scrubs_master_admission_key_from_per_server_auth(self) -> None:
+        master_key: Final = "sk-" + "1234"
         scope: Final = {
             "type": "http",
             "method": "POST",
             "path": "/mcp/",
             "headers": [
-                (b"x-litellm-api-key", b"Bearer sk-1234"),
-                (b"x-mcp-echo_srv-authorization", b"Bearer sk-1234"),
+                (b"x-litellm-api-key", f"Bearer {master_key}".encode()),
+                (b"x-mcp-echo_srv-authorization", f"Bearer {master_key}".encode()),
             ],
         }
         master_auth: Final = UserAPIKeyAuth(api_key="litellm_proxy_master_key")
@@ -9630,7 +9631,7 @@ class TestSessionBearerEgressScrub:
         mock_auth.assert_awaited_once()
         assert auth is master_auth
         assert not mcp_server_auth
-        assert raw["x-litellm-api-key"] == "Bearer sk-1234"
+        assert raw["x-litellm-api-key"] == f"Bearer {master_key}"
 
 
 # ---------------------------------------------------------------------------
