@@ -270,6 +270,7 @@ from litellm.router_utils.reasoning_effort_capability import (
 )
 from litellm.router_utils.request_priority import (
     InvalidPriority,
+    parse_default_priority,
     request_drops_params,
     resolve_request_priority,
 )
@@ -1112,7 +1113,15 @@ class Router:
 
         ### SCHEDULER ###
         self.scheduler = Scheduler(polling_interval=polling_interval, redis_cache=redis_cache)
-        self.default_priority = default_priority
+        parsed_default_priority: Final = parse_default_priority(default_priority)
+        if isinstance(parsed_default_priority, InvalidPriority):
+            verbose_router_logger.warning(
+                "router_settings.default_priority is ignored, no request is queued by default: %s",
+                parsed_default_priority.message,
+            )
+        self.default_priority = (
+            None if isinstance(parsed_default_priority, InvalidPriority) else parsed_default_priority
+        )
         self.default_deployment = (
             None  # use this to track the users default deployment, when they want to use model = *
         )
@@ -2915,25 +2924,7 @@ class Router:
             kwargs["original_function"] = self._acompletion
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            request_priority: Final = resolve_request_priority(
-                requested=kwargs.get("priority"),
-                default_priority=self.default_priority,
-                drops_params=lambda: request_drops_params(
-                    kwargs, self.default_litellm_params, self._request_deployment_params(model=model, kwargs=kwargs)
-                ),
-            )
-            if isinstance(request_priority, InvalidPriority):
-                raise litellm.BadRequestError(
-                    message=request_priority.message,
-                    model=model,
-                    llm_provider="",
-                    body={
-                        "message": request_priority.message,
-                        "type": "invalid_request_error",
-                        "param": "priority",
-                        "code": "400",
-                    },
-                )
+            request_priority: Final = self._resolve_request_priority(model=model, kwargs=kwargs)
             start_time: Final = time.time()
             request_kwargs: Final = {key: value for key, value in kwargs.items() if key != "priority"}
             original_function: Final = (
@@ -4541,13 +4532,18 @@ class Router:
 
     @overload
     async def schedule_acompletion(
-        self, model: str, messages: list[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        priority: int | None = None,
+        stream: Literal[False] = False,
+        **kwargs,
     ) -> ModelResponse: 
         ...
 
     @overload
     async def schedule_acompletion(
-        self, model: str, messages: list[AllMessageValues], priority: int, stream: Literal[True], **kwargs
+        self, model: str, messages: list[AllMessageValues], priority: int | None, stream: Literal[True], **kwargs
     ) -> CustomStreamWrapper: 
         ...
 
@@ -4557,11 +4553,33 @@ class Router:
         self,
         model: str,
         messages: list[AllMessageValues],
-        priority: int,
+        priority: int | None = None,
         stream=False,
         **kwargs,
     ):
         return await self.acompletion(model=model, messages=messages, stream=stream, priority=priority, **kwargs)
+
+    def _resolve_request_priority(self, model: str, kwargs: Mapping[str, object]) -> int | None:
+        request_priority: Final = resolve_request_priority(
+            requested=kwargs.get("priority"),
+            default_priority=self.default_priority,
+            drops_params=lambda: request_drops_params(
+                kwargs, self.default_litellm_params, self._request_deployment_params(model=model, kwargs=kwargs)
+            ),
+        )
+        if isinstance(request_priority, InvalidPriority):
+            raise litellm.BadRequestError(
+                message=request_priority.message,
+                model=model,
+                llm_provider="",
+                body={
+                    "message": request_priority.message,
+                    "type": "invalid_request_error",
+                    "param": "priority",
+                    "code": "400",
+                },
+            )
+        return request_priority
 
     async def _schedule_factory(
         self,
@@ -5112,23 +5130,23 @@ class Router:
         is_async: bool | None = False,
         **kwargs,
     ):
-        if kwargs.get("priority", None) is not None:
-            return await self._schedule_factory(
-                model=model,
-                priority=kwargs.pop("priority"),
-                original_function=self.atext_completion,
-                args=(model, prompt),
-                kwargs=kwargs,
-            )
         try:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._atext_completion
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            response: Final = await self.async_function_with_fallbacks(**kwargs)
-
-            return response
+            request_priority: Final = self._resolve_request_priority(model=model, kwargs=kwargs)
+            request_kwargs: Final = {key: value for key, value in kwargs.items() if key != "priority"}
+            if request_priority is None:
+                return await self.async_function_with_fallbacks(**request_kwargs)
+            return await self._schedule_factory(
+                model=model,
+                priority=request_priority,
+                original_function=self.async_function_with_fallbacks,
+                args=(),
+                kwargs=request_kwargs,
+            )
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(

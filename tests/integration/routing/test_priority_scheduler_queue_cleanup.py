@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
 from queue import SimpleQueue
 from typing import Final, Literal, TypeVar
@@ -62,6 +63,18 @@ INMEM_GROUP: Final = "sched-inmem"
 OUTAGE_GROUP: Final = "sched-outage"
 KILL_GROUP: Final = "sched-kill"
 GHOST_ENTRY: Final[list[JsonValue]] = [1, "ghost"]
+DEFAULT_PRIORITY: Final = 3
+DEFAULT_GROUPS: Final = tuple(f"sched-default-{row}" for row in ("d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9"))
+PROMPT_GROUP: Final = "sched-default-prompt"
+PROMPT_ID: Final = "sched_default"
+PROMPT_PREFIX: Final = "Scheduled by default for"
+DROP_GROUP: Final = "sched-default-drop"
+TEAM_GROUP: Final = "sched-default-team"
+ZERO_GROUPS: Final = ("sched-zero-plain", "sched-zero-dropped")
+DIGIT_GROUPS: Final = ("sched-digit-plain", "sched-digit-dropped")
+IGNORED_GROUP: Final = "sched-ignored"
+PRIORITIZED: Final = "x-litellm-request-prioritization-used"
+IGNORED_WARNING: Final = "router_settings.default_priority is ignored"
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 JSON_LIST: Final = TypeAdapter(list[JsonValue])
 
@@ -161,15 +174,24 @@ def assert_never(received: Sequence[str], markers: Sequence[str]) -> None:
     assert not set(markers) & set(received), (markers, received)
 
 
-def deployment_entry(group: str, wire: Wire) -> dict[str, JsonValue]:
+def deployment_entry(
+    group: str,
+    wire: Wire,
+    *,
+    model_name: str | None = None,
+    model: str | None = None,
+    model_info: Mapping[str, JsonValue] | None = None,
+    **litellm_params: JsonValue,
+) -> dict[str, JsonValue]:
     return {
-        "model_name": group,
+        "model_name": model_name or group,
         "litellm_params": {
-            "model": f"openai/{upstream_name(group)}",
+            "model": model or f"openai/{upstream_name(group)}",
             "api_base": wire.url + "/v1",
             "api_key": "synthetic-openai-key",
+            **litellm_params,
         },
-        "model_info": {"id": f"{group}-deployment"},
+        "model_info": {"id": f"{group}-deployment", **(model_info or {})},
     }
 
 
@@ -180,12 +202,16 @@ def owned_config(
     settings: Mapping[str, JsonValue],
     *,
     cancel_on_disconnect: bool = False,
+    extra_models: Sequence[Mapping[str, JsonValue]] = (),
+    litellm_settings: Mapping[str, JsonValue] | None = None,
 ) -> Path:
     base: Final = JSON_OBJECT.validate_python(
         yaml.safe_load((Path(__file__).parents[1] / "proxy_config.yaml").read_text())
     )
     general_settings: Final = base.get("general_settings", {})
     assert isinstance(general_settings, dict)
+    base_litellm_settings: Final = base.get("litellm_settings", {})
+    assert isinstance(base_litellm_settings, dict)
     general: Final[dict[str, JsonValue]] = {
         **general_settings,
         **({"cancel_on_disconnect": True} if cancel_on_disconnect else {}),
@@ -193,8 +219,9 @@ def owned_config(
     config: Final[dict[str, JsonValue]] = {
         **base,
         "general_settings": general,
+        "litellm_settings": {**base_litellm_settings, **(litellm_settings or {})},
         "router_settings": dict(settings),
-        "model_list": [deployment_entry(group, wire) for group in groups],
+        "model_list": [*(deployment_entry(group, wire) for group in groups), *(dict(entry) for entry in extra_models)],
     }
     path: Final = directory / f"scheduler-{uuid.uuid4().hex[:8]}.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -208,6 +235,10 @@ def cooldown_settings(cache: OwnedRedis | None) -> dict[str, JsonValue]:
 
 def redis_settings(cache: OwnedRedis) -> dict[str, JsonValue]:
     return {"num_retries": 0, "redis_host": cache.host, "redis_port": cache.port}
+
+
+def priority_field(priority: int | None) -> dict[str, JsonValue]:
+    return {} if priority is None else {"priority": priority}
 
 
 def chat_body(group: str, marker: str, **extra: JsonValue) -> dict[str, JsonValue]:
@@ -280,26 +311,21 @@ def stream_identities(text: str) -> frozenset[str]:
     return frozenset(str(frame["id"]) for frame in frames)
 
 
-def call(gateway: Gateway, endpoint: Endpoint, group: str, marker: str, priority: int = 1) -> Answer:
+def call(gateway: Gateway, endpoint: Endpoint, group: str, marker: str, priority: int | None = 1) -> Answer:
+    field: Final = priority_field(priority)
     match endpoint:
         case "chat":
-            return post(gateway, "/v1/chat/completions", chat_body(group, marker, priority=priority))
+            return post(gateway, "/v1/chat/completions", chat_body(group, marker, **field))
         case "chat-stream":
-            return stream_text(
-                gateway, "/v1/chat/completions", chat_body(group, marker, priority=priority, stream=True)
-            )
+            return stream_text(gateway, "/v1/chat/completions", chat_body(group, marker, stream=True, **field))
         case "completions":
-            return post(gateway, "/v1/completions", completion_body(group, marker, priority=priority))
+            return post(gateway, "/v1/completions", completion_body(group, marker, **field))
         case "completions-stream":
-            return stream_text(
-                gateway, "/v1/completions", completion_body(group, marker, priority=priority, stream=True)
-            )
+            return stream_text(gateway, "/v1/completions", completion_body(group, marker, stream=True, **field))
         case "queue":
-            return post(gateway, "/queue/chat/completions", chat_body(group, marker, priority=priority))
+            return post(gateway, "/queue/chat/completions", chat_body(group, marker, **field))
         case "queue-stream":
-            return stream_text(
-                gateway, "/queue/chat/completions", chat_body(group, marker, priority=priority, stream=True)
-            )
+            return stream_text(gateway, "/queue/chat/completions", chat_body(group, marker, stream=True, **field))
 
 
 def served_identity(status: int, text: str, marker: str) -> str:
@@ -776,7 +802,9 @@ def test_disconnected_waiter_is_removed_from_the_queue(pair: Pair) -> None:
 Outcome = Answer | httpx.TransportError
 
 
-def burst(gateway: Gateway, group: str, count: int) -> tuple[tuple[Endpoint, str, Outcome], ...]:
+def burst(
+    gateway: Gateway, group: str, count: int, priority: int | None = 1
+) -> tuple[tuple[Endpoint, str, Outcome], ...]:
     plan: Final[tuple[tuple[Endpoint, str], ...]] = tuple(
         (ENDPOINTS[index % len(ENDPOINTS)], new_marker()) for index in range(count)
     )
@@ -785,7 +813,7 @@ def burst(gateway: Gateway, group: str, count: int) -> tuple[tuple[Endpoint, str
         endpoint, marker = item
         with httpx.Client(base_url=gateway.client.base_url, timeout=60, trust_env=False) as client:
             try:
-                return call(Gateway(client, gateway.key, gateway.upstream_url), endpoint, group, marker)
+                return call(Gateway(client, gateway.key, gateway.upstream_url), endpoint, group, marker, priority)
             except httpx.TransportError as error:
                 return error
 
@@ -801,10 +829,14 @@ def assert_all_served(outcomes: Sequence[tuple[Endpoint, str, Outcome]]) -> tupl
     return tuple(marker for _, marker, _ in outcomes)
 
 
-def served_eventually(gateway: Gateway, group: str, marker: str) -> None:
+def default_for(priority: int | None) -> dict[str, JsonValue]:
+    return {} if priority is not None else {"default_priority": DEFAULT_PRIORITY}
+
+
+def served_eventually(gateway: Gateway, group: str, marker: str, priority: int | None = 1) -> None:
     def send() -> Outcome:
         try:
-            return post(gateway, "/v1/chat/completions", chat_body(group, marker, priority=1))
+            return post(gateway, "/v1/chat/completions", chat_body(group, marker, **priority_field(priority)))
         except httpx.TransportError as error:
             return error
 
@@ -813,11 +845,14 @@ def served_eventually(gateway: Gateway, group: str, marker: str) -> None:
     assert_served(answer, marker)
 
 
+@pytest.mark.parametrize("priority", (1, None), ids=("explicit", "default"))
 @pytest.mark.timeout(OWNED_CELL_TIMEOUT)
-def test_prioritized_requests_survive_a_redis_outage(gateway: Gateway, tmp_path: Path) -> None:
+def test_prioritized_requests_survive_a_redis_outage(gateway: Gateway, tmp_path: Path, priority: int | None) -> None:
     upstream: Final = upstream_for((OUTAGE_GROUP,))
     with owned_redis(tmp_path) as cache, wire_server(answering_model_discovery(upstream.respond)) as wire:
-        config: Final = owned_config(tmp_path, wire, (OUTAGE_GROUP,), redis_settings(cache))
+        config: Final = owned_config(
+            tmp_path, wire, (OUTAGE_GROUP,), {**redis_settings(cache), **default_for(priority)}
+        )
         overrides: Final = {
             "REDIS_HOST": cache.host,
             "REDIS_PORT": str(cache.port),
@@ -826,11 +861,11 @@ def test_prioritized_requests_survive_a_redis_outage(gateway: Gateway, tmp_path:
         with owned_proxy_process(
             gateway, tmp_path, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
         ) as owned:
-            before: Final = assert_all_served(burst(owned.gateway, OUTAGE_GROUP, 12))
+            before: Final = assert_all_served(burst(owned.gateway, OUTAGE_GROUP, 12, priority))
             cache.stop()
-            during: Final = assert_all_served(burst(owned.gateway, OUTAGE_GROUP, 12))
+            during: Final = assert_all_served(burst(owned.gateway, OUTAGE_GROUP, 12, priority))
             cache.start()
-            after: Final = assert_all_served(burst(owned.gateway, OUTAGE_GROUP, 12))
+            after: Final = assert_all_served(burst(owned.gateway, OUTAGE_GROUP, 12, priority))
             assert_once(received_markers(wire), (*before, *during, *after))
             eventually(lambda: queue_entries(cache, OUTAGE_GROUP), lambda entries: entries in (None, []), seconds=10)
 
@@ -844,13 +879,14 @@ def established_upstream_connections(pid: int, wire: Wire) -> int:
     )
 
 
+@pytest.mark.parametrize("priority", (1, None), ids=("explicit", "default"))
 @pytest.mark.timeout(OWNED_CELL_TIMEOUT)
 def test_sibling_worker_keeps_serving_prioritized_requests_after_a_worker_is_killed(
-    gateway: Gateway, tmp_path: Path
+    gateway: Gateway, tmp_path: Path, priority: int | None
 ) -> None:
     upstream: Final = upstream_for((KILL_GROUP,), hold=(KILL_GROUP,))
     with owned_redis(tmp_path) as cache, wire_server(answering_model_discovery(upstream.respond)) as wire:
-        config: Final = owned_config(tmp_path, wire, (KILL_GROUP,), redis_settings(cache))
+        config: Final = owned_config(tmp_path, wire, (KILL_GROUP,), {**redis_settings(cache), **default_for(priority)})
         overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
         with owned_proxy_process(
             gateway, tmp_path, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
@@ -861,7 +897,7 @@ def test_sibling_worker_keeps_serving_prioritized_requests_after_a_worker_is_kil
                 seconds=graceful_stop_seconds(),
             )
             with ThreadPoolExecutor(max_workers=1) as pool:
-                pending: Final = pool.submit(burst, owned.gateway, KILL_GROUP, 20)
+                pending: Final = pool.submit(burst, owned.gateway, KILL_GROUP, 20, priority)
                 eventually(upstream.held.qsize, lambda size: size == 20, seconds=60)
                 held_by: Final = {pid: established_upstream_connections(pid, wire) for pid in workers}
                 assert sum(held_by.values()) == 20, held_by
@@ -877,10 +913,495 @@ def test_sibling_worker_keeps_serving_prioritized_requests_after_a_worker_is_kil
             assert len(failed) == held_by[victim_pid], (held_by, len(failed))
             assert_all_served(answered)
             follow_up: Final = new_marker()
-            served_eventually(owned.gateway, KILL_GROUP, follow_up)
+            served_eventually(owned.gateway, KILL_GROUP, follow_up, priority)
             eventually(
                 lambda: len(STARTED_WORKER.findall(owned.log.read_text())),
                 lambda count: count == 3,
                 seconds=graceful_stop_seconds(),
             )
             assert_once(received_markers(wire), (*(marker for _, marker, _ in outcomes), follow_up))
+
+
+@dataclass(frozen=True, slots=True)
+class Defaulted:
+    pair: Pair
+    team_key: str
+
+    def as_team(self) -> Gateway:
+        return Gateway(self.pair.first.client, self.team_key, self.pair.first.upstream_url)
+
+
+def prompt_directory(directory: Path) -> Path:
+    prompts: Final = directory / "prompts"
+    prompts.mkdir()
+    (prompts / f"{PROMPT_ID}.prompt").write_text(
+        "---\n"
+        f"model: openai/{upstream_name(PROMPT_GROUP)}\n"
+        "input:\n"
+        "  schema:\n"
+        "    user_message: string\n"
+        "---\n"
+        "\n"
+        f"{PROMPT_PREFIX} {{{{user_message}}}}\n"
+    )
+    return prompts
+
+
+@pytest.fixture(scope="module")
+def defaulted(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Defaulted]:
+    directory: Final = tmp_path_factory.mktemp("scheduler-default")
+    upstream: Final = upstream_for((*DEFAULT_GROUPS, PROMPT_GROUP, DROP_GROUP, TEAM_GROUP))
+    with ExitStack() as stack:
+        gateway: Final = stack.enter_context(gateway_from_environment())
+        scenario: Final = stack.enter_context(gateway.scenario())
+        team: Final = scenario.team(models=[])
+        team_key: Final = scenario.key(team_id=team)
+        cache: Final = stack.enter_context(owned_redis(directory))
+        wire: Final = stack.enter_context(wire_server(answering_model_discovery(upstream.respond)))
+        extra_models: Final = (
+            deployment_entry(
+                PROMPT_GROUP, wire, model=f"dotprompt/openai/{upstream_name(PROMPT_GROUP)}", prompt_id=PROMPT_ID
+            ),
+            deployment_entry(DROP_GROUP, wire, drop_params=True),
+            deployment_entry(
+                TEAM_GROUP,
+                wire,
+                model_name=f"{TEAM_GROUP}-internal",
+                model_info={"team_id": team, "team_public_model_name": TEAM_GROUP},
+                drop_params=True,
+            ),
+        )
+        settings: Final[dict[str, JsonValue]] = {
+            **cooldown_settings(cache),
+            "default_priority": DEFAULT_PRIORITY,
+            "fallbacks": [{DEFAULT_GROUPS[7]: [DEFAULT_GROUPS[8]]}],
+        }
+        config: Final = owned_config(
+            directory,
+            wire,
+            DEFAULT_GROUPS,
+            settings,
+            cancel_on_disconnect=True,
+            extra_models=extra_models,
+            litellm_settings={"global_prompt_directory": str(prompt_directory(directory))},
+        )
+        overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
+        first: Final = stack.enter_context(
+            owned_proxy_process(
+                gateway, directory, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
+            )
+        )
+        second: Final = stack.enter_context(
+            owned_proxy_process(
+                gateway, directory, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
+            )
+        )
+        yield Defaulted(Pair(first.gateway, second.gateway, cache, wire, upstream), team_key)
+
+
+def assert_prioritized(answer: Answer) -> None:
+    assert answer.headers.get(PRIORITIZED) == "True", answer.headers
+
+
+def assert_unprioritized(answer: Answer) -> None:
+    assert answer.headers.get(PRIORITIZED) is None, answer.headers
+
+
+def assert_refused_as_non_integer(answer: Answer) -> None:
+    assert answer.status == 400, (answer.status, answer.text)
+    error: Final = JSON_OBJECT.validate_json(answer.text)["error"]
+    assert isinstance(error, dict), answer.text
+    assert error["param"] == "priority", answer.text
+    assert "priority must be an integer" in str(error["message"]), answer.text
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_raw_chat_without_priority_is_scheduled_at_the_default_and_billed(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[0]
+    marker: Final = new_marker()
+    answer: Final = post(defaulted.pair.first, "/v1/chat/completions", chat_body(group, marker))
+    identity: Final = assert_served(answer, marker)
+    assert_prioritized(answer)
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+    spend_row_lands(identity)
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_raw_chat_stream_without_priority_is_served_once(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[0]
+    marker: Final = new_marker()
+    answer: Final = stream_text(defaulted.pair.second, "/v1/chat/completions", chat_body(group, marker, stream=True))
+    assert_served(answer, marker)
+    assert_prioritized(answer)
+    assert_once(received_markers(defaulted.pair.wire), (marker,))
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_sdk_chat_without_priority_is_scheduled_at_the_default_and_billed(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[0]
+    marker: Final = new_marker()
+    client: Final = sdk(defaulted.pair.first)
+    raw: Final = sdk_settled(
+        lambda: client.chat.completions.with_raw_response.create(
+            model=group, messages=[{"role": "user", "content": marker}]
+        )
+    )
+    assert served_identity(raw.status_code, raw.text, marker) == f"chatcmpl-{marker}"
+    assert raw.headers.get(PRIORITIZED) == "True", dict(raw.headers)
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+    spend_row_lands(f"chatcmpl-{marker}")
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_sdk_chat_stream_without_priority_is_served_once(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[0]
+    marker: Final = new_marker()
+    client: Final = sdk(defaulted.pair.second)
+    chunks: Final = sdk_settled(
+        lambda: tuple(
+            client.chat.completions.create(model=group, messages=[{"role": "user", "content": marker}], stream=True)
+        )
+    )
+    assert {chunk.id for chunk in chunks} == {f"chatcmpl-{marker}"}, chunks
+    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+    assert content == f"served {marker}", chunks
+    assert_once(received_markers(defaulted.pair.wire), (marker,))
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_async_sdk_chat_without_priority_is_scheduled_at_the_default(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[0]
+    marker: Final = new_marker()
+    gateway: Final = defaulted.pair.first
+
+    async def send() -> tuple[int, str, str | None]:
+        async with openai.AsyncOpenAI(
+            base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0, timeout=30
+        ) as client:
+            raw: Final = await client.chat.completions.with_raw_response.create(
+                model=group, messages=[{"role": "user", "content": marker}]
+            )
+            return raw.status_code, raw.text, raw.headers.get(PRIORITIZED)
+
+    status, text, prioritized = sdk_settled(lambda: asyncio.run(send()))
+    assert served_identity(status, text, marker) == f"chatcmpl-{marker}"
+    assert prioritized == "True"
+    assert_once(received_markers(defaulted.pair.wire), (marker,))
+
+
+@pytest.mark.parametrize("priority", (1, 0, -1, 2**40), ids=("one", "zero", "negative", "huge"))
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_explicit_integer_priority_under_a_default_is_scheduled_once(defaulted: Defaulted, priority: int) -> None:
+    group: Final = DEFAULT_GROUPS[1]
+    marker: Final = new_marker()
+    answer: Final = post(defaulted.pair.first, "/v1/chat/completions", chat_body(group, marker, priority=priority))
+    assert_served(answer, marker)
+    assert_prioritized(answer)
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_null_priority_under_a_default_takes_the_default(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[1]
+    marker: Final = new_marker()
+    answer: Final = post(defaulted.pair.second, "/v1/chat/completions", chat_body(group, marker, priority=None))
+    assert_served(answer, marker)
+    assert_prioritized(answer)
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+
+
+@pytest.mark.parametrize(
+    "priority",
+    ("1", [1], 1.5, {"level": 3}, "", "p" * 5120, True),
+    ids=("string", "list", "float", "object", "empty", "5kb", "bool"),
+)
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_non_integer_priority_under_a_default_is_refused_before_the_upstream(
+    defaulted: Defaulted, priority: JsonValue
+) -> None:
+    group: Final = DEFAULT_GROUPS[1]
+    marker: Final = new_marker()
+    answer: Final = post(defaulted.pair.first, "/v1/chat/completions", chat_body(group, marker, priority=priority))
+    assert_refused_as_non_integer(answer)
+    assert_never(received_markers(defaulted.pair.wire), (marker,))
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_request_drop_params_replaces_a_non_integer_priority_with_the_default(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[1]
+    marker: Final = new_marker()
+    body: Final = chat_body(group, marker, priority="1", drop_params=True)
+    answer: Final = post(defaulted.pair.second, "/v1/chat/completions", body)
+    assert_served(answer, marker)
+    assert_prioritized(answer)
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+
+
+@pytest.mark.parametrize("model", (DROP_GROUP, f"{DROP_GROUP}-deployment"), ids=("group", "deployment-id"))
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_deployment_drop_params_replaces_a_non_integer_priority_with_the_default(
+    defaulted: Defaulted, model: str
+) -> None:
+    marker: Final = new_marker()
+    answer: Final = post(defaulted.pair.first, "/v1/chat/completions", chat_body(model, marker, priority="1"))
+    assert_served(answer, marker)
+    assert_prioritized(answer)
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_team_deployment_drop_params_replaces_a_non_integer_priority_with_the_default(defaulted: Defaulted) -> None:
+    marker: Final = new_marker()
+    answer: Final = post(defaulted.as_team(), "/v1/chat/completions", chat_body(TEAM_GROUP, marker, priority="1"))
+    assert_served(answer, marker)
+    assert_prioritized(answer)
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+
+
+def assert_waits_at(
+    gateway: Gateway,
+    cache: OwnedRedis,
+    upstream: Upstream,
+    group: str,
+    priority: int,
+    body: Mapping[str, JsonValue],
+) -> None:
+    cooled(gateway, upstream, group)
+    write_queue(cache, group, [[priority - 1, "ghost"]])
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        waiter: Final = pool.submit(post, gateway, "/v1/chat/completions", body)
+        entries: Final = waiting_entries(cache, group, priority)
+        write_queue(cache, group, [entry for entry in entries if entry_priority(entry) == priority])
+        assert_refused_before_the_router_timeout(waiter.result(timeout=30))
+    assert_drained(cache, group)
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_requests_without_priority_wait_at_the_default_priority(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[2]
+    pair: Final = defaulted.pair
+    assert_waits_at(pair.second, pair.cache, pair.upstream, group, DEFAULT_PRIORITY, chat_body(group, new_marker()))
+
+
+@pytest.mark.timeout(OWNED_CELL_TIMEOUT)
+def test_zero_default_priority_queues_requests_without_one_and_dropped_ones(gateway: Gateway, tmp_path: Path) -> None:
+    upstream: Final = upstream_for(ZERO_GROUPS)
+    with owned_redis(tmp_path) as cache, wire_server(answering_model_discovery(upstream.respond)) as wire:
+        settings: Final[dict[str, JsonValue]] = {
+            **cooldown_settings(cache),
+            "default_priority": 0,
+            "default_litellm_params": {"drop_params": True},
+        }
+        config: Final = owned_config(tmp_path, wire, ZERO_GROUPS, settings)
+        overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
+        with owned_proxy_process(
+            gateway, tmp_path, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
+        ) as owned:
+            plain, dropped = ZERO_GROUPS
+            assert_waits_at(owned.gateway, cache, upstream, plain, 0, chat_body(plain, new_marker()))
+            assert_waits_at(owned.gateway, cache, upstream, dropped, 0, chat_body(dropped, new_marker(), priority="1"))
+
+
+@pytest.mark.timeout(OWNED_CELL_TIMEOUT)
+def test_digit_string_default_priority_queues_requests_without_one_and_dropped_ones(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    upstream: Final = upstream_for(DIGIT_GROUPS)
+    with owned_redis(tmp_path) as cache, wire_server(answering_model_discovery(upstream.respond)) as wire:
+        settings: Final[dict[str, JsonValue]] = {**cooldown_settings(cache), "default_priority": "2"}
+        config: Final = owned_config(tmp_path, wire, DIGIT_GROUPS, settings, litellm_settings={"drop_params": True})
+        overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
+        with owned_proxy_process(
+            gateway, tmp_path, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
+        ) as owned:
+            plain, dropped = DIGIT_GROUPS
+            assert_waits_at(owned.gateway, cache, upstream, plain, 2, chat_body(plain, new_marker()))
+            assert_waits_at(owned.gateway, cache, upstream, dropped, 2, chat_body(dropped, new_marker(), priority="1"))
+
+
+@pytest.mark.parametrize("configured", ("high", True), ids=("word", "bool"))
+@pytest.mark.timeout(OWNED_CELL_TIMEOUT)
+def test_an_invalid_default_priority_is_ignored_with_a_warning(
+    gateway: Gateway, tmp_path: Path, configured: JsonValue
+) -> None:
+    upstream: Final = upstream_for((IGNORED_GROUP,))
+    with wire_server(answering_model_discovery(upstream.respond)) as wire:
+        config: Final = owned_config(
+            tmp_path, wire, (IGNORED_GROUP,), {"num_retries": 0, "default_priority": configured}
+        )
+        with owned_proxy_process(
+            gateway, tmp_path, {}, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
+        ) as owned:
+            marker: Final = new_marker()
+            answer: Final = post(owned.gateway, "/v1/chat/completions", chat_body(IGNORED_GROUP, marker))
+            assert_served(answer, marker)
+            assert_unprioritized(answer)
+            assert IGNORED_WARNING in owned.log.read_text()
+            assert_once(received_markers(wire), (marker,))
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_requests_without_priority_fall_back_to_the_fallback_group(defaulted: Defaulted) -> None:
+    primary, fallback = DEFAULT_GROUPS[7], DEFAULT_GROUPS[8]
+    defaulted.pair.upstream.refusing[upstream_name(primary)].set()
+    marker: Final = new_marker()
+    answer: Final = post(defaulted.pair.first, "/v1/chat/completions", chat_body(primary, marker))
+    assert_served(answer, marker)
+    assert_prioritized(answer)
+    attempts: Final = tuple(
+        str(JSON_OBJECT.validate_json(request.body)["model"])
+        for request in defaulted.pair.wire.drain()
+        if marker.encode() in request.body
+    )
+    assert attempts == (upstream_name(primary), upstream_name(fallback)), attempts
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_cooled_group_refuses_requests_without_priority_at_once(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[3]
+    cooled(defaulted.pair.second, defaulted.pair.upstream, group)
+    assert_refused_at_once(post(defaulted.pair.second, "/v1/chat/completions", chat_body(group, new_marker())))
+    assert_drained(defaulted.pair.cache, group)
+
+
+@pytest.mark.parametrize("priority", (None, 1), ids=("default", "explicit"))
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_prompt_management_model_is_scheduled(defaulted: Defaulted, priority: int | None) -> None:
+    marker: Final = new_marker()
+    body: Final = chat_body(PROMPT_GROUP, marker, prompt_variables={"user_message": marker}, **priority_field(priority))
+    answer: Final = post(defaulted.pair.first, "/v1/chat/completions", body)
+    assert_served(answer, marker)
+    assert_prioritized(answer)
+    upstream_body: Final = upstream_body_for(defaulted.pair.wire, marker)
+    assert f"{PROMPT_PREFIX} {marker}" in json.dumps(upstream_body), upstream_body
+    assert "priority" not in upstream_body
+
+
+@pytest.mark.parametrize("endpoint", ("completions", "completions-stream"))
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_text_completions_without_priority_are_scheduled_at_the_default(
+    defaulted: Defaulted, endpoint: Endpoint
+) -> None:
+    group: Final = DEFAULT_GROUPS[4]
+    marker: Final = new_marker()
+    answer: Final = call(defaulted.pair.second, endpoint, group, marker, priority=None)
+    identity: Final = assert_served(answer, marker)
+    assert_prioritized(answer)
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+    spend_row_lands(identity)
+
+
+@pytest.mark.parametrize("priority", ("1", [1]), ids=("string", "list"))
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_text_completion_with_a_non_integer_priority_is_refused_before_the_upstream(
+    defaulted: Defaulted, priority: JsonValue
+) -> None:
+    group: Final = DEFAULT_GROUPS[4]
+    marker: Final = new_marker()
+    answer: Final = post(defaulted.pair.first, "/v1/completions", completion_body(group, marker, priority=priority))
+    assert_refused_as_non_integer(answer)
+    assert_never(received_markers(defaulted.pair.wire), (marker,))
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_text_completion_drop_params_replaces_a_non_integer_priority_with_the_default(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[4]
+    marker: Final = new_marker()
+    body: Final = completion_body(group, marker, priority="1", drop_params=True)
+    answer: Final = post(defaulted.pair.second, "/v1/completions", body)
+    assert_served(answer, marker)
+    assert_prioritized(answer)
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+
+
+@pytest.mark.parametrize("endpoint", ("queue", "queue-stream"))
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_queue_route_without_priority_takes_the_default(defaulted: Defaulted, endpoint: Endpoint) -> None:
+    group: Final = DEFAULT_GROUPS[5]
+    marker: Final = new_marker()
+    answer: Final = call(defaulted.pair.first, endpoint, group, marker, priority=None)
+    assert_served(answer, marker)
+    if endpoint == "queue":
+        assert answer.headers.get("x-litellm-priority") == str(DEFAULT_PRIORITY), answer.headers
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_queue_route_with_an_explicit_priority_under_a_default_reports_it(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[5]
+    marker: Final = new_marker()
+    answer: Final = call(defaulted.pair.second, "queue", group, marker, priority=1)
+    assert_served(answer, marker)
+    assert answer.headers.get("x-litellm-priority") == "1", answer.headers
+    assert "priority" not in upstream_body_for(defaulted.pair.wire, marker)
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_queue_route_refuses_a_digit_string_priority(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[5]
+    marker: Final = new_marker()
+    answer: Final = post(defaulted.pair.first, "/queue/chat/completions", chat_body(group, marker, priority="1"))
+    assert_refused_as_non_integer(answer)
+    assert_never(received_markers(defaulted.pair.wire), (marker,))
+
+
+@pytest.mark.parametrize("path", ("/v1/messages", "/v1/responses"), ids=("messages", "responses"))
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_unscheduled_routes_without_priority_are_served_once_under_a_default(defaulted: Defaulted, path: str) -> None:
+    group: Final = DEFAULT_GROUPS[6]
+    marker: Final = new_marker()
+    body: Final[dict[str, JsonValue]] = (
+        {"model": group, "max_tokens": 32, "messages": [{"role": "user", "content": marker}]}
+        if path == "/v1/messages"
+        else {"model": group, "input": marker}
+    )
+    answer: Final = post(defaulted.pair.second, path, body)
+    assert answer.status == 200, (answer.status, answer.text)
+    assert markers_in(answer.text) == {marker}, answer.text
+    assert_once(received_markers(defaulted.pair.wire), (marker,))
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_unauthenticated_request_without_priority_never_reaches_the_upstream(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[6]
+    marker: Final = new_marker()
+    response: Final = defaulted.pair.first.client.post("/v1/chat/completions", json=chat_body(group, marker))
+    assert response.status_code == 401, response.text
+    assert_never(received_markers(defaulted.pair.wire), (marker,))
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_cached_replay_under_a_default_reaches_the_upstream_once(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[6]
+    marker: Final = new_marker()
+    body: Final = chat_body(group, marker)
+    first: Final = post(defaulted.pair.first, "/v1/chat/completions", body)
+    assert_served(first, marker)
+    assert_prioritized(first)
+    replay: Final = post(defaulted.pair.second, "/v1/chat/completions", body)
+    assert_served(replay, marker)
+    assert_prioritized(replay)
+    assert_once(received_markers(defaulted.pair.wire), (marker,))
+
+
+@pytest.mark.timeout(PAIR_CELL_TIMEOUT)
+def test_concurrent_burst_without_priority_across_instances_and_endpoints_is_served(defaulted: Defaulted) -> None:
+    group: Final = DEFAULT_GROUPS[0]
+    pair: Final = defaulted.pair
+    primer: Final = new_marker()
+    assert_served(post(pair.first, "/v1/chat/completions", chat_body(group, primer)), primer)
+    instances: Final[tuple[Instance, ...]] = ("first", "second")
+    plan: Final = tuple((instance, endpoint, new_marker()) for instance, endpoint in product(instances, ENDPOINTS * 2))
+
+    def one(item: tuple[Instance, Endpoint, str]) -> Answer:
+        instance, endpoint, marker = item
+        return call(pair.at(instance), endpoint, group, marker, priority=None)
+
+    with ThreadPoolExecutor(max_workers=len(plan)) as pool:
+        answers: Final = tuple(pool.map(one, plan))
+    for (_, _, marker), answer in zip(plan, answers, strict=True):
+        assert_served(answer, marker)
+    closing: Final = new_marker()
+    assert_served(post(pair.second, "/v1/chat/completions", chat_body(group, closing)), closing)
+    assert_once(received_markers(pair.wire), (primer, *(marker for _, _, marker in plan), closing))
+    assert_drained(pair.cache, group)

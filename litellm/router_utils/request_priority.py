@@ -27,6 +27,16 @@ def resolve_request_priority(
     return InvalidPriority(value=requested)
 
 
+def parse_default_priority(value: object) -> int | None | InvalidPriority:
+    if value is None:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().isdecimal():
+        return int(value.strip())
+    return InvalidPriority(value=value)
+
+
 def _explicit_drop_params(scope: Mapping[str, object]) -> bool | None:
     return normalize_drop_params(scope.get("drop_params"))
 

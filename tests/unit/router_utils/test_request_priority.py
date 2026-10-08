@@ -3,7 +3,12 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.router_utils.request_priority import InvalidPriority, request_drops_params, resolve_request_priority
+from litellm.router_utils.request_priority import (
+    InvalidPriority,
+    parse_default_priority,
+    request_drops_params,
+    resolve_request_priority,
+)
 
 
 @pytest.mark.parametrize(
@@ -63,3 +68,22 @@ def test_drop_params_is_read_from_the_request_then_the_router_defaults_then_the_
     assert request_drops_params({}, {"drop_params": False}, ()) is False
     assert request_drops_params({}, {}, ({"drop_params": False},)) is False
     assert request_drops_params({"drop_params": "not-a-flag"}, {}, ()) is True
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [(None, None), (3, 3), (0, 0), ("3", 3), (" 12 ", 12), ("0", 0)],
+    ids=["unset", "int", "zero", "digit-string", "padded-digit-string", "zero-string"],
+)
+def test_the_default_priority_is_taken_as_an_integer_or_a_digit_string(
+    configured: object, expected: int | None
+) -> None:
+    assert parse_default_priority(configured) == expected
+
+
+@pytest.mark.parametrize("configured", ["high", "", "-1", "1.5", 1.5, True, False, [3], {"level": 3}])
+def test_any_other_default_priority_is_invalid(configured: object) -> None:
+    parsed: Final = parse_default_priority(configured)
+    assert isinstance(parsed, InvalidPriority)
+    assert parsed.value == configured
+    assert parsed.message.startswith("priority must be an integer, got ")

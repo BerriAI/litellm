@@ -17058,7 +17058,10 @@ async def async_queue_request(
             )
 
         response: Final = await router.schedule_acompletion(**data)
-        fastapi_response.headers.update({"x-litellm-priority": str(data["priority"])})
+        requested_priority: Final = data.get("priority")
+        fastapi_response.headers.update(
+            {"x-litellm-priority": str(router.default_priority if requested_priority is None else requested_priority)}
+        )
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
