@@ -7572,6 +7572,30 @@ class _PinGoneBeforeRefreshCache(_FakeRedisBackedCache):
         return await super().async_refresh_ttl(key, ttl)
 
 
+class _RefreshFailsAfterAnotherReplicaWroteCache(_FakeRedisBackedCache):
+    def __init__(self, server: FakeServer, newer_pin: Mapping[str, str | None]) -> None:
+        super().__init__(server)
+        self._newer_pin = newer_pin
+
+    async def async_refresh_ttl(self, key: str, ttl: int | None = None) -> bool:
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        await self._client.set(key, json.dumps(self._newer_pin), ex=60)
+        raise RedisConnectionError("redis is down")
+
+
+class _PinReplacedBetweenExpiryAndRestoreCache(_FakeRedisBackedCache):
+    def __init__(self, server: FakeServer, newer_pin: Mapping[str, str | None]) -> None:
+        super().__init__(server)
+        self._newer_pin = newer_pin
+
+    async def async_refresh_ttl(self, key: str, ttl: int | None = None) -> bool:
+        await self._client.delete(key)
+        expired: Final = await super().async_refresh_ttl(key, ttl)
+        await self._client.set(key, json.dumps(self._newer_pin), ex=60)
+        return expired
+
+
 class TestClassificationMode:
     """Test classification_mode='user_turn': classify only requests whose newest turn is a new
     human ask; tool-loop continuation turns replay the session's held routing decision."""
@@ -7688,6 +7712,51 @@ class TestClassificationMode:
         assert [first.model, second.model, third.model] == ["o1-preview", "o1-preview", "o1-preview"]
         assert second.routing_decision["cause"] == "user_turn_continuation"
         assert third.routing_decision["cause"] == "user_turn_continuation"
+
+    async def _tool_loop_on_one_replica(
+        self, redis_cache: RedisCache, config: dict, session_id: str
+    ) -> tuple[list, str]:
+        replica: Final = MagicMock()
+        replica.cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+        router: Final = ComplexityRouter(
+            model_name="test-router", litellm_router_instance=replica, complexity_router_config=config
+        )
+        decisions: Final = [
+            await router.async_pre_routing_hook(
+                model="test-model", request_kwargs=self._request_kwargs(session_id), messages=turn
+            )
+            for turn in self._tool_loop_turns()[:2]
+        ]
+        return decisions, router._get_session_affinity_cache_key(session_id, self._request_kwargs(session_id))
+
+    @pytest.mark.asyncio
+    async def test_continuation_leaves_redis_alone_when_the_refresh_fails_on_a_redis_error(self, user_turn_config):
+        """A refresh that fails because Redis errored says nothing about the pin; writing the tier this
+        request read back would overwrite whatever another replica saved since the read."""
+        server: Final = FakeServer()
+        newer_pin: Final = {"model": "claude-sonnet-4-20250514", "tier": "COMPLEX"}
+        decisions, cache_key = await self._tool_loop_on_one_replica(
+            _RefreshFailsAfterAnotherReplicaWroteCache(server, newer_pin), user_turn_config, "outage"
+        )
+
+        assert [decision.model for decision in decisions] == ["o1-preview", "o1-preview"]
+        assert decisions[1].routing_decision["cause"] == "user_turn_continuation"
+        assert json.loads(await FakeRedis(server=server).get(cache_key)) == newer_pin
+
+    @pytest.mark.asyncio
+    async def test_continuation_restores_an_expired_pin_only_while_no_replica_wrote_a_newer_one(
+        self, user_turn_config
+    ):
+        """Between the refresh finding the pin gone and the write restoring it, another replica may have
+        pinned the session on a fresh classification; the restore must leave that newer pin in place."""
+        server: Final = FakeServer()
+        newer_pin: Final = {"model": "claude-sonnet-4-20250514", "tier": "COMPLEX"}
+        decisions, cache_key = await self._tool_loop_on_one_replica(
+            _PinReplacedBetweenExpiryAndRestoreCache(server, newer_pin), user_turn_config, "race"
+        )
+
+        assert [decision.model for decision in decisions] == ["o1-preview", "o1-preview"]
+        assert json.loads(await FakeRedis(server=server).get(cache_key)) == newer_pin
 
     def test_default_mode_is_every_request(self, complexity_router):
         assert complexity_router.config.classification_mode == "every_request"

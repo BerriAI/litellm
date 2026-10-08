@@ -1698,55 +1698,57 @@ class RedisCache(BaseCache):
 
     @_redis_circuit_breaker_guard
     async def async_get_cache(self, key, parent_otel_span: Span | None = None, **kwargs):
-        from redis.asyncio import Redis
-
-        _redis_client: Final[Redis] = self.init_async_client()
-        key = self.check_and_fix_namespace(key=key)
-        start_time: Final = time.time()
-
         try:
-            print_verbose(f"Get Async Redis Cache: key: {key}")
-            cached_response: Final = await _redis_client.get(key)
-            print_verbose(f"Got Async Redis Cache: key: {key}, cached_response {cached_response}")
-            response: Final = self._get_cache_logic(cached_response=cached_response)
-
-            end_time = time.time()
-            _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=_duration,
-                    call_type="async_get_cache",
-                    caller=_get_call_stack_info(),
-                    start_time=start_time,
-                    end_time=end_time,
-                    parent_otel_span=parent_otel_span,
-                )
-            )
-            return response
+            cached_response: Final = await self._async_get_reporting_to_service_hooks(key, parent_otel_span)
+            return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
-            end_time = time.time()
-            _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_failure_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=_duration,
-                    error=e,
-                    call_type="async_get_cache",
-                    caller=_get_call_stack_info(),
-                    start_time=start_time,
-                    end_time=end_time,
-                    parent_otel_span=parent_otel_span,
-                )
-            )
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     @_redis_circuit_breaker_guard
-    async def async_get_cache_or_raise(self, key: str) -> object:
+    async def async_get_cache_or_raise(self, key: str, parent_otel_span: Span | None = None) -> object:
         """GET that raises on a Redis failure, so a caller can tell a failed read from a miss."""
-        cached_response: Final = await self._async_commands().get(self.check_and_fix_namespace(key=key))
+        cached_response: Final = await self._async_get_reporting_to_service_hooks(key, parent_otel_span)
         return self._get_cache_logic(cached_response=cached_response)
+
+    async def _async_get_reporting_to_service_hooks(
+        self, key: str, parent_otel_span: Span | None
+    ) -> bytes | str | None:
+        commands: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        start_time: Final = time.time()
+        try:
+            print_verbose(f"Get Async Redis Cache: key: {namespaced_key}")
+            cached_response: Final = await commands.get(namespaced_key)
+            print_verbose(f"Got Async Redis Cache: key: {namespaced_key}, cached_response {cached_response}")
+        except Exception as e:
+            failed_at: Final = time.time()
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=failed_at - start_time,
+                    error=e,
+                    call_type="async_get_cache",
+                    caller=_get_call_stack_info(),
+                    start_time=start_time,
+                    end_time=failed_at,
+                    parent_otel_span=parent_otel_span,
+                )
+            )
+            raise
+        end_time: Final = time.time()
+        asyncio.create_task(
+            self.service_logger_obj.async_service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=end_time - start_time,
+                call_type="async_get_cache",
+                caller=_get_call_stack_info(),
+                start_time=start_time,
+                end_time=end_time,
+                parent_otel_span=parent_otel_span,
+            )
+        )
+        return cached_response
 
     @_redis_circuit_breaker_guard
     async def async_batch_get_cache(

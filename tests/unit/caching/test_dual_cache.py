@@ -1060,6 +1060,7 @@ class _UnreachableRedis(RedisCache):
 
         client = MagicMock()
         client.get = AsyncMock(side_effect=RedisConnectionError("redis is down"))
+        client.expire = AsyncMock(side_effect=RedisConnectionError("redis is down"))
         return client
 
 
@@ -1112,7 +1113,7 @@ async def test_dual_cache_async_refresh_ttl_extends_memory_and_expires_redis_wit
     clock = MagicMock(return_value=1_000.0)
     cache = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis)
     await cache.in_memory_cache.async_set_cache("pin", "v", ttl=30)
-    assert await cache.async_refresh_ttl("pin", 300) is True
+    assert await cache.async_refresh_ttl("pin", 300) == "refreshed"
     clock.return_value = 1_200.0
     assert cache.in_memory_cache.get_cache("pin") == "v"
     assert redis.refreshed == [("pin", 300)]
@@ -1123,7 +1124,19 @@ async def test_dual_cache_async_refresh_ttl_without_redis_reports_whether_memory
     clock = MagicMock(return_value=1_000.0)
     cache = DualCache(in_memory_cache=InMemoryCache(clock=clock))
     await cache.async_set_cache("pin", "v", ttl=30)
-    assert await cache.async_refresh_ttl("pin", 300) is True
-    assert await cache.async_refresh_ttl("absent", 300) is False
+    assert await cache.async_refresh_ttl("pin", 300) == "refreshed"
+    assert await cache.async_refresh_ttl("absent", 300) == "absent"
     clock.return_value = 1_200.0
     assert await cache.async_get_cache("pin") == "v"
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_refresh_ttl_tells_an_unreachable_redis_from_an_absent_key():
+    """A refresh that fails because Redis errored says nothing about the key, so a caller must not take
+    it for an absent key and write a possibly older value back; the local copy still gets its TTL."""
+    clock = MagicMock(return_value=1_000.0)
+    cache = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=_UnreachableRedis())
+    await cache.in_memory_cache.async_set_cache("pin", "v", ttl=30)
+    assert await cache.async_refresh_ttl("pin", 300) == "unavailable"
+    clock.return_value = 1_200.0
+    assert cache.in_memory_cache.get_cache("pin") == "v"
