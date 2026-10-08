@@ -10,10 +10,10 @@ Covers ``_wrap_streaming_iterator_with_enrichment``,
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from datetime import datetime
 from typing import Any, Dict, Final, List
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -23,7 +23,6 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     BaseAnthropicMessagesStreamingIterator,
 )
@@ -178,6 +177,13 @@ async def _passthrough_hook(*, response: AsyncIterator[object]) -> AsyncGenerato
 
 async def _one_chunk() -> AsyncGenerator[object, None]:
     yield "chunk"
+
+
+async def _wait_until(condition: Callable[[], bool]) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
 
 
 class _AttributeStream:
@@ -564,7 +570,7 @@ async def test_native_messages_stream_logging_fires_after_guardrail_end_of_strea
         request_data=request_data,
     ):
         pass
-    await GLOBAL_LOGGING_WORKER.flush()
+    await _wait_until(lambda: len(events) == 2)
 
     assert events == ["scan_appended", ("logging_dispatched", "post_call_entry_visible", True)]
 
@@ -599,7 +605,7 @@ async def test_native_messages_stream_logging_fires_when_guardrail_blocks_after_
             request_data=request_data,
         ):
             pass
-    await GLOBAL_LOGGING_WORKER.flush()
+    await _wait_until(lambda: len(events) == 1)
 
     assert [event[0] for event in events] == ["logging_dispatched"]
     assert logging_obj._deferred_stream_complete_args is None
@@ -723,7 +729,7 @@ async def test_chat_stream_generic_callback_error_after_stream_end_still_flushes
             request_data=request_data,
         ):
             pass
-    await GLOBAL_LOGGING_WORKER.flush()
+    await _wait_until(lambda: len(events) == 1)
 
     snapshot = {
         "events": events,
@@ -749,12 +755,10 @@ async def test_fire_deferred_stream_logging_fires_callback():
     logging_obj._on_deferred_stream_complete = deferred
     logging_obj._deferred_stream_complete_args = ("payload",)
 
-    with patch.object(GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue") as enqueue:
-        ProxyLogging._fire_deferred_stream_logging(request_data={"litellm_logging_obj": logging_obj})
-
-    enqueue.assert_called_once()
+    deferred_task = ProxyLogging._fire_deferred_stream_logging(request_data={"litellm_logging_obj": logging_obj})
+    assert deferred_task is not None
     assert captured == {}
-    await enqueue.call_args.kwargs["async_coroutine"]
+    await deferred_task
     snapshot = {
         "arg": captured["arg"],
         "callback_cleared": logging_obj._on_deferred_stream_complete is None,

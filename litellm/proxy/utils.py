@@ -1103,6 +1103,21 @@ def _call_type_for_route(route: str | None) -> str | None:
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
+_DEFERRED_STREAM_CALLBACK_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: retains background tasks
+
+
+async def _run_deferred_stream_callback(callback: Coroutine[object, object, object]) -> None:
+    try:
+        await callback
+    except Exception as e:
+        verbose_proxy_logger.exception("Error in deferred stream callback: %s", e)
+
+
+def _retain_deferred_stream_callback(callback: Coroutine[object, object, object]) -> asyncio.Task[None]:
+    task: Final = asyncio.create_task(_run_deferred_stream_callback(callback))
+    _DEFERRED_STREAM_CALLBACK_TASKS.add(task)
+    task.add_done_callback(_DEFERRED_STREAM_CALLBACK_TASKS.discard)
+    return task
 
 
 def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
@@ -4172,7 +4187,7 @@ class ProxyLogging:
         record_served_output_texts(logging_obj.model_call_details, served_stream_output_texts(served_chunks))
 
     @staticmethod
-    def fire_deferred_stream_logging(request_data: dict) -> None:
+    def fire_deferred_stream_logging(request_data: dict) -> asyncio.Task[None] | None:
         """
         Fire the deferred streaming logging callback after the full streaming
         pipeline (including guardrail end-of-stream blocks) has completed.
@@ -4183,8 +4198,7 @@ class ProxyLogging:
         """
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if logging_obj is None:
-            return
-        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+            return None
 
         _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
             logging_obj, "_on_deferred_stream_complete", None
@@ -4193,7 +4207,8 @@ class ProxyLogging:
         if _deferred_cb is not None and _args is not None:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=_deferred_cb(*_args))
+            return _retain_deferred_stream_callback(_deferred_cb(*_args))
+        return None
 
     _fire_deferred_stream_logging = fire_deferred_stream_logging
 
