@@ -21,13 +21,19 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "monthly": "30d",
 }
 
-
-def _normalize_duration(duration: str) -> str:
-    return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
+_DURATION_RE: Final[re.Pattern[str]] = re.compile(r"(\d+)(mo|[smhdw])")
 
 
-def _extract_from_regex(duration: str) -> tuple[int, str]:
-    match: Final = re.match(r"(\d+)(mo|[smhdw]?)", duration)
+def _normalize_duration(duration: object) -> object:
+    if not isinstance(duration, str):
+        return duration
+    return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration.strip())
+
+
+def _extract_from_regex(duration: object) -> tuple[int, str]:
+    if not isinstance(duration, str):
+        raise ValueError("Invalid duration format")
+    match: Final = _DURATION_RE.fullmatch(duration.strip())
 
     if not match:
         raise ValueError("Invalid duration format")
@@ -189,9 +195,11 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[
     return current_time, tz
 
 
-def _parse_duration(duration: str) -> tuple[int | None, str | None]:
+def _parse_duration(duration: object) -> tuple[int | None, str | None]:
     """Parse the duration string into value and unit."""
-    match: Final = re.match(r"(\d+)([a-z]+)", duration)
+    if not isinstance(duration, str):
+        return None, None
+    match: Final = _DURATION_RE.fullmatch(duration.strip())
     if not match:
         return None, None
 
