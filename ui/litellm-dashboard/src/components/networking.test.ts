@@ -142,12 +142,14 @@ describe("teamMemberAddCall error message", () => {
     );
   });
 
-  it("falls back to a generic message when the body is not JSON", async () => {
-    rejectWith("<html>bad gateway</html>");
+  it.each([
+    ["is not JSON", "<html>bad gateway</html>"],
+    ["is JSON null", "null"],
+    ["is an empty object", "{}"],
+  ])("falls back to a generic message when the body %s", async (_case, body) => {
+    rejectWith(body);
 
-    await expect(Networking.teamMemberAddCall("token", "team-1", member)).rejects.toThrow(
-      "Failed to add team member",
-    );
+    await expect(Networking.teamMemberAddCall("token", "team-1", member)).rejects.toThrow("Failed to add team member");
   });
 });
 

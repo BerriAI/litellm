@@ -2767,8 +2767,9 @@ export const teamMemberAddCall = async (accessToken: string, teamId: string, for
         console.warn("Failed to parse error body as JSON:", errorText);
       }
 
-      const rawMessage =
-        Object.keys(parsedError).length > 0 ? deriveErrorMessage(parsedError) : "Failed to add team member";
+      const hasErrorBody =
+        parsedError !== null && typeof parsedError === "object" && Object.keys(parsedError).length > 0;
+      const rawMessage = hasErrorBody ? deriveErrorMessage(parsedError) : "Failed to add team member";
       const err = new Error(rawMessage);
       (err as any).raw = parsedError;
       throw err;
