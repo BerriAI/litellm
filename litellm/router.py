@@ -199,6 +199,7 @@ from litellm.router_utils.common_utils import (
     resolve_model_group_alias,
     truncate_fallback_error_detail,
     warn_on_provider_credential_mismatch,
+    without_router_only_kwargs,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -2728,13 +2729,15 @@ class Router:
             if model in self.model_names or not self.has_model_id(model):
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
-            input_kwargs: Final = {
-                **litellm_params,
-                "messages": messages,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
+            input_kwargs: Final = without_router_only_kwargs(
+                {
+                    **litellm_params,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
@@ -3880,15 +3883,15 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            input_kwargs: Final = {
-                **litellm_params,
-                "messages": messages,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
-            input_kwargs.pop("silent_model", None)
-            input_kwargs.pop("include_fallback_errors", None)
+            input_kwargs: Final = without_router_only_kwargs(
+                {
+                    **litellm_params,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
 
             logging_obj: Final[LiteLLMLogging | None] = kwargs.get("litellm_logging_obj", None)
 
