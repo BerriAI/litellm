@@ -150,7 +150,7 @@ class SemanticMCPToolFilter:
             description = str(tool_dict.get("description", name))
         else:
             # MCPTool object
-            mcp_tool: Final = MCPTool.model_validate(tool)
+            mcp_tool: Final = MCPTool.model_validate(tool, from_attributes=True)
             name = str(mcp_tool.name)
             description = str(mcp_tool.description) if mcp_tool.description else str(mcp_tool.name)
 
@@ -537,7 +537,9 @@ class SemanticMCPToolFilter:
                 if isinstance(content, list):
                     texts = [
                         str(block.get("text", "")) if isinstance(block, Mapping) else str(block)
-                        for block in TypeAdapter(Sequence[Mapping[str, object] | str]).validate_python(content)
+                        for block in TypeAdapter(Sequence[Mapping[str, object] | str]).validate_python(
+                            tuple(block for block in content if isinstance(block, (dict, str)))
+                        )
                     ]
                     return " ".join(texts)
 

@@ -335,6 +335,32 @@ async def test_semantic_filter_extract_user_query():
     assert query3 == ""
 
 
+@pytest.mark.asyncio
+async def test_semantic_filter_extract_user_query_skips_non_text_blocks():
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    mock_router = Mock()
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "find"}, None, 5, "weather"],
+        },
+    ]
+
+    assert filter_instance.extract_user_query(messages) == "find weather"
+
+
 @requires_semantic_router
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_triggers_on_completion():
