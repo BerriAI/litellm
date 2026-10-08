@@ -10,8 +10,7 @@ members one at a time and leave their membership rows and the team's keys behind
 
 import os
 import time
-import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,14 +18,24 @@ from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value, string_value
-from integration._support.database import read_rows, write_rows
+from integration._support.client import Gateway, string_value
+from integration._support.database import read_rows
 from integration._support.database_relay import StatementCountingRelay, statement_counting_relay
-from integration._support.process import owned_proxy_process
-from pydantic import JsonValue
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.scim import (
+    add_to_group,
+    assert_gone,
+    assert_landed,
+    body,
+    create_group,
+    created_team,
+    delete_group,
+    member_ids,
+    replace_group,
+    seed_users,
+    team_key,
+)
 
-GROUP_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:Group"
-PATCH_OP_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 SMALL_PUSH: Final = 5
 LARGE_PUSH: Final = 500
 # Background work on an idle proxy (the cron-job leader poll, spend flushes) lands a few statements inside a
@@ -35,11 +44,8 @@ NOISE_ALLOWANCE: Final = 100
 UNFIXED_PUSH_SECONDS: Final = 120
 SWAP_GROUP: Final = 200
 SWAP_ROUNDS: Final = 10
-SEED_USERS_SQL: Final = """
-INSERT INTO "LiteLLM_UserTable" (user_id, user_role, teams, models)
-SELECT %s || '-' || lpad(n::text, 3, '0'), 'internal_user', '{}'::text[], '{}'::text[]
-FROM generate_series(1, %s::int) AS n
-"""
+OWNED_PROXY_TIMEOUT: Final = int(2 * graceful_stop_seconds() + 2 * UNFIXED_PUSH_SECONDS)
+_UTC_MICROSECONDS: Final = "YYYY-MM-DD HH24:MI:SS.US"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,93 +62,6 @@ def _measured(relay: StatementCountingRelay, send: Callable[[], httpx.Response])
     return Measured(response=response, statements=relay.statements - before, seconds=time.perf_counter() - started)
 
 
-def _seed_users(scenario: Scenario, count: int) -> tuple[str, ...]:
-    prefix: Final = f"integration-scim-{uuid.uuid4().hex}"
-    write_rows(SEED_USERS_SQL, (prefix, str(count)))
-    scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_UserTable" WHERE user_id LIKE %s', (f"{prefix}-%",))
-    return tuple(f"{prefix}-{index:03d}" for index in range(1, count + 1))
-
-
-def _members(users: Sequence[str]) -> list[JsonValue]:
-    return [{"value": user} for user in users]
-
-
-def _create_group(candidate: Gateway, users: Sequence[str]) -> httpx.Response:
-    return candidate.request(
-        "POST",
-        "/scim/v2/Groups",
-        {"schemas": [GROUP_SCHEMA], "displayName": f"integration-{uuid.uuid4().hex}", "members": _members(users)},
-    )
-
-
-def _replace_group(candidate: Gateway, team: str, users: Sequence[str]) -> httpx.Response:
-    return candidate.request(
-        "PUT",
-        f"/scim/v2/Groups/{team}",
-        {
-            "schemas": [GROUP_SCHEMA],
-            "id": team,
-            "displayName": f"integration-{uuid.uuid4().hex}",
-            "members": _members(users),
-        },
-    )
-
-
-def _add_to_group(candidate: Gateway, team: str, users: Sequence[str]) -> httpx.Response:
-    return candidate.request(
-        "PATCH",
-        f"/scim/v2/Groups/{team}",
-        {
-            "schemas": [PATCH_OP_SCHEMA],
-            "Operations": [{"op": "add", "path": "members", "value": _members(users)}],
-        },
-    )
-
-
-def _body(response: httpx.Response) -> dict[str, JsonValue]:
-    return JSON_OBJECT.validate_json(response.content)
-
-
-def _member_ids(body: Mapping[str, JsonValue]) -> frozenset[str]:
-    members: Final = body.get("members") or []
-    assert isinstance(members, list), members
-    return frozenset(string_value(object_value(member)["value"]) for member in members)
-
-
-def _delete_group(candidate: Gateway, team: str) -> httpx.Response:
-    return candidate.request("DELETE", f"/scim/v2/Groups/{team}")
-
-
-def _delete_team_if_present(scenario: Scenario, team: str) -> None:
-    if read_rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)):
-        scenario.delete_team(team)
-
-
-def _created_team(scenario: Scenario, created: httpx.Response) -> str:
-    assert created.status_code == 201, created.text
-    team: Final = string_value(_body(created)["id"])
-    scenario.cleanups.callback(_delete_team_if_present, scenario, team)
-    return team
-
-
-def _team_key(candidate: Gateway, team: str) -> str:
-    created: Final = candidate.post("/key/generate", {"team_id": team, "key_alias": f"integration-{uuid.uuid4().hex}"})
-    return string_value(created["key"])
-
-
-def _membership_user_ids(team: str) -> frozenset[str]:
-    rows: Final = read_rows('SELECT user_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s', (team,))
-    return frozenset(string_value(row["user_id"]) for row in rows)
-
-
-def _keys_of(team: str) -> frozenset[str]:
-    rows: Final = read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,))
-    return frozenset(string_value(row["token"]) for row in rows)
-
-
-_UTC_MICROSECONDS: Final = "YYYY-MM-DD HH24:MI:SS.US"
-
-
 def _updated_at(user_id: str) -> str:
     rows: Final = read_rows(
         f"SELECT to_char(updated_at, '{_UTC_MICROSECONDS}') AS updated_at FROM \"LiteLLM_UserTable\" WHERE user_id = %s",
@@ -156,33 +75,7 @@ def _database_utc_now() -> str:
     return string_value(rows[0]["utc_now"])
 
 
-def _users_referencing(team: str) -> frozenset[str]:
-    rows: Final = read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE %s = ANY(teams)', (team,))
-    return frozenset(string_value(row["user_id"]) for row in rows)
-
-
-def _assert_landed(candidate: Gateway, team: str, users: Sequence[str]) -> None:
-    assert _member_ids(candidate.get(f"/scim/v2/Groups/{team}")) == frozenset(users)
-    assert _membership_user_ids(team) == frozenset(users)
-    assert _users_referencing(team) == frozenset(users)
-
-
-def _groups_of(candidate: Gateway, user: str) -> frozenset[str]:
-    groups: Final = candidate.get(f"/scim/v2/Users/{user}").get("groups") or []
-    assert isinstance(groups, list), groups
-    return frozenset(string_value(object_value(group)["value"]) for group in groups)
-
-
-def _assert_gone(candidate: Gateway, team: str, users: Sequence[str], key: str) -> None:
-    assert candidate.request("GET", f"/scim/v2/Groups/{team}").status_code == 404
-    assert team not in _groups_of(candidate, users[0])
-    assert _membership_user_ids(team) == frozenset()
-    assert _users_referencing(team) == frozenset()
-    assert _keys_of(team) == frozenset()
-    assert candidate.request("GET", "/v1/models", key=key).status_code == 401
-
-
-@pytest.mark.timeout(300)  # owned proxy boot plus three 500-member pushes and a 500-member delete
+@pytest.mark.timeout(OWNED_PROXY_TIMEOUT)
 def test_group_pushes_of_500_members_run_as_many_statements_as_pushes_of_5(
     gateway: Gateway, tmp_path: Path, record_property: Callable[[str, object], None]
 ) -> None:
@@ -199,43 +92,43 @@ def test_group_pushes_of_500_members_run_as_many_statements_as_pushes_of_5(
         ) as owned,
     ):
         candidate: Final = owned.gateway
-        small_a: Final = _seed_users(scenario, SMALL_PUSH)
-        small_b: Final = _seed_users(scenario, SMALL_PUSH)
-        large: Final = _seed_users(scenario, LARGE_PUSH)
+        small_a: Final = seed_users(scenario, SMALL_PUSH)
+        small_b: Final = seed_users(scenario, SMALL_PUSH)
+        large: Final = seed_users(scenario, LARGE_PUSH)
 
-        created_small: Final = _measured(relay, lambda: _create_group(candidate, small_a))
-        small_team: Final = _created_team(scenario, created_small.response)
-        created_large: Final = _measured(relay, lambda: _create_group(candidate, large))
-        large_team: Final = _created_team(scenario, created_large.response)
-        assert _member_ids(_body(created_large.response)) == frozenset(large)
-        _assert_landed(candidate, small_team, small_a)
-        _assert_landed(candidate, large_team, large)
+        created_small: Final = _measured(relay, lambda: create_group(candidate, small_a))
+        small_team: Final = created_team(scenario, created_small.response)
+        created_large: Final = _measured(relay, lambda: create_group(candidate, large))
+        large_team: Final = created_team(scenario, created_large.response)
+        assert member_ids(body(created_large.response)) == frozenset(large)
+        assert_landed(candidate, small_team, small_a)
+        assert_landed(candidate, large_team, large)
         detach_window_open: Final = _database_utc_now()
 
-        replaced_small: Final = _measured(relay, lambda: _replace_group(candidate, small_team, small_b))
-        replaced_large: Final = _measured(relay, lambda: _replace_group(candidate, large_team, small_a))
+        replaced_small: Final = _measured(relay, lambda: replace_group(candidate, small_team, small_b))
+        replaced_large: Final = _measured(relay, lambda: replace_group(candidate, large_team, small_a))
         assert replaced_small.response.status_code == 200, replaced_small.response.text
         assert replaced_large.response.status_code == 200, replaced_large.response.text
-        assert _member_ids(_body(replaced_small.response)) == frozenset(small_b)
-        _assert_landed(candidate, small_team, small_b)
-        _assert_landed(candidate, large_team, small_a)
+        assert member_ids(body(replaced_small.response)) == frozenset(small_b)
+        assert_landed(candidate, small_team, small_b)
+        assert_landed(candidate, large_team, small_a)
         assert detach_window_open <= _updated_at(large[0]) <= _database_utc_now()
 
-        patched_small: Final = _measured(relay, lambda: _add_to_group(candidate, small_team, small_a))
-        patched_large: Final = _measured(relay, lambda: _add_to_group(candidate, large_team, large))
+        patched_small: Final = _measured(relay, lambda: add_to_group(candidate, small_team, small_a))
+        patched_large: Final = _measured(relay, lambda: add_to_group(candidate, large_team, large))
         assert patched_small.response.status_code == 200, patched_small.response.text
         assert patched_large.response.status_code == 200, patched_large.response.text
-        _assert_landed(candidate, small_team, [*small_a, *small_b])
-        _assert_landed(candidate, large_team, [*small_a, *large])
+        assert_landed(candidate, small_team, [*small_a, *small_b])
+        assert_landed(candidate, large_team, [*small_a, *large])
 
-        small_key: Final = _team_key(candidate, small_team)
-        large_key: Final = _team_key(candidate, large_team)
-        deleted_small: Final = _measured(relay, lambda: _delete_group(candidate, small_team))
-        deleted_large: Final = _measured(relay, lambda: _delete_group(candidate, large_team))
+        small_key: Final = team_key(candidate, small_team)
+        large_key: Final = team_key(candidate, large_team)
+        deleted_small: Final = _measured(relay, lambda: delete_group(candidate, small_team))
+        deleted_large: Final = _measured(relay, lambda: delete_group(candidate, large_team))
         assert deleted_small.response.status_code == 204, deleted_small.response.text
         assert deleted_large.response.status_code == 204, deleted_large.response.text
-        _assert_gone(candidate, small_team, [*small_a, *small_b], small_key)
-        _assert_gone(candidate, large_team, [*small_a, *large], large_key)
+        assert_gone(candidate, small_team, [*small_a, *small_b], small_key)
+        assert_gone(candidate, large_team, [*small_a, *large], large_key)
 
         pushes: Final = (
             ("POST", created_small, created_large),
@@ -256,13 +149,13 @@ def test_group_pushes_of_500_members_run_as_many_statements_as_pushes_of_5(
 
 def _trade_rosters(candidate: Gateway, teams: tuple[str, str], rosters: tuple[Sequence[str], Sequence[str]]) -> None:
     with ThreadPoolExecutor(max_workers=2) as pool:
-        left: Final = pool.submit(_replace_group, candidate, teams[0], rosters[1])
-        right: Final = pool.submit(_replace_group, candidate, teams[1], rosters[0])
+        left: Final = pool.submit(replace_group, candidate, teams[0], rosters[1])
+        right: Final = pool.submit(replace_group, candidate, teams[1], rosters[0])
         for response in (left.result(), right.result()):
             assert response.status_code == 200, response.text
 
 
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(OWNED_PROXY_TIMEOUT)
 def test_two_groups_trading_rosters_in_parallel_both_land(gateway: Gateway, tmp_path: Path) -> None:
     with (
         gateway.scenario() as scenario,
@@ -276,12 +169,15 @@ def test_two_groups_trading_rosters_in_parallel_both_land(gateway: Gateway, tmp_
         ) as owned,
     ):
         candidate: Final = owned.gateway
-        left_users: Final = _seed_users(scenario, SWAP_GROUP)
-        right_users: Final = _seed_users(scenario, SWAP_GROUP)
-        left: Final = _created_team(scenario, _create_group(candidate, left_users))
-        right: Final = _created_team(scenario, _create_group(candidate, right_users))
-        for round_index in range(SWAP_ROUNDS):
-            held: Final = (left_users, right_users) if round_index % 2 == 0 else (right_users, left_users)
+        left_users: Final = seed_users(scenario, SWAP_GROUP)
+        right_users: Final = seed_users(scenario, SWAP_GROUP)
+        left: Final = created_team(scenario, create_group(candidate, left_users))
+        right: Final = created_team(scenario, create_group(candidate, right_users))
+        rounds: Final = tuple(
+            (left_users, right_users) if round_index % 2 == 0 else (right_users, left_users)
+            for round_index in range(SWAP_ROUNDS)
+        )
+        for held in rounds:
             _trade_rosters(candidate, (left, right), held)
-        _assert_landed(candidate, left, left_users)
-        _assert_landed(candidate, right, right_users)
+        assert_landed(candidate, left, left_users)
+        assert_landed(candidate, right, right_users)
