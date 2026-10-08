@@ -46,17 +46,13 @@ pub async fn prepare_audio_transcription_provider_call(
     let env_lookup = |key: &str| snapshot.get(key);
     let forwarded = string_headers("audio transcription", request.extra_headers)?;
     let validated =
-        config.validate_environment(forwarded, &model, &request.optional_params, &env_lookup)?;
+        config.validate_environment(forwarded, &model, &request.connection, &env_lookup)?;
     let environment = ValidatedEnvironment {
         headers: with_default_headers(validated.headers, config.default_headers()),
         auth: validated.auth,
     };
-    let url = config.get_complete_url(
-        request.api_base,
-        &model,
-        &request.optional_params,
-        &env_lookup,
-    )?;
+    let url =
+        config.get_complete_url(request.api_base, &model, &request.connection, &env_lookup)?;
     let filtered_params = config.map_transcription_params(&request.optional_params);
     let transformed =
         config.transform_audio_transcription_request(&model, request.audio, filtered_params)?;

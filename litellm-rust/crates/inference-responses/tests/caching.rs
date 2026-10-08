@@ -278,6 +278,7 @@ async fn responses_cache_identity_follows_resolved_configuration_and_request_cal
             .with_cache(cache)
             .execute(
                 ResponsesCall {
+                    connection: Default::default(),
                     model: "test".into(),
                     input: json!("hello"),
                     optional_params: Default::default(),

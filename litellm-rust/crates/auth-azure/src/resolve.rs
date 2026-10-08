@@ -1,4 +1,7 @@
+use std::sync::LazyLock;
+
 use litellm_auth_types::Error;
+use litellm_auth_types::fields::{self, ConnectionField, azure};
 use litellm_auth_types::{
     CredentialFileRef, CredentialLookup, CredentialRef, InputSource, ResolvedCredential,
     SecretValue, Sourced, TokenProviderHandle,
@@ -10,25 +13,8 @@ use std::sync::Arc;
 use super::native::{NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest};
 use super::types::{AzureAuthInputs, AzureCredentialType, ConfigValue, DEFAULT_AZURE_SCOPE};
 
-const AZURE_AD_TOKEN_ENV: &str = "AZURE_AD_TOKEN";
-const AZURE_TENANT_ID_ENV: &str = "AZURE_TENANT_ID";
-const AZURE_CLIENT_ID_ENV: &str = "AZURE_CLIENT_ID";
-const AZURE_CLIENT_SECRET_ENV: &str = "AZURE_CLIENT_SECRET";
-const AZURE_SCOPE_ENV: &str = "AZURE_SCOPE";
-const AZURE_AUTHORITY_HOST_ENV: &str = "AZURE_AUTHORITY_HOST";
-const AZURE_CREDENTIAL_ENV: &str = "AZURE_CREDENTIAL";
-const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
-
-pub const SECRET_NAMES: &[&str] = &[
-    AZURE_AD_TOKEN_ENV,
-    AZURE_TENANT_ID_ENV,
-    AZURE_CLIENT_ID_ENV,
-    AZURE_CLIENT_SECRET_ENV,
-    AZURE_SCOPE_ENV,
-    AZURE_AUTHORITY_HOST_ENV,
-    AZURE_CREDENTIAL_ENV,
-    AZURE_FEDERATED_TOKEN_FILE_ENV,
-];
+pub static SECRET_NAMES: LazyLock<Vec<&'static str>> =
+    LazyLock::new(|| fields::env_names(fields::azure::FIELDS));
 
 #[derive(Clone, Debug)]
 pub(crate) enum AzureCredentialPlan {
@@ -153,19 +139,18 @@ pub(crate) fn select_auth_plan(
     inputs: &AzureAuthInputs,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<AzureCredentialPlan, Error> {
-    let token = configured_secret(&inputs.azure_ad_token, AZURE_AD_TOKEN_ENV, env_lookup);
-    let tenant_id = configured_string(&inputs.tenant_id, AZURE_TENANT_ID_ENV, env_lookup);
-    let client_id = configured_string(&inputs.client_id, AZURE_CLIENT_ID_ENV, env_lookup);
-    let client_secret =
-        configured_secret(&inputs.client_secret, AZURE_CLIENT_SECRET_ENV, env_lookup);
-    let scope = configured_string(&inputs.azure_scope, AZURE_SCOPE_ENV, env_lookup)
+    let token = configured_secret(&inputs.azure_ad_token, &azure::AD_TOKEN, env_lookup);
+    let tenant_id = configured_string(&inputs.tenant_id, &azure::TENANT_ID, env_lookup);
+    let client_id = configured_string(&inputs.client_id, &azure::CLIENT_ID, env_lookup);
+    let client_secret = configured_secret(&inputs.client_secret, &azure::CLIENT_SECRET, env_lookup);
+    let scope = configured_string(&inputs.azure_scope, &azure::SCOPE, env_lookup)
         .unwrap_or_else(|| Sourced::new(DEFAULT_AZURE_SCOPE.to_string(), InputSource::Environment));
     let authority = configured_string(
         &inputs.azure_authority_host,
-        AZURE_AUTHORITY_HOST_ENV,
+        &azure::AUTHORITY_HOST,
         env_lookup,
     );
-    let selector = configured_string(&inputs.azure_credential, AZURE_CREDENTIAL_ENV, env_lookup)
+    let selector = configured_string(&inputs.azure_credential, &azure::CREDENTIAL, env_lookup)
         .map(|value| {
             value
                 .value()
@@ -176,7 +161,7 @@ pub(crate) fn select_auth_plan(
         .map_err(|_| Error::InvalidConfiguration("invalid Azure credential selector".into()))?;
     let federated_token_file = configured_string(
         &inputs.federated_token_file,
-        AZURE_FEDERATED_TOKEN_FILE_ENV,
+        &azure::FEDERATED_TOKEN_FILE,
         env_lookup,
     );
 
@@ -367,7 +352,7 @@ fn workload_request(
 
 fn configured_string(
     configured: &ConfigValue<String>,
-    environment_name: &str,
+    field: &ConnectionField,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<Sourced<String>> {
     configured
@@ -375,7 +360,8 @@ fn configured_string(
         .filter(|value| !value.value().is_empty())
         .cloned()
         .or_else(|| {
-            env_lookup(environment_name)
+            field
+                .env(env_lookup)
                 .filter(|value| !value.is_empty())
                 .map(|value| Sourced::new(value, InputSource::Environment))
         })
@@ -383,7 +369,7 @@ fn configured_string(
 
 fn configured_secret(
     configured: &ConfigValue<SecretValue>,
-    environment_name: &str,
+    field: &ConnectionField,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<Sourced<SecretValue>> {
     configured
@@ -391,7 +377,8 @@ fn configured_secret(
         .filter(|value| !value.value().expose().is_empty())
         .cloned()
         .or_else(|| {
-            env_lookup(environment_name)
+            field
+                .env(env_lookup)
                 .filter(|value| !value.is_empty())
                 .map(|value| Sourced::new(SecretValue::new(value), InputSource::Environment))
         })

@@ -1,3 +1,4 @@
+use litellm_auth::{ConnectionArguments, InputSource};
 use litellm_llms::{
     Error,
     base_llm::{
@@ -19,6 +20,10 @@ fn params(value: Value) -> Map<String, Value> {
         Value::Object(map) => map,
         other => panic!("params must be an object, got {other}"),
     }
+}
+
+fn connection(value: Value) -> ConnectionArguments {
+    ConnectionArguments::from_arguments(&params(value), |_| InputSource::Deployment)
 }
 
 fn no_env(_: &str) -> Option<String> {
@@ -95,14 +100,19 @@ fn max_completion_tokens_wins_when_both_limits_are_sent() {
 
 #[rstest]
 fn call_configuration_never_enters_the_body() {
+    let (provider_params, connection) = ConnectionArguments::split(
+        params(json!({"custom_endpoint": true, "temperature": 0.2})),
+        |_| InputSource::Deployment,
+    );
+    assert!(connection.get("custom_endpoint").is_some());
     let body = transform(
         "my-model",
         json!([{"role": "user", "content": "hi"}]),
-        json!({"custom_endpoint": true, "extra_headers": {"x": "y"}, "max_retries": 2}),
+        Value::Object(provider_params),
     );
     assert_eq!(
         body.as_object().unwrap().keys().collect::<Vec<_>>(),
-        vec!["model", "messages"]
+        vec!["model", "messages", "temperature"]
     );
 }
 
@@ -113,7 +123,7 @@ fn call_configuration_never_enters_the_body() {
 fn complete_url(#[case] api_base: &str, #[case] opts: Value, #[case] expected: &str) {
     assert_eq!(
         OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
-            .get_complete_url(Some(api_base), "my-model", &params(opts), &no_env)
+            .get_complete_url(Some(api_base), "my-model", &connection(opts), &no_env)
             .expect("url resolves"),
         expected
     );
@@ -126,7 +136,7 @@ fn api_base_falls_back_to_the_environment() {
             .get_complete_url(
                 None,
                 "my-model",
-                &params(json!({})),
+                &connection(json!({})),
                 &env_with("OPENAI_LIKE_API_BASE", "https://env.example.com/v1"),
             )
             .expect("url resolves"),
@@ -138,7 +148,7 @@ fn api_base_falls_back_to_the_environment() {
 fn a_missing_api_base_is_an_error() {
     assert!(matches!(
         OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
-            .get_complete_url(None, "my-model", &params(json!({})), &no_env),
+            .get_complete_url(None, "my-model", &connection(json!({})), &no_env),
         Err(Error::InvalidRequest(message)) if message.to_string().starts_with("Missing API Base")
     ));
 }
@@ -150,7 +160,7 @@ fn the_resolved_key_authenticates_as_a_bearer() {
             vec![],
             Some("sk-test"),
             "my-model",
-            &params(json!({})),
+            &connection(json!({})),
             &no_env,
         )
         .expect("validates");
@@ -170,7 +180,7 @@ fn the_key_falls_back_to_the_environment() {
             vec![],
             None,
             "my-model",
-            &params(json!({})),
+            &connection(json!({})),
             &env_with("OPENAI_LIKE_API_KEY", "sk-env"),
         )
         .expect("validates");
@@ -190,7 +200,7 @@ fn a_forwarded_authorization_is_the_whole_credential() {
             headers,
             Some("sk-test"),
             "my-model",
-            &params(json!({})),
+            &connection(json!({})),
             &no_env,
         )
         .expect("validates");
@@ -202,7 +212,7 @@ fn keyless_calls_still_validate_for_endpoints_that_take_no_key() {
     // vllm-compatible endpoints require no api key; Python resolves `""` and
     // sends `Bearer `, so validation must not fail on the missing key.
     let validated = OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
-        .validate_environment(vec![], None, "my-model", &params(json!({})), &no_env)
+        .validate_environment(vec![], None, "my-model", &connection(json!({})), &no_env)
         .expect("validates");
     let AuthScheme::Credential { secret, .. } = validated.auth else {
         panic!("expected a bearer credential");
@@ -322,7 +332,6 @@ fn accepts_standard_openai_params() {
                 "top_p": 0.9,
                 "max_tokens": 16,
                 "response_format": {"type": "json_object"},
-                "custom_endpoint": true,
             }),
         ),
         None

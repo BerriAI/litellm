@@ -68,6 +68,7 @@ pub(super) fn resolve_request(
         config,
         messages,
         optional_params: request.optional_params,
+        connection: request.connection,
         api_key: request.api_key,
         api_base: request.api_base,
         extra_headers: request.extra_headers,
@@ -87,7 +88,7 @@ fn validate_environment(
         forwarded,
         request.api_key,
         model,
-        &request.optional_params,
+        &request.connection,
         &env_lookup,
     )?;
     Ok(ValidatedEnvironment {
@@ -106,12 +107,8 @@ pub(super) fn prepare_provider_request(
     let model = request.model;
     let config = request.config;
     let env_lookup = |key: &str| secrets.get(key);
-    let url = config.get_complete_url(
-        request.api_base,
-        &model,
-        &request.optional_params,
-        &env_lookup,
-    )?;
+    let url =
+        config.get_complete_url(request.api_base, &model, &request.connection, &env_lookup)?;
     let transformed =
         config.transform_request(&model, request.messages, request.optional_params.clone())?;
 
@@ -126,6 +123,11 @@ pub(super) fn prepare_provider_request(
         secrets,
         timeout: request.timeout,
         api_key: request.api_key.map(|key| SecretValue::new(key.to_string())),
+        secret_fields: request
+            .connection
+            .secret_names()
+            .map(str::to_string)
+            .collect(),
     })
 }
 
@@ -170,13 +172,18 @@ mod tests {
         messages: Value,
         optional_params: Value,
     ) -> ChatCompletionsRequest<'a> {
+        let Value::Object(arguments) = optional_params else {
+            panic!("params must be an object, got {optional_params}");
+        };
+        let (optional_params, connection) =
+            litellm_auth::ConnectionArguments::split(arguments, |_| {
+                litellm_auth::InputSource::Deployment
+            });
         ChatCompletionsRequest {
+            connection,
             model,
             messages,
-            optional_params: match optional_params {
-                Value::Object(map) => map,
-                other => panic!("params must be an object, got {other}"),
-            },
+            optional_params,
             api_key: Some("sk-test"),
             api_base: None,
             custom_llm_provider: provider,

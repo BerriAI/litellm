@@ -1,3 +1,4 @@
+use litellm_auth::{ConnectionArguments, InputSource};
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::{path::Path, sync::Arc};
 
@@ -41,6 +42,12 @@ async fn handle(
         }
         None => body.get("audio").cloned().unwrap_or_default(),
     };
+    let (optional_params, connection) = ConnectionArguments::split(
+        body.into_iter()
+            .filter(|(name, _)| !matches!(name.as_str(), "model" | "audio"))
+            .collect(),
+        |_| InputSource::Request,
+    );
     Ok(gateway
         .audio_transcription
         .execute(AudioTranscriptionRequest {
@@ -50,10 +57,8 @@ async fn handle(
             api_base: deployment.api_base.as_deref(),
             custom_llm_provider: deployment.custom_llm_provider.as_deref(),
             extra_headers: None,
-            optional_params: body
-                .into_iter()
-                .filter(|(name, _)| !matches!(name.as_str(), "model" | "audio"))
-                .collect(),
+            optional_params,
+            connection,
             timeout: deployment.timeout,
         })
         .await?)

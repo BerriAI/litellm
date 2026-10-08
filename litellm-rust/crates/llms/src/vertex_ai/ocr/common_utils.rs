@@ -8,14 +8,12 @@ use crate::base_llm::ocr::{
 
 pub(super) fn vertex_config(request: &PreparedOcrRequest) -> Result<VertexConfig, Error> {
     let settings = &request.connection.settings;
-    Ok(VertexConfig::from_sourced_optional_params(
-        &request.optional_params,
-        &request.input_sources,
-    )?
-    .or_configured(
-        settings.vertex_project.as_deref(),
-        settings.vertex_location.as_deref(),
-    ))
+    Ok(
+        VertexConfig::from_credentials(&request.connection_arguments)?.or_configured(
+            settings.vertex_project.as_deref(),
+            settings.vertex_location.as_deref(),
+        ),
+    )
 }
 
 pub(super) fn validate_destination(connection: &OcrConnection) -> Result<(), Error> {

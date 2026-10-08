@@ -1,13 +1,17 @@
 #![forbid(unsafe_code)]
 
+mod connection;
 mod credential;
 mod error;
+pub mod fields;
 pub mod http;
 mod policy;
 mod secret;
 mod token;
 
 use serde::{Deserialize, Serialize};
+
+pub use connection::{ConnectionArguments, is_connection_name, is_secret_connection_name};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

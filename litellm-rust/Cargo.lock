@@ -3472,6 +3472,7 @@ version = "0.1.0"
 dependencies = [
  "rstest",
  "serde",
+ "serde_json",
  "subtle",
  "thiserror 2.0.19",
  "tokio",
@@ -3702,6 +3703,7 @@ name = "litellm-core-utils"
 version = "0.1.0"
 dependencies = [
  "fancy-regex 0.19.2",
+ "litellm-auth-types",
  "litellm-llms-types",
  "litellm-tracing",
  "rstest",

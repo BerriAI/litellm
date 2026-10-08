@@ -8,6 +8,8 @@ pub enum Error {
 
 use std::ops::{Deref, DerefMut};
 
+use litellm_auth_types::is_connection_name;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -19,22 +21,9 @@ mod owned;
 
 pub fn is_litellm_owned(name: &str) -> bool {
     is_control_param(name)
+        || is_connection_name(name)
         || name.starts_with(owned::INTERNAL_PREFIX)
         || owned::PYTHON_OWNED.binary_search(&name).is_ok()
-}
-
-pub fn is_secret_param(name: &str) -> bool {
-    matches!(
-        name,
-        "azure_ad_token"
-            | "client_secret"
-            | "azure_federated_token_file"
-            | "vertex_credentials"
-            | "vertex_ai_credentials"
-            | "aws_secret_access_key"
-            | "aws_session_token"
-            | "aws_web_identity_token"
-    )
 }
 
 fn is_control_param(name: &str) -> bool {
@@ -61,33 +50,7 @@ fn is_control_param(name: &str) -> bool {
             | "max_retries"
             | "req_format"
             | "max_response_bytes"
-            | "azure_ad_token"
             | "azure_ad_token_provider"
-            | "tenant_id"
-            | "client_id"
-            | "client_secret"
-            | "azure_scope"
-            | "azure_authority_host"
-            | "azure_credential"
-            | "azure_federated_token_file"
-            | "enable_azure_ad_token_refresh"
-            | "vertex_credentials"
-            | "vertex_ai_credentials"
-            | "vertex_project"
-            | "vertex_ai_project"
-            | "vertex_location"
-            | "vertex_ai_location"
-            | "aws_access_key_id"
-            | "aws_secret_access_key"
-            | "aws_session_token"
-            | "aws_region_name"
-            | "aws_session_name"
-            | "aws_profile_name"
-            | "aws_role_name"
-            | "aws_web_identity_token"
-            | "aws_sts_endpoint"
-            | "aws_external_id"
-            | "aws_bedrock_runtime_endpoint"
     )
 }
 
@@ -137,11 +100,12 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::{OpaqueParams, is_litellm_owned, is_secret_param, owned::PYTHON_OWNED};
+    use super::{OpaqueParams, is_litellm_owned, owned::PYTHON_OWNED};
 
     #[rstest]
     #[case::rust_control("drop_params")]
-    #[case::rust_credential("aws_secret_access_key")]
+    #[case::credential("aws_secret_access_key")]
+    #[case::credential_alias("vertex_ai_location")]
     #[case::python_connection("api_key")]
     #[case::python_logging("litellm_call_id")]
     #[case::python_metadata("metadata")]
@@ -164,26 +128,6 @@ mod tests {
     #[test]
     fn every_generated_python_name_is_owned() {
         assert!(PYTHON_OWNED.iter().all(|name| is_litellm_owned(name)));
-    }
-
-    #[test]
-    fn every_secret_is_owned() {
-        let secrets = [
-            "azure_ad_token",
-            "client_secret",
-            "azure_federated_token_file",
-            "vertex_credentials",
-            "vertex_ai_credentials",
-            "aws_secret_access_key",
-            "aws_session_token",
-            "aws_web_identity_token",
-        ];
-        assert!(
-            secrets
-                .iter()
-                .all(|name| is_secret_param(name) && is_litellm_owned(name))
-        );
-        assert!(!is_secret_param("aws_region_name"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use crate::routes::codec::{RouteCodec, ProjectedCall};
+use crate::routes::codec::{ProjectedCall, RouteCodec};
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_responses::{Error, route::Responses, types::ResponsesCall};
 use pyo3::{
@@ -17,6 +17,7 @@ impl From<ProjectedCall> for ResponsesCall {
             model: call.options.model,
             input: call.input,
             optional_params: call.params,
+            connection: call.connection,
             api_key: call.options.api_key,
             api_base: call.options.api_base,
             custom_llm_provider: call.options.custom_llm_provider,

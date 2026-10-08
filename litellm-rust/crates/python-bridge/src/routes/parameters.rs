@@ -1,3 +1,4 @@
+use litellm_auth::{ConnectionArguments, is_connection_name};
 use litellm_core_utils::{call_arguments::CallArguments, params::is_litellm_owned};
 use litellm_host_python::from_py;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
@@ -17,6 +18,30 @@ pub(super) fn field<'py>(
     name: &str,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     Ok(request.get_item(name)?.filter(|value| !value.is_none()))
+}
+
+pub(super) fn connection_arguments(request: &Bound<'_, PyDict>) -> PyResult<ConnectionArguments> {
+    let fields = connection_fields(request)?;
+    let sources =
+        crate::marshal::request_input_sources(request, fields.keys().map(String::as_str))?;
+    Ok(ConnectionArguments::from_arguments(&fields, |name| {
+        sources.get(name).copied().unwrap_or_default()
+    }))
+}
+
+pub(super) fn connection_fields(request: &Bound<'_, PyDict>) -> PyResult<Map<String, Value>> {
+    request
+        .iter()
+        .filter(|(_, value)| !value.is_none())
+        .map(|(key, value)| {
+            let name: String = key.extract()?;
+            if !is_connection_name(&name) {
+                return Ok(None);
+            }
+            Ok(Some((name, from_py(&value)?)))
+        })
+        .filter_map(PyResult::transpose)
+        .collect()
 }
 
 pub(super) fn provider_parameters(
@@ -165,6 +190,39 @@ mod tests {
             assert_eq!(
                 project_forwarding(&python_dict(py, request), &["metadata"]).unwrap(),
                 expected
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::aws(
+        "aws_secret_access_key",
+        "{'aws_secret_access_key': 'secret', 'temperature': 1}"
+    )]
+    #[case::vertex_alias("vertex_ai_project", "{'vertex_ai_project': 'p', 'temperature': 1}")]
+    #[case::endpoint("custom_endpoint", "{'custom_endpoint': True, 'temperature': 1}")]
+    fn connection_fields_reach_the_connection_and_never_the_params(
+        #[case] name: &str,
+        #[case] request: &str,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let request = python_dict(py, request);
+            assert!(connection_arguments(&request).unwrap().get(name).is_some());
+            assert_eq!(project(&request).unwrap(), json!({"temperature": 1}));
+        });
+    }
+
+    #[test]
+    fn a_none_connection_field_is_absent() {
+        Python::initialize();
+        Python::attach(|py| {
+            let request = python_dict(py, "{'aws_region_name': None}");
+            assert!(
+                connection_arguments(&request)
+                    .unwrap()
+                    .get("aws_region_name")
+                    .is_none()
             );
         });
     }

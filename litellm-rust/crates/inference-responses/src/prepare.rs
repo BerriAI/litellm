@@ -27,13 +27,14 @@ pub(super) async fn prepare(
     let environment = config.validate_environment(
         litellm_http::request::string_headers("responses", call.extra_headers)?,
         call.api_key.as_deref(),
+        &call.connection,
         &lookup,
     )?;
     let context = RequestContext {
         model: model.into(),
         custom_llm_provider: provider.into(),
         optional_params: Value::Object(call.optional_params.clone()),
-        secret_fields: Vec::new(),
+        secret_fields: call.connection.secret_names().map(str::to_string).collect(),
         api_key: match &environment.auth {
             litellm_llms::base_llm::auth::AuthScheme::Credential { secret, .. } => {
                 Some(secret.clone())
@@ -43,7 +44,7 @@ pub(super) async fn prepare(
     };
     let body = config.transform_responses_api_request(model, call.input, call.optional_params)?;
     Ok(ProviderResponsesRequest {
-        url: config.get_complete_url(call.api_base.as_deref(), &lookup),
+        url: config.get_complete_url(call.api_base.as_deref(), &call.connection, &lookup),
         config,
         environment,
         body,

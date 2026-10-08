@@ -1,5 +1,7 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
+use litellm_auth::{ConnectionArguments, InputSource};
+
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
@@ -67,6 +69,7 @@ fn project(
     body: Map<String, Value>,
     headers: &HeaderMap,
 ) -> Result<MessagesCall, Error> {
+    let (body, connection) = ConnectionArguments::split(body, |_| InputSource::Request);
     let body = body
         .into_iter()
         .map(|(name, value)| match name.as_str() {
@@ -78,6 +81,7 @@ fn project(
         body: messages_body(body)?,
         api_key: deployment.api_key.clone(),
         api_base: deployment.api_base.clone(),
+        connection,
         custom_llm_provider: deployment.custom_llm_provider.clone(),
         extra_headers: None,
         provider_specific_header: anthropic_api_headers(headers),

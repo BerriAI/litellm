@@ -1,3 +1,4 @@
+use litellm_auth::{ConnectionArguments, InputSource};
 use std::sync::Arc;
 
 use axum::{Json, body::Bytes, extract::State, response::Response};
@@ -25,13 +26,18 @@ pub(crate) async fn create(
         None => route,
     };
 
-    let call = ResponsesCall {
-        model: deployment.model.clone(),
-        input: body.get("input").cloned().unwrap_or_default(),
-        optional_params: body
-            .into_iter()
+    let input = body.get("input").cloned().unwrap_or_default();
+    let (optional_params, connection) = ConnectionArguments::split(
+        body.into_iter()
             .filter(|(name, _)| !matches!(name.as_str(), "model" | "input"))
             .collect(),
+        |_| InputSource::Request,
+    );
+    let call = ResponsesCall {
+        model: deployment.model.clone(),
+        input,
+        optional_params,
+        connection,
         api_key: deployment.api_key.clone(),
         api_base: deployment.api_base.clone(),
         custom_llm_provider: deployment.custom_llm_provider.clone(),

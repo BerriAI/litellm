@@ -21,6 +21,7 @@ use support::*;
 #[fixture]
 fn call() -> ResponsesCall {
     ResponsesCall {
+        connection: Default::default(),
         model: "openai/test-model".into(),
         input: json!("hello"),
         optional_params: Default::default(),

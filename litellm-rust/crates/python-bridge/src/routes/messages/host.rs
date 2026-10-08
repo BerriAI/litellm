@@ -2,7 +2,7 @@ use crate::{
     cache::{CacheCall, Cached, PythonCache, Selection},
     routes::{
         codec::connection_options,
-        parameters::{field, merged_request},
+        parameters::{connection_arguments, field, merged_request},
     },
 };
 use litellm_host_python::{PythonHostCalls, PythonOwned};
@@ -135,10 +135,12 @@ impl MessagesPythonHost {
         let provider_specific_header = field(&request, "provider_specific_header")?
             .map(|value| from_py(&value))
             .transpose()?;
+        let connection = connection_arguments(&request)?;
         Ok(messages_body(body).map(|body| MessagesCall {
             body,
             api_key: options.api_key,
             api_base: options.api_base,
+            connection,
             extra_headers: merge_headers(headers, options.extra_headers),
             provider_specific_header,
             custom_llm_provider: options.custom_llm_provider,

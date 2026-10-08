@@ -73,6 +73,7 @@ fn message_response() -> ResponseTemplate {
 #[fixture]
 fn call() -> MessagesCall {
     MessagesCall {
+        connection: Default::default(),
         body: body(json!({
             "model": MODEL,
             "max_tokens": 16,

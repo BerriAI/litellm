@@ -1,9 +1,11 @@
-use std::collections::BTreeMap;
-
 use litellm_auth_types::{
-    CredentialResolverHandle, Error, InputSource, SecretValue, Sourced, TokenProviderHandle,
+    ConnectionArguments, CredentialResolverHandle, Error, InputSource, SecretValue, Sourced,
+    TokenProviderHandle,
+    fields::{ConnectionField, azure},
 };
-use serde_json::{Map, Value};
+#[cfg(test)]
+use serde_json::Map;
+use serde_json::Value;
 use strum::EnumString;
 
 pub const DEFAULT_AZURE_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
@@ -78,46 +80,56 @@ impl AzureAuthInputs {
 
     #[cfg(test)]
     pub fn from_optional_params(params: &Map<String, Value>) -> Result<Self, Error> {
-        Self::from_sourced_optional_params(params, &BTreeMap::new())
+        Self::from_credentials(&ConnectionArguments::from_arguments(params, |_| {
+            InputSource::default()
+        }))
     }
 
+    #[cfg(test)]
     pub fn from_sourced_optional_params(
         params: &Map<String, Value>,
-        sources: &BTreeMap<String, InputSource>,
+        sources: &std::collections::BTreeMap<String, InputSource>,
     ) -> Result<Self, Error> {
+        Self::from_credentials(&ConnectionArguments::from_arguments(params, |name| {
+            sources.get(name).copied().unwrap_or_default()
+        }))
+    }
+
+    pub fn from_credentials(credentials: &ConnectionArguments) -> Result<Self, Error> {
         Ok(Self {
-            azure_ad_token: secret_config(params, sources, "azure_ad_token")?,
+            azure_ad_token: secret_config(credentials, &azure::AD_TOKEN)?,
             azure_ad_token_provider: None,
             credential_resolver: None,
-            tenant_id: string_config(params, sources, "tenant_id")?,
-            client_id: string_config(params, sources, "client_id")?,
-            client_secret: secret_config(params, sources, "client_secret")?,
-            azure_scope: string_config(params, sources, "azure_scope")?,
-            azure_authority_host: string_config(params, sources, "azure_authority_host")?,
-            azure_credential: string_config(params, sources, "azure_credential")?,
-            federated_token_file: string_config(params, sources, "azure_federated_token_file")?,
+            tenant_id: string_config(credentials, &azure::TENANT_ID)?,
+            client_id: string_config(credentials, &azure::CLIENT_ID)?,
+            client_secret: secret_config(credentials, &azure::CLIENT_SECRET)?,
+            azure_scope: string_config(credentials, &azure::SCOPE)?,
+            azure_authority_host: string_config(credentials, &azure::AUTHORITY_HOST)?,
+            azure_credential: string_config(credentials, &azure::CREDENTIAL)?,
+            federated_token_file: string_config(credentials, &azure::FEDERATED_TOKEN_FILE)?,
             enable_azure_ad_token_refresh: Sourced::new(
-                params
-                    .get("enable_azure_ad_token_refresh")
-                    .and_then(Value::as_bool)
+                azure::ENABLE_TOKEN_REFRESH
+                    .kwarg(credentials)
+                    .and_then(|(_, value)| value.as_bool())
                     .unwrap_or(false),
-                source_for(sources, "enable_azure_ad_token_refresh"),
+                credentials.source(azure::ENABLE_TOKEN_REFRESH.kwargs[0]),
             ),
         })
     }
 }
 
 fn string_config(
-    params: &Map<String, Value>,
-    sources: &BTreeMap<String, InputSource>,
-    name: &str,
+    credentials: &ConnectionArguments,
+    field: &ConnectionField,
 ) -> Result<ConfigValue<String>, Error> {
-    let source = source_for(sources, name);
-    match params.get(name) {
-        None => Ok(ConfigValue::Absent),
-        Some(Value::Null) => Ok(ConfigValue::ExplicitNone(source)),
-        Some(Value::String(value)) => Ok(ConfigValue::Value(Sourced::new(value.clone(), source))),
-        Some(_) => Err(Error::InvalidConfiguration(
+    let Some((name, value)) = field.kwarg(credentials) else {
+        return Ok(ConfigValue::Absent);
+    };
+    let source = credentials.source(name);
+    match value {
+        Value::Null => Ok(ConfigValue::ExplicitNone(source)),
+        Value::String(value) => Ok(ConfigValue::Value(Sourced::new(value.clone(), source))),
+        _ => Err(Error::InvalidConfiguration(
             litellm_auth_types::ErrorDetail::InvalidType {
                 field: name.into(),
                 expected: "a string or null",
@@ -127,19 +139,14 @@ fn string_config(
 }
 
 fn secret_config(
-    params: &Map<String, Value>,
-    sources: &BTreeMap<String, InputSource>,
-    name: &str,
+    credentials: &ConnectionArguments,
+    field: &ConnectionField,
 ) -> Result<ConfigValue<SecretValue>, Error> {
-    Ok(match string_config(params, sources, name)? {
+    Ok(match string_config(credentials, field)? {
         ConfigValue::Absent => ConfigValue::Absent,
         ConfigValue::ExplicitNone(source) => ConfigValue::ExplicitNone(source),
         ConfigValue::Value(value) => ConfigValue::Value(value.map(SecretValue::new)),
     })
-}
-
-fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSource {
-    sources.get(name).copied().unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -223,7 +230,7 @@ mod tests {
     #[case::global_turns_refresh_on(json!({}), true, true, InputSource::Deployment)]
     #[case::global_overrides_a_call_false_like_python(json!({"enable_azure_ad_token_refresh": false}), true, true, InputSource::Deployment)]
     #[case::call_true_survives_a_global_false(json!({"enable_azure_ad_token_refresh": true}), false, true, InputSource::Request)]
-    #[case::both_off(json!({}), false, false, InputSource::Request)]
+    #[case::both_off(json!({}), false, false, InputSource::Deployment)]
     fn token_refresh_follows_the_configured_global(
         #[case] params: serde_json::Value,
         #[case] global: bool,

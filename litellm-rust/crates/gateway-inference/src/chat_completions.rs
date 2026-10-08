@@ -1,3 +1,4 @@
+use litellm_auth::{ConnectionArguments, InputSource};
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
@@ -53,16 +54,20 @@ async fn handle(
     };
 
     let messages = body.get("messages").cloned().unwrap_or_default();
+    let (optional_params, connection) = ConnectionArguments::split(
+        body.into_iter()
+            .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
+            .collect(),
+        |_| InputSource::Request,
+    );
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve_unary(
         route.machine(
             ChatCompletionsCall {
                 model: deployment.model.clone(),
                 messages,
-                optional_params: body
-                    .into_iter()
-                    .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
-                    .collect(),
+                optional_params,
+                connection,
                 api_key: deployment.api_key.clone(),
                 api_base: deployment.api_base.clone(),
                 custom_llm_provider: deployment.custom_llm_provider.clone(),

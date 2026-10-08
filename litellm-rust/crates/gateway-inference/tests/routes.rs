@@ -101,6 +101,7 @@ async fn chat_errors_come_from_core(
                 .filter(|(name, _)| name.as_str() != "messages")
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect(),
+            connection: Default::default(),
             api_key: Some("test-key"),
             api_base: Some(&base),
             custom_llm_provider: None,

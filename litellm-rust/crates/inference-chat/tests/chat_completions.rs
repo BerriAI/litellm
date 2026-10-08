@@ -39,6 +39,7 @@ fn hi() -> Value {
 #[fixture]
 fn request() -> ChatCompletionsRequest<'static> {
     ChatCompletionsRequest {
+        connection: Default::default(),
         model: "anthropic/claude-sonnet-4-5",
         messages: hi(),
         optional_params: object(json!({"max_tokens": 16})),
@@ -126,11 +127,15 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
 
     let response = complete(ChatCompletionsRequest {
         model: "bedrock/anthropic.claude-sonnet-4-5",
-        optional_params: object(json!({
-            "aws_access_key_id": "access-key",
-            "aws_secret_access_key": "secret-key",
-            "aws_region_name": "eu-west-1"
-        })),
+        connection: litellm_auth::ConnectionArguments::from_arguments(
+            &object(json!({
+                "aws_access_key_id": "access-key",
+                "aws_secret_access_key": "secret-key",
+                "aws_region_name": "eu-west-1"
+            })),
+            |_| litellm_auth::InputSource::Deployment,
+        ),
+        optional_params: Map::new(),
         api_key: None,
         api_base: Some(&base),
         ..request
@@ -286,6 +291,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
         chat_completions_route()
             .execute(
                 ChatCompletionsRequest {
+                    connection: Default::default(),
                     model: &call.model,
                     messages: call.messages,
                     optional_params: call.optional_params,

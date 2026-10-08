@@ -1,3 +1,4 @@
+use litellm_auth::ConnectionArguments;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_python::from_py;
 use litellm_http::transport::Error as TransportError;
@@ -6,7 +7,7 @@ use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use super::parameters::{field, merged_request, provider_parameters};
+use super::parameters::{connection_arguments, field, merged_request, provider_parameters};
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{RouteOptions, optional_timeout, public_response, python_timeout_seconds},
@@ -19,6 +20,7 @@ pub(super) struct RouteCodec {
 
 pub(super) struct ProjectedCall {
     pub options: RouteOptions,
+    pub connection: ConnectionArguments,
     pub input: Value,
     pub params: Map<String, Value>,
 }
@@ -46,6 +48,7 @@ impl RouteCodec {
         let request = merged_request(self.bound.bind(py), hooked)?;
         Ok(ProjectedCall {
             options: connection_options(py, self.module, &request)?,
+            connection: connection_arguments(&request)?,
             input: from_py(
                 &field(&request, input)?
                     .ok_or_else(|| PyValueError::new_err(format!("{input} is required")))?,
@@ -263,6 +266,7 @@ mod tests {
                 extra_headers: None,
                 timeout: None,
             },
+            connection: Default::default(),
             input: Value::Null,
             params,
         };

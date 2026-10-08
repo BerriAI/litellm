@@ -10,6 +10,7 @@ pub struct AudioTranscriptionRequestData {
 }
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
+pub use litellm_auth::ConnectionArguments;
 
 pub trait BaseAudioTranscriptionConfig: Sync {
     fn secret_names(&self) -> Vec<&'static str>;
@@ -31,7 +32,7 @@ pub trait BaseAudioTranscriptionConfig: Sync {
         &self,
         api_base: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
@@ -54,7 +55,7 @@ pub trait BaseAudioTranscriptionConfig: Sync {
         &self,
         headers: Headers,
         model: &str,
-        optional_params: &Map<String, Value>,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error>;
 }
