@@ -15,29 +15,32 @@ function MoyaiPageContent() {
   const { accessToken, userRole } = useAuthorized();
   const { data: uiSettings, isLoading, refetch } = useUISettings();
 
-  const [connectedParams] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("moyai_connected") !== "1") return null;
-    const models = Number(params.get("models"));
-    return {
-      keyAlias: params.get("key_alias"),
-      models: Number.isFinite(models) && params.get("models") !== null ? models : null,
-    };
-  });
+  const [connectedParams, setConnectedParams] = useState<{ keyAlias: string | null; models: number | null } | null>(
+    null,
+  );
+  const [parsed, setParsed] = useState(false);
 
   useEffect(() => {
-    if (!connectedParams) return;
-    window.history.replaceState(null, "", window.location.pathname);
-    refetch();
-  }, [connectedParams, refetch]);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("moyai_connected") === "1") {
+      const models = Number(params.get("models"));
+      setConnectedParams({
+        keyAlias: params.get("key_alias"),
+        models: Number.isFinite(models) && params.get("models") !== null ? models : null,
+      });
+      window.history.replaceState(null, "", window.location.pathname);
+      refetch();
+    }
+    setParsed(true);
+  }, [refetch]);
 
   const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
 
   useEffect(() => {
-    if (!connectedParams && !isLoading && moyaiUrl) {
+    if (parsed && !connectedParams && !isLoading && moyaiUrl) {
       window.location.replace(moyaiUrl);
     }
-  }, [connectedParams, isLoading, moyaiUrl]);
+  }, [parsed, connectedParams, isLoading, moyaiUrl]);
 
   const onQuickConnect = async (url: string) => {
     const response = await startMoyaiQuickConnect(accessToken ?? "", url, window.location.origin + uiHref("moyai"));
@@ -45,7 +48,7 @@ function MoyaiPageContent() {
   };
 
   let content: React.ReactNode = null;
-  if (!isLoading) {
+  if (parsed && !isLoading) {
     if (connectedParams) {
       content = (
         <MoyaiConnected moyaiUrl={moyaiUrl} keyAlias={connectedParams.keyAlias} models={connectedParams.models} />
