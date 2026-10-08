@@ -398,10 +398,6 @@ class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
     def litellm_teammembership(self) -> "TableActions[prisma_models.LiteLLM_TeamMembership]": ...
 
 
-_STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
-UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
-"""
-
 _DETACH_DELETED_TEAM_MEMBERS_SQL: Final = """
 UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
 RETURNING user_id
@@ -4436,7 +4432,7 @@ async def delete_validated_teams(
     deleted-team records, the audit rows, the teams' keys and BYOK models, then the team
     rows with their membership rows and user references under every team's advisory lock,
     then the cache evictions. ``member_user_ids`` names every user the deletion touched:
-    the rosters as the caller read them plus the users the locked sweep detached, which
+    the rosters as the caller read them plus the users either sweep detached, which
     includes a member a concurrent roster write added after that read.
     """
     from litellm.proxy.management_helpers.audit_logs import (
@@ -4451,6 +4447,16 @@ async def delete_validated_teams(
     )
 
     team_ids: Final = [team.team_id for team in teams]
+    found: Final = await asyncio.gather(
+        *(_team_db(prisma_client).find_unique(where={"team_id": team_id}) for team_id in team_ids)
+    )
+    missing_id: Final = next((team_id for team_id, row in zip(team_ids, found) if row is None), None)
+    if missing_id is not None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={missing_id}"},
+        )
+
     await _persist_deleted_team_records(
         teams=teams,
         prisma_client=prisma_client,
@@ -4542,7 +4548,7 @@ async def delete_validated_teams(
         llm_router=llm_router,
     )
 
-    await _sweep_deleted_team_references(team_ids=team_ids, prisma_client=prisma_client)
+    unlocked_per_team: Final = await _sweep_deleted_team_references(team_ids=team_ids, prisma_client=prisma_client)
 
     rostered_per_team: Final = await _resolve_deleted_team_member_user_ids(
         teams=teams,
@@ -4564,7 +4570,13 @@ async def delete_validated_teams(
         await tx.litellm_teamtable.delete_many(where=delete_filter)
         detached_per_team: Final = await _sweep_deleted_team_references_tx(team_ids=team_ids, tx=tx)
 
-    member_ids_per_team: Final = _members_per_deleted_team(rostered_per_team, detached_per_team)
+    member_ids_per_team: Final = _members_per_deleted_team(
+        rostered_per_team,
+        tuple(
+            (team_id, (*unlocked_ids, *locked_ids))
+            for (team_id, unlocked_ids), (_, locked_ids) in zip(unlocked_per_team, detached_per_team)
+        ),
+    )
 
     # Evict AFTER the rows are gone. Both writers of these keys (`_cache_team_object` and
     # `get_team_object_by_alias`) hydrate from the db, so evicting first leaves a window where a
@@ -4600,7 +4612,9 @@ def _members_per_deleted_team(
     )
 
 
-async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client: PrismaClient) -> None:
+async def _sweep_deleted_team_references(
+    team_ids: Sequence[str], prisma_client: PrismaClient
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """
     Strip the deleted team ids from every user row and team-membership row that still references them.
 
@@ -4615,11 +4629,18 @@ async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client:
 
     `array_remove` rather than read-filter-write: rewriting the whole array from a snapshot read
     outside a transaction drops any team a concurrent `/team/member_add` appended in between.
+    Returns the users each team was stripped from, so a member added after the caller's roster
+    read and detached here is still named on ``DeletedTeams``.
     """
-    for team_id in team_ids:
-        _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
+    detached: Final = tuple(
+        [
+            (team_id, _detached_user_ids(await prisma_client.db.query_raw(_DETACH_DELETED_TEAM_MEMBERS_SQL, team_id)))
+            for team_id in team_ids
+        ]
+    )
 
     _ = await _team_membership_db(prisma_client).delete_many(where=_TeamIdInFilter(team_id={"in": tuple(team_ids)}))
+    return detached
 
 
 async def _sweep_deleted_team_references_tx(

@@ -3216,14 +3216,18 @@ async def test_delete_group_answers_404_when_the_team_vanished_before_the_delete
     mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ):
     """A group deleted by a concurrent request between the lookup and the team delete
-    answers 404, the same as a group that never existed."""
-    _, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
-    delete_team_mock.side_effect = HTTPException(status_code=404, detail={"error": "Team not found"})
+    answers 404, the same as a group that never existed, and does not write a
+    second tombstone for the already-gone team."""
+    team: Final = _admin_group_team()
+    prisma, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, team)
+    mocker.stop(delete_team_mock)
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(side_effect=(team, None))
 
     with pytest.raises(ProxyException) as raised:
         await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
 
     assert raised.value.code == "404"
+    prisma.db.litellm_deletedteamtable.create_many.assert_not_called()
 
 
 @pytest.mark.asyncio
