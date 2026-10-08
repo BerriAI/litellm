@@ -2,11 +2,12 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from pydantic import BaseModel
 
 import litellm
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -115,25 +116,47 @@ class _FakePrismaClient:
         self.db = _FakeSpendLogsDB(spend_logs)
 
 
-class _AnthropicBlock(BaseModel):
+class _AnthropicBlock(BaseModel, frozen=True):
     type: str
     id: str | None = None
     tool_use_id: str | None = None
     text: str | None = None
 
 
-class _AnthropicMessage(BaseModel):
+class _AnthropicMessage(BaseModel, frozen=True):
     role: str
     content: tuple[_AnthropicBlock, ...]
 
 
-class _AnthropicRequest(BaseModel):
+class _AnthropicRequest(BaseModel, frozen=True):
     messages: tuple[_AnthropicMessage, ...]
     system: tuple[_AnthropicBlock, ...]
 
 
+class _RecordingAnthropicMessages:
+    def __init__(self) -> None:
+        self.request: _AnthropicRequest | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request = _AnthropicRequest.model_validate_json(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_second_turn",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Il fait 47C."}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+
 @pytest.mark.asyncio
-async def test_previous_response_id_tool_output_with_new_instructions_builds_valid_anthropic_request():
+async def test_previous_response_id_tool_output_with_new_instructions_builds_valid_anthropic_request() -> None:
     """
     A continuation that resends `instructions` must not land a system message between the replayed
     tool_use and its tool_result, and the previous turn's instructions do not carry over (OpenAI semantics)
@@ -172,14 +195,9 @@ async def test_previous_response_id_tool_output_with_new_instructions_builds_val
             ],
         },
     }
+    anthropic: Final = _RecordingAnthropicMessages()
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([first_turn])),
-        patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion,
-    ):
-        mock_acompletion.return_value = ModelResponse(
-            id="id", created=0, model=model, object="chat.completion", choices=[]
-        )
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([first_turn])):
         await litellm.aresponses(
             model=model,
             previous_response_id="chatcmpl-first-turn",
@@ -193,24 +211,16 @@ async def test_previous_response_id_tool_output_with_new_instructions_builds_val
                 }
             ],
             api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
         )
 
-    anthropic_request: Final = _AnthropicRequest.model_validate(
-        AnthropicConfig().transform_request(
-            model="claude-sonnet-5-5",
-            messages=mock_acompletion.call_args.kwargs["messages"],
-            optional_params={},
-            litellm_params={},
-            headers={},
-        )
-    )
-
+    assert anthropic.request is not None
     assert [
         (message.role, [(block.type, block.id or block.tool_use_id or block.text) for block in message.content])
-        for message in anthropic_request.messages
+        for message in anthropic.request.messages
     ] == [
         ("user", [("text", "What is the weather in Tokyo?")]),
         ("assistant", [("tool_use", "toolu_weather")]),
         ("user", [("tool_result", "toolu_weather")]),
     ]
-    assert [block.text for block in anthropic_request.system] == ["Answer in French."]
+    assert [block.text for block in anthropic.request.system] == ["Answer in French."]

@@ -126,7 +126,6 @@ class ResponsesSessionHandler:
                 )
 
         if response_input_param:
-            # A previous turn's `instructions` don't carry over to the next response (OpenAI Responses semantics)
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                     input=response_input_param,
