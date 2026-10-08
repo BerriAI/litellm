@@ -1811,3 +1811,77 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
         "the mapped-key branch returns before the shared virtual-key checks, so the "
         "user's per-model budget is never attached and never enforced"
     )
+
+
+def _rejected_websocket() -> tuple[MagicMock, AsyncMock]:
+    close = AsyncMock()
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.close = close
+    mock_websocket.query_params = {"model": "gpt-5.4"}
+    mock_websocket.headers = {"authorization": "Bearer sk-restricted"}
+    mock_websocket.scope = {
+        "type": "websocket",
+        "path": "/v1/responses",
+        "headers": [(b"authorization", b"Bearer sk-restricted")],
+    }
+    mock_websocket.url = URL(url="/v1/responses")
+    return mock_websocket, close
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_logs_a_model_access_denial_as_one_warning_without_a_traceback(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy._types import ModelAccessDeniedProxyException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    mock_websocket, close = _rejected_websocket()
+    denial = ModelAccessDeniedProxyException(
+        message="The requested model 'gpt-5.4' is not available for this API key",
+        internal_message=(
+            "key not allowed to access model. This key can only access models=['gpt-5.4-mini'].\nTried gpt-5.4"
+        ),
+        type="key_model_access_denied",
+        param="model",
+        code=403,
+    )
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with (
+        patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True, side_effect=denial),
+        caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name),
+        pytest.raises(HTTPException) as rejection,
+    ):
+        await user_api_key_auth_websocket(mock_websocket)
+
+    assert rejection.value.status_code == 403
+    close.assert_awaited_once_with(code=status.WS_1008_POLICY_VIOLATION)
+    proxy_records = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
+    assert [(record.levelno, record.getMessage(), record.exc_info) for record in proxy_records] == [
+        (
+            logging.WARNING,
+            "key not allowed to access model. This key can only access models=['gpt-5.4-mini'].Tried gpt-5.4",
+            None,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_websocket_rejection_adds_no_traceback_for_other_auth_errors(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    mock_websocket, close = _rejected_websocket()
+    auth_error = ProxyException("Authentication Error, Invalid proxy server token passed", "auth_error", "key", 401)
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with (
+        patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True, side_effect=auth_error),
+        caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name),
+        pytest.raises(HTTPException) as rejection,
+    ):
+        await user_api_key_auth_websocket(mock_websocket)
+
+    assert rejection.value.status_code == 403
+    close.assert_awaited_once_with(code=status.WS_1008_POLICY_VIOLATION)
+    assert [record for record in caplog.records if record.name == verbose_proxy_logger.name] == []
