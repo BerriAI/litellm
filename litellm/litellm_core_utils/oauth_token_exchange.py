@@ -3,7 +3,13 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, Literal, Protocol, TypeAlias, cast
+from typing import (
+    Final,
+    Literal,
+    Protocol,
+    TypeAlias,
+    cast,  # noqa: TID251  # adapter protocols cover untyped cache and HTTP handler methods
+)
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
