@@ -80,15 +80,14 @@ async def get_deployment_model_metadata(
 ) -> Mapping[str, object]:
     if params.get("use_clientside_credentials") or "*" in params.model:
         return _EMPTY_METADATA
-    if params.model.startswith("chatgpt/"):
-        model: str = params.model.removeprefix("chatgpt/")
-        provider: str = "chatgpt"
-        api_base: str | None = params.api_base
-        dynamic_api_key: str | None = None
-    else:
-        model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(model=params.model, litellm_params=params)
-        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
-            return _EMPTY_METADATA
+    connection: Final = (
+        (params.model.removeprefix("chatgpt/"), "chatgpt", None, params.api_base)
+        if params.model.startswith("chatgpt/")
+        else litellm.get_llm_provider(model=params.model, litellm_params=params)
+    )
+    model, provider, dynamic_api_key, api_base = connection
+    if provider != "chatgpt" and provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
+        return _EMPTY_METADATA
     api_key: Final = params.api_key or dynamic_api_key
     headers: Final = _HEADERS.validate_python(params.get("extra_headers") or params.get("headers") or {})
     inventory: Final = await get_provider_model_inventory(

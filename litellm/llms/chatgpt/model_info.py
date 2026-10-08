@@ -22,6 +22,8 @@ _EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class _ReasoningLevel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     effort: str
 
 
@@ -210,10 +212,10 @@ async def get_chatgpt_model_inventory(
             MappingProxyType({card.slug: card.metadata() for card in catalog.models}), credential_scope
         )
         cache.set_cache(cache_key, inventory, ttl=MODEL_INFO_REFRESH_SECONDS)
-        return inventory
     except httpx.HTTPStatusError:
         return SupplierInventoryUnavailable("http", credential_scope)
     except ValidationError:
         return SupplierInventoryUnavailable("malformed", credential_scope)
     except Exception:  # noqa: BLE001  # optional metadata discovery must not interrupt proxy startup
         return SupplierInventoryUnavailable("transport", credential_scope)
+    return inventory

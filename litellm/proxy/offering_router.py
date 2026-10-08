@@ -63,7 +63,11 @@ class OfferingRouterView(Router):
             return
         setattr(self.serving_snapshot().router, name, value)
 
-    def _offering_reject_mutation(self, *args: object, **kwargs: object) -> None:
+    def _offering_reject_mutation(
+        self,
+        *args: object,
+        **kwargs: object,  # kwargs-ok: blocks all native Router mutation signatures
+    ) -> None:
         raise litellm.BadRequestError(
             message="Model definitions are owned by the external offering configuration", model="", llm_provider=""
         )

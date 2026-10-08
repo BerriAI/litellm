@@ -1225,7 +1225,9 @@ class ModelInfoDelete(LiteLLMPydanticObjectBase):
     id: str
 
 
-class ModelInfo(GatewayModelMetadata, LiteLLMPydanticObjectBase):
+class ModelInfo(  # frozen-ok: native model management assigns team_public_model_name after validation
+    GatewayModelMetadata, LiteLLMPydanticObjectBase
+):
     id: str | None
     mode: Literal["embedding", "chat", "completion"] | None
     input_cost_per_token: float | None = 0.0

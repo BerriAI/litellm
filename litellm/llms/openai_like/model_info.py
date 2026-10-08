@@ -34,26 +34,36 @@ _TokenLimit: TypeAlias = Annotated[int | None, BeforeValidator(_positive_limit)]
 
 
 class _Modalities(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     input: Sequence[str] | None = None
     output: Sequence[str] | None = None
 
 
 class _Architecture(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     input_modalities: Sequence[str] | None = None
     output_modalities: Sequence[str] | None = None
 
 
 class _TopProvider(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     context_length: _TokenLimit = None
     max_completion_tokens: _TokenLimit = None
 
 
 class _Reasoning(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     supported_efforts: Sequence[str] | None = None
     default_effort: str | None = None
 
 
 class _ReasoningOption(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     type: str
     values: Sequence[str] | None = None
 

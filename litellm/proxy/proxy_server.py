@@ -1344,11 +1344,11 @@ async def _call_current_lens_signal_router(
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+    global llm_router  # noqa: PLW0603  # proxy routes share the external router published during lifespan
     global \
         prisma_client, \
         master_key, \
         use_background_health_checks, \
-        llm_router, \
         llm_model_list, \
         general_settings, \
         proxy_budget_rescheduler_min_time, \
@@ -1707,7 +1707,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             raise ValueError("External offering mode requires an empty model_list and store_model_in_db disabled")
         if not await offerings_manager.reload(initial=True):
             raise ValueError("Initial external offering configuration is invalid")
-        llm_router = offerings_manager.router
+        llm_router = offerings_manager.router  # rebind-ok: publish the process-wide router used by native proxy routes
     offerings_guard: Final = (
         OfferingAccessGuard(offerings_manager.router, general_settings) if offerings_manager is not None else None
     )
