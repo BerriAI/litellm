@@ -30,6 +30,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_pre_routing_selection,
     log_failure_fallback_event,
     log_success_fallback_event,
+    malformed_request_fallbacks,
     mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
     record_pre_routing_selection,
@@ -2339,3 +2340,52 @@ class CustomTestLogger(CustomLogger):
         self.failure_fallback_events.append(
             (original_model_group, kwargs, original_exception)
         )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"fallbacks": [{"primary": 5}]}, 'fallbacks[0]["primary"] must be a list of model names, got int'),
+        ({"fallbacks": [{"primary": "backup"}]}, 'fallbacks[0]["primary"] must be a list of model names, got str'),
+        (
+            {"fallbacks": [{"primary": ["backup"]}, {"*": None}]},
+            'fallbacks[1]["*"] must be a list of model names, got NoneType',
+        ),
+        ({"fallbacks": [{"primary": ["backup", 7]}]}, 'fallbacks[0]["primary"][1] must be a model name, got int'),
+        ({"fallbacks": [{}]}, "fallbacks[0] must name one model group, got an empty object"),
+        ({"fallbacks": [5]}, "fallbacks[0] must be a model name or a {model_group: [model names]} entry, got int"),
+        ({"fallbacks": {"primary": ["backup"]}}, "fallbacks must be a list, got dict"),
+        (
+            {"context_window_fallbacks": [{"primary": 5}]},
+            'context_window_fallbacks[0]["primary"] must be a list of model names, got int',
+        ),
+        (
+            {"content_policy_fallbacks": [{"primary": True}]},
+            'content_policy_fallbacks[0]["primary"] must be a list of model names, got bool',
+        ),
+        (
+            {"fallbacks": [{"primary": ["backup"]}], "content_policy_fallbacks": [{"primary": 5}]},
+            'content_policy_fallbacks[0]["primary"] must be a list of model names, got int',
+        ),
+    ],
+)
+def test_malformed_request_fallbacks_names_the_first_entry_the_walk_cannot_act_on(kwargs, message):
+    assert malformed_request_fallbacks(kwargs) == message
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"fallbacks": None},
+        {"fallbacks": []},
+        {"fallbacks": [{"primary": ["backup"]}, {"*": ["generic"]}]},
+        {"fallbacks": ["backup", "generic"]},
+        {"fallbacks": [{"model": "backup", "messages": [{"role": "user", "content": "hi"}]}]},
+        {"fallbacks": [{"api_key": "good-key"}]},
+        {"fallbacks": [{"primary": [{"model": "backup", "temperature": 0}]}]},
+        {"context_window_fallbacks": [{"primary": ["backup"]}], "content_policy_fallbacks": ["backup"]},
+    ],
+)
+def test_malformed_request_fallbacks_accepts_every_shape_the_walk_reads(kwargs):
+    assert malformed_request_fallbacks(kwargs) is None
