@@ -6326,19 +6326,13 @@ class StandardLoggingPayloadSetup:
         # check for 'tags' in both 'metadata' and 'litellm_metadata'
         metadata: Final = litellm_params.get("metadata") or {}
         litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
-        if metadata.get("tags", []):
-            request_tags = metadata.get("tags", []).copy()
-        elif litellm_metadata.get("tags", []):
-            request_tags = litellm_metadata.get("tags", []).copy()
-        else:
-            request_tags = []
+        request_tags: Final = next(
+            (tags for tags in (metadata.get("tags"), litellm_metadata.get("tags")) if isinstance(tags, list) and tags),
+            [],
+        )
         user_agent_tags: Final = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)
         additional_header_tags: Final = StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request)
-        if user_agent_tags is not None:
-            request_tags.extend(user_agent_tags)
-        if additional_header_tags is not None:
-            request_tags.extend(additional_header_tags)
-        return request_tags
+        return [*request_tags, *(user_agent_tags or ()), *(additional_header_tags or ())]
 
 
 def _get_status_fields(
