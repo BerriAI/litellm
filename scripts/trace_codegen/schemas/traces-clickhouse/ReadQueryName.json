@@ -6,7 +6,10 @@
     "agents",
     "sample",
     "content",
-    "evidence"
+    "evidence",
+    "feedback_target",
+    "feedback",
+    "feedback_summary"
   ],
   "title": "ReadQueryName",
   "type": "string"

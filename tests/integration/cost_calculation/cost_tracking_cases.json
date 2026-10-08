@@ -31213,7 +31213,7 @@
       "name": "perplexity/pplx-decider-v1-27b-decisions",
       "covers": "quota_management.spend_tracking.decisions_costs",
       "model": "perplexity/pplx-decider-v1-27b",
-      "endpoint": "/v1/decisions",
+      "endpoint": "/v1/systemone",
       "request": {
         "model": "$MODEL",
         "state": {
@@ -31254,7 +31254,7 @@
       "name": "typesafe/jev-latest-decisions",
       "covers": "quota_management.spend_tracking.decisions_costs",
       "model": "typesafe/jev-latest",
-      "endpoint": "/v1/decisions",
+      "endpoint": "/v1/systemone",
       "request": {
         "model": "$MODEL",
         "state": {

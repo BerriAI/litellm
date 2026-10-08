@@ -36,6 +36,7 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         source_type: String::new(),
         source_url: String::new(),
         source_title: String::new(),
+        source_user: String::new(),
         team_id: "team".into(),
         api_key_hash: "key".into(),
         user_id: String::new(),
@@ -225,6 +226,16 @@ fn summary_source_type_picks_the_app(#[case] source_type: &str, #[case] expected
     root.source_type = source_type.into();
     let source = resolve_trace("t", "", &[root], &[]).unwrap().summary.source;
     assert_eq!(source.map(|source| source.kind), Some(expected));
+}
+
+#[rstest]
+#[case::set("tin@berri.ai")]
+#[case::missing("")]
+fn summary_source_carries_who_started_it(#[case] user: &str) {
+    let mut root = sourced(row("root", "", "agent", "agent", "agent"), THREAD, "t");
+    root.source_user = user.into();
+    let source = resolve_trace("t", "", &[root], &[]).unwrap().summary.source;
+    assert_eq!(source.map(|source| source.user), Some(user.to_owned()));
 }
 
 #[rstest]
