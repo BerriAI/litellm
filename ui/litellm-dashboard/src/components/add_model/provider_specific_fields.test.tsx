@@ -523,7 +523,9 @@ describe("ProviderSpecificFields", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText("This auth type is saved as an LLM credential and attached to this model.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("This auth type is saved as an LLM credential and attached to this model."),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Token Endpoint URL")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Create credential" }));
     expect(onCreateCredential).toHaveBeenCalledWith("oauth_token_exchange");
