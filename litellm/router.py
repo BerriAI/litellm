@@ -12026,11 +12026,14 @@ class Router:
         # O(1) lookup in team_model index when team_id is provided
         if team_id is not None:
             key: Final = (team_id, model_name)
-            if key in self.team_model_to_deployment_indices:
-                indices = self.team_model_to_deployment_indices[key]
+            indices = self.team_model_to_deployment_indices.get(key)
+            if indices is not None:
                 # O(k) where k = team deployments for this model_name (typically 1-10)
                 for idx in indices:
-                    model = self.model_list[idx]
+                    try:
+                        model = self.model_list[idx]
+                    except IndexError:
+                        continue
                     if not self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                         continue
                     if model_alias is not None:
@@ -12043,12 +12046,14 @@ class Router:
                     return returned_models
 
         # O(1) lookup in model_name index
-        if model_name in self.model_name_to_deployment_indices:
-            indices = self.model_name_to_deployment_indices[model_name]
-
+        indices = self.model_name_to_deployment_indices.get(model_name)
+        if indices is not None:
             # O(k) where k = deployments for this model_name (typically 1-10)
             for idx in indices:
-                model = self.model_list[idx]
+                try:
+                    model = self.model_list[idx]
+                except IndexError:
+                    continue
                 if self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                     if model_alias is not None:
                         # Optimized: Use shallow copy since we only modify top-level model_name

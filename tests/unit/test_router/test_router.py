@@ -9,9 +9,10 @@ import os
 import sys
 import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from types import FrameType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -945,6 +946,61 @@ def test_arouter_test_team_model():
 
     result = router.map_team_model(team_model_name="test-model", team_id="test-team")
     assert result is not None
+
+
+def test_map_team_model_tolerates_concurrent_deployment_removal():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "internal-team-model",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {
+                    "id": "deployment-1",
+                    "team_id": "team-1",
+                    "team_public_model_name": "public-model",
+                },
+            }
+        ],
+    )
+    source_lines, first_line = inspect.getsourcelines(Router.get_all_deployments)
+    lookup_line = first_line + next(
+        index
+        for index, line in enumerate(source_lines)
+        if "model = self.model_list[idx]" in line
+    )
+    paused = threading.Event()
+    resume = threading.Event()
+
+    def trace_reader(
+        frame: FrameType, event: str, _arg: object
+    ) -> Callable[[FrameType, str, object], object] | None:
+        if (
+            frame.f_code is Router.get_all_deployments.__code__
+            and event == "line"
+            and frame.f_lineno == lookup_line
+            and not paused.is_set()
+        ):
+            paused.set()
+            if not resume.wait(timeout=10):
+                raise TimeoutError("reader was not resumed")
+        return trace_reader
+
+    def resolve_model() -> str | None:
+        sys.settrace(trace_reader)
+        try:
+            return router.map_team_model("public-model", "team-1")
+        finally:
+            sys.settrace(None)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        reader = executor.submit(resolve_model)
+        try:
+            assert paused.wait(timeout=10), "reader did not reach indexed lookup"
+            assert router.delete_deployment("deployment-1") is not None
+        finally:
+            resume.set()
+
+        assert reader.result(timeout=10) is None
 
 
 def test_team_model_has_alternatives():
