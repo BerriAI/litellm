@@ -24,7 +24,9 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     MaskedHTTPStatusError,
     get_httpx_client,
+    get_shared_realtime_ssl_context,
     get_ssl_configuration,
+    realtime_ssl_for_url,
 )
 from litellm.types.llms.custom_http import VerifyTypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1493,7 +1495,6 @@ async def test_connection_error_retry_forwards_content(method: str):
         await handler.close()
 
 
-
 @pytest.fixture
 def forward_proxy_server():
     """Plain HTTP forward proxy that records the absolute URIs it is asked to fetch."""
@@ -1624,9 +1625,7 @@ def private_ca_tls_upstream(tmp_path: pathlib.Path):
     ca_pem.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     key_pem = tmp_path / "key.pem"
     key_pem.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-        )
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
     )
 
     class OkTlsHandler(BaseHTTPRequestHandler):
@@ -1801,8 +1800,11 @@ async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_
     handler = AsyncHTTPHandler()
     try:
         response = await handler.get(
-            "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
-            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
+            "https://example.com/spec.json?original=1",
+            max_response_bytes=100,
+            follow_redirects=True,
+            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"},
+            timeout=2.0,
         )
     finally:
         await handler.close()
@@ -1888,6 +1890,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -1940,6 +1943,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1959,6 +1963,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -1982,11 +1987,13 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 _SERVER_DELAY_S = 5
 
 _PER_REQUEST_TIMEOUT_S = 1.0
 
 _CLIENT_DEFAULT_TIMEOUT_S = 60.0
+
 
 class _SlowHandler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -2000,6 +2007,7 @@ class _SlowHandler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_post_delay_exceeds_per_request_timeout_raises():
@@ -2022,3 +2030,24 @@ def test_post_delay_exceeds_per_request_timeout_raises():
         handler.close()
         server.shutdown()
         server.server_close()
+
+
+def test_realtime_ssl_for_url_sends_no_tls_argument_for_a_plain_ws_endpoint() -> None:
+    assert (
+        realtime_ssl_for_url("ws://127.0.0.1:8080/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent")
+        is None
+    )
+
+
+def test_realtime_ssl_for_url_keeps_the_shared_context_for_wss_endpoints() -> None:
+    shared: Final = get_shared_realtime_ssl_context()
+    assert isinstance(shared, ssl.SSLContext)
+    assert realtime_ssl_for_url("wss://aiplatform.us.rep.googleapis.com/ws") is shared
+
+
+def test_realtime_ssl_for_url_turns_ssl_verify_false_into_an_unverified_tls_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._shared_realtime_ssl_context", False)
+    selected: Final = realtime_ssl_for_url("wss://aiplatform.us.rep.googleapis.com/ws")
+    assert isinstance(selected, ssl.SSLContext)
+    assert selected.verify_mode == ssl.CERT_NONE
+    assert selected.check_hostname is False
