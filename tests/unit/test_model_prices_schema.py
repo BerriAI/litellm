@@ -13,6 +13,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
@@ -119,6 +120,30 @@ def test_github_copilot_rows_resolve_through_get_model_info() -> None:
     assert {
         key: (litellm.get_model_info(key)["mode"], litellm.get_model_info(key)["max_input_tokens"]) for key in rows
     } == {key: (row.mode, row.max_input_tokens) for key, row in rows.items()}
+
+
+def test_github_copilot_rows_keep_the_reasoning_flag_their_family_fallback_supplies() -> None:
+    reasoning_rows: Final = tuple(
+        key
+        for key in _copilot_endpoint_rows(PRICES_PATH)
+        if (match_capability_generalizations(key) or {}).get("supports_reasoning") is True
+    )
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    assert reasoning_rows
+    assert {key: _thinking_capabilities(prices, key).supports_reasoning for key in reasoning_rows} == dict.fromkeys(
+        reasoning_rows, True
+    )
+    assert {key: litellm.get_model_info(key).get("supports_reasoning") for key in reasoning_rows} == dict.fromkeys(
+        reasoning_rows, True
+    )
+    assert {
+        key: resolve_supported_reasoning_efforts(
+            litellm.get_model_info(key),
+            deployment_is_mapped=True,
+        )
+        != ()
+        for key in reasoning_rows
+    } == dict.fromkeys(reasoning_rows, True)
 
 
 def test_github_copilot_messages_claude_rows_keep_their_anthropic_thinking_capabilities() -> None:

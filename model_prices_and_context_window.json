@@ -31349,6 +31349,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "github_copilot/claude-haiku-5.5": {
@@ -31484,6 +31485,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "github_copilot/gemini-3.8-flash": {
@@ -31497,6 +31499,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "github_copilot/gpt-3.5-turbo": {
@@ -31651,6 +31654,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31666,6 +31670,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31680,6 +31685,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31694,6 +31700,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31708,6 +31715,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31722,6 +31730,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31736,6 +31745,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31750,6 +31760,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31764,6 +31775,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31778,6 +31790,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31792,6 +31805,7 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
