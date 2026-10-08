@@ -5,10 +5,12 @@ from datetime import datetime
 from typing import Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import can_block_current_thread
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
 from .common_utils import (
     APIKeyExpiredError,
@@ -23,6 +25,24 @@ DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
 DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _DeviceCode(TypedDict):
+    device_code: ReadOnly[str]
+    user_code: ReadOnly[object]
+    verification_uri: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AccessTokenPoll(TypedDict):
+    access_token: ReadOnly[NotRequired[str]]
+    error: ReadOnly[NotRequired[object]]
+
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_DEVICE_CODE: Final = TypeAdapter(_DeviceCode)
+_ACCESS_TOKEN_POLL: Final = TypeAdapter(_AccessTokenPoll)
 
 
 class Authenticator:
@@ -175,7 +195,7 @@ class Authenticator:
         max_retries: Final = 3
         for attempt in range(max_retries):
             try:
-                sync_client = _get_httpx_client()
+                sync_client = get_httpx_client()
                 response = sync_client.get(api_key_url, headers=headers)
                 response.raise_for_status()
 
@@ -226,7 +246,7 @@ class Authenticator:
 
         return headers
 
-    def _get_device_code(self) -> dict[str, str]:
+    def _get_device_code(self) -> _DeviceCode:
         """
         Get a device code for GitHub authentication.
 
@@ -237,7 +257,7 @@ class Authenticator:
             GetDeviceCodeError: If unable to get a device code.
         """
         try:
-            sync_client: Final = _get_httpx_client()
+            sync_client: Final = get_httpx_client()
             device_code_url: Final = os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL)
             client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
             resp: Final = sync_client.post(
@@ -246,7 +266,7 @@ class Authenticator:
                 json={"client_id": client_id, "scope": "read:user"},
             )
             resp.raise_for_status()
-            resp_json: Final = resp.json()
+            resp_json: Final = _JSON_OBJECT.validate_python(resp.json())
 
             required_fields: Final = ["device_code", "user_code", "verification_uri"]
             if not all(field in resp_json for field in required_fields):
@@ -256,7 +276,7 @@ class Authenticator:
                     status_code=400,
                 )
 
-            return resp_json
+            return _DEVICE_CODE.validate_python(resp_json)
         except httpx.HTTPStatusError as e:
             verbose_logger.error("HTTP error getting device code: %s", e)
             raise GetDeviceCodeError(
@@ -289,7 +309,7 @@ class Authenticator:
         Raises:
             GetAccessTokenError: If unable to get an access token.
         """
-        sync_client: Final = _get_httpx_client()
+        sync_client: Final = get_httpx_client()
         max_attempts: Final = 12  # 1 minute (12 * 5 seconds)
 
         access_token_url: Final = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
@@ -307,12 +327,13 @@ class Authenticator:
                     },
                 )
                 resp.raise_for_status()
-                resp_json = resp.json()
+                resp_json = _JSON_OBJECT.validate_python(resp.json())
+                poll_result = _ACCESS_TOKEN_POLL.validate_python(resp_json)
 
-                if "access_token" in resp_json:
+                if "access_token" in poll_result:
                     verbose_logger.info("Authentication successful!")
-                    return resp_json["access_token"]
-                elif "error" in resp_json and resp_json.get("error") == "authorization_pending":
+                    return poll_result["access_token"]
+                elif "error" in poll_result and poll_result.get("error") == "authorization_pending":
                     verbose_logger.debug("Authorization pending (attempt %s/%s)", attempt + 1, max_attempts)
                 else:
                     verbose_logger.warning("Unexpected response: %s", resp_json)

@@ -9,31 +9,32 @@ users can intentionally clear previously-set fields.
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-
-from fastapi import HTTPException
-from litellm import Router
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
+from pydantic import BaseModel
 
+from litellm import Router
 from litellm.proxy._types import (
-    Member,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    Member,
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.common_utils import (
+    _has_non_empty_value,
     _org_admin_can_invite_user,
-    _set_object_metadata_field,
     _team_admin_can_invite_user,
-    _update_metadata_fields,
-    _user_has_admin_privileges,
-    _user_has_admin_view,
     admin_can_invite_user,
+    set_object_metadata_field,
+    update_metadata_fields,
+    user_api_key_has_admin_view,
+    user_has_admin_privileges,
 )
-from litellm.proxy.management_endpoints.common_utils import _has_non_empty_value
 from litellm.types.utils import BudgetConfig
 
 
@@ -52,7 +53,7 @@ class TestUpdateMetadataFieldsEmptyCollections:
     guardrails by sending `guardrails: []`).
     """
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_empty_list_does_not_trigger_premium_check(self, mock_premium_check):
         """Empty lists for premium fields must not trigger the premium check."""
         updated_kv = {
@@ -61,10 +62,10 @@ class TestUpdateMetadataFieldsEmptyCollections:
             "policies": [],
             "logging": [],
         }
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         mock_premium_check.assert_not_called()
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_empty_list_still_updates_metadata(self, mock_premium_check):
         """
         Empty lists must still be moved into metadata so users can clear
@@ -75,7 +76,7 @@ class TestUpdateMetadataFieldsEmptyCollections:
             "guardrails": [],
             "policies": [],
         }
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         # The fields should have been moved into metadata
         assert (
             "guardrails" not in updated_kv
@@ -84,17 +85,17 @@ class TestUpdateMetadataFieldsEmptyCollections:
         assert updated_kv["metadata"]["guardrails"] == []
         assert updated_kv["metadata"]["policies"] == []
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_empty_dict_does_not_trigger_premium_check(self, mock_premium_check):
         """Empty dicts for premium fields must not trigger the premium check."""
         updated_kv = {
             "team_id": "test-team",
             "secret_manager_settings": {},
         }
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         mock_premium_check.assert_not_called()
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_empty_dict_still_updates_metadata(self, mock_premium_check):
         """
         Empty dicts must still be moved into metadata so users can clear
@@ -104,13 +105,13 @@ class TestUpdateMetadataFieldsEmptyCollections:
             "team_id": "test-team",
             "secret_manager_settings": {},
         }
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         assert (
             "secret_manager_settings" not in updated_kv
         ), "secret_manager_settings should be popped from top-level"
         assert updated_kv["metadata"]["secret_manager_settings"] == {}
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_none_value_does_not_trigger_premium_check(self, mock_premium_check):
         """None values for premium fields should be silently ignored."""
         updated_kv = {
@@ -118,51 +119,51 @@ class TestUpdateMetadataFieldsEmptyCollections:
             "guardrails": None,
             "policies": None,
         }
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         mock_premium_check.assert_not_called()
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_absent_fields_do_not_trigger_premium_check(self, mock_premium_check):
         """Fields not present in the dict should not trigger premium check."""
         updated_kv = {
             "team_id": "test-team",
             "team_alias": "example-team",
         }
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         mock_premium_check.assert_not_called()
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_non_empty_list_triggers_premium_check(self, mock_premium_check):
         """Non-empty lists for premium fields should trigger the premium check."""
         updated_kv = {
             "team_id": "test-team",
             "guardrails": ["my-guardrail"],
         }
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         mock_premium_check.assert_called()
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_non_empty_value_triggers_premium_check(self, mock_premium_check):
         """Non-empty string values for premium fields should trigger the premium check."""
         updated_kv = {
             "team_id": "test-team",
             "tags": ["production"],
         }
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         mock_premium_check.assert_called()
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_non_empty_list_updates_metadata(self, mock_premium_check):
         """Non-empty lists should be moved into metadata."""
         updated_kv = {
             "team_id": "test-team",
             "guardrails": ["my-guardrail"],
         }
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         assert "guardrails" not in updated_kv
         assert updated_kv["metadata"]["guardrails"] == ["my-guardrail"]
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_false_boolean_does_not_trigger_premium_check(self, mock_premium_check):
         """
         Regression #30285: /team/update sends disable_global_guardrails=False
@@ -170,25 +171,25 @@ class TestUpdateMetadataFieldsEmptyCollections:
         premium check, so non-premium users are not wrongly 403'd.
         """
         updated_kv = {"team_id": "test-team", "disable_global_guardrails": False}
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         mock_premium_check.assert_not_called()
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_false_boolean_still_updates_metadata(self, mock_premium_check):
         """A falsy boolean must still be moved into metadata so it persists."""
         updated_kv = {"team_id": "test-team", "disable_global_guardrails": False}
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         assert "disable_global_guardrails" not in updated_kv
         assert updated_kv["metadata"]["disable_global_guardrails"] is False
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_true_boolean_triggers_premium_check(self, mock_premium_check):
         """Control: enabling the premium feature (True) still requires a license."""
         updated_kv = {"team_id": "test-team", "disable_global_guardrails": True}
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         mock_premium_check.assert_called()
 
-    @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
+    @patch("litellm.proxy.management_endpoints.common_utils.premium_user_check")
     def test_ui_typical_payload_does_not_trigger_premium_check(
         self, mock_premium_check
     ):
@@ -207,7 +208,7 @@ class TestUpdateMetadataFieldsEmptyCollections:
             },
             "policies": [],
         }
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
         mock_premium_check.assert_not_called()
 
 
@@ -227,7 +228,7 @@ class TestUserHasAdminView:
         """Parametrized test: admin roles return True, non-admin return False."""
         mock_auth = MagicMock()
         mock_auth.user_role = user_role
-        assert _user_has_admin_view(mock_auth) == expected
+        assert user_api_key_has_admin_view(mock_auth) == expected
 
     def test_user_has_admin_view_with_user_api_key_auth(self):
         """Test with actual UserAPIKeyAuth object."""
@@ -241,8 +242,8 @@ class TestUserHasAdminView:
             api_key="sk-yyy",
             user_role=LitellmUserRoles.INTERNAL_USER,
         )
-        assert _user_has_admin_view(auth_admin) is True
-        assert _user_has_admin_view(auth_user) is False
+        assert user_api_key_has_admin_view(auth_admin) is True
+        assert user_api_key_has_admin_view(auth_user) is False
 
 
 def test_published_enterprise_import_of_team_admin_check_still_answers():
@@ -383,7 +384,7 @@ class TestUserHasAdminPrivileges:
             api_key="sk-x",
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
-        result = await _user_has_admin_privileges(
+        result = await user_has_admin_privileges(
             user_api_key_dict=auth,
             prisma_client=None,
         )
@@ -397,7 +398,7 @@ class TestUserHasAdminPrivileges:
             api_key="sk-x",
             user_role=LitellmUserRoles.INTERNAL_USER,
         )
-        result = await _user_has_admin_privileges(
+        result = await user_has_admin_privileges(
             user_api_key_dict=auth,
             prisma_client=None,
         )
@@ -454,9 +455,9 @@ class TestSetObjectMetadataField:
         """Parametrized test: premium fields trigger _premium_user_check."""
         team = LiteLLM_TeamTable(team_id="t1", metadata={})
         with patch(
-            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+            "litellm.proxy.management_endpoints.common_utils.premium_user_check"
         ) as mock_premium:
-            _set_object_metadata_field(team, field_name, value)
+            set_object_metadata_field(team, field_name, value)
             if should_call_premium:
                 mock_premium.assert_called_once()
             else:
@@ -467,9 +468,9 @@ class TestSetObjectMetadataField:
         """Test initializes metadata dict when object has None."""
         team = LiteLLM_TeamTable(team_id="t1", metadata=None)
         with patch(
-            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+            "litellm.proxy.management_endpoints.common_utils.premium_user_check"
         ):
-            _set_object_metadata_field(team, "model_rpm_limit", {"x": 1})
+            set_object_metadata_field(team, "model_rpm_limit", {"x": 1})
         assert team.metadata == {"model_rpm_limit": {"x": 1}}
 
     def test_mcp_rpm_limit_is_hoisted_into_metadata(self):
@@ -491,11 +492,11 @@ class TestSetObjectMetadataField:
         data = SimpleNamespace(mcp_rpm_limit=mcp_rpm_limit)
 
         with patch(
-            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+            "litellm.proxy.management_endpoints.common_utils.premium_user_check"
         ):
             for field in LiteLLM_ManagementEndpoint_MetadataFields:
                 if getattr(data, field, None) is not None:
-                    _set_object_metadata_field(team, field, getattr(data, field))
+                    set_object_metadata_field(team, field, getattr(data, field))
 
         assert team.metadata["mcp_rpm_limit"] == mcp_rpm_limit
 
@@ -680,7 +681,7 @@ class TestCheckPassthroughRoutesCallerPermission:
         from pydantic import BaseModel
 
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_passthrough_routes_caller_permission,
+            check_passthrough_routes_caller_permission,
         )
 
         class _RouteData(BaseModel):
@@ -689,7 +690,7 @@ class TestCheckPassthroughRoutesCallerPermission:
 
         data = _RouteData(allowed_passthrough_routes=["/v1/foo"])
         with pytest.raises(HTTPException) as exc_info:
-            _check_passthrough_routes_caller_permission(data, self._non_admin())
+            check_passthrough_routes_caller_permission(data, self._non_admin())
 
         assert exc_info.value.status_code == 403
         assert exc_info.value.detail == {
@@ -701,7 +702,7 @@ class TestCheckPassthroughRoutesCallerPermission:
         from pydantic import BaseModel
 
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_passthrough_routes_caller_permission,
+            check_passthrough_routes_caller_permission,
         )
 
         class _RouteData(BaseModel):
@@ -710,7 +711,7 @@ class TestCheckPassthroughRoutesCallerPermission:
 
         data = _RouteData(metadata={"allowed_passthrough_routes": ["/v1/foo"]})
         with pytest.raises(HTTPException) as exc_info:
-            _check_passthrough_routes_caller_permission(data, self._non_admin())
+            check_passthrough_routes_caller_permission(data, self._non_admin())
 
         assert exc_info.value.detail == {
             "error": "Only proxy admins can set `metadata.allowed_passthrough_routes` on a key."
@@ -720,16 +721,114 @@ class TestCheckPassthroughRoutesCallerPermission:
         from pydantic import BaseModel
 
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_passthrough_routes_caller_permission,
+            check_passthrough_routes_caller_permission,
         )
 
         class _Bare(BaseModel):
             unrelated: str = "x"
 
-        assert (
-            _check_passthrough_routes_caller_permission(_Bare(), self._non_admin())
-            is None
+        assert check_passthrough_routes_caller_permission(_Bare(), self._non_admin()) is None
+
+    @pytest.mark.parametrize(
+        "kwargs, field",
+        [
+            ({"denied_passthrough_routes": ["/v1/foo"]}, "denied_passthrough_routes"),
+            ({"metadata": {"denied_passthrough_routes": ["/v1/foo"]}}, "metadata.denied_passthrough_routes"),
+        ],
+    )
+    def test_denied_routes_rejected_for_non_admin(self, kwargs: dict[str, object], field: str) -> None:
+        from fastapi import HTTPException
+        from pydantic import BaseModel
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            check_passthrough_routes_caller_permission,
         )
+
+        class _RouteData(BaseModel):
+            denied_passthrough_routes: list[str] | None = None
+            metadata: dict[str, object] | None = None
+
+        with pytest.raises(HTTPException) as exc_info:
+            check_passthrough_routes_caller_permission(
+                _RouteData.model_validate(kwargs), self._non_admin(), entity="team"
+            )
+
+        assert exc_info.value.detail == {"error": f"Only proxy admins can set `{field}` on a team."}
+
+
+class _DenyRouteData(BaseModel):
+    denied_passthrough_routes: list[str] | None = None
+    metadata: dict[str, object] | None = None
+    max_budget: float | None = None
+
+
+_EXISTING_DENY: Final = {"denied_passthrough_routes": ["/v1/foo"]}
+
+
+class TestDeniedPassthroughRoutesCallerPermission:
+    @pytest.mark.parametrize(
+        "kwargs, field",
+        [
+            ({"denied_passthrough_routes": []}, "denied_passthrough_routes"),
+            ({"denied_passthrough_routes": ["/v1/other"]}, "denied_passthrough_routes"),
+            ({"metadata": {"team": "core"}}, "metadata.denied_passthrough_routes"),
+            ({"metadata": None}, "metadata.denied_passthrough_routes"),
+        ],
+        ids=["cleared", "replaced", "dropped-by-metadata-replace", "dropped-by-null-metadata"],
+    )
+    def test_non_admin_cannot_change_an_existing_deny_list(self, kwargs: dict[str, object], field: str) -> None:
+        from litellm.proxy.management_endpoints.common_utils import check_passthrough_routes_caller_permission
+
+        with pytest.raises(HTTPException) as exc_info:
+            check_passthrough_routes_caller_permission(
+                _DenyRouteData.model_validate(kwargs),
+                UserAPIKeyAuth(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
+                existing_metadata=_EXISTING_DENY,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": f"Only proxy admins can set `{field}` on a key."}
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"denied_passthrough_routes": ["/v1/foo"]},
+            {"metadata": {"team": "core", "denied_passthrough_routes": ["/v1/foo"]}},
+            {"max_budget": 10.0},
+        ],
+        ids=["resent-top-level", "resent-in-metadata", "unrelated-field"],
+    )
+    def test_non_admin_may_leave_an_existing_deny_list_unchanged(self, kwargs: dict[str, object]) -> None:
+        from litellm.proxy.management_endpoints.common_utils import check_passthrough_routes_caller_permission
+
+        check_passthrough_routes_caller_permission(
+            _DenyRouteData.model_validate(kwargs),
+            UserAPIKeyAuth(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
+            existing_metadata=_EXISTING_DENY,
+        )
+
+    def test_non_admin_may_send_null_metadata_when_no_deny_list_exists(self) -> None:
+        from litellm.proxy.management_endpoints.common_utils import check_passthrough_routes_caller_permission
+
+        check_passthrough_routes_caller_permission(
+            _DenyRouteData(metadata=None),
+            UserAPIKeyAuth(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER),
+            existing_metadata={"team": "core"},
+        )
+
+    def test_malformed_metadata_deny_entries_are_rejected_even_for_proxy_admins(self) -> None:
+        from litellm.proxy.management_endpoints.common_utils import check_passthrough_routes_caller_permission
+
+        with pytest.raises(HTTPException) as exc_info:
+            check_passthrough_routes_caller_permission(
+                _DenyRouteData(metadata={"denied_passthrough_routes": [123, None]}),
+                UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == {
+            "error": "`metadata.denied_passthrough_routes` must be a list of route strings."
+        }
 
 
 class TestCheckDisableGlobalGuardrailsCallerPermission:
@@ -750,11 +849,11 @@ class TestCheckDisableGlobalGuardrailsCallerPermission:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_disable_global_guardrails_caller_permission,
+            check_disable_global_guardrails_caller_permission,
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            _check_disable_global_guardrails_caller_permission(True, None, self._non_admin())
+            check_disable_global_guardrails_caller_permission(True, None, self._non_admin())
 
         assert exc_info.value.status_code == 403
         assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
@@ -763,11 +862,11 @@ class TestCheckDisableGlobalGuardrailsCallerPermission:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_disable_global_guardrails_caller_permission,
+            check_disable_global_guardrails_caller_permission,
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            _check_disable_global_guardrails_caller_permission(
+            check_disable_global_guardrails_caller_permission(
                 None, {"disable_global_guardrails": True}, self._non_admin()
             )
 
@@ -778,11 +877,11 @@ class TestCheckDisableGlobalGuardrailsCallerPermission:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_disable_global_guardrails_caller_permission,
+            check_disable_global_guardrails_caller_permission,
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            _check_disable_global_guardrails_caller_permission(
+            check_disable_global_guardrails_caller_permission(
                 False, {"disable_global_guardrails": True}, self._non_admin()
             )
 
@@ -793,37 +892,37 @@ class TestCheckDisableGlobalGuardrailsCallerPermission:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_disable_global_guardrails_caller_permission,
+            check_disable_global_guardrails_caller_permission,
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            _check_disable_global_guardrails_caller_permission(True, None, self._non_admin(), entity="team")
+            check_disable_global_guardrails_caller_permission(True, None, self._non_admin(), entity="team")
 
         assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a team."}
 
     def test_false_and_absent_flag_do_not_raise(self):
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_disable_global_guardrails_caller_permission,
+            check_disable_global_guardrails_caller_permission,
         )
 
         non_admin = self._non_admin()
-        assert _check_disable_global_guardrails_caller_permission(False, None, non_admin) is None
-        assert _check_disable_global_guardrails_caller_permission(None, None, non_admin) is None
-        assert _check_disable_global_guardrails_caller_permission(None, {}, non_admin) is None
+        assert check_disable_global_guardrails_caller_permission(False, None, non_admin) is None
+        assert check_disable_global_guardrails_caller_permission(None, None, non_admin) is None
+        assert check_disable_global_guardrails_caller_permission(None, {}, non_admin) is None
         assert (
-            _check_disable_global_guardrails_caller_permission(None, {"disable_global_guardrails": False}, non_admin)
+            check_disable_global_guardrails_caller_permission(None, {"disable_global_guardrails": False}, non_admin)
             is None
         )
 
     def test_unchanged_stored_flag_does_not_raise(self):
         """Re-sending a flag that is already stored is not an opt-out."""
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_disable_global_guardrails_caller_permission,
+            check_disable_global_guardrails_caller_permission,
         )
 
         non_admin = self._non_admin()
         assert (
-            _check_disable_global_guardrails_caller_permission(
+            check_disable_global_guardrails_caller_permission(
                 True,
                 {"disable_global_guardrails": True},
                 non_admin,
@@ -836,11 +935,11 @@ class TestCheckDisableGlobalGuardrailsCallerPermission:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_disable_global_guardrails_caller_permission,
+            check_disable_global_guardrails_caller_permission,
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            _check_disable_global_guardrails_caller_permission(
+            check_disable_global_guardrails_caller_permission(
                 True,
                 None,
                 self._non_admin(),
@@ -852,11 +951,11 @@ class TestCheckDisableGlobalGuardrailsCallerPermission:
 
     def test_proxy_admin_may_set_the_flag(self):
         from litellm.proxy.management_endpoints.common_utils import (
-            _check_disable_global_guardrails_caller_permission,
+            check_disable_global_guardrails_caller_permission,
         )
 
         assert (
-            _check_disable_global_guardrails_caller_permission(True, {"disable_global_guardrails": True}, self._admin())
+            check_disable_global_guardrails_caller_permission(True, {"disable_global_guardrails": True}, self._admin())
             is None
         )
 
@@ -864,7 +963,7 @@ class TestCheckDisableGlobalGuardrailsCallerPermission:
 class TestTeamMemberHasPermission:
     def test_requires_caller_to_be_a_team_member(self):
         from litellm.proxy.management_endpoints.common_utils import (
-            _team_member_has_permission,
+            team_member_has_permission,
         )
 
         team = LiteLLM_TeamTable(
@@ -875,7 +974,7 @@ class TestTeamMemberHasPermission:
         key = UserAPIKeyAuth(
             user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
         )
-        assert _team_member_has_permission(key, team, "/key/generate") is False
+        assert team_member_has_permission(key, team, "/key/generate") is False
 
 
 class TestUserHasAdminPrivilegesGuard:
@@ -887,7 +986,7 @@ class TestUserHasAdminPrivilegesGuard:
         )
         mock_get_user = AsyncMock(return_value=None)
         with patch("litellm.proxy.auth.auth_checks.get_user_object", mock_get_user):
-            result = await _user_has_admin_privileges(
+            result = await user_has_admin_privileges(
                 user_api_key_dict=auth, prisma_client=None
             )
         assert result is False
@@ -914,7 +1013,7 @@ class TestUserHasAdminPrivilegesGuard:
         )
         mock_get_user = AsyncMock(return_value=user_obj)
         with patch("litellm.proxy.auth.auth_checks.get_user_object", mock_get_user):
-            result = await _user_has_admin_privileges(
+            result = await user_has_admin_privileges(
                 user_api_key_dict=auth, prisma_client=MagicMock()
             )
         assert result is True
@@ -1005,9 +1104,9 @@ class TestSetObjectMetadataFieldPremiumArg:
     def test_premium_check_receives_the_field_name(self):
         team = LiteLLM_TeamTable(team_id="t1", metadata={})
         with patch(
-            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+            "litellm.proxy.management_endpoints.common_utils.premium_user_check"
         ) as mock_premium:
-            _set_object_metadata_field(team, "guardrails", ["g1"])
+            set_object_metadata_field(team, "guardrails", ["g1"])
             mock_premium.assert_called_once_with("guardrails")
 
 
@@ -1025,9 +1124,9 @@ class TestUpdateMetadataFieldMove:
     def test_set_premium_field_is_moved_into_metadata(self):
         updated_kv = {"guardrails": ["g1"]}
         with patch(
-            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+            "litellm.proxy.management_endpoints.common_utils.premium_user_check"
         ):
-            _update_metadata_fields(updated_kv)
+            update_metadata_fields(updated_kv)
         assert "guardrails" not in updated_kv
         assert updated_kv["metadata"]["guardrails"] == ["g1"]
 
@@ -1072,7 +1171,7 @@ class TestUpdateMetadataFieldsPremiumCheck:
     """
 
     @patch(
-        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        "litellm.proxy.management_endpoints.common_utils.premium_user_check",
         side_effect=Exception("Should not be called"),
     )
     def test_empty_policies_skips_premium_check(self, mock_check):
@@ -1082,11 +1181,11 @@ class TestUpdateMetadataFieldsPremiumCheck:
             "team_alias": "my-team",
             "policies": [],
         }
-        _update_metadata_fields(updated_kv)
+        update_metadata_fields(updated_kv)
         mock_check.assert_not_called()
 
     @patch(
-        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        "litellm.proxy.management_endpoints.common_utils.premium_user_check",
         side_effect=Exception("Should not be called"),
     )
     def test_empty_guardrails_skips_premium_check(self, mock_check):
@@ -1095,11 +1194,11 @@ class TestUpdateMetadataFieldsPremiumCheck:
             "team_id": "team-123",
             "guardrails": [],
         }
-        _update_metadata_fields(updated_kv)
+        update_metadata_fields(updated_kv)
         mock_check.assert_not_called()
 
     @patch(
-        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        "litellm.proxy.management_endpoints.common_utils.premium_user_check",
         side_effect=Exception("Should not be called"),
     )
     def test_empty_string_team_member_key_duration_skips_premium_check(
@@ -1110,11 +1209,11 @@ class TestUpdateMetadataFieldsPremiumCheck:
             "team_id": "team-123",
             "team_member_key_duration": "",
         }
-        _update_metadata_fields(updated_kv)
+        update_metadata_fields(updated_kv)
         mock_check.assert_not_called()
 
     @patch(
-        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        "litellm.proxy.management_endpoints.common_utils.premium_user_check",
         side_effect=Exception("Should not be called"),
     )
     def test_full_ui_payload_with_empty_premium_fields_skips_premium_check(
@@ -1132,11 +1231,11 @@ class TestUpdateMetadataFieldsPremiumCheck:
             "team_member_key_duration": "",
             "prompts": [],
         }
-        _update_metadata_fields(updated_kv)
+        update_metadata_fields(updated_kv)
         mock_check.assert_not_called()
 
     @patch(
-        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        "litellm.proxy.management_endpoints.common_utils.premium_user_check",
     )
     def test_non_empty_policies_triggers_premium_check(self, mock_check):
         """policies: ['real-policy'] SHOULD trigger premium user check."""
@@ -1144,11 +1243,11 @@ class TestUpdateMetadataFieldsPremiumCheck:
             "team_id": "team-123",
             "policies": ["real-policy"],
         }
-        _update_metadata_fields(updated_kv)
+        update_metadata_fields(updated_kv)
         mock_check.assert_called()
 
     @patch(
-        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        "litellm.proxy.management_endpoints.common_utils.premium_user_check",
     )
     def test_non_empty_guardrails_triggers_premium_check(self, mock_check):
         """guardrails: ['my-guardrail'] SHOULD trigger premium user check."""
@@ -1156,11 +1255,11 @@ class TestUpdateMetadataFieldsPremiumCheck:
             "team_id": "team-123",
             "guardrails": ["my-guardrail"],
         }
-        _update_metadata_fields(updated_kv)
+        update_metadata_fields(updated_kv)
         mock_check.assert_called()
 
     @patch(
-        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        "litellm.proxy.management_endpoints.common_utils.premium_user_check",
     )
     def test_non_empty_team_member_key_duration_triggers_premium_check(
         self, mock_check
@@ -1170,7 +1269,7 @@ class TestUpdateMetadataFieldsPremiumCheck:
             "team_id": "team-123",
             "team_member_key_duration": "30d",
         }
-        _update_metadata_fields(updated_kv)
+        update_metadata_fields(updated_kv)
         mock_check.assert_called()
 
 

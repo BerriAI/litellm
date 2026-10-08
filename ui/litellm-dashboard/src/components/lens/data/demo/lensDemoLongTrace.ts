@@ -85,6 +85,7 @@ export function withReleaseCases(run: { trace: Trace; details: SpanDetail[] }) {
     input_tokens: models.reduce((sum, span) => sum + span.input_tokens, 0),
     output_tokens: models.reduce((sum, span) => sum + span.output_tokens, 0),
     spend: models.reduce((sum, span) => sum + (span.spend ?? 0), 0),
+    priced_calls: models.length,
   };
   const finalDetail = run.details.at(-1)!;
   const history = caseDetails.filter((_, index) => index % 3 === 2);
@@ -102,6 +103,7 @@ export function withReleaseCases(run: { trace: Trace; details: SpanDetail[] }) {
           llm_calls: caseCount,
           tool_calls: caseCount,
           spend: summary.spend - (final.spend ?? 0),
+          priced_calls: caseCount,
         },
       ],
     },

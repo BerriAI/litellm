@@ -1,4 +1,4 @@
-import asyncio
+import asyncio, importlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 import os
@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
 from botocore.auth import SigV4Auth
@@ -29,6 +29,9 @@ from litellm.llms.bedrock.base_aws_llm import (
     sign_request_off_loop_if_aws,
 )
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 # Global variable for the base_aws_llm.py file path
 
@@ -447,7 +450,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.return_value = mock_session
 
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "us-east-1"
             mock_boto3_session.assert_called_once()
@@ -462,7 +465,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.return_value = mock_session
 
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "us-west-2"
             mock_boto3_session.assert_called_once()
@@ -475,7 +478,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.side_effect = Exception("boto3 not available")
 
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "us-west-2"
             mock_boto3_session.assert_called_once()
@@ -483,7 +486,7 @@ def test_get_aws_region_name_boto3_fallback():
     # Test case 4: aws_region_name is provided in optional_params (should not use boto3)
     with patch("boto3.Session") as mock_boto3_session:
         optional_params = {"aws_region_name": "eu-west-1"}
-        result = base_aws_llm._get_aws_region_name(optional_params)
+        result = base_aws_llm.get_aws_region_name(optional_params)
 
         assert result == "eu-west-1"
         mock_boto3_session.assert_not_called()
@@ -500,7 +503,7 @@ def test_get_aws_region_name_boto3_fallback():
 
         with patch("boto3.Session") as mock_boto3_session:
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "ap-southeast-1"
             mock_boto3_session.assert_not_called()
@@ -531,9 +534,7 @@ def test_get_aws_region_name_rejects_malformed_region(bad_region):
     base_aws_llm = BaseAWSLLM()
 
     with pytest.raises(ValueError, match="Invalid AWS region format"):
-        base_aws_llm._get_aws_region_name(
-            optional_params={"aws_region_name": bad_region}
-        )
+        base_aws_llm.get_aws_region_name(optional_params={"aws_region_name": bad_region})
 
 
 @pytest.mark.parametrize(
@@ -550,9 +551,7 @@ def test_get_aws_region_name_rejects_malformed_region(bad_region):
 def test_get_aws_region_name_accepts_valid_regions(valid_region):
     """Real AWS region formats must continue to work after the format guard."""
     base_aws_llm = BaseAWSLLM()
-    result = base_aws_llm._get_aws_region_name(
-        optional_params={"aws_region_name": valid_region}
-    )
+    result = base_aws_llm.get_aws_region_name(optional_params={"aws_region_name": valid_region})
     assert result == valid_region
 
 
@@ -573,7 +572,7 @@ def test_get_aws_region_name_rejects_malformed_region_from_env():
         mock_get_secret.side_effect = side_effect
 
         with pytest.raises(ValueError, match="Invalid AWS region format"):
-            base_aws_llm._get_aws_region_name(optional_params={})
+            base_aws_llm.get_aws_region_name(optional_params={})
 
 
 def test_get_aws_region_name_for_non_llm_api_calls_rejects_malformed_param():
@@ -2701,29 +2700,19 @@ def test_converse_handler_external_id_extraction():
         mock_credentials.token = "test-session-token"
         return mock_credentials
 
-    with patch.object(
-        converse_llm, "get_credentials", side_effect=mock_get_credentials
-    ):
-        with patch.object(
-            converse_llm, "_get_aws_region_name", return_value="us-west-2"
-        ):
+    with patch.object(converse_llm, "get_credentials", side_effect=mock_get_credentials):
+        with patch.object(converse_llm, "_get_aws_region_name", return_value="us-west-2"):
             with patch.object(
                 converse_llm,
                 "get_runtime_endpoint",
                 return_value=("https://test", "https://test"),
             ):
                 with patch("litellm.AmazonConverseConfig") as mock_config:
-                    mock_config.return_value._transform_request.return_value = {
-                        "test": "data"
-                    }
-                    with patch.object(
-                        converse_llm, "get_request_headers"
-                    ) as mock_headers:
+                    mock_config.return_value._transform_request.return_value = {"test": "data"}
+                    with patch.object(converse_llm, "get_request_headers") as mock_headers:
                         mock_headers.return_value = MagicMock()
                         mock_headers.return_value.headers = {"Authorization": "test"}
-                        with patch(
-                            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-                        ) as mock_client:
+                        with patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_client:
                             mock_http_client = MagicMock()
                             mock_response = MagicMock()
                             mock_response.raise_for_status.return_value = None
@@ -2731,9 +2720,7 @@ def test_converse_handler_external_id_extraction():
                             mock_client.return_value = mock_http_client
 
                             # Mock the transform_response method
-                            mock_config.return_value._transform_response.return_value = (
-                                MagicMock()
-                            )
+                            mock_config.return_value._transform_response.return_value = MagicMock()
 
                             # Call completion with aws_external_id in optional_params
                             optional_params = {
@@ -3701,3 +3688,486 @@ def test_resolve_credentials_forwards_profile_name():
 
     assert mock_session_cls.call_args.kwargs["profile_name"] == "litellm-qa-profile"
     assert credentials.access_key == "AKIAPROFILE"
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="session")
+def event_loop():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+@pytest.fixture(scope="function")
+def setup_and_teardown(event_loop):
+    import litellm
+
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    importlib.reload(litellm)
+    asyncio.set_event_loop(event_loop)
+    yield
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    pending = asyncio.all_tasks(event_loop)
+    for task in pending:
+        task.cancel()
+    if pending:
+        event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+    "cohere_key": getattr(litellm, "cohere_key", None),
+}
+
+@pytest.fixture
+def base_aws_llm():
+    return BaseAWSLLM()
+
+@pytest.fixture
+def mock_credentials():
+    return Credentials(access_key="test_access", secret_key="test_secret", token="test_token")
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_get_cache_key(base_aws_llm):
+    test_args = {
+        "aws_access_key_id": "test_key",
+        "aws_secret_access_key": "test_secret",
+    }
+    cache_key = base_aws_llm.get_cache_key(test_args)
+    assert isinstance(cache_key, str)
+    assert len(cache_key) == 64  # SHA-256 produces 64 character hex string
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@patch("boto3.client")
+@patch("litellm.llms.bedrock.base_aws_llm.get_secret")  # Add this patch
+def test_auth_with_web_identity_token(mock_get_secret, mock_boto3_client, base_aws_llm):
+    # Mock get_secret to return a token
+    mock_get_secret.return_value = "mocked_oidc_token"
+
+    # Mock the STS client and response
+    mock_sts = MagicMock()
+    mock_sts.assume_role_with_web_identity.return_value = {
+        "Credentials": {
+            "AccessKeyId": "test_access",
+            "SecretAccessKey": "test_secret",
+            "SessionToken": "test_token",
+        },
+        "PackedPolicySize": 10,
+    }
+    mock_boto3_client.return_value = mock_sts
+
+    credentials, ttl = base_aws_llm._auth_with_web_identity_token(
+        aws_web_identity_token="test_token",
+        aws_role_name="test_role",
+        aws_session_name="test_session",
+        aws_region_name="us-west-2",
+        aws_sts_endpoint=None,
+    )
+
+    # Verify get_secret was called with the correct argument
+    mock_get_secret.assert_called_once_with("test_token")
+
+    assert isinstance(credentials, Credentials)
+    assert ttl == 3540  # default TTL (3600 - 60)
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@patch("boto3.client")
+def test_auth_with_aws_role(mock_boto3_client, base_aws_llm):
+    # Mock the STS client and response
+    mock_sts = MagicMock()
+    expiry_time = datetime.now(timezone.utc)
+    mock_sts.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "test_access",
+            "SecretAccessKey": "test_secret",
+            "SessionToken": "test_token",
+            "Expiration": expiry_time,
+        }
+    }
+    mock_boto3_client.return_value = mock_sts
+
+    credentials, ttl = base_aws_llm._auth_with_aws_role(
+        aws_access_key_id="test_access",
+        aws_secret_access_key="test_secret",
+        aws_session_token="test_token",
+        aws_role_name="test_role",
+        aws_session_name="test_session",
+    )
+
+    assert isinstance(credentials, Credentials)
+    assert isinstance(ttl, float)
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@patch("boto3.Session")
+def test_auth_with_aws_profile(mock_session, base_aws_llm, mock_credentials):
+    # Mock the session
+    mock_session_instance = MagicMock()
+    mock_session_instance.get_credentials.return_value = mock_credentials
+    mock_session.return_value = mock_session_instance
+
+    credentials, ttl = base_aws_llm._auth_with_aws_profile("test_profile")
+
+    assert credentials == mock_credentials
+    assert ttl is None
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_auth_with_aws_session_token(base_aws_llm):
+    credentials, ttl = base_aws_llm._auth_with_aws_session_token(
+        aws_access_key_id="test_access",
+        aws_secret_access_key="test_secret",
+        aws_session_token="test_token",
+    )
+
+    assert isinstance(credentials, Credentials)
+    assert credentials.access_key == "test_access"
+    assert credentials.secret_key == "test_secret"
+    assert credentials.token == "test_token"
+    assert ttl is None
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@patch("boto3.Session")
+def test_auth_with_access_key_and_secret_key(mock_session, base_aws_llm, mock_credentials):
+    # Mock the session
+    mock_session_instance = MagicMock()
+    mock_session_instance.get_credentials.return_value = mock_credentials
+    mock_session.return_value = mock_session_instance
+
+    credentials, ttl = base_aws_llm._auth_with_access_key_and_secret_key(
+        aws_access_key_id="test_access",
+        aws_secret_access_key="test_secret",
+        aws_region_name="us-west-2",
+    )
+
+    assert credentials == mock_credentials
+    assert ttl == 3540  # default TTL (3600 - 60)
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@patch("boto3.Session")
+def test_auth_with_env_vars(mock_session, base_aws_llm, mock_credentials):
+    # Mock the session
+    mock_session_instance = MagicMock()
+    mock_session_instance.get_credentials.return_value = mock_credentials
+    mock_session.return_value = mock_session_instance
+
+    credentials, ttl = base_aws_llm._auth_with_env_vars()
+
+    assert credentials == mock_credentials
+    assert ttl is None
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_get_runtime_endpoint(base_aws_llm):
+    endpoint_url, proxy_endpoint_url = base_aws_llm.get_runtime_endpoint(
+        api_base=None, aws_bedrock_runtime_endpoint=None, aws_region_name="us-west-2"
+    )
+    assert endpoint_url == "https://bedrock-runtime.us-west-2.amazonaws.com"
+    assert proxy_endpoint_url == "https://bedrock-runtime.us-west-2.amazonaws.com"
+
+    endpoint_url, proxy_endpoint_url = base_aws_llm.get_runtime_endpoint(
+        aws_bedrock_runtime_endpoint=None, aws_region_name="us-east-1", api_base=None
+    )
+    assert endpoint_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
+    assert proxy_endpoint_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
+
+@pytest.fixture
+def clear_cache(base_aws_llm):
+    """Clear the cache before each test"""
+    base_aws_llm.iam_cache.in_memory_cache.cache_dict = {}
+    yield
+
+@pytest.fixture
+def _pr4_bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "pr4-test-aws-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "pr4-test-aws-secret-key")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+
+@pytest.mark.usefixtures("_pr4_bedrock_env", "_vcr_outcome_gate", "setup_and_teardown")
+def test_bedrock_completion_with_region_name():
+    litellm.turn_on_debug()
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        # Construct a response similar to our other tests.
+        mock_response.text = json.dumps(
+            {
+                "response_id": "379ed018/60744aff-e741-4aad-bd10-74639a4ade79",
+                "text": "Hello! How's it going? I hope you're having a fantastic day!",
+                "generation_id": "38709bb9-f20f-42d9-9c61-13a73b7bbc12",
+                "chat_history": [
+                    {"role": "USER", "message": "Hello, world!"},
+                    {
+                        "role": "CHATBOT",
+                        "message": "Hello! How's it going? I hope you're having a fantastic day!",
+                    },
+                ],
+                "finish_reason": "COMPLETE",
+            }
+        )
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        # Pass the client so that the HTTP call will be intercepted.
+        response = litellm.completion(
+            model="bedrock/cohere.command-r-v1:0",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            aws_region_name="us-west-12",
+            client=client,
+        )
+
+        # Ensure our post method has been called.
+        mock_post.assert_called_once()
+
+        assert (
+            mock_post.call_args.kwargs["url"]
+            == "https://bedrock-runtime.us-west-12.amazonaws.com/model/cohere.command-r-v1:0/invoke"
+        )
+        assert mock_post.call_args.kwargs["data"] == json.dumps(
+            {"message": "Hello, world!", "chat_history": []}
+        ).encode("utf-8")
+
+        # Print the URL and body of the HTTP request.
+        # assert request was signed with the correct region
+        _authorization_header = mock_post.call_args.kwargs["headers"]["Authorization"]
+        import re
+
+        # Ensure the authorization header contains the exact region segment "us-west-12/bedrock/aws4_request"
+        pattern = r"us-west-12/bedrock/aws4_request"
+        assert re.search(pattern, _authorization_header) is not None
+
+@pytest.mark.usefixtures("_pr4_bedrock_env", "_vcr_outcome_gate", "setup_and_teardown")
+def test_bedrock_completion_with_dynamic_authentication_params():
+    litellm.turn_on_debug()
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        # Construct a response similar to our other tests.
+        mock_response.text = json.dumps(
+            {
+                "response_id": "379ed018/60744aff-e741-4aad-bd10-74639a4ade79",
+                "text": "Hello! How's it going? I hope you're having a fantastic day!",
+                "generation_id": "38709bb9-f20f-42d9-9c61-13a73b7bbc12",
+                "chat_history": [
+                    {"role": "USER", "message": "Hello, world!"},
+                    {
+                        "role": "CHATBOT",
+                        "message": "Hello! How's it going? I hope you're having a fantastic day!",
+                    },
+                ],
+                "finish_reason": "COMPLETE",
+            }
+        )
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        # Pass the client so that the HTTP call will be intercepted.
+        response = litellm.completion(
+            model="bedrock/cohere.command-r-v1:0",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            aws_access_key_id="dynamically_generated_access_key_id",
+            aws_secret_access_key="dynamically_generated_secret_access_key",
+            client=client,
+        )
+
+        # Ensure our post method has been called.
+        mock_post.assert_called_once()
+        import re
+
+        # Get authorization header
+        _authorization_header = mock_post.call_args.kwargs["headers"]["Authorization"]
+
+        # Check for exact credential pattern
+        pattern = (
+            r"AWS4-HMAC-SHA256 Credential=dynamically_generated_access_key_id/\d{8}/[a-z0-9-]+/bedrock/aws4_request"
+        )
+        assert re.search(pattern, _authorization_header) is not None
+
+@pytest.mark.usefixtures("_pr4_bedrock_env", "_vcr_outcome_gate", "setup_and_teardown")
+def test_bedrock_completion_with_dynamic_bedrock_runtime_endpoint():
+    litellm.turn_on_debug()
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        # Construct a response similar to our other tests.
+        mock_response.text = json.dumps(
+            {
+                "response_id": "379ed018/60744aff-e741-4aad-bd10-74639a4ade79",
+                "text": "Hello! How's it going? I hope you're having a fantastic day!",
+                "generation_id": "38709bb9-f20f-42d9-9c61-13a73b7bbc12",
+                "chat_history": [
+                    {"role": "USER", "message": "Hello, world!"},
+                    {
+                        "role": "CHATBOT",
+                        "message": "Hello! How's it going? I hope you're having a fantastic day!",
+                    },
+                ],
+                "finish_reason": "COMPLETE",
+            }
+        )
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        # Pass the client so that the HTTP call will be intercepted.
+        response = litellm.completion(
+            model="bedrock/cohere.command-r-v1:0",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            aws_bedrock_runtime_endpoint="https://my-fake-endpoint.com",
+            client=client,
+        )
+
+        # Ensure our post method has been called.
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["url"] == "https://my-fake-endpoint.com/model/cohere.command-r-v1:0/invoke"
+
+class DummyCredentials:
+    access_key = "dummy_access"
+    secret_key = "dummy_secret"
+    token = "dummy_token"
+
+@pytest.mark.usefixtures("_pr4_bedrock_env", "_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/cohere.command-r-v1:0",
+        "amazon.nova-2-lite-v1:0",
+        "bedrock/cohere.command-r-v1:0",
+        "bedrock/invoke/cohere.command-r-v1:0",
+    ],
+)
+@pytest.mark.parametrize(
+    "param_name, param_value, expected_credentials_value",
+    [
+        ("aws_session_token", "dummy_session_token", "dummy_session_token"),
+        ("aws_session_name", "dummy_session_name", "dummy_session_name"),
+        ("aws_profile_name", "dummy_profile_name", "dummy_profile_name"),
+        ("aws_role_name", "dummy_role_name", "dummy_role_name"),
+        ("aws_web_identity_token", "dummy_web_identity_token", "dummy_web_identity_token"),
+        ("aws_sts_endpoint", "dummy_sts_endpoint", "dummy_sts_endpoint"),
+        ("aws_external_id", "dummy_external_id", "dummy_external_id"),
+        ("aws_session_tags", [{"Key": "team", "Value": "genai"}], ({"Key": "team", "Value": "genai"},)),
+    ],
+)
+def test_dynamic_aws_params_propagation(model, param_name, param_value, expected_credentials_value):
+    """
+    When passed to litellm.completion, each dynamic AWS authentication parameter
+    should propagate down to the get_credentials() call in BaseAWSLLM.
+
+    Also tests different model parameter values.
+    """
+    client = HTTPHandler()
+
+    # Base parameters required for the completion call.
+    # (We include aws_access_key_id and aws_secret_access_key so that the correct auth
+    # branch in get_credentials() is reached.)
+    base_params = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "aws_access_key_id": "dummy_access",
+        "aws_secret_access_key": "dummy_secret",
+        "client": client,
+    }
+    # For parameters such as aws_role_name or aws_web_identity_token a session name is required.
+    if param_name in ("aws_role_name", "aws_web_identity_token"):
+        base_params["aws_session_name"] = "dummy_session_name"
+        if param_name == "aws_web_identity_token":
+            # The web identity branch also requires a role name.
+            base_params["aws_role_name"] = "dummy_role_name"
+    # Inject the dynamic parameter under test.
+    base_params[param_name] = param_value
+
+    # Patch SigV4Auth in the signing (so that no actual signing is done).
+    with patch("botocore.auth.SigV4Auth", autospec=True) as mock_sigv4:
+        instance = mock_sigv4.return_value
+        instance.add_auth.return_value = None
+
+        # Patch BaseAWSLLM.get_credentials so that we can capture its kwargs.
+        def dummy_get_credentials(**kwargs):
+            dummy_get_credentials.called_kwargs = kwargs  # type: ignore[attr-defined]
+            return DummyCredentials()
+
+        with patch.object(BaseAWSLLM, "get_credentials", side_effect=dummy_get_credentials):
+            # Patch the HTTP client's post method to avoid an actual HTTP call.
+            with patch.object(client, "post") as mock_post:
+                mock_response = Mock()
+                mock_response.text = json.dumps(
+                    {
+                        "response_id": "dummy_response",
+                        "text": "Hello! world",
+                        "generation_id": "dummy_gen",
+                        "chat_history": [],
+                        "finish_reason": "COMPLETE",
+                    }
+                )
+                if BedrockModelInfo.get_bedrock_route(model) == "converse":
+                    mock_response.text = json.dumps(
+                        {
+                            "output": {
+                                "message": {
+                                    "role": "assistant",
+                                    "content": [{"text": "Here's a joke..."}],
+                                }
+                            },
+                            "usage": {
+                                "inputTokens": 12,
+                                "outputTokens": 6,
+                                "totalTokens": 18,
+                            },
+                            "stopReason": "stop",
+                        }
+                    )
+
+                mock_response.status_code = 200
+                mock_response.headers = {"Content-Type": "application/json"}
+                mock_response.json = lambda: json.loads(mock_response.text)
+                mock_post.return_value = mock_response
+
+                # Call litellm.completion with our base & dynamic parameters.
+                litellm.completion(**base_params)
+
+                print(
+                    "get_credentials.called_kwargs",
+                    json.dumps(dummy_get_credentials.called_kwargs, indent=4),
+                )
+
+                # We now assert that get_credentials() was called with the dynamic param.
+                assert dummy_get_credentials.called_kwargs.get(param_name) == expected_credentials_value

@@ -1,7 +1,7 @@
+model_list: []
+
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   tracing:
     store:
-      type: clickhouse
-      url: os.environ/CLICKHOUSE_URL
-      retention_days: 14
+      type: lens

@@ -11,7 +11,9 @@ tests:
     set:
       backend.image.tag: sha-0123456789abcdef
       lensWorker.enabled: true
-      lensWorker.tokenSecret.name: lens-credential
+      lensWorker.publicUrl: https://traces.example
+      lensWorker.serviceTokenSecret.name: lens-service
+      lensWorker.clickhouseSecret.name: lens-storage
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
@@ -31,7 +33,9 @@ tests:
     set:
       backend.image.tag: sha-0123456789abcdef
       lensWorker.enabled: true
-      lensWorker.tokenSecret.name: lens-credential
+      lensWorker.publicUrl: https://traces.example
+      lensWorker.serviceTokenSecret.name: lens-service
+      lensWorker.clickhouseSecret.name: lens-storage
       lensWorker.image.repository: registry.example/lens-worker
     asserts:
       - equal:
@@ -41,7 +45,9 @@ tests:
     template: lens/deployment.yaml
     set:
       lensWorker.enabled: true
-      lensWorker.tokenSecret.name: lens-credential
+      lensWorker.publicUrl: https://traces.example
+      lensWorker.serviceTokenSecret.name: lens-service
+      lensWorker.clickhouseSecret.name: lens-storage
       lensWorker.image.tag: replaced-release
       lensWorker.image.digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     asserts:
@@ -71,20 +77,29 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
-  - it: requires a limited worker credential when enabled
+  - it: uses the managed service secret when none is supplied
     template: lens/deployment.yaml
     set:
       lensWorker.enabled: true
+      lensWorker.publicUrl: https://traces.example
     asserts:
-      - failedTemplate:
-          errorMessage: lensWorker.tokenSecret.name must reference a Lens worker token
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_SERVICE_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-litellm-lens-service
+                key: service-token
   - it: uses the chart release and a secret without granting Kubernetes access
     template: lens/deployment.yaml
     chart:
       appVersion: v1.2.3
     set:
       lensWorker.enabled: true
-      lensWorker.tokenSecret.name: lens-credential
+      lensWorker.publicUrl: https://traces.example
+      lensWorker.serviceTokenSecret.name: lens-service
+      lensWorker.clickhouseSecret.name: lens-storage
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
@@ -92,8 +107,8 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[1].valueFrom.secretKeyRef
           value:
-            name: lens-credential
-            key: token
+            name: lens-service
+            key: service-token
       - equal:
           path: spec.template.spec.automountServiceAccountToken
           value: false
@@ -120,7 +135,9 @@ tests:
     template: lens/deployment.yaml
     set:
       lensWorker.enabled: true
-      lensWorker.tokenSecret.name: lens-credential
+      lensWorker.publicUrl: https://traces.example
+      lensWorker.serviceTokenSecret.name: lens-service
+      lensWorker.clickhouseSecret.name: lens-storage
       lensWorker.url: https://gateway.example/proxy
       lensWorker.image.repository: registry.example/lens-worker
       lensWorker.image.tag: branch-main-1234567
@@ -137,7 +154,9 @@ tests:
       appVersion: 1.2.3-rc.4
     set:
       lensWorker.enabled: true
-      lensWorker.tokenSecret.name: lens-credential
+      lensWorker.publicUrl: https://traces.example
+      lensWorker.serviceTokenSecret.name: lens-service
+      lensWorker.clickhouseSecret.name: lens-storage
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
@@ -147,7 +166,9 @@ tests:
     set:
       backend.image.tag: branch-main-1234567
       lensWorker.enabled: true
-      lensWorker.tokenSecret.name: lens-credential
+      lensWorker.publicUrl: https://traces.example
+      lensWorker.serviceTokenSecret.name: lens-service
+      lensWorker.clickhouseSecret.name: lens-storage
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
@@ -167,7 +188,9 @@ tests:
     set:
       backend.image.tag: 1.2.3-dev.4
       lensWorker.enabled: true
-      lensWorker.tokenSecret.name: lens-credential
+      lensWorker.publicUrl: https://traces.example
+      lensWorker.serviceTokenSecret.name: lens-service
+      lensWorker.clickhouseSecret.name: lens-storage
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image

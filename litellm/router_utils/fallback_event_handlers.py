@@ -17,13 +17,13 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
 )
-from litellm.router_utils.batch_utils import _get_router_metadata_variable_name
+from litellm.router_utils.batch_utils import get_router_metadata_variable_name
 from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
-    _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
     is_caller_timeout_408,
+    set_cooldown_deployments,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -141,7 +141,7 @@ def _trigger_cooldown_for_failed_deployment(
             litellm_router_instance=litellm_router,
             deployment_id=deployment_id,
         )
-        _set_cooldown_deployments(
+        set_cooldown_deployments(
             litellm_router_instance=litellm_router,
             exception_status=exception_status,
             original_exception=exception,
@@ -335,6 +335,28 @@ def per_request_fallback_controls(kwargs: Mapping[str, object]) -> MidStreamFall
     )
 
 
+def mid_stream_fallback_snapshot_kwargs(
+    model: str,
+    controls: object,
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the streaming iterators rewrite it in place when they re-enter the chain
+    """
+    The kwargs a completion attempt's stream re-enters the fallback chain with if it fails.
+
+    async_function_with_retries popped the per-request fallback lists before the attempt ran, so
+    the carrier restores them here and rides along into every hop this re-entry opens. A shallow
+    copy keeps the metadata buckets shared with the live kwargs, the way the attempt's own
+    in-place bucket writes expect.
+    """
+    hop_controls: Final = controls if isinstance(controls, MidStreamFallbackControls) else _NO_FALLBACK_CONTROLS
+    return {
+        **kwargs,
+        **hop_controls.overrides,
+        MID_STREAM_FALLBACK_CONTROLS_KEY: hop_controls,
+        "model": model,
+    }
+
+
 def mid_stream_fallback_hop_kwargs(
     model: str,
     original_generic_function: Callable[..., object],
@@ -342,22 +364,18 @@ def mid_stream_fallback_hop_kwargs(
     kwargs: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: the streaming iterators rewrite it in place when they re-enter the chain
     """
-    The kwargs one streaming attempt re-enters the fallback chain with if its stream fails.
+    The kwargs one generic-endpoint streaming attempt re-enters the fallback chain with if its stream fails.
 
     A shallow copy keeps ``attempted_targets`` shared with the outer chain, so entries this
     request already tried are never retried; the metadata buckets are copied key by key because
     the attempt writes deployment-specific fields into them in place.
     """
-    hop_controls: Final = controls if isinstance(controls, MidStreamFallbackControls) else _NO_FALLBACK_CONTROLS
     copied_buckets: Final = MappingProxyType(
         {name: safe_deep_copy(kwargs[name]) for name in _ROUTER_METADATA_BUCKETS if isinstance(kwargs.get(name), dict)}
     )
     return {
-        **kwargs,
+        **mid_stream_fallback_snapshot_kwargs(model=model, controls=controls, kwargs=kwargs),
         **copied_buckets,
-        **hop_controls.overrides,
-        MID_STREAM_FALLBACK_CONTROLS_KEY: hop_controls,
-        "model": model,
         "original_generic_function": original_generic_function,
     }
 
@@ -696,7 +714,7 @@ async def run_async_fallback(
 
     error_from_fallbacks = original_exception
     fallback_errors = (get_fallback_error_info(original_exception),)
-    metadata_variable_name: Final = _get_router_metadata_variable_name(
+    metadata_variable_name: Final = get_router_metadata_variable_name(
         function_name=getattr(kwargs.get("original_function"), "__name__", None)
     )
     same_model_group_only: Final = references_provider_scoped_resource(kwargs) or creates_provider_scoped_resource(
@@ -855,7 +873,7 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
             verbose_router_logger.error("Error in log_failure_fallback_event: %s", e)
 
 
-def _check_non_standard_fallback_format(fallbacks: Sequence[object] | None) -> bool:
+def check_non_standard_fallback_format(fallbacks: Sequence[object] | None) -> bool:
     """
     Checks if the fallbacks list is a list of strings or a list of dictionaries.
 
@@ -880,6 +898,9 @@ def _check_non_standard_fallback_format(fallbacks: Sequence[object] | None) -> b
                         return True
 
     return False
+
+
+_check_non_standard_fallback_format = check_non_standard_fallback_format
 
 
 def run_non_standard_fallback_format(fallbacks: Sequence[str] | Sequence[Mapping[str, object]], model_group: str):

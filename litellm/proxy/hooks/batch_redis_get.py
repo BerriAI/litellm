@@ -25,7 +25,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 self.async_get_cache
             )  # map the litellm 'get_cache' function to our custom function
 
-    def print_verbose(self, print_statement, debug_level: Literal["INFO", "DEBUG"] = "DEBUG"):
+    def print_verbose(self, print_statement, debug_level: Literal["INFO", "DEBUG"] = "DEBUG") -> None:
         if debug_level == "DEBUG" or debug_level == "INFO":
             verbose_proxy_logger.debug(print_statement)
         if litellm.set_verbose is True:
@@ -37,7 +37,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ):
+    ) -> None:
         try:
             """
             Get the user key
@@ -83,7 +83,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 
-    async def async_get_cache(self, *args, **kwargs):
+    async def async_get_cache(self, *args, **kwargs) -> object | None:
         """
         - Check if the cache key is in-memory
 
@@ -110,6 +110,9 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                         cached_result = await litellm.cache.cache.async_get_cache(cache_key, *args, **kwargs)
                     if cached_result is not None:
                         await self.in_memory_cache.async_set_cache(cache_key, cached_result, ttl=60)
-                return litellm.cache._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                return litellm.cache.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             return None
+
+
+PROXY_BatchRedisRequests: Final = _PROXY_BatchRedisRequests

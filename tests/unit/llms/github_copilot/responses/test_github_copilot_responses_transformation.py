@@ -363,7 +363,7 @@ class TestGithubCopilotResponsesAPIRouting:
     in the (already-merged) model info; otherwise returns None so the dispatcher
     routes through the chat-completions translation bridge."""
 
-    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
+    @patch("litellm.llms.github_copilot.responses.transformation.cached_get_model_info_helper")
     def test_returns_config_when_mode_is_responses(self, mock_get_info):
         """``mode=responses`` returns native config."""
         mock_get_info.return_value = {"mode": "responses"}
@@ -373,7 +373,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert isinstance(config, GithubCopilotResponsesAPIConfig)
 
-    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
+    @patch("litellm.llms.github_copilot.responses.transformation.cached_get_model_info_helper")
     def test_returns_none_when_mode_is_chat(self, mock_get_info):
         """``mode=chat`` returns None so dispatcher uses bridge."""
         mock_get_info.return_value = {"mode": "chat"}
@@ -383,7 +383,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert config is None
 
-    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
+    @patch("litellm.llms.github_copilot.responses.transformation.cached_get_model_info_helper")
     def test_returns_none_when_mode_is_unset_and_no_endpoints(self, mock_get_info):
         """Entry without ``mode`` and without ``supported_endpoints`` returns None
         (conservative default)."""
@@ -463,7 +463,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert isinstance(config, GithubCopilotResponsesAPIConfig)
 
-    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
+    @patch("litellm.llms.github_copilot.responses.transformation.cached_get_model_info_helper")
     def test_returns_none_when_get_model_info_raises(self, mock_get_info):
         """Catalog lookup failure (model not registered) returns None
         (conservative default; bridge handles unknown models safely)."""
@@ -474,7 +474,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert config is None
 
-    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
+    @patch("litellm.llms.github_copilot.responses.transformation.cached_get_model_info_helper")
     def test_user_override_via_register_model(self, mock_get_info):
         """User-supplied per-deployment ``model_info`` flows through
         ``litellm.register_model`` (called by the router) into the merged
@@ -488,7 +488,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert isinstance(config, GithubCopilotResponsesAPIConfig)
 
-    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
+    @patch("litellm.llms.github_copilot.responses.transformation.cached_get_model_info_helper")
     def test_realistic_chat_only_entry_returns_none(self, mock_get_info):
         """Realistic ``model_prices_and_context_window.json`` shape for a
         chat-only Copilot model (e.g. github_copilot/gemini-3.1-pro-preview)
@@ -512,7 +512,7 @@ class TestGithubCopilotResponsesAPIRouting:
         )
         assert config is None
 
-    @patch("litellm.llms.github_copilot.responses.transformation._cached_get_model_info_helper")
+    @patch("litellm.llms.github_copilot.responses.transformation.cached_get_model_info_helper")
     def test_realistic_responses_only_entry_returns_config(self, mock_get_info):
         """Realistic catalog entry for a Responses-only Copilot model
         (e.g. github_copilot/gpt-5.5) returns the native config."""
