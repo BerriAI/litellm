@@ -92,13 +92,15 @@ LIT014  Comprehension with more than one `for` clause or more than one `if` clau
         marker belongs to the innermost violating comprehension spanning that
         line, and also to any single-line violating comprehension on that line.
 LIT015  Pydantic model class that is not frozen. Set `frozen=True` in
-        `model_config = ConfigDict(...)`, a dict-literal `model_config`, an inner
-        `class Config`, or the class keywords. Classes inherit the frozen setting
-        from in-module model bases, unless their own configuration overrides it.
-        Detection is name-based: `BaseModel`, `pydantic.BaseModel`,
-        `LiteLLMPydanticObjectBase`, and `RootModel` identify models, while
-        `TypedDict` classes are exempt. Suppress with `# frozen-ok: <reason>` on
-        the `class` line.
+        `model_config = ConfigDict(...)`, `SettingsConfigDict(...)`, a dict-literal
+        `model_config`, an inner `class Config`, or the class keywords. Classes
+        inherit the frozen setting from in-module model bases, unless their own
+        configuration overrides it. Detection is name-based: `BaseModel`,
+        `pydantic.BaseModel`, `LiteLLMBaseModel`, `BaseLiteLLMOpenAIResponseObject`,
+        `LiteLLMPydanticObjectBase`, `RootModel`, and `BaseSettings` identify
+        models, while `TypedDict` classes are exempt. Replace in-place field writes
+        with `model_copy(update=...)`. Suppress with `# frozen-ok: <reason>` on the
+        `class` line.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -158,7 +160,17 @@ READONLY_QUALIFIER = "ReadOnly"
 FIELD_QUALIFIER_WRAPPERS = frozenset(("Required", "NotRequired", "Annotated"))
 TYPEDDICT_BASE = "TypedDict"
 # Base names that mark a class as a pydantic model (LIT015).
-PYDANTIC_BASES: Final = frozenset(("BaseModel", "LiteLLMPydanticObjectBase", "RootModel"))
+PYDANTIC_BASES: Final = frozenset(
+    (
+        "BaseModel",
+        "LiteLLMBaseModel",
+        "BaseLiteLLMOpenAIResponseObject",
+        "LiteLLMPydanticObjectBase",
+        "RootModel",
+        "BaseSettings",
+    )
+)
+PYDANTIC_CONFIG_FACTORIES: Final = frozenset(("ConfigDict", "SettingsConfigDict"))
 MIN_REASON_LEN = 3
 
 NOQA_RE = re.compile(
@@ -868,7 +880,7 @@ def _bool_constant(value: ast.expr) -> bool | None:
 
 
 def _model_config_frozen(value: ast.expr) -> bool | None:
-    if isinstance(value, ast.Call) and _head_name(value.func) == "ConfigDict":
+    if isinstance(value, ast.Call) and _head_name(value.func) in PYDANTIC_CONFIG_FACTORIES:
         flags: Final = tuple(_bool_constant(kw.value) for kw in value.keywords if kw.arg == "frozen")
         return flags[-1] if flags else None
     if isinstance(value, ast.Dict):
@@ -916,27 +928,28 @@ def _class_frozen_override(cls: ast.ClassDef) -> bool | None:
 
 def iter_pydantic_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
     models: Final = _pydantic_classes(tree)
-    bases_of: Final = {cls.name: _base_names(cls) for cls in models}
-    override_of: Final = {cls.name: _class_frozen_override(cls) for cls in models}
+    bases_of: Final = {cls: _base_names(cls) for cls in models}
+    override_of: Final = {cls: _class_frozen_override(cls) for cls in models}
 
     def frozen(known: frozenset[str]) -> frozenset[str]:
         grown: Final = known | frozenset(
             cls.name
             for cls in models
-            if override_of[cls.name] is True or (override_of[cls.name] is None and bases_of[cls.name] & known)
+            if override_of[cls] is True or (override_of[cls] is None and bases_of[cls] & known)
         )
         return grown if grown == known else frozen(grown)
 
     frozen_names: Final = frozen(frozenset())
     for cls in models:
-        if cls.name in frozen_names:
+        if override_of[cls] is True or (override_of[cls] is None and bases_of[cls] & frozen_names):
             continue
         yield Violation(
             path,
             cls.lineno,
             "LIT015",
             f"pydantic model `{cls.name}` is not frozen: set `frozen=True` in "
-            f"`model_config`, an inner `class Config`, or the class keywords "
+            f"`model_config`, an inner `class Config`, or the class keywords, and "
+            f"replace in-place field writes with `model_copy(update=...)` "
             f"(suppress: `# frozen-ok: <reason>`)",
         )
 

@@ -735,6 +735,41 @@ def test_extra_allow_does_not_exempt(tmp_path):
     assert "LIT015" in _codes(tmp_path, src)
 
 
+def test_litellm_base_model_is_flagged(tmp_path):
+    src = "class Foo(LiteLLMBaseModel):\n    x: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_litellm_openai_response_base_is_flagged(tmp_path):
+    src = "class R(BaseLiteLLMOpenAIResponseObject):\n    x: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_base_settings_is_flagged(tmp_path):
+    src = "class S(BaseSettings):\n    x: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_settings_config_dict_frozen_true_is_clean(tmp_path):
+    src = (
+        "from pydantic_settings import BaseSettings, SettingsConfigDict\n"
+        "class S(BaseSettings):\n"
+        "    model_config = SettingsConfigDict(frozen=True)\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_same_named_models_use_each_classes_own_override(tmp_path):
+    src = (
+        "from pydantic import BaseModel\n"
+        "class Dup(BaseModel, frozen=True):\n"
+        "    x: int\n"
+        "class Dup(BaseModel):\n"
+        "    x: int\n"
+    )
+    assert _codes(tmp_path, src) == ["LIT015"]
+
+
 # --------------------------------------------------------------------------- #
 # Stacked comprehension clauses (LIT014)
 # --------------------------------------------------------------------------- #
