@@ -30,7 +30,7 @@ import EntityUsageExportModal from "@/components/EntityUsageExport";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { filterModelActivity } from "@/components/UsagePage/modelActivityFilter";
 import { Team } from "@/components/key_team_helpers/key_list";
-import { gatewayDailyActivityCall, Organization, tagListCall } from "@/components/networking";
+import { gatewayDailyActivityCall, Organization, requestErrorActivityCall, tagListCall } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
@@ -51,6 +51,8 @@ import {
   type FetchedGatewayActivity,
   type GatewayActivity,
 } from "./gatewayActivity";
+import ErrorsTab from "./errors/ErrorsTab";
+import type { RequestErrorActivity } from "./errors/errorsData";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
@@ -230,6 +232,27 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   const gatewayActivity = selectGatewayActivity(isAdmin, gatewayActivityData, currentGatewayRangeKey);
 
+  const [requestErrorData, setRequestErrorData] = useState<FetchedForRange<RequestErrorActivity | null> | null>(null);
+  const requestErrorFetchIdRef = useRef(0);
+  useEffect(() => {
+    if (!isAdmin || !gatewayRequest) return;
+    const fetchId = ++requestErrorFetchIdRef.current;
+    requestErrorActivityCall(gatewayRequest.accessToken, gatewayRequest.startTime, gatewayRequest.endTime)
+      .then((data) => {
+        if (requestErrorFetchIdRef.current !== fetchId) return;
+        setRequestErrorData({ rangeKey: currentGatewayRangeKey, value: data as RequestErrorActivity });
+      })
+      .catch(() => {
+        if (requestErrorFetchIdRef.current !== fetchId) return;
+        setRequestErrorData({ rangeKey: currentGatewayRangeKey, value: null });
+      });
+  }, [isAdmin, gatewayRequest, currentGatewayRangeKey]);
+  const requestErrorsForRange = isAdmin ? requestErrorData : null;
+  const requestErrorsFailed =
+    requestErrorsForRange?.rangeKey === currentGatewayRangeKey && requestErrorsForRange.value === null;
+  const requestErrorActivity =
+    requestErrorsForRange?.rangeKey === currentGatewayRangeKey ? requestErrorsForRange.value : null;
+
   const userSpendData = useMemo(
     () => ({
       results: toDailyData(aggregatedRaw),
@@ -364,6 +387,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     <TabsTrigger value="endpoints" className="flex-none px-3">
                       Endpoint Activity
                     </TabsTrigger>
+                    {isAdmin && (
+                      <TabsTrigger value="errors" className="flex-none px-3">
+                        Errors
+                      </TabsTrigger>
+                    )}
                   </TabsList>
                   <div className="flex items-center gap-2">
                     <Button variant="outline" size="sm" onClick={() => setIsAiChatOpen(true)}>
@@ -487,6 +515,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 <TabsContent value="endpoints" keepMounted>
                   <EndpointUsage userSpendData={userSpendData} />
                 </TabsContent>
+                {isAdmin && (
+                  <TabsContent value="errors">
+                    <ErrorsTab
+                      activity={requestErrorActivity}
+                      loading={requestErrorActivity === null && !requestErrorsFailed}
+                      failed={requestErrorsFailed}
+                      userScoped={effectiveUserId !== null}
+                    />
+                  </TabsContent>
+                )}
               </Tabs>
             </>
           )}
