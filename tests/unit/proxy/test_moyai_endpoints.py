@@ -90,6 +90,7 @@ async def _exchange_env(monkeypatch: pytest.MonkeyPatch):
 
     prisma = MagicMock()
     prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=SimpleNamespace(ui_settings={}))
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     persisted: dict = {}
 
     async def _upsert(where, data):
@@ -102,10 +103,8 @@ async def _exchange_env(monkeypatch: pytest.MonkeyPatch):
 
     async def _mint(request_type, **kwargs):
         mint_calls.append(kwargs)
-        return {"key": "sk-new-virtual-key", **kwargs}
+        return {"token": "sk-new-virtual-key"}
 
-    import litellm.proxy.moyai_endpoints as m
-    monkeypatch.setattr(m, "_moyai_key_alias", AsyncMock(return_value="moyai-moyai.example.com"))
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
         AsyncMock(side_effect=_mint),

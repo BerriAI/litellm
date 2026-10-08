@@ -160,7 +160,9 @@ async def moyai_connect_start(
 
 
 async def _moyai_key_alias(prisma_client, moyai_url: str) -> str:
-    from litellm.repositories.table_repositories import VerificationTokenRepository
+    from litellm.repositories.verification_token_repository import (
+        VerificationTokenRepository,
+    )
 
     host: Final = urlparse(moyai_url).hostname or "deployment"
     alias: Final = f"moyai-{host}"
@@ -238,7 +240,7 @@ async def moyai_connect_exchange(request: Request, body: MoyaiConnectExchangeReq
     await _persist_moyai_url(prisma_client, moyai_url)
 
     return MoyaiConnectExchangeResponse(
-        api_key=key_response["key"],
+        api_key=key_response["token"],
         key_alias=alias,
         api_base=_gateway_url(request),
     )
