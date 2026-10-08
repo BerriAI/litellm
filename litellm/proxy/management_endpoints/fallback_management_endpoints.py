@@ -14,6 +14,8 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.model_checks import get_all_fallbacks
@@ -42,9 +44,10 @@ from litellm.types.management_endpoints.router_settings_endpoints import (
 router: Final = APIRouter()
 
 ROUTER_SETTINGS_PARAM: Final = "router_settings"
+_FALLBACK_RULES: Final = TypeAdapter(list[dict[str, list[str]]])
 
 
-async def _router_settings_fresh_from_db(proxy_config: "ProxyConfig") -> dict:
+async def _router_settings_fresh_from_db(proxy_config: "ProxyConfig") -> dict[str, object]:
     await evict_config_param(ROUTER_SETTINGS_PARAM)
     config: Final = await proxy_config.get_config()
     return config.get(ROUTER_SETTINGS_PARAM, {})
@@ -156,7 +159,7 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final[list[dict[str, list[str]]]] = router_settings.get(fallback_key, [])
+        existing_fallbacks: Final = _FALLBACK_RULES.validate_python(router_settings.get(fallback_key, []))
 
         # Update or add the fallback configuration
         fallback_updated = False
@@ -312,7 +315,7 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final[list[dict[str, list[str]]]] = router_settings.get(fallback_key, [])
+        existing_fallbacks: Final = _FALLBACK_RULES.validate_python(router_settings.get(fallback_key, []))
 
         # Find and remove the fallback configuration
         fallback_found = False
