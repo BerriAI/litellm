@@ -1,10 +1,15 @@
-from collections.abc import Awaitable, Mapping, Sequence
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Final, Protocol, TypeVar, runtime_checkable
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
-from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_ATTRIBUTE_VALUE_BYTES
+from litellm.constants import (
+    AGENT_TRACING_LIST_PAGE_SIZE,
+    OTLP_MAX_ATTRIBUTE_VALUE_BYTES,
+    TRACE_RESPONSE_INLINE_PARSE_BYTES,
+)
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.trace.generated.models import (
     ActivityAvailability,
@@ -58,6 +63,11 @@ class Tenant:
 _EMPTY_TENANT: Final = Tenant("", "")
 
 
+@dataclass(frozen=True, slots=True)
+class RawJson:
+    body: bytes
+
+
 class NativeStore(Protocol):
     def ensure_schema(self) -> Awaitable[None]: ...
 
@@ -69,25 +79,27 @@ class NativeStore(Protocol):
 
     def list_traces(
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
-    ) -> Awaitable[JsonValue]: ...
+    ) -> Awaitable[JsonValue | RawJson]: ...
 
     def get_trace(
         self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
-    ) -> Awaitable[JsonValue]: ...
+    ) -> Awaitable[JsonValue | RawJson]: ...
 
-    def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> Awaitable[JsonValue]: ...
+    def get_span(
+        self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str
+    ) -> Awaitable[JsonValue | RawJson]: ...
 
     def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str, cursor: str | None
-    ) -> Awaitable[JsonValue]: ...
+    ) -> Awaitable[JsonValue | RawJson]: ...
 
-    def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Awaitable[str]: ...
+    def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Awaitable[str | RawJson]: ...
 
-    def query_help(self, scope: QueryScope, secret: str) -> Awaitable[JsonValue]: ...
+    def query_help(self, scope: QueryScope, secret: str) -> Awaitable[JsonValue | RawJson]: ...
 
     def query(
         self, name: ReadQueryName, parameters: Mapping[str, str | int | float | Sequence[str]]
-    ) -> Awaitable[str]: ...
+    ) -> Awaitable[str | RawJson]: ...
 
 
 @runtime_checkable
@@ -109,7 +121,13 @@ _TRACE_PAGE: Final = TypeAdapter(TracePage)
 _TRACE: Final[TypeAdapter[Trace | None]] = TypeAdapter(Trace | None)
 _SPAN_DETAIL: Final[TypeAdapter[SpanDetail | None]] = TypeAdapter(SpanDetail | None)
 _SPAN_ERROR_PAGE: Final[TypeAdapter[SpanErrorPage | None]] = TypeAdapter(SpanErrorPage | None)
-_ResponseT: Final = TypeVar("_ResponseT")
+_ResponseT = TypeVar("_ResponseT")
+
+
+class Offload(Protocol):
+    def __call__(self, func: Callable[[bytes], _ResponseT], body: bytes, /) -> Awaitable[_ResponseT]: ...
+
+
 _NATIVE_ADAPTER: Final[TypeAdapter[NativeTraces]] = TypeAdapter(
     NativeTraces, config=ConfigDict(arbitrary_types_allowed=True)
 )
@@ -150,23 +168,27 @@ def encode_error(message: str) -> bytes:
     return _native().trace_encode_error(message)
 
 
-def _decode_query_response(adapter: TypeAdapter[_ResponseT], body: str) -> _ResponseT:
+async def _parse(adapter: TypeAdapter[_ResponseT], value: JsonValue | RawJson, offload: Offload) -> _ResponseT:
     try:
-        return adapter.validate_json(body)
+        match value:
+            case RawJson(body) if len(body) > TRACE_RESPONSE_INLINE_PARSE_BYTES:
+                return await offload(adapter.validate_json, body)
+            case RawJson(body):
+                return adapter.validate_json(body)
+            case _:
+                return adapter.validate_python(value)
     except ValidationError as error:
         raise RuntimeError("Native trace query returned an invalid response") from error
 
 
-def _validate_query_response(adapter: TypeAdapter[_ResponseT], value: JsonValue) -> _ResponseT:
-    try:
-        return adapter.validate_python(value)
-    except ValidationError as error:
-        raise RuntimeError("Native trace query returned an invalid response") from error
+async def _parse_text(adapter: TypeAdapter[_ResponseT], value: str | RawJson, offload: Offload) -> _ResponseT:
+    return await _parse(adapter, RawJson(value.encode()) if isinstance(value, str) else value, offload)
 
 
 class ClickHouseStorage:
-    def __init__(self, config: TraceStorageConfig | NativeStore) -> None:
+    def __init__(self, config: TraceStorageConfig | NativeStore, offload: Offload = asyncio.to_thread) -> None:
         self._native: Final = self._transport(config)
+        self._offload: Final = offload
 
     @staticmethod
     def _transport(config: TraceStorageConfig | NativeStore) -> NativeStore:
@@ -199,7 +221,7 @@ class ClickHouseStorage:
         limit: int = AGENT_TRACING_LIST_PAGE_SIZE,
     ) -> TracePage:
         result: Final = await self._native.list_traces(scope, start_ms, end_ms, cursor, limit)
-        return _validate_query_response(_TRACE_PAGE, result)
+        return await _parse(_TRACE_PAGE, result, self._offload)
 
     async def get_trace(
         self,
@@ -210,31 +232,31 @@ class ClickHouseStorage:
         page_size: int | None = None,
     ) -> Trace | None:
         result: Final = await self._native.get_trace(trace_id, scope, trace_ref, cursor, page_size)
-        return _validate_query_response(_TRACE, result)
+        return await _parse(_TRACE, result, self._offload)
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         result: Final = await self._native.get_span(trace_id, span_id, scope, trace_ref)
-        return _validate_query_response(_SPAN_DETAIL, result)
+        return await _parse(_SPAN_DETAIL, result, self._offload)
 
     async def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None
     ) -> SpanErrorPage | None:
         result: Final = await self._native.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
-        return _validate_query_response(_SPAN_ERROR_PAGE, result)
+        return await _parse(_SPAN_ERROR_PAGE, result, self._offload)
 
     async def query(self, query: ReadQuery[ParamsT, RowT], parameters: ParamsT) -> tuple[RowT, ...]:
         validated: Final = query.parameters.model_validate(parameters)
         result: Final = await self._native.query(query.name, QUERY_PARAMETERS.validate_python(validated.model_dump()))
-        return _decode_query_response(query.response, result).data
+        return (await _parse_text(query.response, result, self._offload)).data
 
     async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> TraceSQLResponse:
         result: Final = await self._native.query_sql(sql, scope, secret)
-        envelope: Final = _decode_query_response(_SQL_ENVELOPE, result)
+        envelope: Final = await _parse_text(_SQL_ENVELOPE, result, self._offload)
         return TraceSQLResponse(data=envelope.data)
 
     async def query_help(self, scope: QueryScope, secret: str) -> TraceQueryHelp:
         result: Final = await self._native.query_help(scope, secret)
-        return _validate_query_response(_HELP_RESPONSE, result)
+        return await _parse(_HELP_RESPONSE, result, self._offload)
 
     async def trace_agents(self, parameters: TraceAgentsParams) -> tuple[TraceAgentRow, ...]:
         return await self.query(TRACE_AGENTS, parameters)
