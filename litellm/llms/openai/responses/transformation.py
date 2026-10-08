@@ -10,7 +10,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -356,7 +356,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _input_with_wire_safe_prompt_cache_breakpoints(
         self, input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams
     ) -> str | ResponseInputParam:
-        deployment_drop_params: Final[object] = getattr(litellm_params, "drop_params", None)
+        deployment_drop_params: Final = normalize_drop_params(getattr(litellm_params, "drop_params", None))
         if not (deployment_drop_params or litellm.drop_params) or not isinstance(input, list):
             return input
         wire_safe_items: Final = [self._item_with_wire_safe_prompt_cache_breakpoints(item) for item in input]

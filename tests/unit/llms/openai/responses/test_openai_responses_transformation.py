@@ -3516,6 +3516,15 @@ def test_malformed_prompt_cache_breakpoint_is_forwarded_verbatim_without_drop_pa
     assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params=drop_params)) == input
 
 
+@pytest.mark.parametrize("marker", _MALFORMED_MARKERS, ids=_MALFORMED_MARKER_IDS)
+def test_a_non_flag_deployment_drop_params_keeps_the_marker_like_the_param_mapper_does(
+    monkeypatch: pytest.MonkeyPatch, marker: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    input: Final = _marked_message("input_text", marker)
+    assert _transformed_input(_CONFIGS[0], input, GenericLiteLLMParams(drop_params="maybe")) == input
+
+
 @pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
 @pytest.mark.parametrize("marker", _VALID_MARKERS, ids=_VALID_MARKER_IDS)
 def test_valid_prompt_cache_breakpoint_reaches_the_wire_under_both_settings(
