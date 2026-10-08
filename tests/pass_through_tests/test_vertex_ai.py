@@ -118,58 +118,6 @@ def _is_vertex_quota_error(response: requests.Response) -> bool:
 
 
 @pytest.mark.asyncio()
-async def test_basic_vertex_ai_pass_through_with_spendlog():
-    load_vertex_ai_credentials()
-    access_token = _vertex_access_token()
-
-    # Drive the pass-through over HTTP instead of the vertexai SDK: the SDK intermittently
-    # routes generateContent to the public Vertex endpoint rather than the proxy override,
-    # so the call never reaches LiteLLM and no spend is logged. A direct request always
-    # hits the proxy. Spend logging then runs on a best-effort background worker that can
-    # drop a single event, so retry a few billed calls and assert that one specific call's
-    # spend log lands. Failing every attempt still fails hard, which is the signal we want
-    # if cost tracking is broken.
-    max_attempts = 3
-    poll_seconds = 60
-    poll_interval = 5
-
-    for attempt in range(1, max_attempts + 1):
-        response = requests.post(
-            VERTEX_GENERATE_CONTENT_URL,
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            },
-            json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
-            timeout=60,
-        )
-        if _is_vertex_quota_error(response):
-            pytest.skip("Vertex AI quota exhausted")
-        assert (
-            response.status_code == 200
-        ), f"vertex pass-through call failed: {response.status_code} {response.text}"
-
-        call_id = response.headers.get("x-litellm-call-id")
-        assert call_id, "proxy response missing x-litellm-call-id header"
-
-        for _ in range(poll_seconds // poll_interval):
-            await asyncio.sleep(poll_interval)
-            row = _spend_log_for_request(call_id)
-            if row is not None and float(row.get("spend") or 0) > 0:
-                assert "gemini" in row["model"], f"unexpected model in spend log: {row}"
-                assert (
-                    row["custom_llm_provider"] == "vertex_ai"
-                ), f"unexpected provider in spend log: {row}"
-                return
-
-        print(f"attempt {attempt}: spend log for call {call_id} not found yet, re-billing")
-
-    pytest.fail(
-        f"Vertex pass-through spend never recorded after {max_attempts} billed calls"
-    )
-
-
-@pytest.mark.asyncio()
 @pytest.mark.skip(reason="skip flaky test - vertex pass through streaming is flaky")
 async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
 

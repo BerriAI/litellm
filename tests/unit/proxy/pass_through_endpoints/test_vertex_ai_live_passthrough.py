@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 import pytest
@@ -887,3 +888,78 @@ class TestVertexAILivePassthroughErrorHandling:
 
         assert "result" in result
         assert "kwargs" in result
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_generate_content_spendlog(respx_mock, httpx_transport) -> None:
+    import asyncio
+    import json
+    from unittest.mock import MagicMock
+
+    import httpx
+    from fastapi import Request, Response
+
+    import litellm
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import vertex_proxy_route
+    from litellm.integrations.custom_logger import CustomLogger
+
+    recorded: list[dict] = []
+
+    class _Recorder(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            recorded.append((kwargs, response_obj))
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            recorded.append((kwargs, response_obj))
+
+    litellm._async_success_callback = [*litellm._async_success_callback, _Recorder()]
+
+    request: Final = MagicMock(spec=Request)
+    request.method = "POST"
+    request.url = httpx.URL(
+        "http://proxy/vertex_ai/v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"
+    )
+    request.headers = {"content-type": "application/json", "authorization": "Bearer fake-google-token"}
+    request.scope = {
+        "path": "/vertex_ai/v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent",
+        "type": "http",
+        "method": "POST",
+        "headers": [],
+    }
+    request.query_params = {}
+    body: Final = json.dumps({"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}).encode()
+    request.body = AsyncMock(return_value=body)
+    request.json = AsyncMock(return_value=json.loads(body))
+
+    canned: Final = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "hello vertex"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 6, "totalTokenCount": 15},
+    }
+    route: Final = respx_mock.post(
+        url__regex=r"https://us-central1-aiplatform\.googleapis\.com/.*generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=canned))
+
+    GLOBAL_LOGGING_WORKER.start()
+    response: Final = await vertex_proxy_route(
+        endpoint="v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent",
+        request=request,
+        fastapi_response=MagicMock(spec=Response),
+        user_api_key_dict=MagicMock(client_ip="127.0.0.1"),
+    )
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert route.call_count == 1
+    outbound: Final = route.calls[0].request
+    assert outbound.headers["authorization"] == "Bearer fake-google-token"
+    assert json.loads(outbound.content)["contents"] == [{"role": "user", "parts": [{"text": "hi"}]}]
+    assert json.loads(response.body)["candidates"][0]["content"]["parts"][0]["text"] == "hello vertex"
+    assert recorded, "success handler never invoked"
+    kwargs, response_obj = recorded[0]
+    payload: Final = kwargs.get("standard_logging_object") or {}
+    assert float(kwargs.get("response_cost") or 0) > 0, kwargs
+    usage: Final = payload.get("usage") or getattr(response_obj, "usage", None) or {}
+    prompt: Final = usage.get("prompt_tokens") if isinstance(usage, dict) else getattr(usage, "prompt_tokens", None)
+    completion: Final = usage.get("completion_tokens") if isinstance(usage, dict) else getattr(usage, "completion_tokens", None)
+    assert prompt == 9, (kwargs, usage)
+    assert completion == 6, (kwargs, usage)
