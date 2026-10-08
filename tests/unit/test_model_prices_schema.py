@@ -10,6 +10,7 @@ from typing import Final
 
 import jsonschema
 import pytest
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
@@ -45,56 +46,54 @@ def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
 
 
-GITHUB_COPILOT_CATALOG: Final[tuple[tuple[str, str, int], ...]] = (
-    ("github_copilot/gpt-5.4", "chat", 272_000),
-    ("github_copilot/gpt-5.4-mini", "responses", 272_000),
-    ("github_copilot/gpt-5.5", "responses", 272_000),
-    ("github_copilot/gpt-5.6-luna", "responses", 200_000),
-    ("github_copilot/gpt-5.6-sol", "responses", 272_000),
-    ("github_copilot/gpt-5.6-terra", "responses", 272_000),
-    ("github_copilot/gpt-6-astra", "responses", 272_000),
-    ("github_copilot/gpt-6-luna", "responses", 272_000),
-    ("github_copilot/gpt-6-sol", "responses", 272_000),
-    ("github_copilot/gpt-6.1-sol", "responses", 272_000),
-    ("github_copilot/claude-fable-5", "chat", 200_000),
-    ("github_copilot/claude-fable-5.1", "chat", 200_000),
-    ("github_copilot/claude-haiku-5.5", "chat", 100_000),
-    ("github_copilot/claude-opus-4.8", "chat", 200_000),
-    ("github_copilot/claude-opus-4.8-fast", "chat", 200_000),
-    ("github_copilot/claude-opus-5", "chat", 200_000),
-    ("github_copilot/claude-opus-5.5", "chat", 200_000),
-    ("github_copilot/claude-sonnet-5", "chat", 200_000),
-    ("github_copilot/claude-sonnet-5.5", "chat", 200_000),
-    ("github_copilot/gemini-3.7-flash", "chat", 200_000),
-    ("github_copilot/gemini-3.8-flash", "chat", 200_000),
-    ("github_copilot/mai-code-1.1-flash", "responses", 128_000),
-    ("github_copilot/kimi-k3", "chat", 917_504),
-)
-GITHUB_COPILOT_RETIRED_KEYS: Final[tuple[str, ...]] = (
-    "github_copilot/claude-opus-4.5",
-    "github_copilot/claude-opus-4.6-fast",
-    "github_copilot/claude-opus-41",
-    "github_copilot/claude-sonnet-4",
-    "github_copilot/claude-sonnet-4.5",
-    "github_copilot/gpt-5",
-    "github_copilot/gpt-5.1",
-    "github_copilot/gpt-5.1-codex-max",
-    "github_copilot/gpt-5.2",
-    "github_copilot/mai-code-1-flash",
-    "github_copilot/mai-code-1-flash-internal",
-)
+class _CopilotEndpointRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    mode: str
+    max_input_tokens: int
+    max_output_tokens: int
+    max_tokens: int
+    supported_endpoints: tuple[str, ...]
 
 
-@pytest.mark.parametrize(("model", "mode", "max_input_tokens"), GITHUB_COPILOT_CATALOG)
-def test_github_copilot_catalog_entries_resolve_to_spec(model: str, mode: str, max_input_tokens: int) -> None:
-    info: Final = litellm.get_model_info(model)
-    assert info["mode"] == mode
-    assert info["max_input_tokens"] == max_input_tokens
+def _copilot_endpoint_rows(path: Path) -> Mapping[str, _CopilotEndpointRow]:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    return MappingProxyType(
+        {
+            key: _CopilotEndpointRow.model_validate(value)
+            for key, value in prices.items()
+            if key.startswith("github_copilot/") and isinstance(value, dict) and "supported_endpoints" in value
+        }
+    )
 
 
-@pytest.mark.parametrize("model", GITHUB_COPILOT_RETIRED_KEYS)
-def test_retired_github_copilot_models_are_absent(prices: dict, model: str) -> None:
-    assert model not in prices
+def _github_copilot_catalog_rows(path: Path) -> Mapping[str, JsonValue]:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    return MappingProxyType({key: value for key, value in prices.items() if key.startswith("github_copilot/")})
+
+
+@pytest.mark.parametrize(("path",), [(PRICES_PATH,), (BACKUP_PRICES_PATH,)], ids=("main", "backup"))
+def test_github_copilot_rows_derive_mode_and_max_tokens_from_their_endpoints(path: Path) -> None:
+    rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(path)
+    assert rows, f"No GitHub Copilot endpoint rows found in {path}"
+    assert {key: (row.mode, row.max_tokens) for key, row in rows.items()} == {
+        key: (
+            "chat" if "/v1/chat/completions" in row.supported_endpoints else "responses",
+            row.max_output_tokens,
+        )
+        for key, row in rows.items()
+    }
+
+
+def test_github_copilot_backup_rows_match_the_main_catalog() -> None:
+    assert _github_copilot_catalog_rows(PRICES_PATH) == _github_copilot_catalog_rows(BACKUP_PRICES_PATH)
+
+
+def test_github_copilot_rows_resolve_through_get_model_info() -> None:
+    rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(PRICES_PATH)
+    assert {
+        key: (litellm.get_model_info(key)["mode"], litellm.get_model_info(key)["max_input_tokens"]) for key in rows
+    } == {key: (row.mode, row.max_input_tokens) for key, row in rows.items()}
 
 
 def test_committed_schema_matches_generator_output(prices: dict, committed_schema: dict):
