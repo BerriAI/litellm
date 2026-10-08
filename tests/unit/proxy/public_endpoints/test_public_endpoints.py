@@ -402,6 +402,50 @@ def test_tencent_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def _decisions_provider_entry(provider: str) -> dict:
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    entry = next((p for p in response.json() if p["provider"] == provider), None)
+    assert entry is not None, f"{provider} provider entry not found"
+    return entry
+
+
+def test_typesafe_provider_fields():
+    typesafe = _decisions_provider_entry("TypeSafe")
+
+    assert typesafe["provider_display_name"] == "TypeSafe"
+    assert typesafe["litellm_provider"] == LlmProviders.TYPESAFE.value
+    assert typesafe["default_model_placeholder"].startswith("typesafe/")
+
+    fields_by_key = {f["key"]: f for f in typesafe["credential_fields"]}
+
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert fields_by_key["api_base"]["required"] is False
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+
+def test_strands_decider_provider_fields():
+    strands = _decisions_provider_entry("StrandsDecider")
+
+    assert strands["provider_display_name"] == "Strands Decider"
+    assert strands["litellm_provider"] == LlmProviders.STRANDS_DECIDER.value
+    assert strands["default_model_placeholder"].startswith("strands_decider/")
+
+    fields_by_key = {f["key"]: f for f in strands["credential_fields"]}
+
+    assert fields_by_key["api_base"]["required"] is True
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+    assert fields_by_key["api_key"]["required"] is False
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+
 ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
     {
         "a2a",
@@ -436,12 +480,10 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "sagemaker_nova",
         "scaleway",
         "stability",
-        "strands_decider",
         "synthetic",
         "tensormesh",
         "text-completion-inception",
         "transcribe",
-        "typesafe",
         "valkey",
         "xiaomi_mimo",
         "zai",
