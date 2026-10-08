@@ -165,10 +165,12 @@ pub struct Safeguard {
 )]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
-#[strum(serialize_all = "snake_case")]
 pub enum MessageRole {
+    #[strum(serialize = "user")]
     User,
+    #[strum(serialize = "assistant")]
     Assistant,
+    #[strum(serialize = "system")]
     System,
     #[strum(default, transparent)]
     Other(String),
@@ -205,8 +207,8 @@ impl From<MessageRole> for String {
 )]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
-#[strum(serialize_all = "snake_case")]
 pub enum MessageType {
+    #[strum(serialize = "message")]
     Message,
     #[strum(default, transparent)]
     Other(String),
@@ -243,15 +245,22 @@ impl From<MessageType> for String {
 )]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
-#[strum(serialize_all = "snake_case")]
 pub enum StopReason {
+    #[strum(serialize = "end_turn")]
     EndTurn,
+    #[strum(serialize = "max_tokens")]
     MaxTokens,
+    #[strum(serialize = "stop_sequence")]
     StopSequence,
+    #[strum(serialize = "tool_use")]
     ToolUse,
+    #[strum(serialize = "refusal")]
     Refusal,
+    #[strum(serialize = "compaction")]
     Compaction,
+    #[strum(serialize = "pause_turn")]
     PauseTurn,
+    #[strum(serialize = "model_context_window_exceeded")]
     ModelContextWindowExceeded,
     #[strum(default, transparent)]
     Other(String),

@@ -27394,6 +27394,13 @@ export interface components {
              */
             sticky_session_routing: boolean | null;
             /**
+             * Stream Scope
+             * @description Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.
+             */
+            stream_scope?: ("streaming" | "non_streaming" | "both") | {
+                [key: string]: "streaming" | "non_streaming" | "both";
+            } | null;
+            /**
              * Template Id
              * @description The ID of your Model Armor template
              */
@@ -30422,6 +30429,8 @@ export interface components {
             search_tool_deny_by_default: boolean;
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
+            /** @description Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key */
+            spend_logs_metadata_fields?: components["schemas"]["SpendLogsMetadataFields"] | null;
             /**
              * Store Batch Line Items In Callbacks
              * @description If True, a completed batch logged via aretrieve_batch also emits one callback event per JSONL line item (request paired with its response or error). The aggregate batch callback is unchanged. Default is False.
@@ -37791,6 +37800,13 @@ export interface components {
              * @default true
              */
             sticky_session_routing: boolean | null;
+            /**
+             * Stream Scope
+             * @description Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.
+             */
+            stream_scope?: ("streaming" | "non_streaming" | "both") | {
+                [key: string]: "streaming" | "non_streaming" | "both";
+            } | null;
             /**
              * Template Id
              * @description The ID of your Model Armor template
@@ -46267,6 +46283,13 @@ export interface components {
              * @default 0.9
              */
             threshold: number;
+        };
+        /** SpendLogsMetadataFields */
+        SpendLogsMetadataFields: {
+            /** Exclude */
+            exclude?: string[] | null;
+            /** Include */
+            include?: string[] | null;
         };
         /** SpendMetrics */
         SpendMetrics: {

@@ -2,14 +2,20 @@ import gzip
 import json
 import os
 from datetime import datetime
-from typing import Coroutine, Final
+from pathlib import Path
+from typing import Coroutine, Final, TypedDict
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import respx
 from httpx import Request, Response
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 import litellm.integrations.datadog.datadog as datadog_module
+from litellm.caching.caching import Cache
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_env,
@@ -19,6 +25,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_source,
     get_datadog_tags,
 )
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.integrations.datadog import DatadogInitParams, DatadogPayload, DataDogStatus
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
@@ -803,3 +810,113 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
             additional_headers=None,
         ),
     )
+
+
+_INTAKE_URL: Final = "https://http-intake.logs.test.datadoghq.com/api/v2/logs"
+
+
+class _ServiceEventMessage(TypedDict):
+    service: ReadOnly[str]
+    call_type: ReadOnly[str]
+    error: ReadOnly[str]
+    is_error: ReadOnly[bool]
+
+
+@pytest.fixture
+def delivery(
+    datadog_env: None, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> tuple[DataDogLogger, respx.Route]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.delenv("DD_SOURCE", raising=False)
+    monkeypatch.delenv("DD_SERVICE", raising=False)
+    with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
+        logger: Final = DataDogLogger()
+    intake: Final = respx_mock.post(_INTAKE_URL).mock(return_value=Response(202, text="Accepted"))
+    return logger, intake
+
+
+def _delivered_logs(intake: respx.Route) -> list[DatadogPayload]:
+    return TypeAdapter(list[DatadogPayload]).validate_json(gzip.decompress(intake.calls.last.request.content))
+
+
+@pytest.mark.asyncio
+async def test_a_successful_request_is_delivered_as_an_info_log_carrying_the_standard_payload(
+    delivery: tuple[DataDogLogger, respx.Route],
+) -> None:
+    datadog_logger, intake = delivery
+    standard_payload: Final = _standard_logging_payload()
+
+    await datadog_logger.async_log_success_event(
+        kwargs={"standard_logging_object": standard_payload},
+        response_obj=None,
+        start_time=STANDARD_START_TIME,
+        end_time=STANDARD_END_TIME,
+    )
+    await datadog_logger.async_send_batch()
+
+    assert intake.call_count == 1
+    logs: Final = _delivered_logs(intake)
+    assert len(logs) == 1
+    assert logs[0]["ddsource"] == "litellm"
+    assert logs[0]["service"] == "litellm-server"
+    assert logs[0]["status"] == DataDogStatus.INFO
+    assert TypeAdapter(dict[str, object]).validate_json(logs[0]["message"]) == standard_payload
+
+
+@pytest.mark.asyncio
+async def test_a_failed_request_is_delivered_as_an_error_log_that_keeps_the_error_string(
+    delivery: tuple[DataDogLogger, respx.Route],
+) -> None:
+    datadog_logger, intake = delivery
+    standard_payload: Final = _standard_logging_payload()
+    standard_payload["status"] = "failure"
+    standard_payload["error_str"] = "Test error"
+
+    await datadog_logger.async_log_failure_event(
+        kwargs={"standard_logging_object": standard_payload},
+        response_obj=None,
+        start_time=STANDARD_START_TIME,
+        end_time=STANDARD_END_TIME,
+    )
+    await datadog_logger.async_send_batch()
+
+    assert intake.call_count == 1
+    logs: Final = _delivered_logs(intake)
+    assert len(logs) == 1
+    assert logs[0]["status"] == DataDogStatus.ERROR
+    message: Final = TypeAdapter(dict[str, object]).validate_json(logs[0]["message"])
+    assert message == standard_payload
+    assert message["error_str"] == "Test error"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_redis_cache_is_delivered_to_datadog_as_redis_warnings(
+    delivery: tuple[DataDogLogger, respx.Route], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    datadog_logger, intake = delivery
+    absent_socket: Final = str(tmp_path / "absent.sock")
+    redis_cache: Final = Cache(type="redis", url=f"unix://{absent_socket}")
+    monkeypatch.setattr(redis_cache.cache.service_logger_obj, "dd_logger", datadog_logger, raising=False)
+    monkeypatch.setattr(litellm, "service_callback", ["datadog"])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "cache", redis_cache)
+
+    for _ in range(3):
+        await litellm.acompletion(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": "what llm are u"}],
+            mock_response="Accepted",
+            caching=True,
+        )
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    await datadog_logger.async_send_batch()
+
+    assert intake.call_count == 1
+    logs: Final = _delivered_logs(intake)
+    assert len(logs) > 0
+    assert {log["status"] for log in logs} == {DataDogStatus.WARN}
+    messages: Final = [TypeAdapter(_ServiceEventMessage).validate_json(log["message"]) for log in logs]
+    assert {message["service"] for message in messages} == {"redis"}
+    assert all(message["is_error"] is True for message in messages)
+    assert all(absent_socket in message["error"] for message in messages)
