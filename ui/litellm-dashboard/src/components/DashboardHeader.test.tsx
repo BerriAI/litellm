@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { DashboardHeader } from "./DashboardHeader";
 import { NAV_PRODUCT_LINK_CLASS } from "@/components/Navbar/navProductLinkClass";
+import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 
 const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
   const state = {
@@ -31,31 +32,43 @@ vi.mock("@/components/Navbar/NotificationsBell/NotificationsBell", () => ({ Noti
 vi.mock("@/components/Navbar/WorkerDropdown/WorkerDropdown", () => ({ default: () => null }));
 vi.mock("@/components/liteadmin/LiteAdmin", () => ({ default: () => <button>LiteAdmin</button> }));
 
+const renderDashboardHeader = () =>
+  render(
+    <CommandPaletteProvider>
+      <DashboardHeader />
+    </CommandPaletteProvider>,
+  );
+
 describe("DashboardHeader breadcrumb", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   afterEach(() => {
     state.plugins = [];
     state.enableChatUI = false;
     state.pathname = "/ui/logs";
     state.isDesktop = false;
+    localStorage.clear();
   });
 
   it("titles the breadcrumb from the current route, not from a sidebar page id", () => {
     state.pathname = "/ui/models-and-endpoints";
-    render(<DashboardHeader />);
+    renderDashboardHeader();
 
     expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
   });
 
   it("titles the dashboard root as Virtual Keys", () => {
     state.pathname = "/ui/";
-    render(<DashboardHeader />);
+    renderDashboardHeader();
 
     expect(screen.getByText("Virtual Keys")).toBeInTheDocument();
   });
 
   it("roots the breadcrumb in the AI Gateway selector (with a Chat option) and drops the static section crumb when the selector is available", async () => {
     state.enableChatUI = true;
-    render(<DashboardHeader />);
+    renderDashboardHeader();
 
     expect(screen.getByText("Logs")).toBeInTheDocument();
     expect(screen.queryByText("Observability")).not.toBeInTheDocument();
@@ -68,7 +81,7 @@ describe("DashboardHeader breadcrumb", () => {
   });
 
   it("keeps the AI Gateway selector at the root even when there is nothing to switch to (discovery)", () => {
-    render(<DashboardHeader />);
+    renderDashboardHeader();
 
     expect(screen.getByRole("button", { name: /AI Gateway/i })).toBeInTheDocument();
     expect(screen.getByText("Logs")).toBeInTheDocument();
@@ -76,7 +89,7 @@ describe("DashboardHeader breadcrumb", () => {
   });
 
   it("styles Docs with the shared product-link class instead of a muted toolbar button", () => {
-    render(<DashboardHeader />);
+    renderDashboardHeader();
 
     const docs = screen.getByRole("link", { name: "Docs" });
     for (const cls of NAV_PRODUCT_LINK_CLASS.trim().split(/\s+/)) {
@@ -86,7 +99,7 @@ describe("DashboardHeader breadcrumb", () => {
   });
 
   it("renders the tools divider centered rather than stretched to the top of the row", () => {
-    const { container } = render(<DashboardHeader />);
+    const { container } = renderDashboardHeader();
 
     const separators = container.querySelectorAll('[data-slot="separator"][data-orientation="vertical"]');
     expect(separators).toHaveLength(1);
@@ -95,7 +108,7 @@ describe("DashboardHeader breadcrumb", () => {
   });
 
   it("places LiteAdmin in the header tools ahead of Docs", () => {
-    render(<DashboardHeader />);
+    renderDashboardHeader();
 
     const liteAdmin = within(screen.getByRole("banner")).getByRole("button", { name: "LiteAdmin" });
     expect(liteAdmin.compareDocumentPosition(screen.getByRole("link", { name: "Docs" }))).toBe(
@@ -104,7 +117,7 @@ describe("DashboardHeader breadcrumb", () => {
   });
 
   it("keeps the gateway selector and tools available from the compact header menu", async () => {
-    render(<DashboardHeader />);
+    renderDashboardHeader();
     fireEvent.click(screen.getByRole("button", { name: "More options" }));
     const tools = await screen.findByRole("dialog", { name: "Gateway tools" });
     expect(within(tools).getByRole("button", { name: "AI Gateway" })).toBeInTheDocument();
@@ -113,16 +126,24 @@ describe("DashboardHeader breadcrumb", () => {
   });
 
   it("closes mobile tools when switching to desktop and keeps them closed when returning", async () => {
-    const { rerender } = render(<DashboardHeader />);
+    const { rerender } = renderDashboardHeader();
     fireEvent.click(screen.getByRole("button", { name: "More options" }));
     expect(await screen.findByRole("dialog", { name: "Gateway tools" })).toBeInTheDocument();
 
     state.isDesktop = true;
-    rerender(<DashboardHeader />);
+    rerender(
+      <CommandPaletteProvider>
+        <DashboardHeader />
+      </CommandPaletteProvider>,
+    );
     expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
 
     state.isDesktop = false;
-    rerender(<DashboardHeader />);
+    rerender(
+      <CommandPaletteProvider>
+        <DashboardHeader />
+      </CommandPaletteProvider>,
+    );
     expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
   });
 });
