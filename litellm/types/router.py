@@ -786,7 +786,13 @@ class Deployment(LiteLLMBaseModel):
 @dataclass(frozen=True, slots=True)
 class DiscoveredDeploymentModelInfo:
     deployment: Mapping[str, object]
-    limits: Mapping[str, int]
+    limits: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class ModelListingDeployment:
+    cost_map_key: str | None
+    model_info: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -805,6 +811,7 @@ class DeploymentModelListingInfo:
     cost_map_keys: tuple[str, ...]
     max_input_tokens: int | None
     max_output_tokens: int | None
+    deployments: tuple[ModelListingDeployment, ...] = ()
 
 
 class RouterErrors(enum.Enum):

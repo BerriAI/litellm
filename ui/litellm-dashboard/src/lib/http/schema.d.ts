@@ -30345,6 +30345,11 @@ export interface components {
              */
             model_list_healthy_only?: boolean | null;
             /**
+             * Model Offerings Path
+             * @description Path to the authoritative external offering file, reloaded without restarting the proxy
+             */
+            model_offerings_path?: string | null;
+            /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
              */
@@ -39194,6 +39199,15 @@ export interface components {
              * @enum {string}
              */
             purpose: "extract" | "cluster" | "investigate";
+        };
+        /** ModelRequestDefaults */
+        ModelRequestDefaults: {
+            /** Output Token Budget */
+            output_token_budget?: number | null;
+            /** Output Token Budget By Reasoning Effort */
+            output_token_budget_by_reasoning_effort?: {
+                [key: string]: number;
+            } | null;
         };
         /** ModelResponse */
         ModelResponse: {
@@ -50779,6 +50793,16 @@ export interface components {
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
             base_model: ("gpt-4-1106-preview" | "gpt-4-32k" | "gpt-4" | "gpt-3.5-turbo-16k" | "gpt-3.5-turbo" | "text-embedding-ada-002") | null;
+            /**
+             * Context Window
+             * @description Maximum combined input and generated output tokens
+             */
+            context_window?: number | null;
+            /**
+             * Default Reasoning Effort
+             * @description Effort used when the request omits it
+             */
+            default_reasoning_effort?: string | null;
             /** Discoverable */
             discoverable?: boolean | null;
             /** Id */
@@ -50788,6 +50812,16 @@ export interface components {
              * @default 0
              */
             input_cost_per_token: number | null;
+            /**
+             * Max Input Tokens
+             * @description Independent maximum input tokens
+             */
+            max_input_tokens?: number | null;
+            /**
+             * Max Output Tokens
+             * @description Independent maximum generated output tokens
+             */
+            max_output_tokens?: number | null;
             /**
              * Max Tokens
              * @default 2048
@@ -50800,6 +50834,28 @@ export interface components {
              * @default 0
              */
             output_cost_per_token: number | null;
+            /**
+             * Reasoning Effort Levels
+             * @description Exact effort values this route accepts
+             */
+            reasoning_effort_levels?: string[] | null;
+            /** @description Configured request defaults, independent of supplier capability limits */
+            request_defaults?: components["schemas"]["ModelRequestDefaults"] | null;
+            /**
+             * Supported Endpoints
+             * @description Inference endpoints exposed by this route
+             */
+            supported_endpoints?: string[] | null;
+            /** Supported Modalities */
+            supported_modalities?: string[] | null;
+            /** Supported Output Modalities */
+            supported_output_modalities?: string[] | null;
+            /** Supports Function Calling */
+            supports_function_calling?: boolean | null;
+            /** Supports Parallel Function Calling */
+            supports_parallel_function_calling?: boolean | null;
+            /** Supports Reasoning */
+            supports_reasoning?: boolean | null;
         } & {
             [key: string]: unknown;
         };

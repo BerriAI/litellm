@@ -1260,3 +1260,65 @@ async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absen
     await jobs["prometheus_fallback_stats_job"]()
 
     assert send_fallback_stats.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configuration", ["valid", "invalid", "mixed"])
+async def test_external_inventory_lifespan_does_not_close_shared_clients(tmp_path, monkeypatch, configuration):
+    import httpx
+    import yaml
+
+    import litellm
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.router import Router
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    path = tmp_path / "offerings.yaml"
+    path.write_text(
+        "invalid: true\n"
+        if configuration == "invalid"
+        else yaml.safe_dump(
+            {
+                "version": 1,
+                "providers": {"source": {"provider": "openai", "api_base": "https://supplier.test/v1"}},
+                "offerings": [
+                    {"model_name": "manual", "source": "manual", "provider": "source", "upstream_model": "backend"}
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    inventory = get_async_httpx_client(httpxSpecialProvider.ModelInventory)
+    inference = get_async_httpx_client("openai")
+    assert inventory is not inference
+    await inventory.client.aclose()
+    inventory.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    monkeypatch.setattr(ps, "llm_router", Router(model_list=[]))
+    monkeypatch.setattr(ps, "llm_model_list", [] if configuration != "mixed" else [{"model_name": "unmanaged"}])
+    monkeypatch.setattr(ps, "store_model_in_db", False)
+    monkeypatch.setattr(ps, "scheduler", None)
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.dict(
+            ps.general_settings, {"model_offerings_path": str(path), "disable_model_info_refresh": True}, clear=True
+        ),
+    ):
+        try:
+            if configuration == "valid":
+                async with proxy_startup_event(app=None):
+                    assert ps.llm_router.model_names == {"manual"}
+            else:
+                with pytest.raises(ValueError, match=r"external offering|External offering"):
+                    async with proxy_startup_event(app=None):
+                        pytest.fail("Invalid external config must reject startup")
+            assert get_async_httpx_client(httpxSpecialProvider.ModelInventory) is inventory
+            assert not inventory.client.is_closed
+            assert not inference.client.is_closed
+            assert (await inventory.get("https://supplier.test/v1/models")).status_code == 200
+        finally:
+            await inventory.close()
+            await inference.close()

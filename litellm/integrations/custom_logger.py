@@ -89,7 +89,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         turn_off_message_logging: bool = False,
         # deprecated param, use `turn_off_message_logging` instead
         message_logging: bool = True,
-        **kwargs,
+        **kwargs: object,  # kwargs-ok: legacy logger initialization accepts and ignores extension options
     ) -> None:
         """
         Args:

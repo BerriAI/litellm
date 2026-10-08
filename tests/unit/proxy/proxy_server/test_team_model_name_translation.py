@@ -1137,6 +1137,11 @@ async def test_v1_models_team_alias_inherits_token_limits_and_chat_mode(monkeypa
             "mode": "chat",
             "max_input_tokens": 876000,
             "max_output_tokens": 128000,
+            "supports_function_calling": True,
+            "supports_parallel_function_calling": True,
+            "supported_endpoints": ["/v1/chat/completions", "/v1/batch", "/v1/responses"],
+            "supported_modalities": ["text", "image"],
+            "supported_output_modalities": ["text"],
             "metadata": {"fallbacks": []},
         }
     ]
@@ -1183,6 +1188,7 @@ async def test_v1_models_team_image_alias_inherits_image_generation_mode(monkeyp
             "created": 1677610602,
             "owned_by": "openai",
             "mode": "image_generation",
+            "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
         }
     ]
 

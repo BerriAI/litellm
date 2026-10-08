@@ -2,7 +2,9 @@ import base64
 import json
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Final, TypeAlias
 
 import httpx
@@ -38,6 +40,16 @@ OPENAI_AUTH_CLAIM_KEY: Final = "https://api.openai.com/auth"
 JsonObject: TypeAlias = Mapping[str, JsonValue]
 
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
+_DEVICE_LOGIN_ENABLED: Final[ContextVar[bool]] = ContextVar("chatgpt_device_login_enabled", default=True)
+
+
+@contextmanager
+def prevent_device_login() -> Generator[None]:
+    token: Final = _DEVICE_LOGIN_ENABLED.set(False)
+    try:
+        yield
+    finally:
+        _DEVICE_LOGIN_ENABLED.reset(token)
 
 
 def _optional_str(value: JsonValue | None) -> str | None:
@@ -64,7 +76,7 @@ class Authenticator:
     def get_api_base(self) -> str:
         return os.getenv("CHATGPT_API_BASE") or os.getenv("OPENAI_CHATGPT_API_BASE") or CHATGPT_API_BASE
 
-    def get_access_token(self) -> str:
+    def get_access_token(self, *, allow_device_login: bool = True) -> str:
         auth_data: Final = self._read_auth_file()
         if auth_data:
             access_token: Final = _optional_str(auth_data.get("access_token"))
@@ -77,6 +89,12 @@ class Authenticator:
                     return refreshed["access_token"]
                 except RefreshAccessTokenError as exc:
                     verbose_logger.warning("ChatGPT refresh token failed, re-login required: %s", exc)
+
+        if not allow_device_login or not _DEVICE_LOGIN_ENABLED.get():
+            raise GetAccessTokenError(
+                status_code=401,
+                message="ChatGPT authorization is unavailable; model discovery cannot start device login",
+            )
 
         if not can_block_current_thread():
             raise GetAccessTokenError(

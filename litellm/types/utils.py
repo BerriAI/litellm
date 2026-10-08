@@ -211,7 +211,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
     reasoning_effort_levels: ReadOnly[Sequence[str] | None]
-    default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
+    default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
     supports_anthropic_thinking_payload: ReadOnly[bool | None]
@@ -279,6 +279,9 @@ class OffPeakPricing(TypedDict, total=False):
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
+    context_window: ReadOnly[int | None]
+    supported_modalities: ReadOnly[Sequence[str] | None]
+    supported_output_modalities: ReadOnly[Sequence[str] | None]
     key: Required[str]  # the key in litellm.model_cost which is returned
 
     max_tokens: Required[int | None]

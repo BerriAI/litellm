@@ -66,6 +66,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.model_metadata import GatewayModelMetadata
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
@@ -1224,7 +1225,9 @@ class ModelInfoDelete(LiteLLMPydanticObjectBase):
     id: str
 
 
-class ModelInfo(LiteLLMPydanticObjectBase):
+class ModelInfo(  # frozen-ok: native model management assigns team_public_model_name after validation
+    GatewayModelMetadata, LiteLLMPydanticObjectBase
+):
     id: str | None
     mode: Literal["embedding", "chat", "completion"] | None
     input_cost_per_token: float | None = 0.0
@@ -1241,7 +1244,7 @@ class ModelInfo(LiteLLMPydanticObjectBase):
     )
     discoverable: bool | None = None
 
-    model_config = ConfigDict(protected_namespaces=(), extra="allow")
+    model_config = ConfigDict(protected_namespaces=(), extra="allow", frozen=False)
 
     @model_validator(mode="before")
     @classmethod
@@ -2751,6 +2754,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    model_offerings_path: str | None = Field(
+        None, description="Path to the authoritative external offering file, reloaded without restarting the proxy"
+    )
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
     max_in_flight_requests_per_worker: int | None = Field(
         None, gt=0, description="maximum concurrent requests handled by each worker"

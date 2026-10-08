@@ -137,6 +137,7 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  #
     realtime_request_body,
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
+from litellm.proxy.model_discovery import discover_model_metadata
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -159,6 +160,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.proxy.model_metadata import GatewayModelMetadata, resolve_gateway_model_metadata
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     ModelResponse,
@@ -1342,11 +1344,11 @@ async def _call_current_lens_signal_router(
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
+    global llm_router  # noqa: PLW0603  # proxy routes share the external router published during lifespan
     global \
         prisma_client, \
         master_key, \
         use_background_health_checks, \
-        llm_router, \
         llm_model_list, \
         general_settings, \
         proxy_budget_rescheduler_min_time, \
@@ -1683,19 +1685,57 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         await initialize_shared_aiohttp_session()
     )
 
+    import pathlib
+
+    from litellm.proxy.model_offerings import ModelOfferingsManager
+    from litellm.proxy.offering_router import OfferingAccessGuard
+
+    offerings_path: Final = TypeAdapter[str | None](str | None).validate_python(
+        cast(object, general_settings.get("model_offerings_path")),  # cast-ok: validate untyped config
+        strict=True,
+    )
+    offerings_manager: Final = (
+        ModelOfferingsManager(
+            path=pathlib.Path(str(offerings_path)),
+            template=llm_router or Router(model_list=[]),
+        )
+        if offerings_path is not None
+        else None
+    )
+    if offerings_manager is not None:
+        if llm_model_list or (llm_router is not None and llm_router.get_model_ids()) or store_model_in_db:
+            raise ValueError("External offering mode requires an empty model_list and store_model_in_db disabled")
+        if not await offerings_manager.reload(initial=True):
+            raise ValueError("Initial external offering configuration is invalid")
+        llm_router = offerings_manager.router  # rebind-ok: publish the process-wide router used by native proxy routes
+    offerings_guard: Final = (
+        OfferingAccessGuard(
+            offerings_manager.router, TypeAdapter(Mapping[str, object]).validate_python(general_settings)
+        )
+        if offerings_manager is not None
+        else None
+    )
+    if offerings_guard is not None:
+        litellm.logging_callback_manager.add_litellm_callback(offerings_guard)
+    offerings_task: Final = asyncio.create_task(offerings_manager.run()) if offerings_manager is not None else None
+
     model_info_refresh_disabled: Final = (
         "disable_model_info_refresh" in general_settings and general_settings["disable_model_info_refresh"] is True
     )
     model_info_scheduler: Final = (
-        None if model_info_refresh_disabled else scheduler if scheduler is not None else AsyncIOScheduler()
+        None
+        if model_info_refresh_disabled or offerings_manager is not None
+        else scheduler
+        if scheduler is not None
+        else AsyncIOScheduler()
     )
     if model_info_scheduler is not None:
+        await ProxyStartupEvent.refresh_model_info()
         model_info_scheduler.add_job(
             ProxyStartupEvent.refresh_model_info,
             "interval",
             seconds=MODEL_INFO_REFRESH_SECONDS,
             id="refresh_model_info",
-            next_run_time=datetime.now(timezone.utc),
             max_instances=1,
             replace_existing=True,
         )
@@ -1756,6 +1796,12 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     GracefulShutdownManager.start_shutdown()
                     await GracefulShutdownManager.wait_for_drain()
         finally:
+            if offerings_task is not None:
+                offerings_task.cancel()
+                await asyncio.gather(offerings_task, return_exceptions=True)
+            if offerings_guard is not None:
+                litellm.logging_callback_manager.remove_callback_from_all_lists(offerings_guard, require_self=True)
+
             # Shutdown event - close shared aiohttp session
             if shared_aiohttp_session is not None:
                 try:
@@ -2650,6 +2696,9 @@ app.add_middleware(
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(RedisRequestBatchMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
+from litellm.proxy.offering_router import OfferingSnapshotMiddleware
+
+app.add_middleware(OfferingSnapshotMiddleware, router_getter=lambda: llm_router)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
 
@@ -14923,10 +14972,25 @@ def _enrich_model_info_with_litellm_data(
             if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
         },
     }
-    # don't return the api key / vertex credentials
-    # don't return the llm credentials
-    model = remove_sensitive_info_from_deployment(model, excluded_keys={"litellm_credential_name"})
-    return model
+    gateway_metadata: Final = resolve_gateway_model_metadata(
+        MappingProxyType({})
+        if llm_router is not None and getattr(llm_router, "model_metadata_authoritative", False) is True
+        else MappingProxyType({**litellm_model_info, **discovered_model_info}),
+        model_info,
+    )
+    published_model: Final = {
+        **model,
+        "model_info": {
+            **{
+                field: value
+                for field, value in model["model_info"].items()
+                if field not in GatewayModelMetadata.model_fields
+            },
+            **gateway_metadata.model_dump(mode="json", exclude_none=True),
+            **discover_model_metadata((gateway_metadata,)),
+        },
+    }
+    return remove_sensitive_info_from_deployment(published_model, excluded_keys={"litellm_credential_name"})
 
 
 async def _get_caller_byok_team_scope(
