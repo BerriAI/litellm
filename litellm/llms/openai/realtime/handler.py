@@ -18,7 +18,7 @@ from ....litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
-from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+from ....llms.custom_httpx.http_handler import realtime_ssl_for_url
 from ..common_utils import is_openai_backed_api_base
 from ..openai import OpenAIChatCompletion
 
@@ -68,20 +68,9 @@ class OpenAIRealtime(OpenAIChatCompletion):
             url: WebSocket URL (ws:// or wss://)
 
         Returns:
-            SSL configuration (None, True, or SSLContext)
+            None for ws://, otherwise the shared SSL context, or an unverified one when ssl_verify is off
         """
-        if url.startswith("ws://"):
-            return None
-
-        # Use the shared SSL context which respects custom CA certs and SSL settings
-        ssl_config: Final = get_shared_realtime_ssl_context()
-
-        # If ssl_config is False (ssl_verify=False), websockets library needs True instead
-        # to establish connection without verification (False would fail)
-        if ssl_config is False:
-            return True
-
-        return ssl_config
+        return realtime_ssl_for_url(url)
 
     def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
         """

@@ -740,3 +740,55 @@ async def test_arealtime_forwards_deployment_azure_ad_token(monkeypatch, no_ambi
     )
 
     assert mock_async_realtime.call_args.kwargs["azure_ad_token"] == "deployment-entra-token"
+
+
+@pytest.mark.asyncio
+async def test_construct_url_maps_http_to_ws():
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    url = AzureOpenAIRealtime()._construct_url("http://127.0.0.1:8113", "gpt-realtime", "2024-10-01-preview")
+
+    assert url.startswith("ws://127.0.0.1:8113/openai/realtime?")
+
+
+async def _dial_through_mocked_connect(api_base: str) -> tuple[str, dict]:
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    with (
+        patch("websockets.connect", return_value=_DummyAsyncContextManager(AsyncMock())) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
+    ):
+        mock_realtime_streaming.return_value.bidirectional_forward = AsyncMock()
+        await AzureOpenAIRealtime().async_realtime(
+            model="gpt-realtime",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            api_base=api_base,
+            api_key="test-key",
+            api_version="2024-10-01-preview",
+        )
+    mock_ws_connect.assert_called_once()
+    return mock_ws_connect.call_args[0][0], mock_ws_connect.call_args[1]
+
+
+@pytest.mark.parametrize("api_base", ["http://127.0.0.1:8113", "ws://127.0.0.1:8113"])
+@pytest.mark.asyncio
+async def test_async_realtime_plaintext_api_base_dials_ws_without_ssl(api_base):
+    url, kwargs = await _dial_through_mocked_connect(api_base)
+
+    assert url.startswith("ws://127.0.0.1:8113/openai/realtime?")
+    assert kwargs["ssl"] is None
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_wss_with_ssl_verify_off_dials_with_an_unverified_context(monkeypatch):
+    import ssl
+
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._shared_realtime_ssl_context", False)
+
+    url, kwargs = await _dial_through_mocked_connect("https://127.0.0.1:8113")
+
+    assert url.startswith("wss://127.0.0.1:8113/openai/realtime?")
+    assert isinstance(kwargs["ssl"], ssl.SSLContext)
+    assert kwargs["ssl"].verify_mode is ssl.CERT_NONE
+    assert kwargs["ssl"].check_hostname is False
