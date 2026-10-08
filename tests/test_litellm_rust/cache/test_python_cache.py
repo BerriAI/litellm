@@ -12,10 +12,10 @@ from litellm.caching.caching_handler import (
 )
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_max_budget_limiter import (
-    _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
     model_budget_spend_cache_key,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import runtime
@@ -57,8 +57,8 @@ async def test_cache_hit_keeps_model_budget_spend_but_accounts_for_usage(
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
     litellm.cache = Cache() if legacy else _v2.Cache.memory()
     counters: Final = litellm.DualCache()
-    budget: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(
+    budget: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
         InternalUsageCache(counters), model_group_resolver=lambda model: model
     )
     recorder: Final = RecordingLogger()
@@ -133,8 +133,8 @@ async def test_response_cache_backend_does_not_control_coordination(
     )
     recording_server.expected_requests = 2 if backend == "disabled" else 1
     counters: Final = litellm.DualCache()
-    budget: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(
+    budget: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
         InternalUsageCache(counters), model_group_resolver=lambda model: model
     )
     key_hash: Final = "b" * 64

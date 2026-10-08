@@ -29,10 +29,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_session_id_for_spend_log,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
-    _is_master_key,
+    is_master_key,
     _redact_logged_api_key,
     _redact_prompt_leaks_in_error_string,
-    _sanitize_error_information_for_spend_logs,
+    sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _scrub_raw_model_from_error_information,
@@ -1478,7 +1478,7 @@ def test_get_logging_payload_persists_no_raw_model_for_a_prompt_shaped_moderatio
         model=_RAW_MODEL_WITH_PROMPT,
         llm_provider="openai",
     )
-    error_information: Final = _sanitize_error_information_for_spend_logs(
+    error_information: Final = sanitize_error_information_for_spend_logs(
         StandardLoggingPayloadSetup.get_error_information(
             original_exception=provider_rejection,
             traceback_str=(
@@ -1645,7 +1645,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     If this test fails in CI/CD, the build MUST fail.
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
     from litellm.proxy.utils import hash_token
 
     # Setup
@@ -1729,7 +1729,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     exception = Exception("BadRequestError: Invalid parameter 'invalid_param'")
 
     # Execute the ACTUAL failure hook code path
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         await logger.async_post_call_failure_hook(
@@ -2795,19 +2795,19 @@ class TestIsMasterKey:
 
     def test_none_api_key_returns_false(self):
         """Regression: _is_master_key(None, 'sk-master') should return False, not raise TypeError."""
-        assert _is_master_key(api_key=None, _master_key="sk-master-key") is False
+        assert is_master_key(api_key=None, _master_key="sk-master-key") is False
 
     def test_none_master_key_returns_false(self):
-        assert _is_master_key(api_key="sk-some-key", _master_key=None) is False
+        assert is_master_key(api_key="sk-some-key", _master_key=None) is False
 
     def test_both_none_returns_false(self):
-        assert _is_master_key(api_key=None, _master_key=None) is False
+        assert is_master_key(api_key=None, _master_key=None) is False
 
     def test_matching_key_returns_true(self):
-        assert _is_master_key(api_key="sk-master", _master_key="sk-master") is True
+        assert is_master_key(api_key="sk-master", _master_key="sk-master") is True
 
     def test_non_matching_key_returns_false(self):
-        assert _is_master_key(api_key="sk-other", _master_key="sk-master") is False
+        assert is_master_key(api_key="sk-other", _master_key="sk-master") is False
 
     def test_master_key_hash_is_rejected(self):
         """
@@ -2818,7 +2818,7 @@ class TestIsMasterKey:
 
         master = "sk-master-key-123"
         hashed = hash_token(master)
-        assert _is_master_key(api_key=hashed, _master_key=master) is False
+        assert is_master_key(api_key=hashed, _master_key=master) is False
 
 
 def test_sanitize_request_body_strips_secret_fields():
@@ -3201,7 +3201,7 @@ def test_sanitize_error_information_redacts_when_not_storing_prompts(
         ),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "leaked-prompt-content" not in sanitized["error_message"]
@@ -3226,7 +3226,7 @@ def test_sanitize_error_information_skips_redaction_when_storing_prompts(
         "error_message": ('OpenAIException - {"error":{"input":[{"role":"user","content":"kept"}]}}'),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     # User opted in via store_prompts_in_spend_logs — no key-level redaction.
@@ -3253,7 +3253,7 @@ def test_sanitize_error_information_caps_size_regardless_of_prompt_flag(
         "error_message": huge_error,
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert len(sanitized["error_message"]) < len(huge_error)
@@ -3262,7 +3262,7 @@ def test_sanitize_error_information_caps_size_regardless_of_prompt_flag(
 
 
 def test_sanitize_error_information_none_passthrough():
-    assert _sanitize_error_information_for_spend_logs(None) is None
+    assert sanitize_error_information_for_spend_logs(None) is None
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
@@ -3293,7 +3293,7 @@ def test_sanitize_error_information_reproduces_lit_2992(mock_should_store):
         "error_message": error_message,
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert huge_conversation_blob not in sanitized["error_message"]
@@ -3372,7 +3372,7 @@ def test_sanitize_error_information_redacts_traceback_when_not_storing_prompts(
         "error_message": "invalid request",
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "tb-leaked-prompt" not in sanitized["traceback"]
@@ -3396,7 +3396,7 @@ def test_sanitize_error_information_skips_traceback_redaction_when_storing_promp
         "error_message": "invalid request",
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "tb-kept" in sanitized["traceback"]
@@ -3512,7 +3512,7 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
         ),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "leaked-via-pydantic-msg" not in sanitized["error_message"]
@@ -3537,7 +3537,7 @@ def test_sanitize_error_information_persists_no_raw_model_for_an_unknown_model_r
 ):
     error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=original_exception)
 
-    sanitized: Final = _sanitize_error_information_for_spend_logs(
+    sanitized: Final = sanitize_error_information_for_spend_logs(
         error_information, original_exception=original_exception
     )
 

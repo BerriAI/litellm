@@ -84,7 +84,7 @@ def _origin_label(scheme: str, netloc: str) -> str:
     return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
 
 
-def _redact_mcp_resource_url(url: str | None) -> str | None:
+def redact_mcp_resource_url(url: str | None) -> str | None:
     """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
 
     Everything else is dropped: userinfo (``user:pass@``), the query string, the
@@ -105,6 +105,9 @@ def _redact_mcp_resource_url(url: str | None) -> str | None:
         return None
     netloc: Final = f"{hostname}:{port}" if port else hostname
     return urlunsplit((parts.scheme, netloc, "", "", "")) or None
+
+
+_redact_mcp_resource_url: Final = redact_mcp_resource_url
 
 
 def _resolve_proxy_base_url_env() -> str | None:

@@ -3521,7 +3521,7 @@ async def test_chat_completion_modify_response_exception_streaming_logging_obj_n
         raise exc
 
     with (
-        patch("litellm.proxy.proxy_server._read_request_body", AsyncMock(return_value=request_data)),
+        patch("litellm.proxy.proxy_server.read_request_body", AsyncMock(return_value=request_data)),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
         patch(
             "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing.base_process_llm_request",
