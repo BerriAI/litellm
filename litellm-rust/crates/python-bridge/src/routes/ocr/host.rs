@@ -177,6 +177,68 @@ mod tests {
     use super::*;
 
     #[rstest::rstest]
+    fn failures_name_the_model_of_the_call_it_decoded() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(
+                c"
+import sys
+import types
+name = 'litellm.rust_bridge.ocr.route_host'
+previous = sys.modules.get(name)
+route_host = types.ModuleType(name)
+def map_failure(error, request, provider):
+    failure = Exception()
+    failure.model = request['model']
+    return failure
+route_host.map_failure = map_failure
+sys.modules[name] = route_host
+arguments = {
+    'model': 'azure_ai/hook-model',
+    'custom_llm_provider': None,
+    'document': {'type': 'document_url', 'document_url': 'https://example.com/a.pdf'},
+    'api_key': None,
+    'api_base': None,
+    'extra_headers': None,
+    'timeout': None,
+}
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let arguments = locals
+                .get_item("arguments")
+                .unwrap()
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let mut host = OcrPythonHost::new();
+            host.decode_request(py, &arguments).unwrap();
+            let mapped = host.map_error(py, Error::RequestFormat).unwrap();
+            py.run(
+                c"
+if previous is None:
+    sys.modules.pop(name, None)
+else:
+    sys.modules[name] = previous
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let model: String = mapped
+                .value(py)
+                .getattr("model")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(model, "azure_ai/hook-model");
+        });
+    }
+
+    #[rstest::rstest]
     #[case::acquired(true)]
     #[case::provider_raised(false)]
     fn closing_releases_the_token_provider(#[case] succeeds: bool) {

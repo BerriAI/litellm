@@ -202,3 +202,60 @@ where
         asynchronous,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rstest::rstest]
+    fn failures_name_the_model_of_the_call_it_projected() {
+        Python::initialize();
+        Python::attach(|py| {
+            py.run(
+                c"
+import sys
+import types
+route_host = types.ModuleType('inference_failure_route_host')
+route_host.PARAMETERS = []
+route_host.connection_defaults = lambda provider: (None, None)
+def map_failure(error, request):
+    failure = Exception()
+    failure.model = request['model']
+    return failure
+route_host.map_failure = map_failure
+sys.modules[route_host.__name__] = route_host
+",
+                None,
+                None,
+            )
+            .unwrap();
+            let arguments = py
+                .eval(
+                    c"{'model': 'openai/hook-model', 'messages': []}",
+                    None,
+                    None,
+                )
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let mut host = InferenceHost::new("inference_failure_route_host");
+            host.project(py, &arguments, "messages").unwrap();
+            let mapped = host
+                .error(
+                    py,
+                    RouteError::Transport(TransportError::Http {
+                        status: 400,
+                        body: "bad".into(),
+                    }),
+                )
+                .unwrap();
+            let model: String = mapped
+                .value(py)
+                .getattr("model")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(model, "openai/hook-model");
+        });
+    }
+}
