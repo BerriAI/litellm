@@ -12,6 +12,7 @@ import ast
 import asyncio
 import functools
 import hashlib
+import importlib.util
 import inspect
 import itertools
 import json
@@ -25,7 +26,6 @@ from datetime import timedelta
 from types import FrameType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
-import orjson
 from pydantic import TypeAdapter
 
 import litellm
@@ -654,7 +654,14 @@ def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -
     )
 
 
+_ORJSON_INSTALLED: Final = importlib.util.find_spec("orjson") is not None
+
+
 def _dumps_cache_value(value: object) -> str:
+    if not _ORJSON_INSTALLED:
+        return json.dumps(value)
+    import orjson  # noqa: PLC0415  # orjson only ships with the litellm[proxy] extra
+
     try:
         return orjson.dumps(value, option=orjson.OPT_NON_STR_KEYS).decode()
     except TypeError:
