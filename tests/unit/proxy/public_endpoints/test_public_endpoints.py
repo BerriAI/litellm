@@ -9,6 +9,7 @@ import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
@@ -16,6 +17,7 @@ from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_pres
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
+from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo
 from litellm.types.utils import LlmProviders
 
 
@@ -402,47 +404,74 @@ def test_tencent_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    test_client: Final = TestClient(app_instance)
+
+    response: Final = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = TypeAdapter(list[ProviderCreateInfo]).validate_python(response.json())
+    entry: Final = next((p for p in providers if p.provider == provider), None)
+    assert entry is not None, f"{provider} provider entry not found"
+    return entry
+
+
+def test_typesafe_provider_fields():
+    typesafe: Final = _decisions_provider_entry("TypeSafe")
+
+    assert typesafe.provider_display_name == "TypeSafe"
+    assert typesafe.litellm_provider == LlmProviders.TYPESAFE.value
+    assert typesafe.default_model_placeholder is not None
+    assert typesafe.default_model_placeholder.startswith("typesafe/")
+
+    fields_by_key: Final = {f.key: f for f in typesafe.credential_fields}
+
+    assert fields_by_key["api_key"].required is True
+    assert fields_by_key["api_key"].field_type == "password"
+
+    assert fields_by_key["api_base"].required is False
+    assert fields_by_key["api_base"].field_type == "text"
+
+
+def test_strands_decider_provider_fields():
+    strands: Final = _decisions_provider_entry("StrandsDecider")
+
+    assert strands.provider_display_name == "Strands Decider"
+    assert strands.litellm_provider == LlmProviders.STRANDS_DECIDER.value
+    assert strands.default_model_placeholder is not None
+    assert strands.default_model_placeholder.startswith("strands_decider/")
+
+    fields_by_key: Final = {f.key: f for f in strands.credential_fields}
+
+    assert fields_by_key["api_base"].required is True
+    assert fields_by_key["api_base"].field_type == "text"
+
+    assert fields_by_key["api_key"].required is False
+    assert fields_by_key["api_key"].field_type == "password"
+
+
 @pytest.mark.parametrize(
-    ("provider", "display_name", "litellm_provider", "model_placeholder", "api_base_required", "api_key_required"),
+    ("provider", "display_name", "litellm_provider", "model_placeholder"),
     (
-        ("TYPESAFE", "TypeSafe", LlmProviders.TYPESAFE.value, "typesafe/jev-latest", False, True),
-        (
-            "STRANDS_DECIDER",
-            "Strands Decider",
-            LlmProviders.STRANDS_DECIDER.value,
-            "strands_decider/strands-decider-2B-hobson-v19",
-            True,
-            False,
-        ),
-        ("LAYA", "Laya", LlmProviders.LAYA.value, "laya/english", True, False),
-        ("BESPOKE", "Bespoke Nimble", LlmProviders.BESPOKE.value, "bespoke/nimble-latest", True, False),
+        ("Laya", "Laya", LlmProviders.LAYA.value, "laya/english"),
+        ("Bespoke", "Bespoke Nimble", LlmProviders.BESPOKE.value, "bespoke/nimble-latest"),
     ),
 )
-def test_decisions_provider_fields(
-    provider, display_name, litellm_provider, model_placeholder, api_base_required, api_key_required
-):
-    app_instance = FastAPI()
-    app_instance.include_router(router)
-    test_client = TestClient(app_instance)
+def test_oss_decisions_provider_fields(provider, display_name, litellm_provider, model_placeholder):
+    entry: Final = _decisions_provider_entry(provider)
 
-    response = test_client.get("/public/providers/fields")
-    assert response.status_code == 200
-    providers = response.json()
+    assert entry.provider_display_name == display_name
+    assert entry.litellm_provider == litellm_provider
+    assert entry.default_model_placeholder == model_placeholder
 
-    entry = next((p for p in providers if p["provider"] == provider), None)
-    assert entry is not None, f"{provider} provider entry not found"
+    fields_by_key: Final = {f.key: f for f in entry.credential_fields}
 
-    assert entry["provider_display_name"] == display_name
-    assert entry["litellm_provider"] == litellm_provider
-    assert entry["default_model_placeholder"] == model_placeholder
+    assert fields_by_key["api_base"].required is True
+    assert fields_by_key["api_base"].field_type == "text"
 
-    fields_by_key = {f["key"]: f for f in entry["credential_fields"]}
-
-    assert fields_by_key["api_base"]["required"] is api_base_required
-    assert fields_by_key["api_base"]["field_type"] == "text"
-
-    assert fields_by_key["api_key"]["required"] is api_key_required
-    assert fields_by_key["api_key"]["field_type"] == "password"
+    assert fields_by_key["api_key"].required is False
+    assert fields_by_key["api_key"].field_type == "password"
 
 
 ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(

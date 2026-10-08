@@ -2962,7 +2962,7 @@ def supports_pdf_input(model: str, custom_llm_provider: str | None = None) -> bo
 
 def supports_audio_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """Check if a given model supports audio output in a chat completion call"""
-    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input")
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_output")
 
 
 def supports_prompt_caching(model: str, custom_llm_provider: str | None = None) -> bool:

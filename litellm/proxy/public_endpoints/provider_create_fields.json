@@ -749,7 +749,7 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
-    "provider": "BESPOKE",
+    "provider": "Bespoke",
     "provider_display_name": "Bespoke Nimble",
     "litellm_provider": "bespoke",
     "credential_fields": [
@@ -1912,7 +1912,7 @@
     "default_model_placeholder": "jina_ai/"
   },
   {
-    "provider": "LAYA",
+    "provider": "Laya",
     "provider_display_name": "Laya",
     "litellm_provider": "laya",
     "credential_fields": [
@@ -3246,15 +3246,15 @@
     "default_model_placeholder": "soniox/stt-async-v5"
   },
   {
-    "provider": "STRANDS_DECIDER",
+    "provider": "StrandsDecider",
     "provider_display_name": "Strands Decider",
     "litellm_provider": "strands_decider",
     "credential_fields": [
       {
         "key": "api_base",
         "label": "API Base",
-        "placeholder": null,
-        "tooltip": null,
+        "placeholder": "http://localhost:8000",
+        "tooltip": "URL of your self-hosted Strands Decider server",
         "required": true,
         "field_type": "text",
         "options": null,
@@ -3430,6 +3430,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "TypeSafe",
+    "provider_display_name": "TypeSafe",
+    "litellm_provider": "typesafe",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.typesafe.ai",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "typesafe/jev-latest"
   },
   {
     "provider": "V0",

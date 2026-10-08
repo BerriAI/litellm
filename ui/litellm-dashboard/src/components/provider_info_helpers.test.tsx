@@ -174,7 +174,7 @@ describe("provider_info_helpers", () => {
     it("should map every provider to a bundled logo except the known logoless set, never a raw /ui/assets path", () => {
       const knownLogolessProviders = [
         Providers.AUTO_ROUTER,
-        Providers.BESPOKE,
+        Providers.Bespoke,
         Providers.BYTEZ,
         Providers.CLARIFAI,
         Providers.Cognition,
@@ -186,7 +186,7 @@ describe("provider_info_helpers", () => {
         Providers.GALADRIEL,
         Providers.GradientAI,
         Providers.HEROKU,
-        Providers.LAYA,
+        Providers.Laya,
         Providers.LEMONADE,
         Providers.LLAMAFILE,
         Providers.MARITALK,
@@ -197,7 +197,6 @@ describe("provider_info_helpers", () => {
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
         Providers.Sail,
-        Providers.TYPESAFE,
         Providers.WANDB,
         Providers.ZAI,
       ];
@@ -218,10 +217,25 @@ describe("provider_info_helpers", () => {
       expect(logo).toContain("tencent");
     });
 
-    it("should resolve the Strands Decider provider to its bundled logo", () => {
-      const { logo, displayName } = getProviderLogoAndName("strands_decider");
-      expect(displayName).toBe(Providers.STRANDS_DECIDER);
-      expect(logo).toContain("strands");
+
+    it("should resolve the typesafe slug and TypeSafe enum key to the TypeSafe name and bundled logo", () => {
+      const fromSlug = getProviderLogoAndName("typesafe");
+      expect(fromSlug.displayName).toBe(Providers.TypeSafe);
+      expect(fromSlug.logo).toContain("typesafe");
+
+      const fromEnumKey = getProviderLogoAndName("TypeSafe");
+      expect(fromEnumKey.displayName).toBe(Providers.TypeSafe);
+      expect(fromEnumKey.logo).toBe(fromSlug.logo);
+    });
+
+    it("should resolve the strands_decider slug and StrandsDecider enum key to the Strands Decider name and bundled logo", () => {
+      const fromSlug = getProviderLogoAndName("strands_decider");
+      expect(fromSlug.displayName).toBe("Strands Decider");
+      expect(fromSlug.logo).toContain("strands");
+
+      const fromEnumKey = getProviderLogoAndName("StrandsDecider");
+      expect(fromEnumKey.displayName).toBe(Providers.StrandsDecider);
+      expect(fromEnumKey.logo).toBe(fromSlug.logo);
     });
   });
 
@@ -327,11 +341,14 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder(Providers.Tencent)).toBe("tencent/deepseek-v4-pro");
     });
 
+    it("should return decision model placeholders for the TypeSafe and StrandsDecider dropdown keys", () => {
+      expect(getPlaceholder("TypeSafe")).toBe("typesafe/jev-latest");
+      expect(getPlaceholder("StrandsDecider")).toBe("strands_decider/strands-decider-2B-hobson-v19");
+    });
+
     it.each([
-      [Providers.TYPESAFE, "typesafe/jev-latest"],
-      [Providers.STRANDS_DECIDER, "strands_decider/strands-decider-2B-hobson-v19"],
-      [Providers.LAYA, "laya/english"],
-      [Providers.BESPOKE, "bespoke/nimble-latest"],
+      [Providers.Laya, "laya/english"],
+      [Providers.Bespoke, "bespoke/nimble-latest"],
     ])("should return the %s decisions model placeholder", (provider, placeholder) => {
       expect(getPlaceholder(provider)).toBe(placeholder);
     });
@@ -437,6 +454,30 @@ describe("provider_info_helpers", () => {
         "sagemaker-model": { litellm_provider: "sagemaker" },
       };
       expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
+    });
+
+    it("should list only typesafe decision models for the 'TypeSafe' provider key, not the OpenRouter-hosted one", () => {
+      const modelMap = {
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+        "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "evaluation" },
+        "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "evaluation" },
+        "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "evaluation" },
+      };
+      expect(getProviderModels("TypeSafe" as Providers, modelMap)).toEqual([
+        "typesafe/jev-latest",
+        "typesafe/jev-preview",
+      ]);
+    });
+
+    it("should list only strands_decider models for the 'StrandsDecider' provider key", () => {
+      const modelMap = {
+        "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "evaluation" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+        "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "evaluation" },
+      };
+      expect(getProviderModels("StrandsDecider" as Providers, modelMap)).toEqual([
+        "strands_decider/strands-decider-2B-hobson-v19",
+      ]);
     });
 
     it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {

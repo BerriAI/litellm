@@ -111,7 +111,7 @@ describe("prepareModelAddRequest", () => {
         },
       ],
       model_name: "typesafe/jev-latest",
-      custom_llm_provider: "TYPESAFE",
+      custom_llm_provider: "TypeSafe",
       mode: "evaluation",
     };
 
