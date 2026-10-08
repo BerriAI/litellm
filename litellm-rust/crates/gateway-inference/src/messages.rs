@@ -76,12 +76,9 @@ fn project(
         .collect();
     Ok(MessagesCall {
         body: messages_body(body)?,
-        api_key: deployment.api_key.clone(),
-        api_base: deployment.api_base.clone(),
         custom_llm_provider: deployment.custom_llm_provider.clone(),
-        extra_headers: None,
         provider_specific_header: anthropic_api_headers(headers),
-        timeout: deployment.timeout,
+        connection: deployment.connection(),
         shaping: deployment.shaping.clone(),
     })
 }

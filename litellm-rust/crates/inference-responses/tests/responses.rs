@@ -5,6 +5,7 @@ use litellm_host::{
 use std::sync::Arc;
 
 use futures_util::TryStreamExt;
+use litellm_auth::{InputSource, SecretValue, Sourced};
 use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 use litellm_inference::Connection;
 use litellm_inference_responses::{
@@ -19,6 +20,10 @@ use wiremock::ResponseTemplate;
 mod support;
 use support::*;
 
+fn deployment<T>(value: T) -> Option<Sourced<T>> {
+    Some(Sourced::new(value, InputSource::Deployment))
+}
+
 #[fixture]
 fn call() -> ResponsesCall {
     ResponsesCall {
@@ -27,7 +32,7 @@ fn call() -> ResponsesCall {
         input: json!("hello"),
         optional_params: Default::default(),
         connection: Connection {
-            api_key: Some("test-key".into()),
+            api_key: deployment(SecretValue::new("test-key")),
             ..Connection::default()
         },
     }
@@ -36,7 +41,7 @@ fn call() -> ResponsesCall {
 fn at(base: String, call: ResponsesCall) -> ResponsesCall {
     ResponsesCall {
         connection: Connection {
-            api_base: Some(base),
+            api_base: deployment(base),
             ..call.connection
         },
         ..call
@@ -223,8 +228,8 @@ async fn credentials_and_endpoint_are_resolved_only_when_needed(
     ]));
     let call = ResponsesCall {
         connection: Connection {
-            api_key: explicit.then(|| key.into()),
-            api_base: explicit.then(|| base.clone()),
+            api_key: explicit.then(|| SecretValue::new(key)).and_then(deployment),
+            api_base: explicit.then(|| base.clone()).and_then(deployment),
             ..call.connection
         },
         ..call
@@ -288,8 +293,8 @@ async fn route_tracing_covers_native_and_hosted_outcomes(
     let host = RecordingCall::<Responses>::new(ResponsesCall {
         input: json!("private-prompt-sentinel"),
         connection: Connection {
-            api_key: Some("private-key-sentinel".into()),
-            api_base: Some(upstream.uri()),
+            api_key: deployment(SecretValue::new("private-key-sentinel")),
+            api_base: deployment(upstream.uri()),
             ..call.connection
         },
         ..call

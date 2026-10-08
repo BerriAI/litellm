@@ -1,4 +1,4 @@
-use litellm_auth::SecretValue;
+use litellm_auth::Sourced;
 use litellm_core_utils::settings::Lookup;
 use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
@@ -79,10 +79,10 @@ fn validate_environment(
     secrets: &dyn Lookup,
 ) -> Result<ValidatedEnvironment, Error> {
     let env_lookup = |key: &str| secrets.get(key);
-    let forwarded = string_headers(request.connection.extra_headers.clone())?;
+    let forwarded = string_headers(request.connection.extra_headers_value())?;
     let validated = config.validate_environment(
         forwarded,
-        request.connection.api_key.as_deref(),
+        request.connection.exposed_api_key(),
         model,
         &request.optional_params,
         &env_lookup,
@@ -104,7 +104,7 @@ pub(super) fn prepare_provider_request(
     let config = request.config;
     let env_lookup = |key: &str| secrets.get(key);
     let url = config.get_complete_url(
-        request.connection.api_base.as_deref(),
+        request.connection.api_base_value(),
         &model,
         &request.optional_params,
         &env_lookup,
@@ -122,13 +122,13 @@ pub(super) fn prepare_provider_request(
         environment,
         secrets,
         timeout: request.connection.timeout,
-        api_key: request.connection.api_key.map(SecretValue::new),
+        api_key: request.connection.api_key.map(Sourced::into_value),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use litellm_auth::CredentialPlacement;
+    use litellm_auth::{CredentialPlacement, InputSource, SecretValue, Sourced};
     use litellm_llms::base_llm::auth::{AuthScheme, resolve_auth};
     use serde_json::{Map, Value, json};
 
@@ -138,6 +138,10 @@ mod tests {
         types::{ChatCompletionsCall, ProviderChatCompletionsRequest},
     };
     use litellm_inference::Connection;
+
+    fn deployment<T>(value: T) -> Option<Sourced<T>> {
+        Some(Sourced::new(value, InputSource::Deployment))
+    }
 
     fn prepare_chat_completions_call(
         request: ChatCompletionsCall,
@@ -177,7 +181,7 @@ mod tests {
                 other => panic!("params must be an object, got {other}"),
             },
             connection: Connection {
-                api_key: Some("sk-test".into()),
+                api_key: deployment(SecretValue::new("sk-test")),
                 ..Connection::default()
             },
         }
@@ -251,7 +255,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         );
-        call.connection.extra_headers = Some(Map::from_iter([(
+        call.connection.extra_headers = deployment(Map::from_iter([(
             "X-Api-Key".to_string(),
             json!("sk-caller"),
         )]));
@@ -276,7 +280,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         );
-        call.connection.extra_headers = Some(Map::from_iter([
+        call.connection.extra_headers = deployment(Map::from_iter([
             (
                 "Authorization".to_string(),
                 json!("Bearer sk-ant-oat01-token"),
@@ -310,7 +314,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         );
-        call.connection.extra_headers = Some(Map::from_iter([
+        call.connection.extra_headers = deployment(Map::from_iter([
             ("Authorization".to_string(), json!("Bearer unrelated")),
             ("X-Api-Key".to_string(), json!("sk-caller")),
         ]));
@@ -401,7 +405,8 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         );
-        call.connection.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
+        call.connection.extra_headers =
+            deployment(Map::from_iter([("x-trace".to_string(), json!(7))]));
         assert_eq!(
             preparation_error(call),
             Error::Headers(litellm_http::request::HeaderError {
@@ -459,7 +464,7 @@ mod tests {
         );
         // A key would resolve to a bearer token and never reach the signer.
         call.connection.api_key = None;
-        call.connection.extra_headers = Some(Map::from_iter([(
+        call.connection.extra_headers = deployment(Map::from_iter([(
             "x-request-id".to_string(),
             json!("abc-123"),
         )]));
@@ -510,7 +515,10 @@ mod tests {
     async fn rejects_a_forwarded_header_the_signer_computes(#[case] forwarded: &str) {
         let call = ChatCompletionsCall {
             connection: Connection {
-                extra_headers: Some(Map::from_iter([(forwarded.to_string(), json!("forged"))])),
+                extra_headers: deployment(Map::from_iter([(
+                    forwarded.to_string(),
+                    json!("forged"),
+                )])),
                 ..Connection::default()
             },
             ..request(
@@ -557,7 +565,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({"maxTokens": 16}),
         );
-        call.connection.extra_headers = Some(Map::from_iter([(
+        call.connection.extra_headers = deployment(Map::from_iter([(
             "Authorization".to_string(),
             json!("Bearer caller-supplied"),
         )]));
@@ -590,7 +598,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         );
-        call.connection.extra_headers = Some(Map::from_iter([(
+        call.connection.extra_headers = deployment(Map::from_iter([(
             "authorization".to_string(),
             json!("Bearer sk-ant-oat01-forwarded"),
         )]));

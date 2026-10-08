@@ -1,12 +1,13 @@
 use std::{collections::BTreeMap, time::Duration};
 
-use litellm_auth::{InputSource, SecretValue};
+use litellm_auth::{InputSource, SecretValue, Sourced};
+use litellm_inference::Connection;
 use litellm_llms::base_llm::ocr::{error::Error, transformation::decode_request_value};
 use litellm_llms_types::formats::ocr::OcrDocument;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
+use crate::types::{LiteLLMOcrRequest, OcrDocumentInput};
 
 pub fn consumed_optional_params(
     model: &str,
@@ -78,18 +79,24 @@ pub fn decode_request_input<D: Into<OcrDocumentInput>>(
             })
         })
         .transpose()?;
+    let source = |name: &str| wire.input_sources.get(name).copied().unwrap_or_default();
+    let connection = Connection {
+        api_key: wire.api_key.map(|key| Sourced::new(key, source("api_key"))),
+        api_base: wire
+            .api_base
+            .map(|base| Sourced::new(base, source("api_base"))),
+        extra_headers: wire
+            .extra_headers
+            .map(|headers| Sourced::new(headers, source("extra_headers"))),
+        timeout,
+    };
     LiteLLMOcrRequest::from_inputs(
         wire.model,
         wire.document,
         wire.custom_llm_provider.as_deref(),
         wire.optional_params.into(),
-        OcrConnectionInputs {
-            api_key: wire.api_key,
-            api_base: wire.api_base,
-            extra_headers: wire.extra_headers.unwrap_or_default(),
-            timeout,
-            input_sources: wire.input_sources,
-        },
+        wire.input_sources,
+        connection,
     )
 }
 

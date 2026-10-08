@@ -3,7 +3,9 @@ use std::{
     time::Duration,
 };
 
+use litellm_auth::{InputSource, SecretValue, Sourced};
 use litellm_http::{HttpSettings, Resolution};
+use litellm_inference::Connection;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping,
     route::{Messages, MessagesMachine, MessagesOutput},
@@ -78,18 +80,45 @@ fn call() -> MessagesCall {
             "max_tokens": 16,
             "messages": [{"role": "user", "content": "hi"}]
         })),
-        api_key: None,
-        api_base: None,
         custom_llm_provider: Some("anthropic".into()),
-        extra_headers: None,
         provider_specific_header: None,
-        timeout: Some(Duration::from_secs(5)),
         shaping: MessagesShaping::default(),
+        connection: Connection {
+            timeout: Some(Duration::from_secs(5)),
+            ..Connection::default()
+        },
     }
 }
 
-fn headers<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<Map<String, Value>> {
-    Some(
+fn deployment<T>(value: T) -> Option<Sourced<T>> {
+    Some(Sourced::new(value, InputSource::Deployment))
+}
+
+fn connected(call: MessagesCall, api_key: &str, api_base: String) -> MessagesCall {
+    MessagesCall {
+        connection: Connection {
+            api_key: deployment(SecretValue::new(api_key)),
+            api_base: deployment(api_base),
+            ..call.connection
+        },
+        ..call
+    }
+}
+
+fn with_timeout(call: MessagesCall, timeout: Duration) -> MessagesCall {
+    MessagesCall {
+        connection: Connection {
+            timeout: Some(timeout),
+            ..call.connection
+        },
+        ..call
+    }
+}
+
+fn headers<'a>(
+    pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Option<Sourced<Map<String, Value>>> {
+    deployment(
         pairs
             .into_iter()
             .map(|(name, value)| (name.to_string(), Value::from(value)))

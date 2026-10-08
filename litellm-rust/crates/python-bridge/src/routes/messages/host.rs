@@ -2,8 +2,10 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
+use litellm_auth::{InputSource, SecretValue, Sourced};
 use litellm_host_python::{InvokeError, PythonBinding, from_py, present, to_py};
 use litellm_http::transport::Error as TransportError;
+use litellm_inference::Connection;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, messages_body,
     route::{Messages, MessagesStreamHead},
@@ -20,7 +22,10 @@ use serde_json::{Map, Value};
 
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
+    marshal::{
+        optional_timeout, project_optional_fields, public_response, python_timeout_seconds,
+        request_input_sources,
+    },
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
@@ -128,18 +133,35 @@ impl MessagesPythonHost {
             .flatten();
         let custom_llm_provider = string("custom_llm_provider")?;
         let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
-        let api_key = string("api_key")?;
-        let api_base = string("api_base")?;
-        let extra_headers = self.merged_headers(py, arguments)?;
+        let sources = request_input_sources(
+            arguments,
+            ["api_key", "api_base", "headers", "extra_headers"].into_iter(),
+        )?;
+        let source = |name: &str| sources.get(name).copied().unwrap_or_default();
+        let connection = Connection {
+            api_key: string("api_key")?
+                .map(|key| Sourced::new(SecretValue::new(key), source("api_key"))),
+            api_base: string("api_base")?.map(|base| Sourced::new(base, source("api_base"))),
+            extra_headers: self.merged_headers(py, arguments)?.map(|headers| {
+                let from_request =
+                    sources.contains_key("headers") || sources.contains_key("extra_headers");
+                Sourced::new(
+                    headers,
+                    if from_request {
+                        InputSource::Request
+                    } else {
+                        InputSource::Deployment
+                    },
+                )
+            }),
+            timeout: optional_timeout(timeout),
+        };
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
         Ok(messages_body(body).map(|body| MessagesCall {
             body,
-            api_key,
-            api_base,
-            extra_headers,
-            provider_specific_header,
             custom_llm_provider,
-            timeout: optional_timeout(timeout),
+            provider_specific_header,
+            connection,
             shaping,
         }))
     }

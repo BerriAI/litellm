@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_auth::SecretValue;
+use litellm_auth::{SecretValue, Sourced};
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
     get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
@@ -67,11 +67,8 @@ fn prepare_provider_request(
     let ResolvedProvider { model, provider } = resolved;
     let MessagesCall {
         body,
-        api_key,
-        api_base,
-        extra_headers,
         provider_specific_header,
-        timeout,
+        connection,
         shaping,
         ..
     } = call;
@@ -92,11 +89,16 @@ fn prepare_provider_request(
     let scoped =
         get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
     let forwarded = string_headers(Some(
-        extra_headers.into_iter().flatten().chain(scoped).collect(),
+        connection
+            .extra_headers_value()
+            .into_iter()
+            .flatten()
+            .chain(scoped)
+            .collect(),
     ))?;
     let validated = config.validate_environment(
         forwarded,
-        api_key.as_deref(),
+        connection.exposed_api_key(),
         &transformed.model,
         &env_lookup,
     )?;
@@ -109,9 +111,9 @@ fn prepare_provider_request(
     };
 
     let url = if transformed.params.stream == Some(true) {
-        config.complete_stream_url(api_base.as_deref(), &transformed.model, &env_lookup)?
+        config.complete_stream_url(connection.api_base_value(), &transformed.model, &env_lookup)?
     } else {
-        config.get_complete_url(api_base.as_deref(), &transformed.model, &env_lookup)?
+        config.get_complete_url(connection.api_base_value(), &transformed.model, &env_lookup)?
     };
 
     Ok(ProviderMessagesRequest {
@@ -119,8 +121,8 @@ fn prepare_provider_request(
         url,
         body: transformed,
         environment,
-        timeout,
-        api_key: api_key.map(SecretValue::new),
+        timeout: connection.timeout,
+        api_key: connection.api_key.map(Sourced::into_value),
     })
 }
 
@@ -148,8 +150,15 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::{Map, Value, json};
 
+    use litellm_auth::InputSource;
+    use litellm_inference::Connection;
+
     use super::*;
     use crate::{MessagesSettings, MessagesShaping};
+
+    fn deployment<T>(value: T) -> Option<Sourced<T>> {
+        Some(Sourced::new(value, InputSource::Deployment))
+    }
 
     #[fixture]
     fn shaping() -> MessagesShaping {
@@ -224,13 +233,10 @@ mod tests {
                 body: body(
                     json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
                 ),
-                api_key: None,
-                api_base: None,
                 custom_llm_provider: Some("anthropic".into()),
-                extra_headers: None,
                 provider_specific_header: None,
-                timeout: None,
                 shaping,
+                connection: Connection::default(),
             },
             &lookup,
         )
@@ -250,13 +256,15 @@ mod tests {
     fn prepared_body(fields: Value, shaping: MessagesShaping) -> Result<Value, Error> {
         prepare(MessagesCall {
             body: body(fields),
-            api_key: Some("sk-test".into()),
-            api_base: Some("https://anthropic.test".into()),
             custom_llm_provider: Some("anthropic".into()),
-            extra_headers: None,
             provider_specific_header: None,
-            timeout: None,
             shaping,
+            connection: Connection {
+                api_key: deployment(SecretValue::new("sk-test")),
+                api_base: deployment("https://anthropic.test".into()),
+                extra_headers: None,
+                timeout: None,
+            },
         })
         .map(|prepared| serde_json::to_value(prepared.body).unwrap())
     }
@@ -357,13 +365,15 @@ mod tests {
             body: body(
                 json!({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
             ),
-            api_key: Some("sk-test".into()),
-            api_base: Some("https://resource.services.ai.azure.com".into()),
             custom_llm_provider: custom_llm_provider.map(Into::into),
-            extra_headers: Some(Map::from_iter([("x-priority".into(), json!("extra"))])),
             provider_specific_header: Some(configured),
-            timeout: None,
             shaping,
+            connection: Connection {
+                api_key: deployment(SecretValue::new("sk-test")),
+                api_base: deployment("https://resource.services.ai.azure.com".into()),
+                extra_headers: deployment(Map::from_iter([("x-priority".into(), json!("extra"))])),
+                timeout: None,
+            },
         })
         .unwrap();
         let caller_headers: Vec<(&str, &str)> = prepared

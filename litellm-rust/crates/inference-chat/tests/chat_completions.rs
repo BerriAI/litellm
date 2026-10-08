@@ -5,6 +5,7 @@ use litellm_host::{
 };
 use std::time::Duration;
 
+use litellm_auth::{InputSource, SecretValue, Sourced};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference::Connection;
 use litellm_inference_chat::{Error, types::ChatCompletionsCall};
@@ -33,6 +34,10 @@ fn anthropic_response(body: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_raw(body, "application/json")
 }
 
+fn deployment<T>(value: T) -> Option<Sourced<T>> {
+    Some(Sourced::new(value, InputSource::Deployment))
+}
+
 fn hi() -> Value {
     json!([{"role": "user", "content": "hi"}])
 }
@@ -45,7 +50,7 @@ fn request() -> ChatCompletionsCall {
         messages: hi(),
         optional_params: object(json!({"max_tokens": 16})),
         connection: Connection {
-            api_key: Some("sk-test".into()),
+            api_key: deployment(SecretValue::new("sk-test")),
             timeout: Some(Duration::from_secs(10)),
             ..Connection::default()
         },
@@ -55,7 +60,7 @@ fn request() -> ChatCompletionsCall {
 fn at(base: &str, request: ChatCompletionsCall) -> ChatCompletionsCall {
     ChatCompletionsCall {
         connection: Connection {
-            api_base: Some(base.into()),
+            api_base: deployment(base.into()),
             ..request.connection
         },
         ..request
@@ -110,7 +115,7 @@ async fn the_deployment_key_replaces_a_caller_supplied_x_api_key(request: ChatCo
     let request = at(&base, request);
     complete(ChatCompletionsCall {
         connection: Connection {
-            extra_headers: Some(object(
+            extra_headers: deployment(object(
                 json!({"x-api-key": "caller-key", "x-trace": "kept"}),
             )),
             ..request.connection
@@ -144,7 +149,7 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsCal
             "aws_region_name": "eu-west-1"
         })),
         connection: Connection {
-            api_base: Some(base),
+            api_base: deployment(base),
             ..Connection::default()
         },
         ..request
@@ -242,7 +247,7 @@ async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletion
 
     let error = complete(ChatCompletionsCall {
         connection: Connection {
-            api_base: Some(base),
+            api_base: deployment(base),
             timeout: Some(Duration::from_millis(100)),
             ..request.connection
         },

@@ -1,7 +1,6 @@
-use std::time::Duration;
-
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
+use litellm_inference::Connection;
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
@@ -14,12 +13,9 @@ use super::Error;
 
 pub struct MessagesCall {
     pub body: MessagesRequest,
-    pub api_key: Option<String>,
-    pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
-    pub extra_headers: Option<Map<String, Value>>,
     pub provider_specific_header: Option<ProviderSpecificHeaders>,
-    pub timeout: Option<Duration>,
+    pub connection: Connection,
     pub shaping: MessagesShaping,
 }
 

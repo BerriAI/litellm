@@ -22,15 +22,12 @@ pub(super) async fn prepare(
     let config: &'static dyn BaseResponsesApiConfig = &OpenAiResponsesApiConfig;
     let connection = call.connection;
     let snapshot = secrets
-        .resolve(config.secret_names(
-            connection.api_key.as_deref(),
-            connection.api_base.as_deref(),
-        ))
+        .resolve(config.secret_names(connection.exposed_api_key(), connection.api_base_value()))
         .await?;
     let lookup = |name: &str| snapshot.get(name);
     let environment = config.validate_environment(
-        litellm_http::request::string_headers("responses", connection.extra_headers)?,
-        connection.api_key.as_deref(),
+        litellm_http::request::string_headers("responses", connection.extra_headers_value())?,
+        connection.exposed_api_key(),
         &lookup,
     )?;
     let context = RequestContext {
@@ -47,7 +44,7 @@ pub(super) async fn prepare(
     };
     let body = config.transform_responses_api_request(model, call.input, call.optional_params)?;
     Ok(ProviderResponsesRequest {
-        url: config.get_complete_url(connection.api_base.as_deref(), &lookup),
+        url: config.get_complete_url(connection.api_base_value(), &lookup),
         config,
         environment,
         body,

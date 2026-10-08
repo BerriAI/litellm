@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use litellm_auth::{InputSource, SecretValue, Sourced};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
     CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
@@ -27,6 +28,9 @@ use serde_json::{Value, json};
 
 use support::traces;
 
+fn deployment<T>(value: T) -> Option<Sourced<T>> {
+    Some(Sourced::new(value, InputSource::Deployment))
+}
 #[fixture]
 fn cache() -> Arc<dyn ResponseCacheService> {
     Arc::new(
@@ -82,8 +86,8 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
                     messages: json!([{"role":"user","content":"hello"}]),
                     optional_params: [("max_tokens".into(), json!(16))].into_iter().collect(),
                     connection: Connection {
-                        api_key: Some("test-key".into()),
-                        api_base: Some(base.clone()),
+                        api_key: deployment(SecretValue::new("test-key")),
+                        api_base: deployment(base.clone()),
                         ..Connection::default()
                     },
                 },
@@ -320,7 +324,7 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
             custom_llm_provider:None,
             messages:json!([{"role":"user","content":"hello"}]),
             optional_params:json!({"aws_access_key_id":"test-access","aws_secret_access_key":"test-secret","aws_region_name":"eu-west-1"}).as_object().unwrap().clone(),
-            connection:Connection{api_base:Some(upstream.uri()),..Connection::default()},
+            connection:Connection{api_base:deployment(upstream.uri()),..Connection::default()},
         }, &hooks, None).await.unwrap();
         assert_eq!(
             serde_json::to_value(response).unwrap()["usage"]["total_tokens"],

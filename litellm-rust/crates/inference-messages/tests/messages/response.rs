@@ -30,7 +30,10 @@ async fn calls_defer_execution_until_polled(
     let secrets = Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "test-key")]));
     let route = messages_route(secrets.clone());
     let host = RecordingCall::<Messages>::new(MessagesCall {
-        api_base: Some(upstream.uri()),
+        connection: Connection {
+            api_base: deployment(upstream.uri()),
+            ..call.connection
+        },
         ..call
     });
     let request = host.request().unwrap();
@@ -104,8 +107,11 @@ async fn the_provider_message_is_returned(call: MessagesCall, #[case] provider: 
 
     let message = run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
-        api_key: Some("sk".into()),
-        api_base: Some(upstream.uri()),
+        connection: Connection {
+            api_key: deployment(SecretValue::new("sk")),
+            api_base: deployment(upstream.uri()),
+            ..call.connection
+        },
         ..call
     })
     .await;
@@ -140,8 +146,11 @@ async fn the_message_passes_through_losslessly(call: MessagesCall) {
     let upstream = upstream([json_response(upstream_body.clone())]).await;
 
     let message = run_message(MessagesCall {
-        api_key: Some("sk".into()),
-        api_base: Some(upstream.uri()),
+        connection: Connection {
+            api_key: deployment(SecretValue::new("sk")),
+            api_base: deployment(upstream.uri()),
+            ..call.connection
+        },
         ..call
     })
     .await;
@@ -158,8 +167,11 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
     let upstream = upstream([status_response(400, envelope.clone())]).await;
 
     let error = run(MessagesCall {
-        api_key: Some("sk".into()),
-        api_base: Some(upstream.uri()),
+        connection: Connection {
+            api_key: deployment(SecretValue::new("sk")),
+            api_base: deployment(upstream.uri()),
+            ..call.connection
+        },
         ..call
     })
     .await
@@ -179,8 +191,11 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
     let upstream = upstream([ResponseTemplate::new(500).set_body_string(long.clone())]).await;
 
     let error = run(MessagesCall {
-        api_key: Some("sk".into()),
-        api_base: Some(upstream.uri()),
+        connection: Connection {
+            api_key: deployment(SecretValue::new("sk")),
+            api_base: deployment(upstream.uri()),
+            ..call.connection
+        },
         ..call
     })
     .await
@@ -207,8 +222,11 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
         upstream([ResponseTemplate::new(status).set_body_string("upstream said no")]).await;
 
     let error = run(MessagesCall {
-        api_key: Some("sk".into()),
-        api_base: Some(upstream.uri()),
+        connection: Connection {
+            api_key: deployment(SecretValue::new("sk")),
+            api_base: deployment(upstream.uri()),
+            ..call.connection
+        },
         ..call
     })
     .await
@@ -234,8 +252,11 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     let upstream = upstream([response]).await;
 
     let error = run(MessagesCall {
-        api_key: Some("sk".into()),
-        api_base: Some(upstream.uri()),
+        connection: Connection {
+            api_key: deployment(SecretValue::new("sk")),
+            api_base: deployment(upstream.uri()),
+            ..call.connection
+        },
         ..call
     })
     .await
@@ -250,9 +271,12 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
     let upstream = upstream([message_response().set_delay(Duration::from_secs(5))]).await;
 
     let error = run(MessagesCall {
-        api_key: Some("sk".into()),
-        api_base: Some(upstream.uri()),
-        timeout: Some(Duration::from_millis(100)),
+        connection: Connection {
+            api_key: deployment(SecretValue::new("sk")),
+            api_base: deployment(upstream.uri()),
+            timeout: Some(Duration::from_millis(100)),
+            ..call.connection
+        },
         ..call
     })
     .await
@@ -279,8 +303,11 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     )
     .execute(
         MessagesCall {
-            api_key: Some("sk-ant".into()),
-            api_base: Some(base),
+            connection: Connection {
+                api_key: deployment(SecretValue::new("sk-ant")),
+                api_base: deployment(base),
+                ..call.connection
+            },
             ..call
         },
         &(),
@@ -321,8 +348,11 @@ async fn message_route_summary_excludes_payload_diagnostics(
     traces
         .logger()
         .instrument(run_message(MessagesCall {
-            api_key: Some("private-key-sentinel".into()),
-            api_base: Some(upstream.uri()),
+            connection: Connection {
+                api_key: deployment(SecretValue::new("private-key-sentinel")),
+                api_base: deployment(upstream.uri()),
+                ..call.connection
+            },
             ..call
         }))
         .await;
@@ -372,9 +402,13 @@ async fn route_uses_injected_dependencies_and_optional_cache(
         route
     };
     for _ in 0..2 {
+        let call = super::call();
         let request = MessagesCall {
-            api_base: Some(upstream.uri()),
-            ..super::call()
+            connection: Connection {
+                api_base: deployment(upstream.uri()),
+                ..call.connection
+            },
+            ..call
         };
         let MessagesCallResponse::Complete(response) =
             route.execute(request, &(), None).await.unwrap()
@@ -440,9 +474,7 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
     ] {
         let request = MessagesCall {
             body: call.body.clone(),
-            api_key: Some("same-key".into()),
-            api_base: Some(upstream.uri()),
-            ..super::call()
+            ..connected(super::call(), "same-key", upstream.uri())
         };
         let override_options = CachePolicy {
             ttl: Some(Duration::from_secs(30)),

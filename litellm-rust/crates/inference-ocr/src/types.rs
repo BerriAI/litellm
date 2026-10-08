@@ -1,8 +1,9 @@
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use bytes::Bytes;
-use litellm_auth::{InputSource, SecretValue, TokenProviderHandle};
+use litellm_auth::{InputSource, TokenProviderHandle};
 use litellm_core_utils::call_arguments::CallArguments;
+use litellm_inference::Connection;
 use litellm_llms::base_llm::ocr::{
     error::Error,
     transformation::{OcrCredentialInputs, OcrTransportConfig, response_format},
@@ -41,36 +42,18 @@ impl From<PathBuf> for OcrDocumentInput {
     }
 }
 
-/// Caller-supplied connection overrides for a [`LiteLLMOcrRequest`], in the
-/// shape hosts receive them: JSON-ish headers, optional timeout, optional
-/// credentials, and per-field provenance in `input_sources`.
-#[derive(Clone, Debug, Default)]
-pub struct OcrConnectionInputs {
-    pub api_key: Option<SecretValue>,
-    pub api_base: Option<String>,
-    pub extra_headers: Map<String, Value>,
-    pub timeout: Option<Duration>,
-    pub input_sources: BTreeMap<String, InputSource>,
-}
-
-impl OcrConnectionInputs {
-    fn source(&self, name: &str) -> InputSource {
-        self.input_sources.get(name).copied().unwrap_or_default()
-    }
-
-    fn header_pairs(&self) -> Result<Vec<(String, String)>, Error> {
-        self.extra_headers
-            .iter()
-            .map(|(name, value)| {
-                value
-                    .as_str()
-                    .map(|value| (name.clone(), value.to_string()))
-                    .ok_or_else(|| Error::RequestField {
-                        path: format!("extra_headers.{name}"),
-                    })
-            })
-            .collect()
-    }
+fn header_pairs(headers: &Map<String, Value>) -> Result<Vec<(String, String)>, Error> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            value
+                .as_str()
+                .map(|value| (name.clone(), value.to_string()))
+                .ok_or_else(|| Error::RequestField {
+                    path: format!("extra_headers.{name}"),
+                })
+        })
+        .collect()
 }
 
 pub struct LiteLLMOcrRequest<D = OcrDocumentInput> {
@@ -182,33 +165,26 @@ impl<D> LiteLLMOcrRequest<D> {
 }
 
 impl LiteLLMOcrRequest {
-    /// Builds a request from host-shaped inputs in one step: provider
-    /// resolution, optional-param validation, header/timeout overrides and
-    /// sourced credentials. Hosts should prefer this over sequencing
-    /// [`Self::new`], [`OcrTransportConfig::with_overrides`] and
-    /// [`Self::with_connection_inputs`] by hand.
     pub fn from_inputs(
         model: String,
         document: impl Into<OcrDocumentInput>,
         custom_llm_provider: Option<&str>,
         optional_params: CallArguments,
-        connection: OcrConnectionInputs,
+        input_sources: BTreeMap<String, InputSource>,
+        connection: Connection,
     ) -> Result<Self, Error> {
         let request = Self::new(model, document, custom_llm_provider, optional_params)?;
+        let (extra_headers, extra_headers_source) = match &connection.extra_headers {
+            Some(headers) => (header_pairs(headers.value())?, headers.source()),
+            None => (Vec::new(), InputSource::default()),
+        };
         let transport = request.transport.clone().with_overrides(
-            connection.header_pairs()?,
-            connection.source("extra_headers"),
+            extra_headers,
+            extra_headers_source,
             connection.timeout,
         );
-        let (api_key_source, api_base_source) =
-            (connection.source("api_key"), connection.source("api_base"));
-        let credentials = OcrCredentialInputs::new(
-            connection.api_key,
-            api_key_source,
-            connection.api_base,
-            api_base_source,
-        );
-        Ok(request.with_connection_inputs(credentials, transport, connection.input_sources))
+        let credentials = OcrCredentialInputs::new(connection.api_key, connection.api_base);
+        Ok(request.with_connection_inputs(credentials, transport, input_sources))
     }
 }
 
@@ -216,6 +192,9 @@ pub(crate) type ResolvedOcrRequest = LiteLLMOcrRequest<OcrDocument>;
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use litellm_auth::{SecretValue, Sourced};
     use serde_json::json;
 
     use super::*;
@@ -228,32 +207,24 @@ mod tests {
     }
 
     #[test]
-    fn connection_inputs_debug_hides_the_api_key() {
-        let inputs = OcrConnectionInputs {
-            api_key: Some(SecretValue::new("caller-api-key")),
-            ..OcrConnectionInputs::default()
-        };
-
-        assert!(!format!("{inputs:?}").contains("caller-api-key"));
-    }
-
-    #[test]
     fn from_inputs_applies_connection_overrides_with_field_sources() {
         let request = LiteLLMOcrRequest::from_inputs(
             "mistral/model".into(),
             document(),
             None,
             Default::default(),
-            OcrConnectionInputs {
-                api_key: Some(SecretValue::new(" key ")),
-                api_base: Some("".into()),
-                extra_headers: json!({"x-a": "1"}).as_object().unwrap().clone(),
+            [("aws_region_name".to_string(), InputSource::Request)].into(),
+            Connection {
+                api_key: Some(Sourced::new(
+                    SecretValue::new(" key "),
+                    InputSource::Request,
+                )),
+                api_base: Some(Sourced::new("".into(), InputSource::Deployment)),
+                extra_headers: Some(Sourced::new(
+                    json!({"x-a": "1"}).as_object().unwrap().clone(),
+                    InputSource::Request,
+                )),
                 timeout: Some(Duration::from_secs(7)),
-                input_sources: [
-                    ("api_key".to_string(), InputSource::Request),
-                    ("extra_headers".to_string(), InputSource::Request),
-                ]
-                .into(),
             },
         )
         .unwrap();
@@ -268,14 +239,18 @@ mod tests {
         );
         assert_eq!(request.transport.extra_headers_source, InputSource::Request);
         assert_eq!(request.transport.timeout, Some(Duration::from_secs(7)));
-        assert_eq!(request.input_sources.len(), 2);
+        assert_eq!(
+            request.input_sources,
+            [("aws_region_name".to_string(), InputSource::Request)].into()
+        );
 
         let defaulted = LiteLLMOcrRequest::from_inputs(
             "mistral/model".into(),
             document(),
             None,
             Default::default(),
-            OcrConnectionInputs::default(),
+            Default::default(),
+            Connection::default(),
         )
         .unwrap();
         assert_eq!(
@@ -295,9 +270,13 @@ mod tests {
             document(),
             None,
             Default::default(),
-            OcrConnectionInputs {
-                extra_headers: json!({"x-a": 1}).as_object().unwrap().clone(),
-                ..Default::default()
+            Default::default(),
+            Connection {
+                extra_headers: Some(Sourced::new(
+                    json!({"x-a": 1}).as_object().unwrap().clone(),
+                    InputSource::Deployment,
+                )),
+                ..Connection::default()
             },
         ) else {
             panic!("non-string header value accepted");

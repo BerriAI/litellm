@@ -44,7 +44,10 @@ pub async fn prepare_audio_transcription_provider_call(
         .ok_or_else(|| Error::InvalidProvider(<&str>::from(provider_info.provider).to_string()))?;
     let snapshot = secrets.resolve(&config.secret_names()).await?;
     let env_lookup = |key: &str| snapshot.get(key);
-    let forwarded = string_headers("audio transcription", request.connection.extra_headers)?;
+    let forwarded = string_headers(
+        "audio transcription",
+        request.connection.extra_headers_value(),
+    )?;
     let validated =
         config.validate_environment(forwarded, &model, &request.optional_params, &env_lookup)?;
     let environment = ValidatedEnvironment {
@@ -52,7 +55,7 @@ pub async fn prepare_audio_transcription_provider_call(
         auth: validated.auth,
     };
     let url = config.get_complete_url(
-        request.connection.api_base.as_deref(),
+        request.connection.api_base_value(),
         &model,
         &request.optional_params,
         &env_lookup,

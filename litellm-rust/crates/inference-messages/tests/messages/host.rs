@@ -205,11 +205,7 @@ async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Error> {
 }
 
 fn authenticated(call: MessagesCall, api_base: String) -> MessagesCall {
-    MessagesCall {
-        api_key: Some("sk-ant".into()),
-        api_base: Some(api_base),
-        ..call
-    }
+    connected(call, "sk-ant", api_base)
 }
 
 #[rstest]

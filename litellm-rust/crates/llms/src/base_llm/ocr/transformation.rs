@@ -31,17 +31,18 @@ pub struct OcrCredentialInputs {
 }
 
 impl OcrCredentialInputs {
-    pub fn new(
-        api_key: Option<SecretValue>,
-        api_key_source: InputSource,
-        api_base: Option<String>,
-        api_base_source: InputSource,
-    ) -> Self {
+    pub fn new(api_key: Option<Sourced<SecretValue>>, api_base: Option<Sourced<String>>) -> Self {
         Self {
-            api_key: nonblank(api_key.as_ref().map(|key| key.expose().to_string()))
-                .map(|value| Sourced::new(SecretValue::new(value), api_key_source)),
+            api_key: api_key.and_then(|key| {
+                let source = key.source();
+                nonblank(Some(key.value().expose().to_string()))
+                    .map(|value| Sourced::new(SecretValue::new(value), source))
+            }),
             dynamic_api_key: None,
-            api_base: nonblank(api_base).map(|value| Sourced::new(value, api_base_source)),
+            api_base: api_base.and_then(|base| {
+                let source = base.source();
+                nonblank(Some(base.into_value())).map(|value| Sourced::new(value, source))
+            }),
             dynamic_api_base: None,
         }
     }

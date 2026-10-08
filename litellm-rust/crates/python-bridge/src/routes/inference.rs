@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use litellm_auth::AuthServices;
+use litellm_auth::{AuthServices, InputSource, SecretValue, Sourced};
 use litellm_cache_response::{CachePolicy, CacheScope, ScopedCache};
 use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
@@ -16,7 +16,10 @@ use serde_json::{Map, Value};
 use super::NativeCall;
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
+    marshal::{
+        optional_timeout, project_optional_fields, public_response, python_timeout_seconds,
+        request_input_sources,
+    },
 };
 
 pub(super) struct InferenceHost {
@@ -78,17 +81,28 @@ impl InferenceHost {
             .getattr("connection_defaults")?
             .call1((provider,))?
             .extract()?;
+        let sources = request_input_sources(
+            arguments,
+            ["api_key", "api_base", "base_url", "extra_headers"].into_iter(),
+        )?;
+        let source = |name: &str| sources.get(name).copied().unwrap_or_default();
+        let sourced = |name: &str| -> PyResult<Option<Sourced<String>>> {
+            Ok(string(name)?
+                .filter(|value| !value.is_empty())
+                .map(|value| Sourced::new(value, source(name))))
+        };
+        let environment = |value| Sourced::new(value, InputSource::Environment);
         Ok(Connection {
-            api_key: string("api_key")?
-                .filter(|key| !key.is_empty())
-                .or(default_key),
-            api_base: string("api_base")?
-                .filter(|base| !base.is_empty())
-                .or(string("base_url")?.filter(|base| !base.is_empty()))
-                .or(default_base),
+            api_key: sourced("api_key")?
+                .or(default_key.map(environment))
+                .map(|key| key.map(SecretValue::new)),
+            api_base: sourced("api_base")?
+                .or(sourced("base_url")?)
+                .or(default_base.map(environment)),
             extra_headers: argument("extra_headers")?
                 .map(|value| from_py(&value))
-                .transpose()?,
+                .transpose()?
+                .map(|headers| Sourced::new(headers, source("extra_headers"))),
             timeout: optional_timeout(timeout),
         })
     }
@@ -198,4 +212,67 @@ where
         hooks,
         asynchronous,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    const MODULE: &str = "native_connection_test_host";
+
+    #[rstest]
+    #[case::caller_values_are_request(
+        "{'api_key': 'caller-key', 'api_base': 'https://caller.test', 'proxy_server_request': {'body_fields': ['api_key', 'api_base']}}",
+        ("caller-key", InputSource::Request),
+        ("https://caller.test", InputSource::Request)
+    )]
+    #[case::bound_values_are_deployment(
+        "{'api_key': 'deployment-key', 'api_base': 'https://deployment.test', 'proxy_server_request': {'body_fields': []}}",
+        ("deployment-key", InputSource::Deployment),
+        ("https://deployment.test", InputSource::Deployment)
+    )]
+    #[case::base_url_keeps_its_own_source(
+        "{'base_url': 'https://caller.test', 'proxy_server_request': {'body_fields': ['base_url']}}",
+        ("default-key", InputSource::Environment),
+        ("https://caller.test", InputSource::Request)
+    )]
+    #[case::module_defaults_are_environment(
+        "{'api_key': '', 'api_base': ''}",
+        ("default-key", InputSource::Environment),
+        ("https://default.test", InputSource::Environment)
+    )]
+    fn connection_records_where_each_value_came_from(
+        #[case] arguments: &str,
+        #[case] api_key: (&str, InputSource),
+        #[case] api_base: (&str, InputSource),
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            py.run(
+                c"
+import sys, types
+module = types.ModuleType('native_connection_test_host')
+module.connection_defaults = lambda provider: ('default-key', 'https://default.test')
+sys.modules['native_connection_test_host'] = module
+",
+                None,
+                None,
+            )
+            .unwrap();
+            let arguments = py
+                .eval(&std::ffi::CString::new(arguments).unwrap(), None, None)
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let connection = InferenceHost::new(PyDict::new(py).unbind(), MODULE)
+                .connection(py, &arguments, "anthropic/claude", None)
+                .unwrap();
+            let key = connection.api_key.unwrap();
+            let base = connection.api_base.unwrap();
+            assert_eq!((key.value().expose(), key.source()), api_key);
+            assert_eq!((base.value().as_str(), base.source()), api_base);
+        });
+    }
 }

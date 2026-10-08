@@ -2,8 +2,7 @@ use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
-use litellm_auth::SecretValue;
-use litellm_inference_ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
+use litellm_inference_ocr::types::{LiteLLMOcrRequest, OcrDocumentInput};
 use litellm_llms::base_llm::ocr::transformation::decode_request_value;
 use litellm_llms_types::formats::ocr::OcrDocument;
 use serde_json::Value;
@@ -68,12 +67,8 @@ async fn handle(
         document,
         deployment.custom_llm_provider.as_deref(),
         options,
-        OcrConnectionInputs {
-            api_key: deployment.api_key.clone().map(SecretValue::new),
-            api_base: deployment.api_base.clone(),
-            timeout: deployment.timeout,
-            ..Default::default()
-        },
+        Default::default(),
+        deployment.connection(),
     )?;
     let response = gateway.ocr.execute(call, &(), None).await?;
     match response.provider_native_response {

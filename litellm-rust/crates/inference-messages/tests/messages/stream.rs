@@ -126,11 +126,11 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
 }
 
 fn streaming(call: MessagesCall, api_base: String) -> MessagesCall {
-    MessagesCall {
-        api_key: Some("sk-ant".into()),
-        api_base: Some(api_base),
-        ..with_fields(call, json!({"stream": true}))
-    }
+    connected(
+        with_fields(call, json!({"stream": true})),
+        "sk-ant",
+        api_base,
+    )
 }
 
 fn sse_response() -> ResponseTemplate {
@@ -308,10 +308,7 @@ async fn stalling_upstream() -> (String, JoinHandle<()>) {
 async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
     let (base, connection) = stalling_upstream().await;
     let host = RecordingStreamHost::new(
-        MessagesCall {
-            timeout: Some(Duration::from_millis(300)),
-            ..streaming(call, base)
-        },
+        with_timeout(streaming(call, base), Duration::from_millis(300)),
         usize::MAX,
     );
 
@@ -396,10 +393,7 @@ async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
     let response = tokio::time::timeout(
         Duration::from_secs(5),
         messages_route(no_secrets()).execute(
-            MessagesCall {
-                timeout: Some(Duration::from_secs(30)),
-                ..streaming(call, base)
-            },
+            with_timeout(streaming(call, base), Duration::from_secs(30)),
             &(),
             None,
         ),
@@ -433,10 +427,7 @@ async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesC
     let (base, connection) = stalling_upstream().await;
     let response = messages_route(no_secrets())
         .execute(
-            MessagesCall {
-                timeout: Some(Duration::from_millis(300)),
-                ..streaming(call, base)
-            },
+            with_timeout(streaming(call, base), Duration::from_millis(300)),
             &(),
             None,
         )
