@@ -4,7 +4,8 @@ These links describe the provider-specific wire types in this directory. Shared 
 
 ## anthropic.rs
 
-`AnthropicBeta` and `BetaSet` represent the `anthropic-beta` header values and their wire spelling
+`AnthropicBeta`, `BetaSet` and `BetaProvider` represent the `anthropic-beta` header values, their
+wire spelling and per-host support
 
 - https://platform.claude.com/docs/en/api/beta-headers.md
 
