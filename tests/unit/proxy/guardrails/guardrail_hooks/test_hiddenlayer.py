@@ -1,19 +1,22 @@
+import asyncio
 import os
 import threading
 import time
 import uuid
-from typing import List, cast
+from queue import SimpleQueue
+from typing import Final, List, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
-from httpx import Request, Response
 import requests
-
+import responses
+from fastapi import HTTPException
+from httpx import HTTPStatusError, MockTransport, Request, Response
 
 import litellm
 from litellm import ModelResponse
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import (
     HiddenlayerGuardrail,
     HiddenlayerGuardrailV2,
@@ -1153,3 +1156,149 @@ def test_get_jwt_gives_up_at_the_timeout_instead_of_blocking_the_event_loop(hang
         guardrail.refresh_jwt_func()
 
     assert [call.kwargs["timeout"] for call in get_jwt.call_args_list] == [2, 2]
+
+
+@pytest.fixture(params=("v1", "v2"))
+def hiddenlayer_jwt_guardrail(request: pytest.FixtureRequest) -> HiddenlayerGuardrail | HiddenlayerGuardrailV2:
+    guardrail_cls: Final = HiddenlayerGuardrail if request.param == "v1" else HiddenlayerGuardrailV2
+    with responses.RequestsMock() as auth:
+        auth.post(
+            "https://auth.example.test/oauth2/token?grant_type=client_credentials", json={"access_token": "expired"}
+        )
+        return guardrail_cls(
+            guardrail_name="hiddenlayer",
+            api_id="id",
+            api_key="secret",
+            api_base="https://api.hiddenlayer.ai",
+            auth_url="https://auth.example.test",
+            timeout=2,
+        )
+
+
+@pytest.mark.parametrize("input_type", ("request", "response"))
+async def test_jwt_refresh_allows_other_coroutines_to_run_before_it_finishes(
+    hiddenlayer_jwt_guardrail: HiddenlayerGuardrail | HiddenlayerGuardrailV2,
+    input_type: Literal["request", "response"],
+) -> None:
+    guardrail: Final = hiddenlayer_jwt_guardrail
+    loop: Final = asyncio.get_running_loop()
+    refresh_started: Final = asyncio.Event()
+    release_refresh: Final = threading.Event()
+    evaluations: Final[SimpleQueue[Request]] = SimpleQueue()
+    successful_body: Final = (
+        {"evaluation": {"action": "Allow"}}
+        if isinstance(guardrail, HiddenlayerGuardrail)
+        else {"messages": [{"role": "user", "content": "hi"}]}
+        if input_type == "request"
+        else {"choices": [{"message": {"role": "assistant", "content": "hi"}}]}
+    )
+
+    def refresh_token(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        assert request.headers["Authorization"] == "Basic aWQ6c2VjcmV0"
+        loop.call_soon_threadsafe(refresh_started.set)
+        assert release_refresh.wait(timeout=5), "event loop could not run while JWT refresh was pending"
+        return 200, {}, '{"access_token": "fresh"}'
+
+    def evaluate(request: Request) -> Response:
+        evaluations.put(request)
+        return Response(
+            401 if request.headers["Authorization"] == "Bearer expired" else 200,
+            json=successful_body,
+        )
+
+    async def other_request() -> None:
+        await refresh_started.wait()
+        release_refresh.set()
+
+    client: Final = AsyncHTTPHandler(transport=MockTransport(evaluate))
+    guardrail._http_client = client
+    peer: Final = asyncio.create_task(other_request())
+    with responses.RequestsMock() as auth:
+        auth.add_callback(
+            responses.POST,
+            "https://auth.example.test/oauth2/token?grant_type=client_credentials",
+            callback=refresh_token,
+            content_type="application/json",
+        )
+        try:
+            result, _ = await asyncio.wait_for(
+                asyncio.gather(
+                    guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type=input_type),
+                    peer,
+                ),
+                timeout=10,
+            )
+        finally:
+            release_refresh.set()
+            peer.cancel()
+            await asyncio.gather(peer, return_exceptions=True)
+            await client.close()
+        assert len(auth.calls) == 1
+
+    assert result["texts"] == ["hi"]
+    assert guardrail.jwt_token == "fresh"
+    assert evaluations.qsize() == 2
+    assert evaluations.get_nowait().headers["Authorization"] == "Bearer expired"
+    assert evaluations.get_nowait().headers["Authorization"] == "Bearer fresh"
+
+
+@pytest.mark.parametrize("input_type", ("request", "response"))
+async def test_jwt_refresh_exception_propagates_without_replacing_the_token(
+    hiddenlayer_jwt_guardrail: HiddenlayerGuardrail | HiddenlayerGuardrailV2,
+    input_type: Literal["request", "response"],
+) -> None:
+    guardrail: Final = hiddenlayer_jwt_guardrail
+    evaluations: Final[SimpleQueue[Request]] = SimpleQueue()
+    refresh_error: Final = requests.exceptions.Timeout("token endpoint timed out")
+
+    def evaluate(request: Request) -> Response:
+        evaluations.put(request)
+        return Response(401)
+
+    client: Final = AsyncHTTPHandler(transport=MockTransport(evaluate))
+    guardrail._http_client = client
+    with responses.RequestsMock() as auth:
+        auth.post("https://auth.example.test/oauth2/token?grant_type=client_credentials", body=refresh_error)
+        try:
+            with pytest.raises(requests.exceptions.Timeout, match="token endpoint timed out") as caught:
+                await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type=input_type)
+        finally:
+            await client.close()
+
+    assert caught.value is refresh_error
+    assert guardrail.jwt_token == "expired"
+    assert evaluations.qsize() == 1
+    assert evaluations.get_nowait().headers["Authorization"] == "Bearer expired"
+
+
+@pytest.mark.parametrize("input_type", ("request", "response"))
+async def test_second_detection_401_propagates_without_another_jwt_refresh(
+    hiddenlayer_jwt_guardrail: HiddenlayerGuardrail | HiddenlayerGuardrailV2,
+    input_type: Literal["request", "response"],
+) -> None:
+    guardrail: Final = hiddenlayer_jwt_guardrail
+    evaluations: Final[SimpleQueue[Request]] = SimpleQueue()
+
+    def evaluate(request: Request) -> Response:
+        evaluations.put(request)
+        return Response(401)
+
+    client: Final = AsyncHTTPHandler(transport=MockTransport(evaluate))
+    guardrail._http_client = client
+    with responses.RequestsMock() as auth:
+        auth.post(
+            "https://auth.example.test/oauth2/token?grant_type=client_credentials", json={"access_token": "fresh"}
+        )
+        try:
+            with pytest.raises(HTTPStatusError) as caught:
+                await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type=input_type)
+        finally:
+            await client.close()
+        assert len(auth.calls) == 1
+
+    assert caught.value.response.status_code == 401
+    assert caught.value.request.headers["Authorization"] == "Bearer fresh"
+    assert guardrail.jwt_token == "fresh"
+    assert evaluations.qsize() == 2
+    assert evaluations.get_nowait().headers["Authorization"] == "Bearer expired"
+    assert evaluations.get_nowait().headers["Authorization"] == "Bearer fresh"
