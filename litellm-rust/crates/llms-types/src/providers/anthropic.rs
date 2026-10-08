@@ -122,12 +122,14 @@ pub enum AnthropicBeta {
     ToolExamples20251029,
     #[strum(serialize = "tool-search-tool-2025-10-19")]
     ToolSearchTool20251019,
+    #[strum(serialize = "inline-tools-2026-09-15")]
+    InlineTools20260915,
     #[strum(default, transparent)]
     Other(String),
 }
 
 impl AnthropicBeta {
-    pub const KNOWN: [Self; 39] = [
+    pub const KNOWN: [Self; 40] = [
         Self::Oauth20250420,
         Self::WebFetch20250910,
         Self::WebSearch20250305,
@@ -167,6 +169,7 @@ impl AnthropicBeta {
         Self::TokenEfficientTools20250219,
         Self::ToolExamples20251029,
         Self::ToolSearchTool20251019,
+        Self::InlineTools20260915,
     ];
 
     pub fn as_str(&self) -> &str {
@@ -274,6 +277,13 @@ impl AnthropicBeta {
                 BetaProvider::Anthropic,
                 BetaProvider::AzureAi,
                 BetaProvider::BedrockConverse,
+                BetaProvider::Databricks,
+            ],
+            Self::InlineTools20260915 => &[
+                BetaProvider::AzureAi,
+                BetaProvider::BedrockConverse,
+                BetaProvider::Bedrock,
+                BetaProvider::BedrockMantle,
                 BetaProvider::Databricks,
             ],
             Self::Other(_) => BetaProvider::VARIANTS,
@@ -429,7 +439,8 @@ mod tests {
             AnthropicBeta::ThinkingDisplayUpdates20260818,
             AnthropicBeta::TokenEfficientTools20250219,
             AnthropicBeta::ToolExamples20251029,
-            AnthropicBeta::ToolSearchTool20251019
+            AnthropicBeta::ToolSearchTool20251019,
+            AnthropicBeta::InlineTools20260915
         )]
         beta: AnthropicBeta,
     ) {
