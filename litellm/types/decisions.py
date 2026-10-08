@@ -334,7 +334,7 @@ class DecisionsIRPredicateQuestion:
     name: str | None
     instructions: DecisionsJSON | None
     criteria: NoulCriteria | None = None
-    extra: Mapping[str, object] = field(default=_NO_EXTRA)
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,7 +348,7 @@ class DecisionsIRChoiceQuestion:
     name: str | None
     instructions: DecisionsJSON | None
     choices: tuple[DecisionsIRChoiceOption, ...]
-    extra: Mapping[str, object] = field(default=_NO_EXTRA)
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,7 +362,7 @@ class DecisionsIRScoreQuestion:
     name: str | None
     instructions: DecisionsJSON | None
     levels: tuple[DecisionsIRScoreLevel, ...]
-    extra: Mapping[str, object] = field(default=_NO_EXTRA)
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
 DecisionsIRQuestion: TypeAlias = DecisionsIRPredicateQuestion | DecisionsIRChoiceQuestion | DecisionsIRScoreQuestion
@@ -378,7 +378,7 @@ class DecisionsIRRequest:
 @dataclass(frozen=True, slots=True)
 class DecisionsIRPredicateAnswer:
     probability: float
-    extra: Mapping[str, object] = field(default=_NO_EXTRA)
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,7 +392,7 @@ class DecisionsIRChoiceAnswer:
     choice: str | bool
     confidence: float
     probabilities: tuple[DecisionsIRChoiceProbability, ...]
-    extra: Mapping[str, object] = field(default=_NO_EXTRA)
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,7 +407,7 @@ class DecisionsIRScoreAnswer:
     score: float
     confidence: float
     probabilities: tuple[DecisionsIRScoreProbability, ...]
-    extra: Mapping[str, object] = field(default=_NO_EXTRA)
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,7 +427,7 @@ class DecisionsIRUsage:
     cached_tokens: int = 0
     cache_write_tokens: int = 0
     reasoning_tokens: int = 0
-    extra: Mapping[str, object] = field(default=_NO_EXTRA)
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
 @dataclass(frozen=True, slots=True)
@@ -435,7 +435,7 @@ class DecisionsIRResponse:
     model: str | None
     answers: tuple[DecisionsIRAnswer, ...]
     usage: DecisionsIRUsage
-    extra: Mapping[str, object] = field(default=_NO_EXTRA)
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
 @dataclass(frozen=True, slots=True)
