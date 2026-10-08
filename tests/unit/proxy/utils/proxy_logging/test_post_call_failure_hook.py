@@ -403,6 +403,103 @@ async def test_post_call_failure_hook_flags_pre_routing_reject_despite_caller_mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_pre_routing_reject_logs_the_configured_deployment_over_caller_metadata(
+    proxy_logging, make_user_api_key_auth, monkeypatch, metadata_field: str
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "internal-model",
+                    "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test"},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+    request_data: Final[dict[str, object]] = {
+        "model": "internal-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_call_id": "caller-routing-metadata",
+        metadata_field: {"deployment": "openai/caller-chosen", "model_group": "caller-group"},
+    }
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="acompletion", rules_obj=litellm.utils.Rules(), start_time=datetime.now(), **request_data
+    )
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={**request_data, "litellm_logging_obj": logging_obj},
+        original_exception=HTTPException(status_code=400, detail="Content blocked"),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        route="/chat/completions",
+    )
+
+    assert len(recorded) == 1
+    now: Final = datetime.now()
+    payload: Final = get_logging_payload(
+        kwargs={**recorded[0], "completion_start_time": now}, response_obj=None, start_time=now, end_time=now
+    )
+    standard_logging_object: Final = recorded[0]["standard_logging_object"]
+    assert {
+        "logged_model": standard_logging_object["model"],
+        "logged_model_group": standard_logging_object["model_group"],
+        "spend_model": payload["model"],
+        "spend_model_group": payload["model_group"],
+    } == {
+        "logged_model": "openai/gpt-4.1",
+        "logged_model_group": "internal-model",
+        "spend_model": "openai/gpt-4.1",
+        "spend_model_group": "internal-model",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("error_type", "logged_tags"), [(ProxyErrorTypes.auth_error, []), (None, ["checkout"])])
+async def test_proxy_only_failure_log_keeps_caller_tags_only_after_auth(
+    proxy_logging, monkeypatch, error_type: ProxyErrorTypes | None, logged_tags: list[str]
+):
+    from litellm.proxy import proxy_server
+
+    recorded: list[dict] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={
+            "model": "internal-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"tags": ["checkout"]},
+        },
+        original_exception=HTTPException(status_code=401, detail="Invalid proxy server token passed"),
+        user_api_key_dict=UserAPIKeyAuth(request_route="/chat/completions"),
+        error_type=error_type,
+        route="/chat/completions",
+    )
+
+    assert len(recorded) == 1
+    assert recorded[0]["standard_logging_object"]["request_tags"] == logged_tags
+
+
+@pytest.mark.asyncio
 async def test_post_call_failure_hook_attribution_does_not_count_against_the_deployment(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
