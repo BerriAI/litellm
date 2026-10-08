@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.types import Scope
@@ -17,7 +18,6 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_ALL_TOOLS_WILDCARD
-from litellm.experimental_mcp_client.client import strip_auth_scheme
 from litellm.proxy._experimental.mcp_server.catalog import global_manager
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
@@ -86,6 +86,7 @@ if TYPE_CHECKING:
 
 
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
+_OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
 def _as_list(values: Sequence[str] | None) -> list[str] | None:  # mutable-ok: resolver returns a list
@@ -628,7 +629,7 @@ class MCPRequestHandler:
             # Scrub gateway-shaped credentials and the exact LiteLLM credential that admitted this request.
             raw_headers = dict(headers)
             admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-                litellm_api_key, validated_user_api_key_auth
+                headers, validated_user_api_key_auth
             )
             (
                 oauth2_headers,
@@ -664,7 +665,7 @@ class MCPRequestHandler:
     def _is_caller_admission_key(value: str | None, admitted_credential: str | None) -> bool:
         if value is None or admitted_credential is None:
             return False
-        stripped_value: Final = strip_auth_scheme(value, "Bearer")
+        stripped_value: Final = _get_bearer_token_or_received_api_key(value)
         return bool(
             stripped_value
             and admitted_credential
@@ -1578,12 +1579,24 @@ class MCPRequestHandler:
 
     @staticmethod
     def caller_admission_credential(
-        litellm_api_key: str | None,
+        headers: Headers,
         user_api_key_auth: UserAPIKeyAuth,
     ) -> str | None:
-        if litellm_api_key is None or user_api_key_auth.api_key is None:
+        if user_api_key_auth.api_key is None:
             return None
-        admitted_credential: Final = strip_auth_scheme(litellm_api_key, "Bearer")
+        from litellm.proxy.proxy_server import general_settings_view
+
+        custom_header_name: Final = _OPTIONAL_STRING_ADAPTER.validate_python(
+            general_settings_view().get("litellm_key_header_name")
+        )
+        litellm_api_key: Final = (
+            headers.get(custom_header_name)
+            if custom_header_name is not None
+            else MCPRequestHandler.get_litellm_api_key_from_headers(headers)
+        )
+        if litellm_api_key is None:
+            return None
+        admitted_credential: Final = _get_bearer_token_or_received_api_key(litellm_api_key)
         return admitted_credential if admitted_credential.strip() else None
 
     @staticmethod

@@ -2809,18 +2809,65 @@ class TestCallToolRestAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("auth_type", "per_user_oauth", "expected"),
+        (
+            "auth_type",
+            "per_user_oauth",
+            "admission_header",
+            "authorization_header",
+            "stored_api_key",
+            "expected_oauth2_headers",
+            "expected_raw_authorization",
+        ),
         [
-            ("oauth_delegate", None, {"Authorization": "Bearer user-subject-token"}),
+            (
+                "oauth_delegate",
+                None,
+                "sk-admission-key",
+                "Bearer user-subject-token",
+                None,
+                {"Authorization": "Bearer user-subject-token"},
+                "Bearer user-subject-token",
+            ),
             (
                 "oauth_delegate",
                 {"Authorization": "Bearer per-user-oauth-token"},
+                "sk-admission-key",
+                "Bearer user-subject-token",
+                None,
                 {"Authorization": "Bearer per-user-oauth-token"},
+                "Bearer user-subject-token",
             ),
-            ("oauth2", None, None),
+            (
+                "oauth2",
+                None,
+                "sk-admission-key",
+                "Bearer user-subject-token",
+                None,
+                None,
+                "Bearer user-subject-token",
+            ),
+            (
+                "true_passthrough",
+                None,
+                "Bearer sk-rest-caller-admission-key-123",
+                "Bearer sk-rest-caller-admission-key-123",
+                "stored-key-hash",
+                None,
+                None,
+            ),
         ],
     )
-    async def test_forwards_callers_bearer_as_oauth2_headers(self, monkeypatch, auth_type, per_user_oauth, expected):
+    async def test_client_forwarded_oauth_headers_respect_admission_credential(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        auth_type: str,
+        per_user_oauth: dict[str, str] | None,
+        admission_header: str,
+        authorization_header: str,
+        stored_api_key: str | None,
+        expected_oauth2_headers: dict[str, str] | None,
+        expected_raw_authorization: str | None,
+    ) -> None:
         """A distinct caller Authorization rides oauth2_headers to execute_mcp_tool only for
         client-forwarded-token servers, with a per-user OAuth token still taking precedence.
         A gateway-managed oauth2 server never sees the caller's bearer."""
@@ -2869,17 +2916,27 @@ class TestCallToolRestAPI:
         )
 
         request = _build_request(
-            {"x-litellm-api-key": "sk-admission-key", "authorization": "Bearer user-subject-token"},
+            {
+                "x-litellm-api-key": admission_header,
+                "authorization": authorization_header,
+            },
             path="/mcp-rest/tools/call",
             method="POST",
             json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
         )
 
-        result = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+        result = await rest_endpoints.call_tool_rest_api(
+            request,
+            user_api_key_dict=UserAPIKeyAuth(api_key=stored_api_key),
+        )
+        raw_headers: Final = cast(dict[str, str], captured["raw_headers"])
 
         assert result == _OK_TOOL_RESULT
-        assert captured["oauth2_headers"] == expected
-        assert captured["raw_headers"]["authorization"] == "Bearer user-subject-token"
+        assert captured["oauth2_headers"] == expected_oauth2_headers
+        if expected_raw_authorization is None:
+            assert "authorization" not in raw_headers
+        else:
+            assert raw_headers["authorization"] == expected_raw_authorization
 
     async def test_returns_guardrail_rewritten_tool_result(self, monkeypatch):
         """A post_mcp_call guardrail rewrite of the tool result must reach the REST caller,
