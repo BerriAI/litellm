@@ -191,8 +191,8 @@ def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.Fi
 
 def test_security_worker_services_isolate_identical_database_and_cache_keys(tmp_path: Path) -> None:
     with (
-        worker_services(tmp_path / "first", container_port=16500) as first,
-        worker_services(tmp_path / "second", container_port=16501) as second,
+        worker_services(tmp_path / "first") as first,
+        worker_services(tmp_path / "second") as second,
     ):
         for environment, marker in ((first, "first"), (second, "second")):
             write_rows(

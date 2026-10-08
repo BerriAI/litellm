@@ -1,51 +1,98 @@
 use pyo3::{prelude::*, types::PyDict};
 
-/// The caller's own object for a public argument: the keyword if given, even an explicit
-/// `None`, else the bound request's attribute. Every reader of a public Python call uses
-/// this rule, so the callbacks and the provider see one object per argument.
 pub fn lookup<'py>(
     kwargs: &Bound<'py, PyDict>,
-    request: &Bound<'py, PyAny>,
+    bound: &Bound<'py, PyDict>,
     name: &str,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    if let Some(value) = kwargs.get_item(name)? {
-        return Ok(Some(value));
+    match kwargs.get_item(name)? {
+        Some(value) => Ok(Some(value)),
+        None => bound.get_item(name),
     }
-    request.getattr_opt(name)
+}
+
+pub fn present<'py>(
+    kwargs: &Bound<'py, PyDict>,
+    bound: &Bound<'py, PyDict>,
+    name: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    Ok(lookup(kwargs, bound, name)?.filter(|value| !value.is_none()))
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn lookup_prefers_the_keyword_even_when_none_and_falls_back_to_the_request() {
+    fn dicts<'py>(
+        py: Python<'py>,
+        kwargs: &str,
+        bound: &str,
+    ) -> (Bound<'py, PyDict>, Bound<'py, PyDict>) {
+        let eval = |source: &str| {
+            py.eval(&std::ffi::CString::new(source).unwrap(), None, None)
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap()
+        };
+        (eval(kwargs), eval(bound))
+    }
+
+    #[rstest]
+    #[case::keyword_wins(
+        "{'api_key': 'keyword'}",
+        "{'api_key': 'bound'}",
+        Some(Some("keyword"))
+    )]
+    #[case::explicit_none_wins("{'api_key': None}", "{'api_key': 'bound'}", Some(None))]
+    #[case::bound_fallback("{}", "{'api_key': 'bound'}", Some(Some("bound")))]
+    #[case::missing("{}", "{}", None)]
+    fn lookup_prefers_the_keyword_and_falls_back_to_bound(
+        #[case] kwargs: &str,
+        #[case] bound: &str,
+        #[case] expected: Option<Option<&str>>,
+    ) {
         crate::initialize_python();
         Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                c"
-key = object()
-document = {'type': 'document_url'}
-class Request:
-    api_key = 'from-request'
-    api_base = 'from-request'
-    document = document
-request = Request()
-kwargs = {'api_key': key, 'api_base': None}
-",
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let item = |name: &str| locals.get_item(name).unwrap().unwrap();
-            let kwargs = item("kwargs").cast_into::<PyDict>().unwrap();
-            let request = item("request");
-            let find = |name: &str| lookup(&kwargs, &request, name).unwrap();
-            assert!(find("api_key").unwrap().is(item("key")));
-            assert!(find("api_base").unwrap().is_none());
-            assert!(find("document").unwrap().is(item("document")));
-            assert!(find("model").is_none());
+            let (kwargs, bound) = dicts(py, kwargs, bound);
+            let value = lookup(&kwargs, &bound, "api_key")
+                .unwrap()
+                .map(|value| value.extract::<Option<String>>().unwrap());
+            assert_eq!(value, expected.map(|value| value.map(str::to_owned)));
+        });
+    }
+
+    #[rstest]
+    #[case::explicit_none_hides_bound("{'api_key': None}", "{'api_key': 'bound'}", None)]
+    #[case::bound_none("{}", "{'api_key': None}", None)]
+    #[case::bound_value("{}", "{'api_key': 'bound'}", Some("bound"))]
+    fn present_treats_none_as_unset(
+        #[case] kwargs: &str,
+        #[case] bound: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        crate::initialize_python();
+        Python::attach(|py| {
+            let (kwargs, bound) = dicts(py, kwargs, bound);
+            let value = present(&kwargs, &bound, "api_key")
+                .unwrap()
+                .map(|value| value.extract::<String>().unwrap());
+            assert_eq!(value.as_deref(), expected);
+        });
+    }
+
+    #[rstest]
+    fn lookup_returns_the_callers_object() {
+        crate::initialize_python();
+        Python::attach(|py| {
+            let document = PyDict::new(py);
+            let bound = PyDict::new(py);
+            bound.set_item("document", &document).unwrap();
+            let found = lookup(&PyDict::new(py), &bound, "document")
+                .unwrap()
+                .unwrap();
+            assert!(found.is(&document));
         });
     }
 }

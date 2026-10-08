@@ -13,6 +13,7 @@ from litellm.proxy.common_utils.load_config_utils import (
     get_file_contents_from_s3,
     resolve_bucket_includes,
 )
+from tests._master_key import MASTER_KEY
 
 
 class TestGetFileContentsFromS3:
@@ -106,7 +107,7 @@ class TestBucketConfigIncludes:
     @pytest.mark.asyncio
     async def test_include_resolves_against_the_config_objects_prefix(self):
         merged = await resolve_bucket_includes(
-            config={"include": ["model_config.yaml"], "general_settings": {"master_key": "sk-1234"}},
+            config={"include": ["model_config.yaml"], "general_settings": {"master_key": MASTER_KEY}},
             object_key="configs/prod/config.yaml",
             fetch=self._bucket(
                 {"configs/prod/model_config.yaml": {"model_list": [{"model_name": "gpt-4o-mini"}]}}
@@ -114,7 +115,7 @@ class TestBucketConfigIncludes:
         )
 
         assert merged == {
-            "general_settings": {"master_key": "sk-1234"},
+            "general_settings": {"master_key": MASTER_KEY},
             "model_list": [{"model_name": "gpt-4o-mini"}],
         }
 
@@ -256,7 +257,7 @@ class TestBucketConfigIncludes:
         objects = {
             "lit6982/config.yaml": {
                 "include": ["model_config.yaml"],
-                "general_settings": {"master_key": "sk-1234"},
+                "general_settings": {"master_key": MASTER_KEY},
             },
             "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
         }
@@ -270,7 +271,7 @@ class TestBucketConfigIncludes:
         )
 
         assert config == {
-            "general_settings": {"master_key": "sk-1234"},
+            "general_settings": {"master_key": MASTER_KEY},
             "model_list": [{"model_name": "included-model"}],
         }
 
@@ -347,7 +348,7 @@ class TestBucketConfigIncludes:
         objects = {
             "lit6982/config.yaml": {
                 "include": ["model_config.yaml"],
-                "general_settings": {"master_key": "sk-1234"},
+                "general_settings": {"master_key": MASTER_KEY},
             },
             "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
         }
@@ -373,7 +374,7 @@ class TestBucketConfigIncludes:
         )
 
         assert config == {
-            "general_settings": {"master_key": "sk-1234"},
+            "general_settings": {"master_key": MASTER_KEY},
             "model_list": [{"model_name": "included-model"}],
         }
         assert [bucket.requested for bucket in buckets] == [

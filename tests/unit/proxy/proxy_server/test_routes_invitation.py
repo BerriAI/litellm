@@ -101,8 +101,8 @@ def test_invitation_new_non_admin_forbidden(client, auth_as, monkeypatch, mock_p
         return False
 
     # Patch at the proxy_server import site (used by the route).
-    monkeypatch.setattr(ps, "_user_has_admin_privileges", _no_privileges)
-    monkeypatch.setattr(common_utils, "_user_has_admin_privileges", _no_privileges)
+    monkeypatch.setattr(ps, "user_has_admin_privileges", _no_privileges)
+    monkeypatch.setattr(common_utils, "user_has_admin_privileges", _no_privileges)
 
     with auth_as(LitellmUserRoles.INTERNAL_USER):
         response = client.post("/invitation/new", json={"user_id": "user-target"})
@@ -186,7 +186,7 @@ def test_invitation_info_not_admin_forbidden(client, auth_as, monkeypatch, mock_
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     # _user_has_admin_view is referenced from proxy_server's import.
-    monkeypatch.setattr(ps, "_user_has_admin_view", lambda u: False)
+    monkeypatch.setattr(ps, "user_api_key_has_admin_view", lambda u: False)
 
     with auth_as(LitellmUserRoles.INTERNAL_USER):
         response = client.get("/invitation/info", params={"invitation_id": "inv-xyz"})
@@ -339,7 +339,7 @@ def test_invitation_delete_non_admin_forbidden(
     async def _no_privileges(**kwargs):
         return False
 
-    monkeypatch.setattr(ps, "_user_has_admin_privileges", _no_privileges)
+    monkeypatch.setattr(ps, "user_has_admin_privileges", _no_privileges)
 
     with auth_as(LitellmUserRoles.INTERNAL_USER):
         response = client.post(

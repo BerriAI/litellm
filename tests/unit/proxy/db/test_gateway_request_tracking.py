@@ -4,6 +4,7 @@ LiteLLM_DailyGatewayRequests.
 """
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
 import pytest
@@ -18,6 +19,7 @@ from litellm.proxy.db.gateway_request_tracking import (
 )
 from litellm.proxy.middleware.billable_request_metrics_middleware import BillableCategory
 from litellm.types.proxy.gateway_requests import GatewayRequestCounts, GatewayRequestKey
+from litellm.proxy.db.log_db_metrics import record_db_io
 
 
 def _today() -> str:
@@ -91,6 +93,7 @@ class FakeDB:
         self.statements: list[tuple[str, tuple[object, ...]]] = []
 
     async def execute_raw(self, query: str, *args: object) -> int:
+        record_db_io()
         self.statements.append((query, args))
         return len(args) // 5
 
@@ -512,3 +515,19 @@ def test_failed_redis_push_keeps_counts_locally_for_the_next_flush():
             GatewayRequestCounts(successful_requests=1, failed_requests=1)
         )
     }
+
+
+@pytest.mark.asyncio
+async def test_a_gateway_request_flush_renders_a_postgres_upsert_span(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    prisma = FakePrismaClient()
+    snapshot = {
+        GatewayRequestKey(date="2026-08-01", category="llm", route="/chat/completions"): (
+            GatewayRequestCounts(successful_requests=7, failed_requests=2)
+        )
+    }
+
+    await commit_gateway_requests_to_db(prisma_client=prisma, snapshot=snapshot)
+
+    assert await postgres_span_names() == ("postgres.upsert LiteLLM_DailyGatewayRequests",)

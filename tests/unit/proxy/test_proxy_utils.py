@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 from datetime import datetime
 from typing import Any, Dict, Final, List, Optional, Union
 from unittest.mock import Mock
@@ -10,7 +9,7 @@ from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
+from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,7 +21,7 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
 )
 from litellm.proxy.litellm_pre_call_utils import (
-    _get_dynamic_logging_metadata,
+    get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
 from pydantic import ValidationError
@@ -294,7 +293,7 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -332,7 +331,7 @@ def test_dynamic_logging_metadata_ignores_env_references_from_key_metadata(
         team_metadata={},
     )
 
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -410,7 +409,7 @@ def test_dynamic_turn_off_message_logging(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -766,7 +765,7 @@ async def test_prepare_key_update_data():
     ],
 )
 def test_get_redoc_url(env_vars: dict[str, str], expected_url: str | None) -> None:
-    original_url: Final = _get_redoc_url()
+    original_url: Final = get_redoc_url()
     with pytest.MonkeyPatch.context() as environment:
         for key in ("REDOC_URL", "NO_REDOC"):
             environment.delenv(key, raising=False)
@@ -774,10 +773,10 @@ def test_get_redoc_url(env_vars: dict[str, str], expected_url: str | None) -> No
         for key, value in env_vars.items():
             environment.setenv(key, value)
 
-        result: Final = _get_redoc_url()
+        result: Final = get_redoc_url()
         assert result == expected_url
 
-    assert _get_redoc_url() == original_url
+    assert get_redoc_url() == original_url
 
 
 @pytest.mark.parametrize(
@@ -793,7 +792,7 @@ def test_get_redoc_url(env_vars: dict[str, str], expected_url: str | None) -> No
     ],
 )
 def test_get_docs_url(env_vars: dict[str, str], expected_url: str | None) -> None:
-    original_url: Final = _get_docs_url()
+    original_url: Final = get_docs_url()
     with pytest.MonkeyPatch.context() as environment:
         for key in ("DOCS_URL", "NO_DOCS"):
             environment.delenv(key, raising=False)
@@ -801,10 +800,10 @@ def test_get_docs_url(env_vars: dict[str, str], expected_url: str | None) -> Non
         for key, value in env_vars.items():
             environment.setenv(key, value)
 
-        result: Final = _get_docs_url()
+        result: Final = get_docs_url()
         assert result == expected_url
 
-    assert _get_docs_url() == original_url
+    assert get_docs_url() == original_url
 
 
 @pytest.mark.parametrize(
@@ -820,7 +819,7 @@ def test_get_docs_url(env_vars: dict[str, str], expected_url: str | None) -> Non
     ],
 )
 def test_get_openapi_url(env_vars: dict[str, str], expected_url: str | None) -> None:
-    original_url: Final = _get_openapi_url()
+    original_url: Final = get_openapi_url()
     with pytest.MonkeyPatch.context() as environment:
         for key in ("OPENAPI_URL", "NO_OPENAPI"):
             environment.delenv(key, raising=False)
@@ -828,10 +827,10 @@ def test_get_openapi_url(env_vars: dict[str, str], expected_url: str | None) -> 
         for key, value in env_vars.items():
             environment.setenv(key, value)
 
-        result: Final = _get_openapi_url()
+        result: Final = get_openapi_url()
         assert result == expected_url
 
-    assert _get_openapi_url() == original_url
+    assert get_openapi_url() == original_url
 
 
 @pytest.mark.parametrize(
@@ -1575,7 +1574,7 @@ def test_is_allowed_to_make_key_request():
 
 def test_get_model_group_info():
     from litellm import Router
-    from litellm.proxy.proxy_server import _get_model_group_info
+    from litellm.proxy.proxy_server import get_model_group_info
 
     router = Router(
         model_list=[
@@ -1583,19 +1582,19 @@ def test_get_model_group_info():
                 "model_name": "openai/tts-1",
                 "litellm_params": {
                     "model": "openai/tts-1",
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                 },
             },
             {
                 "model_name": "openai/gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "openai/gpt-3.5-turbo",
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                 },
             },
         ]
     )
-    model_list = _get_model_group_info(
+    model_list = get_model_group_info(
         llm_router=router,
         all_models_str=["openai/tts-1", "openai/gpt-3.5-turbo"],
         model_group="openai/tts-1",

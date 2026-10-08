@@ -291,6 +291,12 @@ export default function TeamMemberTab({
     );
   };
 
+  const resetSpendDisabledReason = (member: Member): string | null => {
+    if (!isProxyAdmin && member.user_id === userId) return "Ask a proxy admin to reset your own spend";
+    if (getUserCurrentCycleSpend(member.user_id) <= 0) return "No current cycle spend to reset";
+    return null;
+  };
+
   return (
     <>
       <MemberTable
@@ -311,9 +317,7 @@ export default function TeamMemberTab({
           isProxyAdmin || (canEditTeam && !isUserTeamAdmin) || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)
         }
         onResetSpend={setMemberToResetSpend}
-        showResetSpendForMember={(record) =>
-          getUserCurrentCycleSpend(record.user_id) > 0 && (isProxyAdmin || record.user_id !== userId)
-        }
+        resetSpendDisabledReason={resetSpendDisabledReason}
       />
       <Dialog open={memberToResetSpend !== null} onOpenChange={(open) => !open && setMemberToResetSpend(null)}>
         <DialogContent>

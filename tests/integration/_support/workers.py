@@ -10,11 +10,11 @@ from tests.integration._support.redis_process import owned_redis
 
 
 @contextmanager
-def worker_services(directory: Path, *, container_port: int) -> Iterator[Mapping[str, str]]:
+def worker_services(directory: Path) -> Iterator[Mapping[str, str]]:
     directory.mkdir(parents=True, exist_ok=True)
     with (
         scratch_database() as database,
-        owned_redis(directory, container_port=container_port) as cache,
+        owned_redis(directory) as cache,
     ):
         yield MappingProxyType(
             {

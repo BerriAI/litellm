@@ -20,7 +20,7 @@ def isolated_security_worker(worker_id: str, tmp_path_factory: pytest.TempPathFa
     results.mkdir(parents=True, exist_ok=True)
     with pytest.MonkeyPatch.context() as environment:
         environment.setenv("INTEGRATION_RESULTS_DIR", str(results))
-        with worker_services(directory, container_port=16400 + int(worker_id.removeprefix("gw"))) as services:
+        with worker_services(directory) as services:
             for name, value in services.items():
                 environment.setenv(name, value)
             yield

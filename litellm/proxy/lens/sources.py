@@ -1,74 +1,43 @@
 import base64
 import json
-from collections.abc import Awaitable, Mapping
-from types import MappingProxyType
-from typing import Final, Literal, Protocol
+from collections.abc import Awaitable, Sequence
+from typing import Final, Protocol, TypeAlias
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm.proxy.lens.models import (
+    ActivitySelection,
     Evidence,
     Execution,
     ExecutionContent,
-    LensSettings,
     MetadataFilter,
     Sample,
     Scope,
     TracePart,
 )
-
-
-class ActivityAvailability(BaseModel):
-    traces: bool = False
-    requests: bool = False
+from litellm.rust_bridge.trace.generated.models import (
+    ActivityAvailability,
+    AgentRow,
+    CountRow,
+    ExecutionRow,
+    LensAccessParams,
+    LensContentParams,
+    LensEvidenceParams,
+    LensSampleParams,
+    PartRow,
+)
 
 
 class Storage(Protocol):
-    def lens_availability(self, parameters: Mapping[str, object]) -> Awaitable[object]: ...
-    def lens_agents(self, parameters: Mapping[str, object]) -> Awaitable[object]: ...
-    def lens_sample(self, parameters: Mapping[str, object]) -> Awaitable[object]: ...
-    def lens_content(self, parameters: Mapping[str, object]) -> Awaitable[object]: ...
-    def lens_evidence(self, parameters: Mapping[str, object]) -> Awaitable[object]: ...
+    def lens_availability(self, parameters: LensAccessParams) -> Awaitable[Sequence[ActivityAvailability]]: ...
+    def lens_agents(self, parameters: LensAccessParams) -> Awaitable[Sequence[AgentRow]]: ...
+    def lens_sample(self, parameters: LensSampleParams) -> Awaitable[Sequence[ExecutionRow]]: ...
+    def lens_content(self, parameters: LensContentParams) -> Awaitable[Sequence[PartRow]]: ...
+    def lens_evidence(self, parameters: LensEvidenceParams) -> Awaitable[Sequence[CountRow]]: ...
 
 
-class ExecutionRow(BaseModel):
-    selection_key: str = ""
-    source: Literal["traces", "requests"]
-    trace_id: str
-    trace_ref: str = ""
-    team_id: str
-    name: str
-    start_time: str
-    span_count: int
-    root_seen: int
-    eligible: int
-    selected: int = 0
-    service: str = ""
-    attributes: tuple[tuple[str, str], ...] = ()
-
-
-class PartRow(BaseModel):
-    span_id: str
-    parent_span_id: str
-    name: str
-    kind: str
-    content: str
-    truncated: int
-
-
-class CountRow(BaseModel):
-    count: int
-
-
-class AgentRow(BaseModel):
-    agent_name: str
-
-
-_AVAILABILITY: Final = TypeAdapter(tuple[ActivityAvailability, ...])
-_AGENTS: Final = TypeAdapter(tuple[AgentRow, ...])
-_ROWS: Final = TypeAdapter(tuple[ExecutionRow, ...])
-_PARTS: Final = TypeAdapter(tuple[PartRow, ...])
-_COUNTS: Final = TypeAdapter(tuple[CountRow, ...])
+ExecutionIdParts: TypeAlias = tuple[str, str, str] | tuple[str, str, str, str]
+_EXECUTION_ID: Final[TypeAdapter[ExecutionIdParts]] = TypeAdapter(ExecutionIdParts)
 
 
 def execution_id(source: str, team_id: str, trace_id: str, trace_ref: str = "") -> str:
@@ -76,22 +45,12 @@ def execution_id(source: str, team_id: str, trace_id: str, trace_ref: str = "") 
 
 
 def parse_execution(value: str) -> tuple[str, str, str, str]:
-    parts: Final = TypeAdapter(tuple[str, str, str] | tuple[str, str, str, str]).validate_json(
-        base64.urlsafe_b64decode(value)
-    )
+    parts: Final = _EXECUTION_ID.validate_json(base64.urlsafe_b64decode(value))
     return (parts[0], parts[1], parts[2], parts[3] if len(parts) == 4 else "")
 
 
-def parameters(scope: Scope, filters: tuple[MetadataFilter, ...]) -> Mapping[str, object]:
-    return MappingProxyType(
-        {
-            "all_teams": int(scope.all_teams),
-            "team": scope.team_id,
-            "key_hash": scope.api_key_hash,
-            "filter_keys": tuple(f.key for f in filters),
-            "filter_values": tuple(f.value for f in filters),
-        }
-    )
+def access_parameters(scope: Scope) -> LensAccessParams:
+    return LensAccessParams(all_teams=1 if scope.all_teams else 0, team=scope.team_id, key_hash=scope.api_key_hash)
 
 
 def selection_id(value: str) -> str:
@@ -104,17 +63,17 @@ class SourceReader:
         self.storage: Final = storage
 
     async def availability(self, scope: Scope) -> ActivityAvailability:
-        rows: Final = _AVAILABILITY.validate_python(await self.storage.lens_availability(parameters(scope, ())))
+        rows: Final = await self.storage.lens_availability(access_parameters(scope))
         return rows[0] if rows else ActivityAvailability()
 
     async def agents(self, scope: Scope) -> tuple[str, ...]:
-        rows: Final = _AGENTS.validate_python(await self.storage.lens_agents(parameters(scope, ())))
+        rows: Final = await self.storage.lens_agents(access_parameters(scope))
         return tuple(row.agent_name for row in rows)
 
     async def sample(
         self,
         scope: Scope,
-        settings: LensSettings,
+        settings: ActivitySelection,
         start: int,
         end: int,
         offset: int = 0,
@@ -122,25 +81,27 @@ class SourceReader:
         preview: bool = False,
         cursor: str = "",
     ) -> Sample:
-        params: Final = MappingProxyType(
-            {
-                **parameters(scope, settings.filters),
-                "source": settings.source,
-                "start": start,
-                "end": end,
-                "service": settings.service,
-                "agent_name": settings.agent_name,
-                "limit": page_size,
-                "offset": offset,
-                "after": cursor,
-                "sample_percent": str(settings.sample_percent),
-                "sample_cap": settings.sample_size or 0,
-                "preview": int(preview),
-                "selected_team": settings.team_id,
-                "execution_ids": tuple(selection_id(value) for value in settings.execution_ids),
-            }
+        params: Final = LensSampleParams(
+            all_teams=1 if scope.all_teams else 0,
+            team=scope.team_id,
+            key_hash=scope.api_key_hash,
+            source=settings.source,
+            start=start,
+            end=end,
+            service=settings.service,
+            agent_name=settings.agent_name,
+            filter_keys=tuple(f.key for f in settings.filters),
+            filter_values=tuple(f.value for f in settings.filters),
+            limit=page_size,
+            offset=offset,
+            after=cursor,
+            sample_percent=settings.sample_percent,
+            sample_cap=settings.sample_size or 0,
+            preview=1 if preview else 0,
+            selected_team=settings.team_id,
+            execution_ids=tuple(selection_id(value) for value in settings.execution_ids),
         )
-        rows: Final = _ROWS.validate_python(await self.storage.lens_sample(params))
+        rows: Final = await self.storage.lens_sample(params)
         return Sample(
             eligible=rows[0].eligible if rows else 0,
             selected=rows[0].selected if rows else 0,
@@ -165,7 +126,7 @@ class SourceReader:
                     metadata=tuple(
                         MetadataFilter(key=k, value=v)
                         for k, v in row.attributes
-                        if k != "litellm.api_key_hash" and 0 < len(k) <= 200 and 0 < len(v) <= 500
+                        if k != "litellm.api_key_hash" and k and v
                     ),
                 )
                 for row in rows
@@ -173,18 +134,19 @@ class SourceReader:
         )
 
     async def content(self, scope: Scope, execution: Execution, cursor: str = "", offset: int = 0) -> ExecutionContent:
-        params: Final = MappingProxyType(
-            {
-                **parameters(scope, ()),
-                "source": execution.source,
-                "id": execution.trace_id,
-                "trace_ref": execution.trace_ref,
-                "record_team": execution.team_id,
-                "cursor": cursor,
-                "offset": offset + 1,
-            }
+        params: Final = LensContentParams(
+            all_teams=1 if scope.all_teams else 0,
+            team=scope.team_id,
+            key_hash=scope.api_key_hash,
+            source=execution.source,
+            id=execution.trace_id,
+            trace_ref=execution.trace_ref,
+            record_team=execution.team_id,
+            start_time=execution.start_time,
+            cursor=cursor,
+            offset=offset + 1,
         )
-        rows: Final = _PARTS.validate_python(await self.storage.lens_content(params))
+        rows: Final = await self.storage.lens_content(params)
         return ExecutionContent(
             execution=execution,
             parts=tuple(
@@ -194,6 +156,8 @@ class SourceReader:
                     parent_span_id=row.parent_span_id,
                     name=row.name,
                     kind=row.kind,
+                    start_time=row.start_time,
+                    end_time=row.end_time,
                     content=row.content,
                     truncated=bool(row.truncated),
                 )
@@ -204,16 +168,17 @@ class SourceReader:
         )
 
     async def verify_evidence(self, scope: Scope, execution: Execution, evidence: Evidence) -> bool:
-        params: Final = MappingProxyType(
-            {
-                **parameters(scope, ()),
-                "source": execution.source,
-                "id": execution.trace_id,
-                "trace_ref": execution.trace_ref,
-                "record_team": execution.team_id,
-                "span": evidence.span_id,
-                "quote": evidence.quote,
-            }
+        params: Final = LensEvidenceParams(
+            all_teams=1 if scope.all_teams else 0,
+            team=scope.team_id,
+            key_hash=scope.api_key_hash,
+            source=execution.source,
+            id=execution.trace_id,
+            trace_ref=execution.trace_ref,
+            record_team=execution.team_id,
+            start_time=execution.start_time,
+            span=evidence.span_id,
+            quote=evidence.quote,
         )
-        rows: Final = _COUNTS.validate_python(await self.storage.lens_evidence(params))
+        rows: Final = await self.storage.lens_evidence(params)
         return bool(rows and rows[0].count)

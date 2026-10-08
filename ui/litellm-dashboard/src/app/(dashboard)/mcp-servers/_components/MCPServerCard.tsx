@@ -14,6 +14,7 @@ import { cn } from "@/lib/cva.config";
 import { AUTH_TYPE, MCP_REACHABLE_DESCRIPTION, type MCPServer } from "@/components/mcp_tools/types";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { getMaskedAndFullUrl, getMCPNetworkAccess } from "./utils";
+import { STDIO_DISABLED_MESSAGE } from "./StdioAvailability";
 
 interface MCPServerCardProps {
   server: MCPServer;
@@ -29,6 +30,7 @@ interface MCPServerCardProps {
   onByokConnect?: () => void;
   onOpenFillFields?: () => void;
   onDelete?: () => void;
+  stdioEnabled?: boolean;
 }
 
 const HEALTH_TONE: Record<string, { dot: string }> = {
@@ -52,6 +54,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   onByokConnect,
   onOpenFillFields,
   onDelete,
+  stdioEnabled = true,
 }) => {
   const alias = server.alias || server.server_name || "";
   const name = server.server_name || alias || server.server_id;
@@ -220,6 +223,19 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
           />
           <Badge variant="outline">{displayTransport.toUpperCase()}</Badge>
           <Badge variant="outline">{authType}</Badge>
+          {transport === "stdio" && !stdioEnabled && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Badge variant="outline">
+                    <CircleAlert />
+                    stdio disabled
+                  </Badge>
+                }
+              />
+              <TooltipContent>{STDIO_DISABLED_MESSAGE}</TooltipContent>
+            </Tooltip>
+          )}
           {oauthFlowUnset && (
             <Tooltip>
               <TooltipTrigger

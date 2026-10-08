@@ -5,6 +5,8 @@ POST /auto_router/test_routing - Route one request through an unsaved complexity
 POST /auto_router/validate_complexity_router_config - Dry-run the complexity-router write gate without saving
 """
 
+import asyncio
+import math
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
@@ -12,7 +14,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
+from pydantic import ConfigDict, TypeAdapter, field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -26,20 +28,24 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
-    _virtual_key_max_budget_check,
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_key_call_resolved_model,
+    virtual_key_max_budget_check,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import (
     AUTOROUTER_BENCHMARKS_SQL,
     bounded_session_id,
 )
+from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.prisma_query_span import sql_relation
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
 )
-from litellm.proxy.management.teams.access import is_team_admin
+from litellm.proxy.management.teams.authz import is_team_admin
+from litellm.proxy.management_endpoints.common_daily_activity import daily_activity_scope
 from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
@@ -47,13 +53,17 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
 )
 from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.base_repository import SupportsModelDump
+from litellm.repositories.daily_activity_sql import build_where_clause
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
 from litellm.router_utils.auto_router_model_naming import (
     StrategyRouterDependencyRole,
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import (
     SHADOW_EVAL_TURN_VALVE,
     AutoRouterAvailabilityRequest,
@@ -181,15 +191,15 @@ def _team_table(prisma_client: "PrismaClient") -> _TeamTable:
 
 
 def _verification_tokens(prisma_client: "PrismaClient") -> _VerificationTokenTable:
-    return prisma_client.db.litellm_verificationtoken
+    return VerificationTokenRepository(prisma_client).table
 
 
 def _team_rows(prisma_client: "PrismaClient") -> _TeamRowsTable:
-    return prisma_client.db.litellm_teamtable
+    return TeamRepository(prisma_client).table
 
 
 def _user_rows(prisma_client: "PrismaClient") -> _UserRowsTable:
-    return prisma_client.db.litellm_usertable
+    return UserRepository(prisma_client).table
 
 
 def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
@@ -205,7 +215,8 @@ def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTa
 
 
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
-    return await prisma_client.db.query_raw(query, *args)
+    async with db_span("auto_router_report_query", sql_relation(query)):
+        return await prisma_client.db.query_raw(query, *args)
 
 
 async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> LiteLLM_TeamTable | None:
@@ -316,7 +327,7 @@ async def _authorize_models_this_test_can_call(
     its calls through the proxy. Team and member budgets are already enforced on every route.
     """
     models: Final = _models_this_test_can_call(config)
-    if not models and config.classifier_type != "jev":
+    if not models and config.classifier_type != "oss_classifier":
         return
 
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -330,7 +341,7 @@ async def _authorize_models_this_test_can_call(
         )
 
     try:
-        await _virtual_key_max_budget_check(
+        await virtual_key_max_budget_check(
             valid_token=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -342,9 +353,9 @@ async def _authorize_models_this_test_can_call(
             code=status.HTTP_400_BAD_REQUEST,
         ) from e
 
-    if config.classifier_type == "jev" and user_api_key_dict.budget_throttle_pct is not None:
+    if config.classifier_type == "oss_classifier" and user_api_key_dict.budget_throttle_pct is not None:
         raise ProxyException(
-            message="Budget has been exceeded! JEV Test Routing requires available budget.",
+            message="Budget has been exceeded! OSS Classifier Test Routing requires available budget.",
             type=ProxyErrorTypes.budget_exceeded,
             param=None,
             code=status.HTTP_400_BAD_REQUEST,
@@ -548,10 +559,10 @@ async def preview_auto_router_routing(
 
     if member_team is not None and _models_this_test_can_call(resolved.complexity_router_config):
         from litellm.proxy.auth.user_api_key_auth import (
-            _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
+            run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
         )
 
-        await _run_centralized_common_checks(
+        await run_centralized_common_checks(
             user_api_key_auth_obj=actor,
             request=http_request,
             request_data=request_data,
@@ -564,13 +575,16 @@ async def preview_auto_router_routing(
         llm_router=llm_router,
     )
 
-    complexity_router: Final = ComplexityRouter(
-        model_name=resolved.router_name,
-        litellm_router_instance=llm_router,
-        complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
-        default_model=resolved.default_model,
-        derive_savings_baseline=False,
-    )
+    try:
+        complexity_router: Final = ComplexityRouter(
+            model_name=resolved.router_name,
+            litellm_router_instance=llm_router,
+            complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
+            default_model=resolved.complexity_router_config.resolve_default_model(resolved.default_model),
+            derive_savings_baseline=False,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": f"Could not route this prompt: {e}"}) from e
 
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=request_data,
@@ -615,35 +629,39 @@ async def preview_auto_router_routing(
     )
 
 
-class _SessionAggRow(BaseModel):
+class _SessionAggRow(LiteLLMBaseModel):
+    """One router's window: session shape from overlapping sessions, money from the selected days."""
+
     router_name: str
     router_type: str
-    tier_turns: Mapping[str, int]
-    sessions: int
-    turns: int
-    unordered_turns: int
-    covered_turns: int
-    cache_hits: int
-    same_model_turns: int
-    same_model_hits: int
-    first_visit_turns: int
-    first_visit_hits: int
-    return_turns: int
-    return_hits: int
-    return_expired_misses: int
-    return_within_ttl_misses: int
-    ttl_5m_turns: int
-    ttl_1h_turns: int
-    total_tokens: int
-    spend: float
-    saved_spend: float
+    tier_turns: Mapping[str, int] = MappingProxyType({})
+    sessions: int = 0
+    session_turns: int = 0
+    unordered_turns: int = 0
+    covered_turns: int = 0
+    cache_hits: int = 0
+    same_model_turns: int = 0
+    same_model_hits: int = 0
+    first_visit_turns: int = 0
+    first_visit_hits: int = 0
+    return_turns: int = 0
+    return_hits: int = 0
+    return_expired_misses: int = 0
+    return_within_ttl_misses: int = 0
+    ttl_5m_turns: int = 0
+    ttl_1h_turns: int = 0
+    total_tokens: int = 0
+    day_total_tokens: int | None = None
+    session_seconds: float = 0.0
+    turns: int = 0
+    spend: float = 0.0
+    saved_spend: float = 0.0
     savings_estimated_turns: int = 0
     savings_estimated_actual_spend: float = 0.0
     savings_estimated_classifier_cost: float | None = None
     savings_estimated_saved_spend: float = 0.0
-    classifier_cost: float
-    classifier_cost_recorded_turns: int
-    session_seconds: float
+    classifier_cost: float = 0.0
+    classifier_cost_recorded_turns: int = 0
 
 
 _SESSION_AGG_ROWS: Final = TypeAdapter(list[_SessionAggRow])
@@ -692,6 +710,13 @@ def _compared_row(row: _SessionAggRow) -> _SessionAggRow:
     )
 
 
+def _per_session(row: _SessionAggRow, total: float) -> float | None:
+    """Unknown, not zero, when routed requests have no session rows of their own to average over."""
+    if row.sessions:
+        return total / row.sessions
+    return None if row.turns else 0.0
+
+
 def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     return_misses: Final = row.return_turns - row.return_hits
     saved_spend, baseline_spend = _savings_cohort(
@@ -701,9 +726,10 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     return AutoRouterBenchmarkTotals(
         sessions=sessions,
         turns=row.turns,
-        avg_turns_per_session=row.turns / sessions if sessions else 0.0,
-        avg_session_seconds=row.session_seconds / sessions if sessions else 0.0,
-        avg_tokens_per_session=row.total_tokens / sessions if sessions else 0.0,
+        total_tokens=row.day_total_tokens,
+        avg_turns_per_session=_per_session(row, row.session_turns),
+        avg_session_seconds=_per_session(row, row.session_seconds),
+        avg_tokens_per_session=_per_session(row, row.total_tokens),
         spend=row.spend,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
@@ -712,9 +738,8 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
         saved_pct=_pct(saved_spend, baseline_spend) if saved_spend is not None and baseline_spend is not None else None,
-        saved_per_session=(saved_spend / sessions if sessions else 0.0) if saved_spend is not None else None,
         cache=AutoRouterCacheStats(
-            coverage_pct=_pct(row.covered_turns, row.turns),
+            coverage_pct=_pct(row.covered_turns, row.session_turns),
             hit_rate_pct=_pct(row.cache_hits, row.covered_turns),
             same_model=_cache_bucket(row.same_model_turns, row.same_model_hits),
             first_visit=_cache_bucket(row.first_visit_turns, row.first_visit_hits),
@@ -737,6 +762,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         tier_turns=row.tier_turns,
         sessions=totals.sessions,
         turns=totals.turns,
+        total_tokens=totals.total_tokens,
         avg_turns_per_session=totals.avg_turns_per_session,
         avg_session_seconds=totals.avg_session_seconds,
         avg_tokens_per_session=totals.avg_tokens_per_session,
@@ -748,7 +774,6 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         classifier_cost=totals.classifier_cost,
         baseline_spend=totals.baseline_spend,
         saved_pct=totals.saved_pct,
-        saved_per_session=totals.saved_per_session,
         cache=totals.cache,
     )
 
@@ -759,6 +784,7 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         router_type="",
         tier_turns=MappingProxyType({}),
         sessions=sum(row.sessions for row in rows),
+        session_turns=sum(row.session_turns for row in rows),
         turns=sum(row.turns for row in rows),
         unordered_turns=sum(row.unordered_turns for row in rows),
         covered_turns=sum(row.covered_turns for row in rows),
@@ -774,6 +800,11 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         ttl_5m_turns=sum(row.ttl_5m_turns for row in rows),
         ttl_1h_turns=sum(row.ttl_1h_turns for row in rows),
         total_tokens=sum(row.total_tokens for row in rows),
+        day_total_tokens=(
+            sum(row.day_total_tokens or 0 for row in rows)
+            if all(row.day_total_tokens is not None for row in rows)
+            else None
+        ),
         spend=sum(row.spend for row in rows),
         saved_spend=sum(row.saved_spend for row in rows),
         savings_estimated_turns=sum(row.savings_estimated_turns for row in rows),
@@ -787,6 +818,49 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         classifier_cost=sum(row.classifier_cost for row in rows),
         classifier_cost_recorded_turns=sum(row.classifier_cost_recorded_turns for row in rows),
         session_seconds=sum(row.session_seconds for row in rows),
+    )
+
+
+async def _recorded_autorouter_savings(
+    prisma_client: "PrismaClient", start_day: str, end_day: str, api_key: str | None, user_id: str | None
+) -> float:
+    """The selected days' auto-router savings exactly as the Overall view sums them: same table, same filters."""
+    where, params = build_where_clause(
+        daily_activity_scope(
+            table="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=user_id,
+            exclude_entity_ids=None,
+            api_key=api_key,
+            start_date=start_day,
+            end_date=end_day,
+            model=None,
+            timezone_offset_minutes=None,
+        )
+    )
+    rows: Final = await _query_raw(
+        prisma_client,
+        f'SELECT COALESCE(SUM(autorouter_savings_spend), 0)::float8 AS saved FROM "LiteLLM_DailyUserSpend" WHERE {where}',
+        *params,
+    )
+    return float(rows[0]["saved"]) if rows else 0.0
+
+
+def _with_recorded_savings(
+    totals: AutoRouterBenchmarkTotals, rows: Sequence[_SessionAggRow], recorded: float
+) -> AutoRouterBenchmarkTotals:
+    """The headline is the recorded total. Savings outside the compared routers void the cost comparison,
+    and the part no router's day rows account for is reported as unattributed."""
+    if math.isclose(recorded, totals.saved_spend or 0.0, abs_tol=1e-9):
+        return totals
+    unattributed: Final = recorded - sum(row.saved_spend for row in rows)
+    return totals.model_copy(
+        update={
+            "saved_spend": recorded,
+            "unattributed_saved_spend": None if math.isclose(unattributed, 0.0, abs_tol=1e-9) else unattributed,
+            "baseline_spend": None,
+            "saved_pct": None,
+        }
     )
 
 
@@ -849,7 +923,7 @@ async def get_auto_router_benchmarks(
         str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to 30 days before end_date)")
     ] = None,
     end_date: Annotated[str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to today)")] = None,
-    api_key: Annotated[str | None, Query(description="Filter to one virtual key token hash")] = None,
+    api_key: Annotated[str | None, Query(min_length=1, description="Filter to one virtual key token hash")] = None,
     user_id: Annotated[
         str | None, Query(min_length=1, description="Filter to one canonical internal user recorded on each turn")
     ] = None,
@@ -860,9 +934,10 @@ async def get_auto_router_benchmarks(
 
     Reads session rollups folded once per request at spend-write time, so this endpoint
     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
-    internal user when written; older key-only history remains outside user views. A session
-    is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
-    end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
+    internal user when written; older key-only history remains outside user views. Money counts
+    only requests on the selected UTC days, and the all-router savings headline is the same daily
+    total the Overall view reads. Session shape and caching cover every session that overlaps the
+    window, whole. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
     over that bucket's turns.
 
     The rollup supplies the measures, never the list. Which routers appear comes from the
@@ -885,24 +960,35 @@ async def get_auto_router_benchmarks(
     if end_day < start_day:
         raise HTTPException(status_code=400, detail="end_date must not be earlier than start_date")
 
-    raw_rows: Final = await _query_raw(
-        prisma_client,
-        AUTOROUTER_BENCHMARKS_SQL,
-        start_day.isoformat(),
-        (end_day + timedelta(days=1)).isoformat(),
-        api_key,
-        user_id,
+    first_day: Final = start_day.strftime("%Y-%m-%d")
+    last_day: Final = end_day.strftime("%Y-%m-%d")
+    raw_rows, recorded = await asyncio.gather(
+        _query_raw(
+            prisma_client,
+            AUTOROUTER_BENCHMARKS_SQL,
+            start_day.isoformat(),
+            (end_day + timedelta(days=1)).isoformat(),
+            api_key,
+            user_id,
+            first_day,
+            last_day,
+        ),
+        _recorded_autorouter_savings(prisma_client, first_day, last_day, api_key, user_id),
     )
     rows: Final = tuple(_compared_row(row) for row in _SESSION_AGG_ROWS.validate_python(raw_rows or ()))
+    totals: Final = _with_recorded_savings(_benchmark_totals(_summed_agg_row(rows)), rows, recorded)
+    unattributed: Final = MappingProxyType(
+        {"baseline_spend": None, "saved_pct": None} if totals.unattributed_saved_spend is not None else {}
+    )
     groups: Final = (
-        *(_benchmark_group(row) for row in rows),
+        *(_benchmark_group(row).model_copy(update=unattributed) for row in rows),
         *_idle_router_groups(llm_router, frozenset((row.router_name, row.router_type) for row in rows)),
     )
     return AutoRouterBenchmarksResponse(
-        start_date=start_day.strftime("%Y-%m-%d"),
-        end_date=end_day.strftime("%Y-%m-%d"),
+        start_date=first_day,
+        end_date=last_day,
         routers_in_scope=len(groups),
-        totals=_benchmark_totals(_summed_agg_row(rows)),
+        totals=totals,
         groups=groups,
     )
 
@@ -1173,7 +1259,7 @@ def _is_unique_violation(error: Exception) -> bool:
     return isinstance(error, UniqueViolationError)
 
 
-class _AttemptAggRow(BaseModel):
+class _AttemptAggRow(LiteLLMBaseModel):
     grp: str
     turn_count: int
     real_wins: int
@@ -1285,7 +1371,7 @@ WHERE group_id = $1 AND stopped_by IS NULL
 """
 
 
-class _FunnelTotalsRow(BaseModel):
+class _FunnelTotalsRow(LiteLLMBaseModel):
     legs_with_rows: int
     not_sampled: int
     unjudgeable: int
@@ -1293,7 +1379,7 @@ class _FunnelTotalsRow(BaseModel):
     withheld: int
 
 
-class _AttemptCountRow(BaseModel):
+class _AttemptCountRow(LiteLLMBaseModel):
     job_id: str
     attempt_count: int
     spend: float
@@ -1319,7 +1405,7 @@ WHERE group_id IN (
 """
 
 
-class _AttemptTotalsRow(BaseModel):
+class _AttemptTotalsRow(LiteLLMBaseModel):
     judged_count: int
     error_count: int
     judge_spend: float
@@ -1353,7 +1439,7 @@ def _leg_group_id(leg: "_LegRow") -> str:
     return leg.group_id
 
 
-class _LegRow(BaseModel):
+class _LegRow(LiteLLMBaseModel):
     """One LiteLLM_ShadowEvalJob row, validated off the untyped prisma record. A row is
     one target's leg of a job; the legs of a job share group_id and identical config,
     written together by one create_many. The API's job id is the group id, so leg ids
