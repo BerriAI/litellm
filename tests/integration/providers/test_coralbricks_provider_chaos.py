@@ -5,7 +5,8 @@ import re
 import signal
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from queue import SimpleQueue
@@ -160,6 +161,14 @@ def assert_no_bleed(received: tuple[Request, ...], markers: frozenset[str]) -> N
     assert sorted(marker for marker in forwarded if marker is not None) == sorted(markers), forwarded
 
 
+@contextmanager
+def released_on_exit(release: threading.Event) -> Iterator[threading.Event]:
+    try:
+        yield release
+    finally:
+        release.set()
+
+
 def held_provider(release: threading.Event, held: SimpleQueue[str]) -> Callable[[Request], Reply]:
     respond: Final = marker_provider()
 
@@ -204,7 +213,7 @@ async def test_provider_outage_mid_burst_fails_fast_reports_unhealthy_and_recove
     after: Final = calls_of(15, ("chat", "messages", "responses"), lambda index: index % 2 == 0)
     release: Final = threading.Event()
     held: Final[SimpleQueue[str]] = SimpleQueue()
-    with gateway.scenario() as scenario:
+    with gateway.scenario() as scenario, released_on_exit(release):
         with wire_server(held_provider(release, held)) as wire:
             port: Final = int(urlsplit(wire.url).port or 0)
             alias: Final = deployment(scenario, wire)
@@ -292,7 +301,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_coralbricks(g
     release: Final = threading.Event()
     held: Final[SimpleQueue[str]] = SimpleQueue()
     alias: Final = chaos_model()
-    with wire_server(held_provider(release, held)) as wire:
+    with released_on_exit(release), wire_server(held_provider(release, held)) as wire:
         config: Final = chaos_config(wire, tmp_path, alias)
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
             candidate: Final = owned.gateway
@@ -328,7 +337,7 @@ async def test_proxy_sigterm_mid_burst_then_reboot_serves_coralbricks_again(gate
     release: Final = threading.Event()
     held: Final[SimpleQueue[str]] = SimpleQueue()
     alias: Final = chaos_model()
-    with wire_server(held_provider(release, held)) as wire:
+    with released_on_exit(release), wire_server(held_provider(release, held)) as wire:
         config: Final = chaos_config(wire, tmp_path, alias)
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
             worker_pids(owned.log)

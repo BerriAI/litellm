@@ -11,9 +11,22 @@ const CORALBRICKS_MODEL = "glm-5.3-flash-fp4";
 const UI_KEY = "cb_ui_integration_key";
 const UPSTREAM_PROMPT_TOKENS = 20;
 const UPSTREAM_COMPLETION_TOKENS = 20;
-const INPUT_COST_PER_TOKEN = 1.5e-7;
-const OUTPUT_COST_PER_TOKEN = 5e-7;
-const EXPECTED_SPEND = UPSTREAM_PROMPT_TOKENS * INPUT_COST_PER_TOKEN + UPSTREAM_COMPLETION_TOKENS * OUTPUT_COST_PER_TOKEN;
+
+type DeploymentRow = {
+  model_name: string;
+  litellm_params?: { model?: string };
+  model_info?: { id?: string; input_cost_per_token?: number; output_cost_per_token?: number };
+};
+
+type SpendRow = {
+  request_id: string;
+  custom_llm_provider: string;
+  model: string;
+  model_group: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  spend: number | string;
+};
 
 const optionNamed = (label: string): RegExp =>
   new RegExp(`(^|\\s)${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
@@ -39,10 +52,10 @@ async function selectProvider(page: PlaywrightPage, providerName: string): Promi
 async function deploymentNamed(
   request: APIRequestContext,
   modelName: string,
-): Promise<Record<string, any> | undefined> {
+): Promise<DeploymentRow | undefined> {
   const response = await request.get("/v2/model/info", { headers });
   expect(response.ok(), await response.text()).toBe(true);
-  const rows = (await response.json()).data as Record<string, any>[];
+  const rows = (await response.json()).data as DeploymentRow[];
   return rows.find((row) => row.model_name === modelName);
 }
 
@@ -62,10 +75,10 @@ async function chatOnce(request: APIRequestContext, modelName: string): Promise<
   return { status: response.status(), body: await response.text() };
 }
 
-async function spendRow(request: APIRequestContext, requestId: string): Promise<Record<string, any> | undefined> {
+async function spendRow(request: APIRequestContext, requestId: string): Promise<SpendRow | undefined> {
   const response = await request.get(`/spend/logs?request_id=${encodeURIComponent(requestId)}`, { headers });
   expect(response.ok(), await response.text()).toBe(true);
-  const rows = (await response.json()) as Record<string, any>[];
+  const rows = (await response.json()) as SpendRow[];
   return rows[0];
 }
 
@@ -118,7 +131,16 @@ test("the Add Model form offers CoralBricks and the deployment it creates serves
     const requestId = JSON.parse(served.body).id as string;
     expect(requestId, served.body).toBeTruthy();
 
-    let row: Record<string, any> | undefined;
+    const stored = await deploymentNamed(request, alias);
+    const inputRate = stored?.model_info?.input_cost_per_token;
+    const outputRate = stored?.model_info?.output_cost_per_token;
+    expect(inputRate, JSON.stringify(stored)).toBeGreaterThan(0);
+    expect(Number.isFinite(inputRate)).toBe(true);
+    expect(outputRate, JSON.stringify(stored)).toBeGreaterThan(0);
+    expect(Number.isFinite(outputRate)).toBe(true);
+    const expectedSpend = UPSTREAM_PROMPT_TOKENS * inputRate! + UPSTREAM_COMPLETION_TOKENS * outputRate!;
+
+    let row: SpendRow | undefined;
     await expect
       .poll(
         async () => {
@@ -133,7 +155,7 @@ test("the Add Model form offers CoralBricks and the deployment it creates serves
     expect(row?.model_group, JSON.stringify(row)).toBe(alias);
     expect(row?.prompt_tokens, JSON.stringify(row)).toBe(UPSTREAM_PROMPT_TOKENS);
     expect(row?.completion_tokens, JSON.stringify(row)).toBe(UPSTREAM_COMPLETION_TOKENS);
-    expect(Number(row?.spend), JSON.stringify(row)).toBeCloseTo(EXPECTED_SPEND, 10);
+    expect(Number(row?.spend), JSON.stringify(row)).toBeCloseTo(expectedSpend, 10);
   } finally {
     await deleteDeployment(request, alias);
   }
