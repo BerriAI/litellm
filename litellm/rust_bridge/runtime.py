@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 
 from typing_extensions import assert_never
@@ -117,7 +118,7 @@ def _select(context: RouteContext, policy: Policy | Decision | None) -> Decision
         case Python() | Rust():
             return policy
         case _:
-            return policy(context)
+            return catalog.decide(context, MappingProxyType({context.route: policy}))
 
 
 def _require_rust(context: RouteContext, selected: Decision) -> None:

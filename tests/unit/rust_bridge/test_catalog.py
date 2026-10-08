@@ -7,13 +7,13 @@ from typing import Final
 import pytest
 
 from litellm.rust_bridge import catalog, configuration
-from litellm.rust_bridge.catalog import Decision, Python, Route, RouteContext, Rust
+from litellm.rust_bridge.catalog import Decision, OptIn, Python, Required, Rollout, Route, RouteContext, Rust
 
 SWITCHED_OFF: Final = Python("Rust is switched off")
 
 
-def only_openai(context: RouteContext) -> Decision:
-    return catalog.optional() if context.provider == "openai" else Python("test keeps other providers on Python")
+def only_openai(context: RouteContext) -> Rollout:
+    return OptIn() if context.provider == "openai" else Python("test keeps other providers on Python")
 
 
 POLICIES: Final = MappingProxyType(
@@ -42,7 +42,7 @@ def isolated_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
             Rust(required=True),
             id="required-policy",
         ),
-        pytest.param(RouteContext(Route.EMBEDDINGS, provider="openai"), SWITCHED_OFF, Rust(), id="optional-policy"),
+        pytest.param(RouteContext(Route.EMBEDDINGS, provider="openai"), SWITCHED_OFF, Rust(), id="opt-in-policy"),
         pytest.param(
             RouteContext(Route.EMBEDDINGS, provider="cohere"),
             Python("test keeps other providers on Python"),
@@ -65,14 +65,26 @@ def test_decide_runs_the_route_policy(
     assert catalog.decide(context, policies=POLICIES) == (when_on if enabled else when_off)
 
 
-def test_optional_and_logger_follow_the_global_switch(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert catalog.optional() == SWITCHED_OFF
+@pytest.mark.parametrize("enabled", (False, True), ids=("rust-off", "rust-on"))
+@pytest.mark.parametrize(
+    ("context", "expected"),
+    (
+        pytest.param(RouteContext(Route.CHAT_COMPLETIONS), Required(), id="required"),
+        pytest.param(RouteContext(Route.EMBEDDINGS, provider="openai"), OptIn(), id="opt-in"),
+        pytest.param(RouteContext(Route.OCR), Python("ocr is not ported"), id="no-policy"),
+    ),
+)
+def test_rollout_ignores_the_global_switch(enabled: bool, context: RouteContext, expected: Rollout) -> None:
+    configuration.rust(enabled)
+
+    assert catalog.rollout(context, policies=POLICIES) == expected
+
+
+def test_logger_follows_the_global_switch(monkeypatch: pytest.MonkeyPatch) -> None:
     assert catalog.logger() == SWITCHED_OFF
 
     configuration.rust(True)
-    assert catalog.optional() == Rust()
     assert catalog.logger() == Rust()
 
     monkeypatch.setenv("LITELLM_RUST", "0")
-    assert catalog.optional() == SWITCHED_OFF
     assert catalog.logger() == SWITCHED_OFF

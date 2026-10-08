@@ -161,9 +161,8 @@ from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer
 from litellm.utils import claude_json_str
 
 shipped = catalog.decide
-catalog.decide = lambda context: (
-    catalog.optional() if context.route in {Route.TOKENIZER, Route.TOKEN_COUNTER} else shipped(context)
-)
+policies = {**catalog.POLICIES, Route.TOKENIZER: catalog.opt_in, Route.TOKEN_COUNTER: catalog.opt_in}
+catalog.decide = lambda context: shipped(context, policies)
 litellm.anthropic_models = {*litellm.anthropic_models, "tokenizer-fork-fixture"}
 _native.reserve_process_for_forking()
 for create in (

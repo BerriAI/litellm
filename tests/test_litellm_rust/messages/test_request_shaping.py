@@ -6,6 +6,7 @@ adaptive-thinking model without sampling params; Claude Haiku 4.5 is a legacy-th
 """
 
 from collections.abc import Iterator
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -26,9 +27,10 @@ LEGACY_THINKING_MODEL: Final = "anthropic/claude-haiku-4-5"
 @pytest.fixture(autouse=True)
 def opt_messages_into_rust() -> Iterator[None]:
     shipped: Final = catalog.decide
+    policies: Final = MappingProxyType({**catalog.POLICIES, Route.MESSAGES: catalog.opt_in})
 
     def every_provider(context: RouteContext) -> Decision:
-        return catalog.optional() if context.route is Route.MESSAGES else shipped(context)
+        return shipped(context, policies)
 
     with rebound(catalog, "decide", every_provider):
         yield

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from types import SimpleNamespace
 from typing import Final, Protocol
 
@@ -10,7 +10,7 @@ from litellm.exceptions import APIError
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import bindings, catalog, configuration, runtime
-from litellm.rust_bridge.catalog import Decision, Python, Route, RouteContext, Rust
+from litellm.rust_bridge.catalog import Decision, Policy, Python, Required, Rollout, Route, RouteContext, Rust
 from litellm.rust_bridge.lifecycle import Complete, Open, Yield
 from litellm.rust_bridge.streams import Stream, SyncStream
 
@@ -79,7 +79,7 @@ def never_loaded() -> bindings.NativeBinding[NativeFn]:
 
 
 async def run(
-    policy: Decision | Callable[[RouteContext], Decision] | None,
+    policy: Decision | Policy | None,
     calls: Recorder,
     *,
     asynchronous: bool,
@@ -138,9 +138,9 @@ async def test_shipped_catalog_decides_when_no_policy_is_given(asynchronous: boo
 def test_policy_callable_receives_the_context() -> None:
     seen: Final[list[RouteContext]] = []
 
-    def policy(context: RouteContext) -> Decision:
+    def policy(context: RouteContext) -> Rollout:
         seen.append(context)
-        return REQUIRED
+        return Required()
 
     result: Final = runtime.run(
         CONTEXT, binding=binding(Recorder().rust), native=lambda fn: fn(), python=lambda: PYTHON, policy=policy

@@ -4,7 +4,7 @@ from typing import Final, NoReturn, TypeAlias
 import pytest
 
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Decision, Python, Route, RouteContext, Rust
+from litellm.rust_bridge.catalog import Decision, Policy, Python, Rollout, Route, RouteContext, Rust
 from litellm.rust_bridge.dispatch import Fields, NativeDispatch, PublicDispatch
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.runtime import NoPythonImplementationError
@@ -61,7 +61,7 @@ async def run_public(
     *,
     python: Callable[..., object],
     binding: NativeBinding[NativeRoute],
-    policy: Decision | Callable[[RouteContext], Decision],
+    policy: Decision | Policy,
     asynchronous: bool,
 ) -> object:
     if not asynchronous:
@@ -196,7 +196,7 @@ def test_policy_sees_the_route_provider_and_named_model_of_the_bound_call(model:
     seen: Final[list[RouteContext]] = []
     dispatch: Final = PublicDispatch(Route.MESSAGES, bind=bind_model, provider=lambda fields: "anthropic")
 
-    def policy(context: RouteContext) -> Decision:
+    def policy(context: RouteContext) -> Rollout:
         seen.append(context)
         return PYTHON
 
