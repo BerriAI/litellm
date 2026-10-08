@@ -1,6 +1,28 @@
 from collections.abc import Sequence
+from datetime import datetime
 
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import ConfigDict, Field
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
+
+
+class TraceAgent(LiteLLMBaseModel):
+    """One agent seen in the caller's traces, for picking which agent's runs to look at."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    runs: int = Field(ge=0)
+    failed_runs: int = Field(ge=0)
+    last_seen: datetime
+    frameworks: tuple[str, ...] = ()
+
+
+class TraceAgentList(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    agents: tuple[TraceAgent, ...]
 
 
 class SpendLogRecord(TypedDict):
@@ -8,6 +30,7 @@ class SpendLogRecord(TypedDict):
 
     request_id: ReadOnly[str]
     response_id: ReadOnly[str]
+    provider_request_id: NotRequired[ReadOnly[str]]
     litellm_call_id: ReadOnly[str]
     call_type: ReadOnly[str]
     api_key: ReadOnly[str]

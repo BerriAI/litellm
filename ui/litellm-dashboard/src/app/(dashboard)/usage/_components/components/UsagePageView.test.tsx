@@ -4,13 +4,30 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
+import { processActivityData } from "@/components/activity_metrics";
 import type { Organization } from "@/components/networking";
+import type { ModelActivityData } from "@/components/UsagePage/types";
 import * as networking from "@/components/networking";
 import UsagePage from "./UsagePageView";
+
+const modelActivity = (label: string): ModelActivityData => ({
+  label,
+  total_requests: 1,
+  total_successful_requests: 1,
+  total_failed_requests: 0,
+  total_cache_read_input_tokens: 0,
+  total_cache_creation_input_tokens: 0,
+  total_tokens: 10,
+  prompt_tokens: 5,
+  completion_tokens: 5,
+  total_spend: 0.01,
+  top_models: [],
+  daily_data: [],
+});
 
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
@@ -36,10 +53,14 @@ vi.mock("@/components/networking", () => ({
 
 // Mock child components to simplify testing
 vi.mock("@/components/activity_metrics", () => ({
-  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: { __source?: string } }) => (
-    <div>{`activity-source:${modelMetrics?.__source ?? "none"}`}</div>
+  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: Record<string, { label: string }> }) => (
+    <div>
+      {Object.entries(modelMetrics ?? {}).map(([model, metrics]) => (
+        <span key={model}>{metrics.label}</span>
+      ))}
+    </div>
   ),
-  processActivityData: (_data: unknown, key: string) => ({ __source: key }),
+  processActivityData: vi.fn(),
 }));
 
 vi.mock("@/components/view_user_spend", () => ({
@@ -366,6 +387,10 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
+    vi.mocked(processActivityData).mockReset();
+    vi.mocked(processActivityData).mockImplementation((_data, key) => ({
+      [key]: modelActivity(`activity-source:${key}`),
+    }));
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
       isAuthorized: true,
@@ -1238,6 +1263,50 @@ describe("UsagePage", () => {
         expect(screen.getByText("activity-source:models")).toBeInTheDocument();
       });
       expect(screen.queryByText("activity-source:model_groups")).not.toBeInTheDocument();
+    });
+
+    it("filters Model Activity by model name and shows an empty state when there are no matches", async () => {
+      vi.mocked(processActivityData).mockReturnValue({
+        "openai/gpt-4o": modelActivity("GPT-4o"),
+        "anthropic/claude-3": modelActivity("Claude 3 Sonnet"),
+      });
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByRole("tab", { name: "Model Activity" }));
+
+      const modelActivityTab = screen.getByRole("tabpanel", { name: "Model Activity" });
+      const searchInput = within(modelActivityTab).getByRole("textbox", { name: "Search models" });
+      fireEvent.change(searchInput, { target: { value: "GPT-4o" } });
+
+      expect(within(modelActivityTab).getByText("GPT-4o")).toBeInTheDocument();
+      expect(within(modelActivityTab).queryByText("Claude 3 Sonnet")).not.toBeInTheDocument();
+
+      fireEvent.change(searchInput, { target: { value: "missing model" } });
+
+      expect(
+        within(modelActivityTab).getByText('No models match "missing model" in this date range'),
+      ).toBeInTheDocument();
+    });
+
+    it("does not show the no-match state when model data is empty", async () => {
+      vi.mocked(processActivityData).mockReturnValue({});
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByRole("tab", { name: "Model Activity" }));
+
+      const modelActivityTab = screen.getByRole("tabpanel", { name: "Model Activity" });
+      const searchInput = within(modelActivityTab).getByRole("textbox", { name: "Search models" });
+      fireEvent.change(searchInput, { target: { value: "missing model" } });
+
+      expect(
+        within(modelActivityTab).queryByText('No models match "missing model" in this date range'),
+      ).not.toBeInTheDocument();
     });
   });
 

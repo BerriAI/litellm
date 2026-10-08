@@ -8,7 +8,7 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Any, Final, Literal, TypedDict, cast
+from typing import Final, Literal, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -298,7 +298,7 @@ async def health_services_endpoint(
     Example:
     ```
     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog' \
-    -H 'Authorization: Bearer sk-1234'
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     try:
@@ -730,6 +730,19 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
     return model_param_to_info
 
 
+def _model_infos_for_endpoint(
+    model_param_to_info: Mapping[str, list[Mapping[str, str | None]]], endpoint: Mapping[str, object]
+) -> tuple[Mapping[str, str | None], ...]:
+    model_param: Final = endpoint.get("model")
+    if not isinstance(model_param, str):
+        return ()
+    model_infos: Final = model_param_to_info.get(model_param, [])
+    endpoint_model_id: Final = endpoint.get("model_id")
+    if not endpoint_model_id:
+        return tuple(model_infos)
+    return tuple(info for info in model_infos if info["model_id"] == endpoint_model_id)
+
+
 def _aggregate_health_check_results(
     model_param_to_info: dict,
     healthy_endpoints: list,
@@ -754,7 +767,7 @@ def _aggregate_health_check_results(
     for endpoint in healthy_endpoints:
         model_param = endpoint.get("model")
         if model_param and model_param in model_param_to_info:
-            for model_info in model_param_to_info[model_param]:
+            for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
                 key = (model_info["model_id"], model_info["model_name"])
                 if key not in model_results:
                     model_results[key] = {
@@ -771,7 +784,7 @@ def _aggregate_health_check_results(
         model_param = endpoint.get("model")
         error_message = endpoint.get("error")
         if model_param and model_param in model_param_to_info:
-            for model_info in model_param_to_info[model_param]:
+            for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
                 key = (model_info["model_id"], model_info["model_name"])
                 if key not in model_results:
                     model_results[key] = {
@@ -998,7 +1011,7 @@ def _caller_may_probe_deployment(
     caller_is_admin: bool,
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
-    if not caller_is_admin and not Router._deployment_usable_by_team(deployment, team_id):
+    if not caller_is_admin and not Router.deployment_usable_by_team(deployment, team_id):
         return False
     if allowed_models is None:
         return True
@@ -1431,7 +1444,7 @@ async def shared_health_check_status_endpoint(
         )
 
 
-def _read_license_data() -> dict[str, Any] | None:
+def _read_license_data() -> EnterpriseLicenseData | None:
     from litellm.proxy.proxy_server import _license_check, premium_user_data
 
     license_data: EnterpriseLicenseData | None = premium_user_data or _license_check.airgapped_license_data
@@ -1453,10 +1466,10 @@ def _read_license_data() -> dict[str, Any] | None:
 
     if license_data is None:
         return None
-    return cast(dict[str, Any], license_data)
+    return license_data
 
 
-def _read_allowed_features(license_data: dict[str, Any]) -> list:
+def _read_allowed_features(license_data: Mapping[str, object]) -> list:
     raw_allowed_features: Final = license_data.get("allowed_features")
     if isinstance(raw_allowed_features, list):
         return list(raw_allowed_features)
@@ -1707,7 +1720,7 @@ def _show_env_credential_login_warning() -> bool:
 
 async def _get_health_readiness_details(
     response: Response | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Detailed health payload for authenticated diagnostics.
     """
@@ -1726,7 +1739,7 @@ async def _get_health_readiness_details(
             success_callback_names = litellm.success_callback
 
         # check Cache
-        cache_type: Any = None
+        cache_type: object = None
         if litellm.cache is not None:
             from litellm.caching.caching import RedisSemanticCache
 
@@ -1735,7 +1748,7 @@ async def _get_health_readiness_details(
             if isinstance(litellm.cache.cache, RedisSemanticCache):
                 # ping the cache
                 # TODO: @ishaan-jaff - we should probably not ping the cache on every /health/readiness check
-                index_info: Any
+                index_info: object
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
@@ -1770,7 +1783,7 @@ async def _get_health_readiness_details(
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
-                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "use_aiohttp_transport": AsyncHTTPHandler.should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
@@ -1783,7 +1796,7 @@ async def _get_health_readiness_details(
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
-                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "use_aiohttp_transport": AsyncHTTPHandler.should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
@@ -2086,7 +2099,7 @@ async def test_model_connection(
     ```bash
     # If model is configured in proxy_config.yaml, you only need to specify the model name:
     curl -X POST 'http://localhost:4000/health/test_connection' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "litellm_params": {
@@ -2099,7 +2112,7 @@ async def test_model_connection(
     
     # You can also override specific params or test with custom credentials:
     curl -X POST 'http://localhost:4000/health/test_connection' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "litellm_params": {

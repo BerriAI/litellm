@@ -1,6 +1,6 @@
 mod host;
 
-use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_inference_responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
@@ -81,7 +81,7 @@ fn run_public(
         py,
         arguments,
         move |py, arguments, request| {
-            let route = litellm_core::responses::ResponsesRoute::new(
+            let route = litellm_inference_responses::ResponsesRoute::new(
                 crate::http::provider_client(py, arguments, asynchronous)?
                     .map_err(crate::http::client_error)?,
                 crate::http::resources().auth.clone(),
@@ -105,23 +105,15 @@ fn run_public(
 }
 
 #[pyfunction]
-pub(crate) fn responses(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_public(py, request, args, kwargs, false)
+pub(crate) fn responses(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let call = super::NativeCall::extract(&call)?;
+    run_public(py, call.bound.into_any(), call.args, call.kwargs, false)
 }
 
 #[pyfunction]
-pub(crate) fn aresponses(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_public(py, request, args, kwargs, true)
+pub(crate) fn aresponses(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let call = super::NativeCall::extract(&call)?;
+    run_public(py, call.bound.into_any(), call.args, call.kwargs, true)
 }
 
 #[pyclass]

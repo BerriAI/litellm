@@ -1,7 +1,7 @@
 use base64::Engine;
 use bytes::Buf;
 use futures_util::{Stream, StreamExt};
-use litellm_framing::{
+use litellm_framer::{
     aws_event_stream::{AwsEventStreamCodec, Message},
     frames,
 };

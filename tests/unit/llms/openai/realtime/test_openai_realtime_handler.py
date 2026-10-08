@@ -1,21 +1,18 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+from litellm.types.realtime import RealtimeQueryParams
 
 
-
-@pytest.mark.parametrize(
-    "api_base", ["https://api.openai.com/v1", "https://api.openai.com"]
-)
+@pytest.mark.parametrize("api_base", ["https://api.openai.com/v1", "https://api.openai.com"])
 def test_openai_realtime_handler_url_construction(api_base):
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
 
     handler = OpenAIRealtime()
-    url = handler._construct_url(
+    url = handler.construct_url(
         api_base=api_base,
         query_params={
             "model": "gpt-4o-realtime-preview-2024-10-01",
@@ -36,7 +33,7 @@ def test_openai_realtime_handler_url_with_extra_params():
         "model": "gpt-4o-realtime-preview-2024-10-01",
         "intent": "chat",
     }
-    url = handler._construct_url(api_base=api_base, query_params=query_params)
+    url = handler.construct_url(api_base=api_base, query_params=query_params)
     # Both 'model' and other params should be included in the query string
     assert url.startswith("wss://api.openai.com/v1/realtime?")
     assert "model=gpt-4o-realtime-preview-2024-10-01" in url
@@ -59,12 +56,8 @@ def test_openai_realtime_handler_model_parameter_inclusion():
     api_base = "https://api.openai.com/"
 
     # Test with just model parameter
-    query_params_model_only: RealtimeQueryParams = {
-        "model": "gpt-4o-mini-realtime-preview"
-    }
-    url = handler._construct_url(
-        api_base=api_base, query_params=query_params_model_only
-    )
+    query_params_model_only: RealtimeQueryParams = {"model": "gpt-4o-mini-realtime-preview"}
+    url = handler.construct_url(api_base=api_base, query_params=query_params_model_only)
 
     # Verify the URL structure
     assert url.startswith("wss://api.openai.com/v1/realtime?")
@@ -75,9 +68,7 @@ def test_openai_realtime_handler_model_parameter_inclusion():
         "model": "gpt-4o-mini-realtime-preview",
         "intent": "chat",
     }
-    url_with_extras = handler._construct_url(
-        api_base=api_base, query_params=query_params_with_extras
-    )
+    url_with_extras = handler.construct_url(api_base=api_base, query_params=query_params_with_extras)
 
     # Verify both parameters are included
     assert url_with_extras.startswith("wss://api.openai.com/v1/realtime?")
@@ -91,7 +82,6 @@ def test_openai_realtime_handler_model_parameter_inclusion():
     assert expected_pattern in url_with_extras
 
 
-import asyncio
 
 import pytest
 
@@ -288,7 +278,6 @@ async def test_async_realtime_uses_max_size_parameter():
 
     This verifies the fix for: https://github.com/BerriAI/litellm/issues/15747
     """
-    from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
     from litellm.types.realtime import RealtimeQueryParams
 
@@ -465,3 +454,75 @@ async def test_async_realtime_upstream_handshake_refusal_sends_error_event_then_
     assert event["error"]["type"] == "server_error"
     assert "401" in event["error"]["message"]
     assert closed and closed[0][0] == 1008
+
+
+@pytest.mark.asyncio
+async def test_realtime_query_params_use_normalized_model_name(monkeypatch):
+    """
+    Ensure query params overwrite model with normalized provider model name.
+    """
+    from litellm.realtime_api import main as realtime_main
+
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(
+        realtime_main,
+        "openai_realtime",
+        MagicMock(async_realtime=mock_async_realtime),
+    )
+
+    def fake_get_llm_provider(model, api_base=None, api_key=None):
+        return ("gpt-4o-realtime-preview", "openai", None, None)
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+
+    query_params: RealtimeQueryParams = {
+        "model": "openai/gpt-4o-realtime-preview",
+        "intent": "chat",
+    }
+
+    await realtime_main._arealtime(
+        model="openai/gpt-4o-realtime-preview",
+        websocket=MagicMock(),
+        api_key="sk-test",
+        query_params=query_params,
+        litellm_logging_obj=MagicMock(),
+    )
+
+    called_kwargs = mock_async_realtime.call_args.kwargs
+    assert called_kwargs["query_params"]["model"] == "gpt-4o-realtime-preview"
+    assert called_kwargs["query_params"]["intent"] == "chat"
+
+
+@pytest.mark.asyncio
+async def test_realtime_query_params_preserve_missing_model(monkeypatch):
+    """
+    OpenAI-compatible transcription clients can connect with only
+    ?intent=transcription and send the model in session.update. Do not add
+    model= back into the upstream query params when the client omitted it.
+    """
+    from litellm.realtime_api import main as realtime_main
+
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(
+        realtime_main,
+        "openai_realtime",
+        MagicMock(async_realtime=mock_async_realtime),
+    )
+
+    def fake_get_llm_provider(model, api_base=None, api_key=None):
+        return ("gpt-realtime-whisper", "openai", None, None)
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+
+    query_params: RealtimeQueryParams = {"intent": "transcription"}
+
+    await realtime_main._arealtime(
+        model="gpt-realtime-whisper",
+        websocket=MagicMock(),
+        api_key="sk-test",
+        query_params=query_params,
+        litellm_logging_obj=MagicMock(),
+    )
+
+    called_kwargs = mock_async_realtime.call_args.kwargs
+    assert called_kwargs["query_params"] == {"intent": "transcription"}

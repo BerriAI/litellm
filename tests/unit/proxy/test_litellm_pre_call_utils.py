@@ -1968,7 +1968,7 @@ async def test_add_litellm_data_to_request_audio_transcription_multipart():
     request_mock.query_params = {}
     request_mock.headers = {
         "Content-Type": "multipart/form-data",
-        "Authorization": "Bearer sk-1234",
+        "Authorization": "Bearer sk-9876",
     }
     request_mock.client = MagicMock()
     request_mock.client.host = "127.0.0.1"
@@ -2984,7 +2984,7 @@ async def test_add_litellm_metadata_from_request_headers():
     Relevant issue: https://github.com/BerriAI/litellm/issues/14008
     """
     # Set up test logger
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     test_logger = TestCustomLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [test_logger]
@@ -3095,7 +3095,7 @@ async def test_anthropic_messages_standard_logging_object_matches_fixture():
     Regression: /v1/messages calls routed to non-Anthropic providers should keep
     call_type=anthropic_messages in standard logging payloads.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     test_logger = TestCustomLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [test_logger]
@@ -4803,7 +4803,7 @@ async def test_bearer_token_not_in_debug_logs():
         "messages": [{"role": "user", "content": "hi"}],
     }
 
-    user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-9876")
 
     # Capture all debug log output from the proxy logger
     log_capture = StringIO()
@@ -8590,3 +8590,38 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
         team_callback_settings_obj=None,
     )
     assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
+
+
+def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("ARIZE_ENDPOINT", "https://arize.internal.example/v1")
+    monkeypatch.delenv("ARIZE_HTTP_ENDPOINT", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        auth = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "arize_space_id": "s",
+                            "arize_api_key": "k",
+                            "arize_otlp_protocol": "http/protobuf",
+                        },
+                    }
+                ]
+            },
+            team_metadata={},
+        )
+
+        destinations = resolve_tenant_otel_destinations(auth)
+
+        assert [d.protocol for d in destinations] == ["otlp_http"]
+        assert destinations[0].endpoint == "https://arize.internal.example/v1/traces"
+    finally:
+        is_otel_v2_enabled.cache_clear()

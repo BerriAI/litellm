@@ -1,8 +1,8 @@
-import { renderHook, screen, waitFor, renderWithProviders } from "../../../tests/test-utils";
+import { fireEvent, renderHook, screen, waitFor, within, renderWithProviders } from "../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
-import type { CredentialItem } from "../networking";
+import { credentialCreateCall, type CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { projectMountedValues, useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
 import { useForm } from "react-hook-form";
@@ -34,6 +34,7 @@ vi.mock("../networking", async () => {
       ],
     }),
     testConnectionRequest: vi.fn().mockResolvedValue({ status: "success" }),
+    credentialCreateCall: vi.fn().mockResolvedValue({ success: true }),
     getProviderCreateMetadata: vi.fn().mockResolvedValue([
       {
         provider: "OpenAI",
@@ -352,6 +353,74 @@ describe("AddModelForm", () => {
       await user.hover(teamOnlySwitch);
 
       expect(screen.queryByText(/enterprise-only feature/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("workload identity federation entry point", () => {
+    const renderAsRole = async (userRole: string, selectedProvider: Providers) => {
+      const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+      mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser(userRole, "user-1", true));
+      const props = { ...createTestProps(userRole, "user-1", false), selectedProvider };
+      renderWithProviders(<AddModelForm {...props} />);
+      await screen.findByText("Existing Credentials");
+      return props;
+    };
+
+    const fill = (label: string | RegExp, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
+    it("saves the federation fields as a credential and attaches it to the model", async () => {
+      const user = userEvent.setup();
+      const props = await renderAsRole("proxy_admin", Providers.Anthropic);
+
+      await user.click(screen.getByRole("button", { name: "Use workload identity federation" }));
+      expect(await screen.findByRole("combobox", { name: /^Authentication:/ })).toHaveTextContent(
+        "Workload identity federation",
+      );
+      fill("Credential Name:", "anthropic-federated");
+      fill(/Federation Rule ID/, "fdrl_new");
+      fill(/Organization ID/, "org-new");
+      fill(/Identity Token File/, "/var/run/secrets/anthropic/token");
+      await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() => {
+        expect(credentialCreateCall).toHaveBeenCalledWith("test-access-token", {
+          credential_name: "anthropic-federated",
+          credential_values: {
+            anthropic_federation_rule_id: "fdrl_new",
+            anthropic_organization_id: "org-new",
+            anthropic_identity_token_file: "/var/run/secrets/anthropic/token",
+          },
+          credential_info: { custom_llm_provider: Providers.Anthropic },
+        });
+      });
+      await waitFor(() => {
+        expect(props.form.getValues("litellm_credential_name")).toBe("anthropic-federated");
+      });
+      expect(props.mountedValues()).not.toHaveProperty("anthropic_federation_rule_id");
+    });
+
+    it("keeps the credential dialog on the model's provider", async () => {
+      const user = userEvent.setup();
+      await renderAsRole("proxy_admin", Providers.Anthropic);
+
+      await user.click(screen.getByRole("button", { name: "Use workload identity federation" }));
+
+      const providerSelect = within(await screen.findByRole("dialog")).getByPlaceholderText("Select a provider");
+      expect(providerSelect).toHaveValue("Anthropic");
+      expect(providerSelect).toBeDisabled();
+    });
+
+    it("is not offered for a provider without federation support", async () => {
+      await renderAsRole("proxy_admin", Providers.OpenAI);
+
+      expect(screen.queryByRole("button", { name: "Use workload identity federation" })).not.toBeInTheDocument();
+    });
+
+    it("is not offered to an admin who is not a proxy admin", async () => {
+      await renderAsRole("org_admin", Providers.Anthropic);
+
+      expect(screen.queryByRole("button", { name: "Use workload identity federation" })).not.toBeInTheDocument();
     });
   });
 

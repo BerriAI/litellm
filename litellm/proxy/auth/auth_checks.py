@@ -14,7 +14,9 @@ import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
 
@@ -34,6 +36,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
     MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
@@ -44,7 +47,9 @@ from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     RBAC_ROLES,
+    UI_TEAM_ID,
     CallInfo,
+    ConfigGeneralSettings,
     LiteLLM_AccessGroupTable,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
@@ -84,7 +89,10 @@ from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
 )
-from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
+from litellm.proxy.auth.model_access_denied import (
+    customer_model_access_denied_client_message,
+    model_access_denied_client_message,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
@@ -145,13 +153,14 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from litellm.types.router import DeploymentTypedDict
 from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,
     organization_role_based_access_check,
 )
-from .auth_utils import get_model_from_request, get_request_route_template
+from .auth_utils import get_model_from_request, get_request_route_template, request_fallback_model_names
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -304,15 +313,12 @@ def _user_table(repo: _PrismaTableHolder[_PrismaUserRow]) -> _PrismaAuthTable[_P
     return _DeadlineBoundedTable(repo.table, "user")
 
 
+GrantLayer = Literal["key", "team", "user"]
+
+
 class _VectorStorePermissionsRow(Protocol):
     @property
     def vector_stores(self) -> Sequence[str] | None: ...
-
-
-def _object_permission_table(
-    repo: _PrismaTableHolder[_VectorStorePermissionsRow],
-) -> _PrismaAuthTable[_VectorStorePermissionsRow]:
-    return _DeadlineBoundedTable(repo.table, "object_permission")
 
 
 class _PrismaTagRow(Protocol):
@@ -382,6 +388,9 @@ def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
 
 def _typed_request_body(request_body: dict) -> Mapping[str, object]:
     return request_body
+
+
+typed_general_settings: Final = _typed_request_body
 
 
 class _JsonLoadsObj(Protocol):
@@ -524,7 +533,8 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
             # not from defaulted sparse auto-registration entries.
             # See: https://github.com/BerriAI/litellm/issues/24770
             safe_name = str(model_name).replace("\n", "").replace("\r", "")
-            if not _is_cost_explicitly_configured(model_name, llm_router):
+            served_deployments = _deployments_served_for(model_name, llm_router)
+            if not _is_cost_explicitly_configured(served_deployments):
                 verbose_proxy_logger.debug(
                     "Model %s has zero cost but no explicit cost "
                     "configuration in model_cost entry — treating as unknown "
@@ -535,7 +545,16 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     zero_cost_cache[model_name] = False
                 return False
 
-            if _has_ptu_flat_cost(model_name, llm_router):
+            if _has_explicit_positive_cost(served_deployments):
+                verbose_proxy_logger.debug(
+                    "Model %s routes to a deployment with an explicit positive per-token price (enforce budget)",
+                    safe_name,
+                )
+                if zero_cost_cache is not None:
+                    zero_cost_cache[model_name] = False
+                return False
+
+            if _has_ptu_flat_cost(served_deployments):
                 verbose_proxy_logger.debug(
                     "Model %s prices reserved PTU capacity as a flat cost, so its zero per-token "
                     "rate is not a free model (enforce budget)",
@@ -567,45 +586,81 @@ _NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 _TEAM_GRANT_RELATIONS: Final[Mapping[str, object]] = MappingProxyType({"litellm_model_table": True})
 
 
-def _has_ptu_flat_cost(model: str, llm_router: "Router") -> bool:
-    """Whether any deployment in the model group bills reserved PTU capacity as a flat cost.
+def _deployments_served_for(model: str, llm_router: "Router") -> Sequence[DeploymentTypedDict]:
+    """
+    The deployments a request to ``model`` routes to, for the gates that waive budget checks.
+
+    The router resolves a ``model_group_alias`` name to its target exactly once and serves that
+    group, never a real deployment that shares the alias's name. ``Router.get_model_list()`` on the
+    routed group reads those deployments unless the group is itself an alias key, where it would
+    follow the alias a second hop the router never takes; then the deployments named after the
+    group count, or the wildcard route serving the group when none carries its name, the same
+    fallback ``get_model_list()`` takes.
+    """
+    routed_group: Final = llm_router.routable_model_group(model)
+    if llm_router.routable_model_group(routed_group) == routed_group:
+        return llm_router.get_model_list(model_name=routed_group) or ()
+    named: Final = llm_router.get_model_list_from_model_alias(model_name=model)
+    if named:
+        return named
+    return tuple(
+        DeploymentTypedDict(**deployment)
+        for deployment in llm_router.pattern_router.get_deployments_by_pattern(model=routed_group)
+    )
+
+
+def _has_ptu_flat_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
+    """Whether any of the deployments bills reserved PTU capacity as a flat cost.
 
     Such a deployment carries an explicit zero per-token price so the flat cost is not charged
     twice, which otherwise reads here as a free model and waives every budget check for it.
-
-    Resolved through ``Router.get_model_list()``, which includes ``model_group_alias``, because
-    this runs after the explicit-cost gate: resolving that gate alone would let an aliased PTU
-    group through as free.
     """
-    for deployment in llm_router.get_model_list(model_name=model) or ():
+    for deployment in deployments:
         model_info = deployment.get("model_info") or _NO_MODEL_INFO
         if model_info.get("ptu_count") is not None and model_info.get("cost_per_ptu_per_hour") is not None:
             return True
     return False
 
 
-def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
+def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -> bool:
     """
-    Check if any deployment in the model group has cost fields explicitly
-    set in its litellm.model_cost entry.
+    Check if any of the deployments has cost fields explicitly set in its
+    litellm.model_cost entry.
 
     When Router._create_deployment() registers a model not in the global
     cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
     fields. _get_model_info_helper() then defaults missing costs to 0.
     This function detects that scenario by checking the raw model_cost entry.
 
-    The group is resolved through ``Router.get_model_list()``, the same resolution
-    ``get_model_group_info()`` applies when the caller reads the cost a few lines earlier, so the
-    two lookups cannot disagree, including for names defined in ``Router.model_group_alias``.
     It also reaches a deployment that prices itself through its ``model_info`` block, whose entry
     lands in the cost map under the deployment id.
     """
-    for deployment in llm_router.get_model_list(model_name=model) or ():
+    for deployment in deployments:
         model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
         if model_id is None:
             continue
         raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
         if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
+            return True
+    return False
+
+
+def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
+    """Whether any of the deployments carries an explicit positive per-token price.
+
+    The group's price is read from the deployments named after the routed group and from
+    that group's own alias target, while an alias chain is served from the deployments named
+    after its routed group or from a wildcard route; a priced route among those serves the
+    request at its own rate whatever the group's price reads.
+    """
+    for deployment in deployments:
+        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
+        if model_id is None:
+            continue
+        raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
+        if _is_positive_cost(raw_entry.get("input_cost_per_token")) or _is_positive_cost(
+            raw_entry.get("output_cost_per_token")
+        ):
             return True
     return False
 
@@ -669,7 +724,7 @@ def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> b
     if _model_group_has_pricing(model=model, llm_router=llm_router):
         return False
 
-    return not _is_cost_explicitly_configured(model=model, llm_router=llm_router)
+    return not _is_cost_explicitly_configured(llm_router.get_model_list(model_name=model) or ())
 
 
 def _unpriced_models_in_request(model: str | list[str] | None, llm_router: Router | None) -> tuple[str, ...]:
@@ -1068,7 +1123,9 @@ async def common_checks(
         if not isinstance(managed_models, (list, tuple)) or not managed_models:
             raise HTTPException(403, "This agent has no model grants")
         _can_object_call_model(
-            model=_resolve_team_alias(_model, valid_token.team_model_aliases, valid_token.team_id, llm_router),
+            model=_resolve_team_alias(
+                _model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
+            ),
             llm_router=llm_router,
             models=list(managed_models),
             team_id=valid_token.team_id,
@@ -1095,6 +1152,23 @@ async def common_checks(
                 user_object=user_object,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
+
+    if end_user_object is not None and end_user_object.models:
+        with tracer.trace("litellm.proxy.auth.common_checks.can_customer_call_model"):
+            if _model:
+                can_customer_access_model(
+                    model=_model,
+                    end_user_object=end_user_object,
+                    llm_router=llm_router,
+                    valid_token=valid_token,
+                )
+            for fallback_model in request_fallback_model_names(_typed_request_body(request_body)):
+                can_customer_access_model(
+                    model=fallback_model,
+                    end_user_object=end_user_object,
+                    llm_router=llm_router,
+                    valid_token=valid_token,
+                )
 
     # 1.1 - 2.2 - 3.0.2 - 3.0.3: Project checks (blocked, model access, budget)
     with tracer.trace("litellm.proxy.auth.common_checks.run_project_checks"):
@@ -1284,6 +1358,8 @@ async def common_checks(
             request_body=request_body,
             team_object=team_object,
             valid_token=valid_token,
+            user_object=user_object,
+            deny_by_default=_vector_store_deny_by_default(_typed_request_body(general_settings)),
         )
 
     # 12. [OPTIONAL] Tool allowlist - key/team allowed_tools (no DB in hot path)
@@ -1436,6 +1512,7 @@ def get_actual_routes(allowed_routes: list) -> list:
 
 
 KEY_END_USER_BUDGET_ID_METADATA_FIELD: Final = "end_user_budget_id"
+_KEY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
 def get_key_end_user_budget_id(key_metadata: Mapping[str, object] | None) -> str | None:
@@ -1698,9 +1775,15 @@ def _column_is_set(column: str) -> Mapping[str, object]:
     return {column: {"not": None}}
 
 
+def _array_is_not_empty(column: str) -> Mapping[str, object]:
+    """``column`` holds at least one element, as a plain dict for prisma's builder."""
+    return {column: {"is_empty": False}}
+
+
 def _restricted_end_user_where() -> Mapping[str, object]:
     """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
-    return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}
+    restrictions: Final = (*map(_column_is_set, _RESTRICTED_COLUMNS), _array_is_not_empty("models"))
+    return {"OR": [{"blocked": True}, *restrictions]}
 
 
 class _RegistryNotCached:
@@ -1857,8 +1940,8 @@ async def _end_user_is_known_unrestricted(
     True when the cached registry proves the id restricts nothing, so its row need not be read.
 
     Every field ``get_end_user_object`` callers consume (budget, spend under that budget, region,
-    default model, object permission, blocked) is part of the registry predicate, so an id outside
-    it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
+    default model, models, object permission, blocked) is part of the registry predicate, so an id
+    outside it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
     the row is meaningful: ``max_end_user_budget_id`` or the key's ``end_user_budget_id`` grafts a
     default budget onto any row that exists, ``validate_end_user_id_in_db`` rejects ids that resolve
     to no row, and a token-supplied ``end_user_max_budget`` (a ``user_custom_auth`` callable can set
@@ -2500,6 +2583,14 @@ def _should_check_db(key: str, last_db_access_time: LimitedSizeOrderedDict, db_c
     return False
 
 
+def _user_db_access_key(user_id: str) -> str:
+    return f"user_id:{user_id}"
+
+
+def forget_missing_user(user_id: str) -> None:
+    last_db_access_time.pop(_user_db_access_key(user_id), None)
+
+
 def _update_last_db_access_time(key: str, value: object | None, last_db_access_time: LimitedSizeOrderedDict):
     last_db_access_time[key] = (value, time.time())
 
@@ -2668,7 +2759,7 @@ async def get_user_object(
     if prisma_client is None:
         raise Exception("No db connected")
     try:
-        db_access_time_key: Final = f"user_id:{user_id}"
+        db_access_time_key: Final = _user_db_access_key(user_id)
         should_check_db: Final = bool(check_db_only) or _should_check_db(
             key=db_access_time_key,
             last_db_access_time=last_db_access_time,
@@ -4463,7 +4554,7 @@ def _can_object_call_model(
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
     key_model_aliases: Mapping[str, str] | None = None,
-    object_type: Literal["user", "team", "key", "org", "project", "agent"] = "user",
+    object_type: Literal["user", "customer", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
     """
@@ -4505,7 +4596,7 @@ def _can_object_call_model(
         litellm.model_alias_map[model]
         if model in litellm.model_alias_map
         else (
-            llm_router._get_model_from_alias(model)
+            llm_router.get_model_from_alias(model)
             if llm_router is not None and model in llm_router.model_group_alias
             else None
         )
@@ -4544,7 +4635,11 @@ def _can_object_call_model(
         f"Tried to access {model}"
     )
     raise ModelAccessDeniedProxyException(
-        message=model_access_denied_client_message(model=model),
+        message=(
+            customer_model_access_denied_client_message(model=model)
+            if object_type == "customer"
+            else model_access_denied_client_message(model=model)
+        ),
         internal_message=internal_message,
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
         param="model",
@@ -4554,7 +4649,7 @@ def _can_object_call_model(
 
 def _resolve_team_alias(
     model: str | list[str],
-    team_model_aliases: dict[str, str] | None,
+    team_model_aliases: Mapping[str, str] | None,
     team_id: str | None,
     llm_router: Router | None,
 ) -> str | list[str]:
@@ -4566,7 +4661,7 @@ def _resolve_team_alias(
 
 
 def _live_team_alias_target(
-    model: str, team_model_aliases: dict[str, str], team_id: str | None, llm_router: Router | None
+    model: str, team_model_aliases: Mapping[str, str], team_id: str | None, llm_router: Router | None
 ) -> str:
     target: Final = team_model_aliases.get(model)
     if target is None:
@@ -4600,7 +4695,9 @@ async def _check_agent_access_group_model_access(
         if unmanaged is not None
         else ()
     )
-    dispatched: Final = _resolve_team_alias(model, valid_token.team_model_aliases, valid_token.team_id, llm_router)
+    dispatched: Final = _resolve_team_alias(
+        model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
+    )
     for ceiling in ceilings:
         if not ceiling.models:
             raise ModelAccessDeniedProxyException(
@@ -4696,6 +4793,10 @@ def _model_in_team_aliases(model: str, team_model_aliases: dict[str, str] | None
 
 def key_model_aliases_for_auth_check(valid_token: UserAPIKeyAuth | None) -> Mapping[str, str] | None:
     return alias_map(valid_token.aliases) if valid_token is not None and valid_token.aliases else None
+
+
+def team_model_aliases_for_auth_check(valid_token: UserAPIKeyAuth) -> Mapping[str, str] | None:
+    return alias_map(valid_token.team_model_aliases) if valid_token.team_model_aliases else None
 
 
 def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]:
@@ -5135,6 +5236,24 @@ async def can_key_call_resolved_model(
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
+    if valid_token.end_user_id is not None and prisma_client is not None:
+        key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(valid_token.metadata)
+        end_user_object: Final = await get_end_user_object(
+            end_user_id=valid_token.end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            token_end_user_max_budget=valid_token.end_user_max_budget,
+            key_end_user_budget_id=get_key_end_user_budget_id(key_metadata),
+        )
+        if end_user_object is not None and end_user_object.models:
+            can_customer_access_model(
+                model=model,
+                end_user_object=end_user_object,
+                llm_router=llm_router,
+                valid_token=valid_token,
+            )
+
 
 def can_org_access_model(
     model: str,
@@ -5302,6 +5421,35 @@ def can_project_access_model(
     )
 
 
+def can_customer_access_model(
+    model: str | list[str],
+    end_user_object: LiteLLM_EndUserTable,
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth | None,
+) -> Literal[True]:
+    team_model_aliases: Final = team_model_aliases_for_auth_check(valid_token) if valid_token is not None else None
+    team_id: Final = valid_token.team_id if valid_token is not None else None
+    key_model_aliases: Final = key_model_aliases_for_auth_check(valid_token)
+
+    def check(name: str) -> None:
+        team_target: Final = (
+            _live_team_alias_target(name, team_model_aliases, team_id, llm_router) if team_model_aliases else name
+        )
+        if team_target != name and name in (end_user_object.models or ()):
+            return
+        _can_object_call_model(
+            model=team_target,
+            llm_router=llm_router,
+            models=end_user_object.models,
+            key_model_aliases=key_model_aliases,
+            object_type="customer",
+        )
+
+    for name in (model,) if isinstance(model, str) else model:
+        check(name)
+    return True
+
+
 async def can_user_call_model(
     model: str | list[str],
     llm_router: Router | None,
@@ -5348,10 +5496,10 @@ def _search_tool_names_from_object_permission(
 def _can_object_call_search_tool(
     search_tool_name: str,
     allowed_search_tools: list[str],
-    object_type: Literal["key", "team", "project"],
+    object_type: Literal["key", "team", "project", "user"],
 ) -> Literal[True]:
     """
-    Check if an object (key/team/project) can access a specific search tool.
+    Check if an object (key/team/project/user) can access a specific search tool.
 
     Similar to _can_object_call_model but for search tools.
 
@@ -5384,82 +5532,186 @@ def _can_object_call_search_tool(
     )
 
 
-async def can_key_call_search_tool(
-    search_tool_name: str,
-    valid_token: UserAPIKeyAuth,
-) -> Literal[True]:
+TeamObjectLoader: TypeAlias = Callable[[], Awaitable[LiteLLM_TeamTable | None]]
+
+
+@dataclass(frozen=True)
+class SearchToolGrants:
     """
-    Check if a key can access a specific search tool.
-
-    Similar to can_key_call_model but for search tools.
-
-    Args:
-        search_tool_name: The search tool being requested
-        valid_token: The authenticated key
-
-    Returns:
-        True if access is allowed
-
-    Raises:
-        ProxyException if access is denied
+    The key, team and user grants that scope one caller's search tools. Every layer in `strict_layers`
+    must list the tool, and any other loaded grant only narrows when its list is nonempty
     """
-    return _can_object_call_search_tool(
-        search_tool_name=search_tool_name,
-        allowed_search_tools=_search_tool_names_from_object_permission(valid_token.object_permission),
-        object_type="key",
-    )
+
+    grants: Mapping[GrantLayer, LiteLLM_ObjectPermissionTable | None]
+    strict_layers: frozenset[GrantLayer]
 
 
-async def can_team_call_search_tool(
-    search_tool_name: str,
-    team_object: LiteLLM_TeamTable | None,
-) -> Literal[True]:
+def _search_tool_deny_by_default(general_settings: Mapping[str, object]) -> bool:
     """
-    Check if a team can access a specific search tool.
-
-    Similar to can_team_access_model but for search tools.
-
-    Args:
-        search_tool_name: The search tool being requested
-        team_object: The team object
-
-    Returns:
-        True if access is allowed
-
-    Raises:
-        ProxyException if access is denied
-    """
-    if team_object is None:
-        return True
-
-    return _can_object_call_search_tool(
-        search_tool_name=search_tool_name,
-        allowed_search_tools=_search_tool_names_from_object_permission(team_object.object_permission),
-        object_type="team",
-    )
-
-
-async def can_user_view_search_tool(
-    search_tool_name: str,
-    valid_token: UserAPIKeyAuth,
-    team_object: LiteLLM_TeamTable | None,
-) -> bool:
-    """
-    Boolean variant of the key + team authorization enforced on /search, used to
-    scope /search_tools/list so a non-admin caller only sees tools it may invoke.
+    Startup rejects a non-boolean value from the config file. A non-boolean value that reaches
+    general_settings another way enables the policy, so only search tool requests are denied.
     """
     try:
-        await can_key_call_search_tool(
-            search_tool_name=search_tool_name,
-            valid_token=valid_token,
+        return ConfigGeneralSettings.model_validate(
+            MappingProxyType(
+                {"search_tool_deny_by_default": general_settings.get("search_tool_deny_by_default", False)}
+            )
+        ).search_tool_deny_by_default
+    except ValidationError:
+        return True
+
+
+def is_search_tool_deny_by_default_applied(valid_token: UserAPIKeyAuth, general_settings: Mapping[str, object]) -> bool:
+    return _search_tool_deny_by_default(general_settings) and _is_strict_grant_identity(valid_token)
+
+
+def _search_tool_denied(object_type: GrantLayer, message: str) -> ProxyException:
+    return ProxyException(
+        message=message,
+        type=ProxyErrorTypes.get_search_tool_access_error_type_for_object(object_type),
+        param="search_tool_name",
+        code=status.HTTP_403_FORBIDDEN,
+    )
+
+
+async def _strict_team_object(load_team_object: TeamObjectLoader) -> LiteLLM_TeamTable | None:
+    try:
+        return await load_team_object()
+    except Exception as e:  # noqa: BLE001  # an unresolved team grants nothing under deny-by-default
+        verbose_proxy_logger.debug("Team lookup failed under search_tool_deny_by_default: %s", e)
+        return None
+
+
+async def _strict_user_object(
+    valid_token: UserAPIKeyAuth, prisma_client: PrismaClient, user_api_key_cache: UserApiKeyCache
+) -> LiteLLM_UserTable | None:
+    if valid_token.user_id is None:
+        return None
+    try:
+        return await get_user_object(
+            user_id=valid_token.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=valid_token.parent_otel_span,
         )
-        await can_team_call_search_tool(
-            search_tool_name=search_tool_name,
-            team_object=team_object,
+    except Exception as e:  # noqa: BLE001  # an unresolved user grants nothing under deny-by-default
+        verbose_proxy_logger.debug("User lookup failed under search_tool_deny_by_default: %s", e)
+        return None
+
+
+async def resolve_search_tool_grants(
+    valid_token: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+    load_team_object: TeamObjectLoader,
+) -> SearchToolGrants:
+    """
+    Without `general_settings.search_tool_deny_by_default`, or for the master key and dashboard sessions,
+    the key and team lists only restrict when nonempty. With it, the identities `_strict_grant_layers` names
+    must each list the tool, and a missing record, `null`, `[]`, or a team or user that fails to load grants nothing
+    """
+    if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
+        team_object: Final = await load_team_object()
+        return SearchToolGrants(
+            grants=MappingProxyType(
+                {"key": valid_token.object_permission, "team": team_object.object_permission if team_object else None}
+            ),
+            strict_layers=frozenset(),
         )
+
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    strict_team_object: Final = await _strict_team_object(load_team_object)
+    strict_layers: Final = _strict_grant_layers(True, valid_token, strict_team_object)
+    if prisma_client is None:
+        return SearchToolGrants(grants=MappingProxyType({}), strict_layers=strict_layers)
+    user_object: Final = (
+        await _strict_user_object(valid_token, prisma_client, user_api_key_cache) if "user" in strict_layers else None
+    )
+    return SearchToolGrants(
+        grants=MappingProxyType(
+            dict(
+                await _identity_grants(valid_token, strict_team_object, user_object, prisma_client, user_api_key_cache)
+            )
+        ),
+        strict_layers=strict_layers,
+    )
+
+
+def check_search_tool_grants(search_tool_name: str, grants: SearchToolGrants) -> Literal[True]:
+    """Raises a 403 ProxyException naming the first key, team or user layer that does not grant the tool"""
+    for layer in ("key", "team", "user"):
+        grant = grants.grants.get(layer)
+        if layer in grants.strict_layers:
+            if grant is None or search_tool_name not in (grant.search_tools or ()):
+                raise _search_tool_denied(
+                    layer,
+                    f"{layer.capitalize()} not allowed to access search tool: {search_tool_name}. "
+                    f"search_tool_deny_by_default is enabled and the {layer} does not grant it",
+                )
+        elif grant is not None:
+            _can_object_call_search_tool(
+                search_tool_name=search_tool_name,
+                allowed_search_tools=_search_tool_names_from_object_permission(grant),
+                object_type=layer,
+            )
+    return True
+
+
+async def can_caller_call_search_tool(
+    search_tool_name: str,
+    valid_token: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+    load_team_object: TeamObjectLoader,
+) -> Literal[True]:
+    """Key, team and user search tool authorization shared by /search, web search interception and discovery"""
+    return check_search_tool_grants(
+        search_tool_name, await resolve_search_tool_grants(valid_token, general_settings, load_team_object)
+    )
+
+
+async def can_token_call_search_tool(search_tool_name: str, valid_token: UserAPIKeyAuth) -> Literal[True]:
+    """`can_caller_call_search_tool` against the proxy's own settings, team cache and database"""
+    from litellm.proxy.proxy_server import general_settings, prisma_client, proxy_logging_obj, user_api_key_cache
+
+    async def _load_team_object() -> LiteLLM_TeamTable | None:
+        if not valid_token.team_id:
+            return None
+        return await get_team_object(
+            team_id=valid_token.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=valid_token.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    return await can_caller_call_search_tool(
+        search_tool_name=search_tool_name,
+        valid_token=valid_token,
+        general_settings=typed_general_settings(general_settings),
+        load_team_object=_load_team_object,
+    )
+
+
+def can_grants_view_search_tool(search_tool_name: str, grants: SearchToolGrants) -> bool:
+    try:
+        check_search_tool_grants(search_tool_name, grants)
     except ProxyException:
         return False
     return True
+
+
+def check_unregistered_search_fallback(
+    valid_token: UserAPIKeyAuth, general_settings: Mapping[str, object]
+) -> Literal[True]:
+    """The unregistered provider fallback names no search tool that a grant could list, so deny-by-default denies it"""
+    if not is_search_tool_deny_by_default_applied(valid_token, general_settings):
+        return True
+    layer: Final = min(_strict_grant_layers(True, valid_token, None), key=("key", "team", "user").index)
+    raise _search_tool_denied(
+        layer,
+        "No registered search tool is available and search_tool_deny_by_default is enabled",
+    )
 
 
 async def is_valid_fallback_model(
@@ -6659,17 +6911,207 @@ def _get_rag_query_vector_store_id(request_body: Mapping[str, object]) -> str | 
     return vector_store_id if isinstance(vector_store_id, str) and vector_store_id else None
 
 
+def _is_strict_grant_identity(valid_token: UserAPIKeyAuth | None) -> bool:
+    return (
+        valid_token is not None
+        and valid_token.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS
+        and valid_token.team_id != UI_TEAM_ID
+    )
+
+
+def _strict_grant_layers(
+    deny_by_default: bool, valid_token: UserAPIKeyAuth | None, team_object: LiteLLM_TeamTable | None
+) -> frozenset[GrantLayer]:
+    """
+    The identities that must each grant an object under a deny-by-default policy: a virtual key and its team,
+    a keyless team member's team, or a keyless user's own grant. The master key and dashboard sessions need none
+    """
+    if not deny_by_default or valid_token is None or not _is_strict_grant_identity(valid_token):
+        return frozenset()
+    virtual_key: Final = valid_token.via_virtual_key and not valid_token.is_session_token
+    has_team: Final = team_object is not None or valid_token.team_id is not None
+    if not virtual_key and not has_team:
+        return frozenset(("user",))
+    return frozenset(layer for layer, required in (("key", virtual_key), ("team", has_team)) if required)
+
+
+async def _identity_grants(
+    valid_token: UserAPIKeyAuth | None,
+    team_object: LiteLLM_TeamTable | None,
+    user_object: LiteLLM_UserTable | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[tuple[GrantLayer, LiteLLM_ObjectPermissionTable | None], ...]:
+    return (
+        (
+            "key",
+            None
+            if valid_token is None
+            else await _cached_object_permission(
+                valid_token.object_permission_id, valid_token.object_permission, prisma_client, user_api_key_cache
+            ),
+        ),
+        (
+            "team",
+            None
+            if team_object is None
+            else await _cached_object_permission(
+                team_object.object_permission_id, team_object.object_permission, prisma_client, user_api_key_cache
+            ),
+        ),
+        (
+            "user",
+            None
+            if user_object is None
+            else await _cached_object_permission(
+                user_object.object_permission_id, user_object.object_permission, prisma_client, user_api_key_cache
+            ),
+        ),
+    )
+
+
+def _vector_store_deny_by_default(general_settings: Mapping[str, object]) -> bool:
+    """
+    Startup rejects a non-boolean value from the config file. A non-boolean value that reaches
+    general_settings another way enables the policy, so only vector store requests are denied.
+    """
+    try:
+        return ConfigGeneralSettings.model_validate(
+            MappingProxyType(
+                {"vector_store_deny_by_default": general_settings.get("vector_store_deny_by_default", False)}
+            )
+        ).vector_store_deny_by_default
+    except ValidationError:
+        return True
+
+
+_VECTOR_STORE_IDS_ADAPTER: Final[TypeAdapter[Sequence[str]]] = TypeAdapter(Sequence[str])
+_TOOLS_ADAPTER: Final[TypeAdapter[Sequence[object]]] = TypeAdapter(Sequence[object])
+_TOOL_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _validated_vector_store_ids(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    try:
+        return tuple(_VECTOR_STORE_IDS_ADAPTER.validate_python(value, strict=True))
+    except ValidationError:
+        raise _malformed_vector_store_ids() from None
+
+
+def _malformed_vector_store_ids() -> ProxyException:
+    return ProxyException(
+        message="vector_store_ids must be a list of strings",
+        type="invalid_request_error",
+        param="vector_store_ids",
+        code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _tools(tools: object) -> tuple[object, ...]:
+    try:
+        return tuple(_TOOLS_ADAPTER.validate_python(tools, strict=True))
+    except ValidationError:
+        return ()
+
+
+def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
+    try:
+        tool_fields: Final = _TOOL_ADAPTER.validate_python(tool, strict=True)
+    except ValidationError:
+        return ()
+    return _validated_vector_store_ids(tool_fields.get("vector_store_ids"))
+
+
+def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    """
+    Same fields VectorStoreRegistry.get_vector_store_ids_to_run reads, but a vector_store_ids that is
+    not a list of strings is a 400 instead of being skipped or iterated, and tools that are not
+    objects name no store.
+    """
+    return tuple(
+        chain(
+            _validated_vector_store_ids(request_body.get("vector_store_ids")),
+            chain.from_iterable(_tool_vector_store_ids(tool) for tool in _tools(request_body.get("tools"))),
+        )
+    )
+
+
+def _require_vector_store_grant(
+    object_type: GrantLayer,
+    vector_store_ids_to_run: Sequence[str],
+    object_permission: _VectorStorePermissionsRow | None,
+) -> None:
+    if object_permission is None or not object_permission.vector_stores:
+        raise ProxyException(
+            message=f"{object_type.capitalize()} not allowed to access vector store. Tried to access {vector_store_ids_to_run[0]}. vector_store_deny_by_default is enabled and the {object_type} has no vector store grants",
+            type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(object_type),
+            param="vector_store",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+    _can_object_call_vector_stores(
+        object_type=object_type,
+        vector_store_ids_to_run=vector_store_ids_to_run,
+        object_permissions=object_permission,
+    )
+
+
+async def _cached_object_permission(
+    object_permission_id: str | None,
+    loaded: LiteLLM_ObjectPermissionTable | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> LiteLLM_ObjectPermissionTable | None:
+    """
+    The grant row auth already attached to the key, team or user, else the cached row by id. Both are
+    evicted on every worker when the grant changes, so the request path never reads the table directly.
+    """
+    if object_permission_id is None:
+        return None
+    if loaded is not None:
+        return loaded
+    return await get_object_permission(
+        object_permission_id=object_permission_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
 async def vector_store_access_check(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
+    *,
+    user_object: LiteLLM_UserTable | None = None,
+    deny_by_default: bool = False,
 ):
     """
-    Checks if the object (key, team, org) has access to the vector store.
+    Checks whether the caller may use every vector store the request names.
 
-    Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
+    Requested stores come from `vector_store_ids`, `tools[].vector_store_ids` and the RAG
+    `retrieval_config.vector_store_id`. Grants come from each identity's
+    `object_permission.vector_stores`.
+
+    With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
+    nonempty, and stores are only read from the request when a vector store registry is loaded.
+
+    With `deny_by_default=True` (`general_settings.vector_store_deny_by_default`), stores are read
+    even without a registry, and a missing record, `null` or `[]` grants nothing:
+
+    - virtual key: the key must grant every store, and so must its team when it has one, even if
+      the team failed to load
+    - keyless team member (JWT, `lite login` session token): only the resolved team is checked
+    - keyless user with no team: the user's own grant is checked
+    - master key and dashboard sessions: legacy behavior
+
+    The user's personal grant is only consulted in the keyless no-team case, so it can neither
+    rescue nor restrict a key or team request.
+
+    Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
+    that does not grant a requested store, and with the flag on, ProxyException (400,
+    `invalid_request_error`) when a `vector_store_ids` field is not a list of strings.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     #########################################################
     # Get the vector store the user is trying to access
@@ -6679,12 +7121,17 @@ async def vector_store_access_check(
         return True
 
     registry_ids: Final = (
-        litellm.vector_store_registry.get_vector_store_ids_to_run(
-            non_default_params=request_body, tools=request_body.get("tools", None)
+        _strict_requested_vector_store_ids(_typed_request_body(request_body))
+        if deny_by_default
+        else (
+            litellm.vector_store_registry.get_vector_store_ids_to_run(
+                non_default_params=request_body, tools=request_body.get("tools", None)
+            )
+            if litellm.vector_store_registry is not None
+            else None
         )
-        if litellm.vector_store_registry is not None
-        else None
-    ) or ()
+        or ()
+    )
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
@@ -6695,38 +7142,28 @@ async def vector_store_access_check(
     #########################################################
     # Check if the object (key, team, org) has access to the vector store
     #########################################################
-    # Check if the key can access the vector store
-    if valid_token is not None and valid_token.object_permission_id is not None:
-        key_object_permission: Final = await _object_permission_table(
-            ObjectPermissionRepository(prisma_client)
-        ).find_unique(
-            where={"object_permission_id": valid_token.object_permission_id},
-        )
-        if key_object_permission is not None:
+    strict_layers: Final = _strict_grant_layers(deny_by_default, valid_token, team_object)
+    grants: Final = await _identity_grants(
+        valid_token,
+        team_object,
+        user_object if "user" in strict_layers else None,
+        prisma_client,
+        user_api_key_cache,
+    )
+    for layer, grant in grants:
+        if layer in strict_layers:
+            _require_vector_store_grant(layer, vector_store_ids_to_run, grant)
+        elif grant is not None:
             _can_object_call_vector_stores(
-                object_type="key",
+                object_type=layer,
                 vector_store_ids_to_run=vector_store_ids_to_run,
-                object_permissions=key_object_permission,
-            )
-
-    # Check if the team can access the vector store
-    if team_object is not None and team_object.object_permission_id is not None:
-        team_object_permission: Final = await _object_permission_table(
-            ObjectPermissionRepository(prisma_client)
-        ).find_unique(
-            where={"object_permission_id": team_object.object_permission_id},
-        )
-        if team_object_permission is not None:
-            _can_object_call_vector_stores(
-                object_type="team",
-                vector_store_ids_to_run=vector_store_ids_to_run,
-                object_permissions=team_object_permission,
+                object_permissions=grant,
             )
     return True
 
 
 def _can_object_call_vector_stores(
-    object_type: Literal["key", "team", "org"],
+    object_type: Literal["key", "team", "org", "user"],
     vector_store_ids_to_run: Sequence[str],
     object_permissions: _VectorStorePermissionsRow | None,
 ):
