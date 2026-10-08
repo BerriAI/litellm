@@ -27,6 +27,7 @@ _ANTHROPIC_SCOPE: Final = ForwardedApiKeyScope(
     "deployment_params",
     [
         (_ANTHROPIC, {"model": "auto_router/claude-router"}),
+        (_ANTHROPIC, {"model": "not-a-known-provider-model"}),
         ({"model": "auto_router/complexity_router"},),
         ({"model": "auto_router/adaptive_router"},),
         (),
