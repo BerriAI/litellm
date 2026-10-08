@@ -28,7 +28,7 @@ class TestUIRootPath(unittest.TestCase):
         source: Final = directory / "source"
         source.mkdir()
         (source / "index.html").write_text(
-            '<html><head><link href="/get_favicon"></head><body>'
+            '<html><head><link href="/get_favicon"><link href="/favicon.ico?version=1"></head><body>'
             '<script src="/litellm-asset-prefix/_next/app.js"></script>'
             '<img src="/ui/assets/logo.png"></body></html>'
         )
@@ -48,6 +48,7 @@ class TestUIRootPath(unittest.TestCase):
                 'name="litellm-server-root-path" content="/services/llm"', (runtime / "index.html").read_text()
             )
             self.assertIn('href="/services/llm/get_favicon"', (runtime / "index.html").read_text())
+            self.assertIn('href="/services/llm/favicon.ico?version=1"', (runtime / "index.html").read_text())
             self.assertIn('src="/services/llm/ui/assets/logo.png"', (runtime / "index.html").read_text())
             self.assertEqual(runtime.stat().st_mode & 0o005, 0o005)
             self.assertEqual((runtime / "index.html").stat().st_mode & 0o004, 0o004)

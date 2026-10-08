@@ -36,6 +36,7 @@ if [ -n "$prefix" ]; then
                         sed -e "s|<head>|<head><meta name=\"litellm-server-root-path\" content=\"$prefix\">|g" \
                             -e "s|src=\"/ui/assets/|src=\"$prefix/ui/assets/|g" \
                             -e "s|href=\"/get_favicon\"|href=\"$prefix/get_favicon\"|g" \
+                            -e "s|href=\"/favicon.ico|href=\"$prefix/favicon.ico|g" \
                             "$file.tmp" > "$file"
                         rm "$file.tmp"
                         ;;
