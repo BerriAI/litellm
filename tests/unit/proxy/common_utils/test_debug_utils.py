@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyRuntimeConfig, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.debug_utils import (
@@ -104,7 +104,7 @@ HOSTILE_STRINGS = ("acme", "sk-live-secret", "hunter2", "10.0.0.7", "azure.com")
 @pytest.fixture
 def hostile_proxy_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     previous_config = proxy_server.proxy_config.get_config_state()
-    proxy_server.proxy_config.update_config_state(config=HOSTILE_CONFIG)
+    proxy_server.proxy_config.update_config_state(config=ProxyRuntimeConfig.from_resolved(HOSTILE_CONFIG))
     monkeypatch.setattr(proxy_server, "general_settings", dict(HOSTILE_GENERAL_SETTINGS))
     yield
     proxy_server.proxy_config.update_config_state(config=previous_config)
