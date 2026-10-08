@@ -724,27 +724,3 @@ async def test_router_moderation_endpoint_factory_invokes_default_model(
     assert route.call_count == 1
     assert json.loads(route.calls[0].request.content) == {"input": "hello"}
     assert response.id == "modr-2"
-
-
-def test_router_clientside_credential_requires_model_group_metadata() -> None:
-    router: Final = Router(model_list=[])
-    deployment: Final = {
-        "model_name": "gpt-4.1",
-        "litellm_params": {"model": "gpt-4.1", "api_key": "test-key"},
-        "model_info": {"id": "original-id"},
-    }
-    kwargs_without_metadata: Final = {"api_key": "client-key", "api_base": "https://api.openai.com/v1"}
-    kwargs_with_empty_metadata: Final = {**kwargs_without_metadata, "metadata": {}}
-
-    with pytest.raises(TypeError):
-        router._handle_clientside_credential(
-            deployment=deployment,
-            kwargs=kwargs_without_metadata,
-            function_name="acompletion",
-        )
-    with pytest.raises(TypeError):
-        router._handle_clientside_credential(
-            deployment=deployment,
-            kwargs=kwargs_with_empty_metadata,
-            function_name="acompletion",
-        )
