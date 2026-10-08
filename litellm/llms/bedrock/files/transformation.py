@@ -82,7 +82,7 @@ LIST_FILES_LOCATION_PARAM: Final = "_s3_list_files_location"
 def _retrieved_s3_file_size(raw_response: Response) -> int:
     status_code: Final = raw_response.status_code
     if status_code == 206:
-        content_range: Final = cast(str, raw_response.headers.get("Content-Range", ""))
+        content_range: Final = raw_response.headers.get("Content-Range", "")
         range_parts: Final = content_range.removeprefix("bytes 0-0/")
         if content_range.startswith("bytes 0-0/") and range_parts.isdigit():
             return int(range_parts)
@@ -93,7 +93,7 @@ def _retrieved_s3_file_size(raw_response: Response) -> int:
             response=raw_response,
         )
     if status_code == 200:
-        content_length: Final = cast(str, raw_response.headers.get("Content-Length", ""))
+        content_length: Final = raw_response.headers.get("Content-Length", "")
         if content_length.isdigit():
             return int(content_length)
         raise BedrockError(
@@ -1352,7 +1352,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         configured_bucket_name: Final = _listing_bucket_name(litellm_params, "batch_output")
         _, configured_prefix = split_configured_cloud_bucket_name(configured_bucket_name)
         relative_key: Final = object_key[len(configured_prefix) + 1 :] if configured_prefix else object_key
-        last_modified: Final = cast(str, raw_response.headers.get("Last-Modified", ""))
+        last_modified: Final = raw_response.headers.get("Last-Modified", "")
         created_at: Final = int(parsedate_to_datetime(last_modified).timestamp()) if last_modified else 0
         return OpenAIFileObject(
             id=file_id,

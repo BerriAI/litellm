@@ -840,6 +840,7 @@ class CheckBatchCost:
                             unified_file_id=_unified_file_id,
                             provider_file_id=_raw_file_id,
                             model_id=model_id,
+                            model_name=managed_file_model_name,
                             owner=_minimal_auth,
                             litellm_parent_otel_span=None,
                             size_bytes=len(content_bytes) if _file_attr == "output_file_id" else None,

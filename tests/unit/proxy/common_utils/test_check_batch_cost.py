@@ -1057,6 +1057,7 @@ class TestCheckBatchCost:
             unified_file_id=unified_error_file_id,
             provider_file_id=raw_error_file_id,
             model_id="model-123",
+            model_name="gpt-5-batch",
             owner=mock_hook.store_batch_output_file.await_args.kwargs["owner"],
             litellm_parent_otel_span=None,
             size_bytes=None,

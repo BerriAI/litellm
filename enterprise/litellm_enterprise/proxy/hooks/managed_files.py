@@ -16,7 +16,6 @@ from typing import (
     Optional,
     Protocol,
     TypedDict,
-    Unpack,
     Union,
     cast,
 )
@@ -25,7 +24,7 @@ from uuid import NAMESPACE_URL, uuid5
 import httpx
 from fastapi import HTTPException
 from pydantic import ValidationError
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, Unpack
 
 import litellm
 from litellm import Router, verbose_logger
@@ -33,7 +32,7 @@ from litellm._internal_context import with_service_target
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.constants import MAX_FILE_LIST_LIMIT
-from litellm.files.types import FileRetrieveCallOptions
+from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -104,7 +103,7 @@ class _ManagedFileRetrieve(Protocol):
         self,
         *,
         file_id: str,
-        _litellm_internal_model_credentials: Mapping[str, object],
+        _litellm_internal_model_credentials: Mapping[str, object] | None = None,
         **kwargs: Unpack[FileRetrieveCallOptions],
     ) -> OpenAIFileObject: ...
 
@@ -625,6 +624,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 unified_file_id=file_id,
                 provider_file_id=raw_file_id,
                 model_id=model_name or None,
+                model_name=model_name,
                 litellm_parent_otel_span=litellm_parent_otel_span,
                 owner=owner_identity,
             )
@@ -635,27 +635,38 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         unified_file_id: str,
         provider_file_id: str,
         model_id: str | None,
+        model_name: str | None,
         size_bytes: int | None,
     ) -> OpenAIFileObject:
-        if model_id is None:
+        if model_id is None and model_name is None:
             return _batch_output_file_object(unified_file_id, provider_file_id, size_bytes or 0)
 
         try:
             import litellm.proxy.proxy_server as proxy_server_module
 
             llm_router: Final = cast(Router | None, getattr(proxy_server_module, "llm_router", None))
-            if llm_router is None:
-                raise ValueError("Managed file retrieval requires a configured LLM router")
-            credentials: Final = cast(
-                Mapping[str, object], llm_router.get_deployment_credentials_with_provider(model_id) or {}
-            )
-            retrieve_file: Final = cast(_ManagedFileRetrieve, litellm.afile_retrieve)
-            provider_file_object: Final = await retrieve_file(
-                file_id=provider_file_id,
-                _litellm_internal_model_credentials=MappingProxyType(dict(credentials)),
-                **cast(FileRetrieveCallOptions, credentials),
-            )
-            return provider_file_object.model_copy(update={"id": unified_file_id})
+            if llm_router is not None and model_id is not None:
+                credentials: Final = cast(
+                    Mapping[str, object], llm_router.get_deployment_credentials_with_provider(model_id) or {}
+                )
+                retrieve_file: Final = cast(_ManagedFileRetrieve, litellm.afile_retrieve)
+                return (
+                    await retrieve_file(
+                        file_id=provider_file_id,
+                        _litellm_internal_model_credentials=MappingProxyType(dict(credentials)),
+                        **cast(FileRetrieveCallOptions, credentials),
+                    )
+                ).model_copy(update={"id": unified_file_id})
+            if model_name is None or "/" not in model_name:
+                return _batch_output_file_object(unified_file_id, provider_file_id, size_bytes or 0)
+            custom_llm_provider: Final = cast(FileRetrieveProvider, model_name.split("/", 1)[0])
+            provider_retrieve_file: Final = cast(_ManagedFileRetrieve, litellm.afile_retrieve)
+            return (
+                await provider_retrieve_file(
+                    custom_llm_provider=custom_llm_provider,
+                    file_id=provider_file_id,
+                )
+            ).model_copy(update={"id": unified_file_id})
         except Exception as e:
             verbose_logger.warning(f"Failed to retrieve batch file object for provider_file_id={provider_file_id}: {e}")
             return _batch_output_file_object(unified_file_id, provider_file_id, size_bytes or 0)
@@ -666,6 +677,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         unified_file_id: str,
         provider_file_id: str,
         model_id: str | None,
+        model_name: str | None = None,
         owner: UserAPIKeyAuth,
         litellm_parent_otel_span: Span | None,
         size_bytes: int | None = None,
@@ -678,6 +690,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             unified_file_id=unified_file_id,
             provider_file_id=provider_file_id,
             model_id=model_id,
+            model_name=model_name,
             size_bytes=size_bytes,
         )
 
@@ -1564,6 +1577,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                             unified_file_id=unified_file_id,
                             provider_file_id=provider_file_id,
                             model_id=model_id,
+                            model_name=resolved_model_name,
                             owner=user_api_key_dict,
                             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                         )
