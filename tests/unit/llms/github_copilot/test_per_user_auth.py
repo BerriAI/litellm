@@ -377,59 +377,53 @@ def _secret_fields(user_id: str, github_token: str):
 
 
 def test_two_per_user_calls_with_identical_bodies_both_reach_upstream(  # test-quality-ok: upstream dispatch count is the observable signal of the cache exclusion
-    per_user_credential,
+    per_user_credential, monkeypatch
 ):
     """Response-cache keys ignore caller identity: without the exclusion the second user's call
     would be served from the first's cache entry and neither run on their own seat."""
     from litellm.caching import Cache
 
-    litellm.cache = Cache()
-    try:
-        with (
-            github_http(_exchange_responder()),
-            patch(
-                "litellm.main.openai_chat_completions.completion",
-                return_value=_chat_completion_response(),
-            ) as mock_completion,
-        ):
-            base = {
-                "model": "github_copilot/gpt-4o",
-                "messages": [{"role": "user", "content": "hi"}],
-                "litellm_credential_name": "copilot-cred",
-            }
-            litellm.completion(**base, secret_fields=_secret_fields("user-a", "gho_a"))
-            litellm.completion(**base, secret_fields=_secret_fields("user-b", "gho_b"))
-            assert mock_completion.call_count == 2
-    finally:
-        litellm.cache = None
+    monkeypatch.setattr(litellm, "cache", Cache())
+    with (
+        github_http(_exchange_responder()),
+        patch(
+            "litellm.main.openai_chat_completions.completion",
+            return_value=_chat_completion_response(),
+        ) as mock_completion,
+    ):
+        base = {
+            "model": "github_copilot/gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_credential_name": "copilot-cred",
+        }
+        litellm.completion(**base, secret_fields=_secret_fields("user-a", "gho_a"))
+        litellm.completion(**base, secret_fields=_secret_fields("user-b", "gho_b"))
+        assert mock_completion.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_two_per_user_async_calls_with_identical_bodies_both_reach_upstream(  # test-quality-ok: upstream dispatch count is the observable signal of the cache exclusion
-    per_user_credential,
+    per_user_credential, monkeypatch
 ):
     """Async path: per-user calls must bypass async_get_cache read and write the same way."""
     from litellm.caching import Cache
 
-    litellm.cache = Cache()
-    try:
-        with (
-            github_http(_exchange_responder()),
-            patch(
-                "litellm.main.openai_chat_completions.acompletion",
-                new=AsyncMock(return_value=_chat_completion_response()),
-            ) as mock_completion,
-        ):
-            base = {
-                "model": "github_copilot/gpt-4o",
-                "messages": [{"role": "user", "content": "hi"}],
-                "litellm_credential_name": "copilot-cred",
-            }
-            await litellm.acompletion(**base, secret_fields=_secret_fields("user-a", "gho_a"))
-            await litellm.acompletion(**base, secret_fields=_secret_fields("user-b", "gho_b"))
-            assert mock_completion.call_count == 2
-    finally:
-        litellm.cache = None
+    monkeypatch.setattr(litellm, "cache", Cache())
+    with (
+        github_http(_exchange_responder()),
+        patch(
+            "litellm.main.openai_chat_completions.acompletion",
+            new=AsyncMock(return_value=_chat_completion_response()),
+        ) as mock_completion,
+    ):
+        base = {
+            "model": "github_copilot/gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_credential_name": "copilot-cred",
+        }
+        await litellm.acompletion(**base, secret_fields=_secret_fields("user-a", "gho_a"))
+        await litellm.acompletion(**base, secret_fields=_secret_fields("user-b", "gho_b"))
+        assert mock_completion.call_count == 2
 
 
 def test_shared_mode_second_identical_call_hits_response_cache(  # test-quality-ok: the cache hit is only observable as the upstream not being dispatched
@@ -453,21 +447,18 @@ def test_shared_mode_second_identical_call_hits_response_cache(  # test-quality-
     )
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
 
-    litellm.cache = Cache()
-    try:
-        with patch(
-            "litellm.main.openai_chat_completions.completion",
-            return_value=_chat_completion_response(),
-        ) as mock_completion:
-            call = {
-                "model": "github_copilot/gpt-4o",
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-            litellm.completion(**call)
-            litellm.completion(**call)
-            assert mock_completion.call_count == 1, "shared mode must still serve the second call from cache"
-    finally:
-        litellm.cache = None
+    monkeypatch.setattr(litellm, "cache", Cache())
+    with patch(
+        "litellm.main.openai_chat_completions.completion",
+        return_value=_chat_completion_response(),
+    ) as mock_completion:
+        call = {
+            "model": "github_copilot/gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        litellm.completion(**call)
+        litellm.completion(**call)
+        assert mock_completion.call_count == 1, "shared mode must still serve the second call from cache"
 
 
 
@@ -885,40 +876,37 @@ async def test_aexchange_failure_with_a_single_caller_emits_no_unretrieved_warni
 
 
 @pytest.mark.asyncio
-async def test_per_user_streaming_call_writes_nothing_to_the_response_cache(per_user_credential):
+async def test_per_user_streaming_call_writes_nothing_to_the_response_cache(per_user_credential, monkeypatch):
     """Per-user streamed completions must never be written to the shared response
     cache: the handler built before the session attach would otherwise use a stale
     request_kwargs copy without the session marker."""
     from litellm.caching import Cache
     from litellm.caching.caching_handler import LLMCachingHandler
 
-    litellm.cache = Cache()
-    try:
-        handler = LLMCachingHandler(
-            original_function=litellm.acompletion,
-            request_kwargs={"model": "github_copilot/gpt-4o"},
-            start_time=datetime.datetime.now(),
-        )
-        kwargs = {
-            "model": "github_copilot/gpt-4o",
-            "messages": [{"role": "user", "content": "hi"}],
-            GITHUB_COPILOT_USER_SESSION_KWARG_KEY: GithubCopilotUserSession(
-                token="copilot-token", api_base="https://api.githubcopilot.com"
-            ),
-        }
-        await handler.async_get_cache(
-            model="github_copilot/gpt-4o",
-            original_function=litellm.acompletion,
-            logging_obj=MagicMock(),
-            start_time=datetime.datetime.now(),
-            call_type="acompletion",
-            kwargs=kwargs,
-        )
-        assert handler.should_store_result_in_cache(
-            original_function=litellm.acompletion, kwargs=handler.request_kwargs
-        ) is False
-    finally:
-        litellm.cache = None
+    monkeypatch.setattr(litellm, "cache", Cache())
+    handler = LLMCachingHandler(
+        original_function=litellm.acompletion,
+        request_kwargs={"model": "github_copilot/gpt-4o"},
+        start_time=datetime.datetime.now(),
+    )
+    kwargs = {
+        "model": "github_copilot/gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        GITHUB_COPILOT_USER_SESSION_KWARG_KEY: GithubCopilotUserSession(
+            token="copilot-token", api_base="https://api.githubcopilot.com"
+        ),
+    }
+    await handler.async_get_cache(
+        model="github_copilot/gpt-4o",
+        original_function=litellm.acompletion,
+        logging_obj=MagicMock(),
+        start_time=datetime.datetime.now(),
+        call_type="acompletion",
+        kwargs=kwargs,
+    )
+    assert handler.should_store_result_in_cache(
+        original_function=litellm.acompletion, kwargs=handler.request_kwargs
+    ) is False
 
 
 @pytest.mark.asyncio
@@ -928,27 +916,24 @@ async def test_shared_streaming_call_still_writes_response_cache(tmp_path, monke
     from litellm.caching import Cache
     from litellm.caching.caching_handler import LLMCachingHandler
 
-    litellm.cache = Cache()
-    try:
-        handler = LLMCachingHandler(
-            original_function=litellm.acompletion,
-            request_kwargs={"model": "github_copilot/gpt-4o"},
-            start_time=datetime.datetime.now(),
-        )
-        kwargs = {
-            "model": "github_copilot/gpt-4o",
-            "messages": [{"role": "user", "content": "hi"}],
-        }
-        await handler.async_get_cache(
-            model="github_copilot/gpt-4o",
-            original_function=litellm.acompletion,
-            logging_obj=MagicMock(),
-            start_time=datetime.datetime.now(),
-            call_type="acompletion",
-            kwargs=kwargs,
-        )
-        assert handler.should_store_result_in_cache(
-            original_function=litellm.acompletion, kwargs=handler.request_kwargs
-        ) is True
-    finally:
-        litellm.cache = None
+    monkeypatch.setattr(litellm, "cache", Cache())
+    handler = LLMCachingHandler(
+        original_function=litellm.acompletion,
+        request_kwargs={"model": "github_copilot/gpt-4o"},
+        start_time=datetime.datetime.now(),
+    )
+    kwargs = {
+        "model": "github_copilot/gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    await handler.async_get_cache(
+        model="github_copilot/gpt-4o",
+        original_function=litellm.acompletion,
+        logging_obj=MagicMock(),
+        start_time=datetime.datetime.now(),
+        call_type="acompletion",
+        kwargs=kwargs,
+    )
+    assert handler.should_store_result_in_cache(
+        original_function=litellm.acompletion, kwargs=handler.request_kwargs
+    ) is True
