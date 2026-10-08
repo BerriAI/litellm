@@ -135,7 +135,7 @@ def _is_data_url(s: str) -> bool:
 
 
 class _EmbeddingVideoMetadata(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     fps: float | None = None
     start_offset: str | None = None
@@ -316,7 +316,10 @@ def _build_part_for_input(
     part: Final = _media_part(_file_block_source(block), block.file.format, files)
     if block.file.video_metadata is None:
         return part
-    part_with_metadata: Final[PartType] = {**part, "video_metadata": _gemini_video_metadata(block.file.video_metadata)}
+    video_metadata: Final = _gemini_video_metadata(block.file.video_metadata)
+    if not video_metadata:
+        return part
+    part_with_metadata: Final[PartType] = {**part, "video_metadata": video_metadata}
     return part_with_metadata
 
 

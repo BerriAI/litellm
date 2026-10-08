@@ -462,6 +462,10 @@ class TestFileContentBlocks:
         part = _build_part_for_input(_file_block(file_data=IMAGE_DATA_URI, filename="dot.png"))
         assert part == {"inline_data": {"mime_type": "image/png", "data": IMAGE_DATA_URI.split(",", 1)[1]}}
 
+    def test_block_with_empty_video_metadata_sends_no_video_metadata_key(self):
+        part = _build_part_for_input(_file_block(file_data=VIDEO_DATA_URI, video_metadata={}))
+        assert part == {"inline_data": {"mime_type": "video/mp4", "data": VIDEO_DATA_URI.split(",", 1)[1]}}
+
     def test_batch_path_nested_block_and_text_share_one_request(self):
         result = transform_openai_input_gemini_content(
             input=[[_file_block(file_data=VIDEO_DATA_URI, video_metadata=self.CLIP_METADATA), "a solid color clip"]],
@@ -514,6 +518,9 @@ class TestFileContentBlocks:
                 "video_metadata.startOffset",
             ),
             (_file_block(file_data=VIDEO_DATA_URI, video_metadata={"fps": "fast"}), "video_metadata.fps"),
+            (_file_block(file_data=VIDEO_DATA_URI, video_metadata={"fps": "1"}), "video_metadata.fps"),
+            (_file_block(file_data=VIDEO_DATA_URI, video_metadata={"fps": True}), "video_metadata.fps"),
+            (_file_block(file_data=VIDEO_DATA_URI, video_metadata={"start_offset": 5}), "video_metadata.start_offset"),
             (_file_block(file_data=VIDEO_DATA_URI, detail="high"), "file.detail"),
             (_file_block(file_id="gs://my-bucket/clip.mp4", file_data=VIDEO_DATA_URI), "not both"),
             (_file_block(), "needs file.file_id or file.file_data"),

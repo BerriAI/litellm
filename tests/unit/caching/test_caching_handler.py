@@ -2714,3 +2714,48 @@ async def test_async_get_cache_forgets_the_worker_copy_of_a_stored_response_with
 
     assert lookup.cached_result is None
     assert await handler.dual_cache.async_get_cache(key) is None
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_partial_hit_keeps_file_block_items_uncached():
+    setup_cache()
+    caching_handler = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=datetime.now())
+    model = "gemini/gemini-embedding-2-preview"
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.aembedding.value,
+        model=model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+    await caching_handler.async_set_cache(
+        result=EmbeddingResponse(model=model, data=[Embedding(embedding=[0.1, 0.2], index=0, object="embedding")]),
+        original_function=aembedding,
+        kwargs={"model": model, "input": ["a red bus"], "caching": True},
+    )
+    clip_block = {
+        "type": "file",
+        "file": {
+            "file_data": "data:video/mp4;base64,AAAA",
+            "format": "video/mp4",
+            "video_metadata": {"fps": 1, "start_offset": "0s", "end_offset": "1s"},
+        },
+        "detail": "left for the provider transformation to judge",
+    }
+
+    cached_response = await caching_handler.async_get_cache(
+        model=model,
+        original_function=aembedding,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.aembedding.value,
+        kwargs={"model": model, "input": [clip_block, "a red bus"], "caching": True},
+    )
+
+    assert cached_response.embedding_all_elements_cache_hit is False
+    assert cached_response.embedding_uncached_input == [clip_block]
+    assert cached_response.final_embedding_cached_response is not None
+    assert cached_response.final_embedding_cached_response.data[1].embedding == [0.1, 0.2]
+    assert cached_response.final_embedding_cached_response.data[0] is None
