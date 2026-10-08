@@ -33,6 +33,7 @@ from litellm._uuid import uuid
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+    from tenacity import RetryCallState
 
 import dotenv
 import httpx
@@ -6108,14 +6109,15 @@ def completion(
         )
 
 
-def _retry_after_wait(retry_state: Any, fallback_wait: Callable[[Any], float]) -> float:
+def _retry_after_wait(retry_state: "RetryCallState", fallback_wait: Callable[["RetryCallState"], float]) -> float:
     """Use a provider retry hint when available, otherwise keep the configured backoff."""
     if retry_state.outcome is not None:
-        exception = retry_state.outcome.exception()
-        response_headers = _get_response_headers(exception)
-        retry_after = litellm.utils._get_retry_after_from_exception_header(response_headers)
-        if retry_after > 0:
-            return min(retry_after, 60)
+        exception: Final = retry_state.outcome.exception()
+        if isinstance(exception, Exception):
+            response_headers: Final = _get_response_headers(exception)
+            retry_after: Final = litellm.utils._get_retry_after_from_exception_header(response_headers)
+            if retry_after is not None and retry_after > 0:
+                return min(retry_after, 60)
 
     return fallback_wait(retry_state)
 
@@ -6135,7 +6137,7 @@ def completion_with_retries(*args, **kwargs):
     kwargs["num_retries"] = 0
     retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
     original_function: Final = kwargs.pop("original_function", completion)
-    fallback_wait = (
+    fallback_wait: Final = (
         tenacity.wait_exponential(multiplier=1, max=10)
         if retry_strategy == "exponential_backoff_retry"
         else tenacity.wait_none()
@@ -6163,7 +6165,7 @@ async def acompletion_with_retries(*args, **kwargs):
     kwargs["num_retries"] = 0
     retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
     original_function: Final = kwargs.pop("original_function", completion)
-    fallback_wait = (
+    fallback_wait: Final = (
         tenacity.wait_exponential(multiplier=1, max=10)
         if retry_strategy == "exponential_backoff_retry"
         else tenacity.wait_none()

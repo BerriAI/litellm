@@ -7252,7 +7252,7 @@ def _get_retry_after_from_exception_header(
             retry_after_ms_header: Final[str | None] = response_headers.get("retry-after-ms")
             if retry_header is None and retry_after_ms_header is not None:
                 retry_after = float(retry_after_ms_header) / 1000
-            else:
+            elif retry_header is not None:
                 try:
                     retry_after = int(retry_header)
                 except Exception:
@@ -7262,6 +7262,8 @@ def _get_retry_after_from_exception_header(
                     else:
                         retry_date: Final = email.utils.mktime_tz(retry_date_tuple)
                         retry_after = int(retry_date - time.time())
+            else:
+                retry_after = -1
         else:
             retry_after = -1
 

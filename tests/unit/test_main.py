@@ -12,8 +12,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -2571,6 +2572,100 @@ messages = [{"content": user_message, "role": "user"}]
 
 def throw_retryable_error(*_, **__):
     raise RuntimeError("BOOM")
+
+
+def _retry_state(exception: BaseException) -> SimpleNamespace:
+    return SimpleNamespace(outcome=SimpleNamespace(exception=lambda: exception))
+
+
+def _rate_limit_error(headers: dict[str, str]) -> litellm.RateLimitError:
+    response = httpx.Response(
+        status_code=429,
+        headers=headers,
+        request=httpx.Request("POST", "https://example.invalid/v1"),
+    )
+    return litellm.RateLimitError(
+        message="rate limited",
+        model="test-model",
+        llm_provider="test-provider",
+        response=response,
+    )
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_wait"),
+    [
+        ({"retry-after": "20"}, 20),
+        ({"retry-after-ms": "2500"}, 2.5),
+        ({"retry-after": "120"}, 60),
+    ],
+)
+def test_retry_after_wait_uses_and_caps_provider_hint(headers: dict[str, str], expected_wait: float) -> None:
+    fallback_wait = Mock(return_value=1.0)
+
+    wait = litellm_main._retry_after_wait(_retry_state(_rate_limit_error(headers)), fallback_wait)
+
+    assert wait == expected_wait
+    fallback_wait.assert_not_called()
+
+
+def test_retry_after_wait_preserves_fallback_strategy_without_hint() -> None:
+    fallback_wait = Mock(return_value=3.0)
+
+    wait = litellm_main._retry_after_wait(_retry_state(RuntimeError("request failed")), fallback_wait)
+
+    assert wait == 3.0
+    fallback_wait.assert_called_once()
+
+
+def test_retry_after_wait_falls_back_for_invalid_provider_hint() -> None:
+    fallback_wait = Mock(return_value=3.0)
+
+    wait = litellm_main._retry_after_wait(
+        _retry_state(_rate_limit_error({"retry-after-ms": "invalid"})), fallback_wait
+    )
+
+    assert wait == 3.0
+    fallback_wait.assert_called_once()
+
+
+def test_completion_with_retries_retries_after_provider_error() -> None:
+    calls: Final[list[int]] = []
+
+    def original_function(*args: object, **kwargs: object) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            raise _rate_limit_error({"retry-after": "0"})
+        return "ok"
+
+    result = litellm_main.completion_with_retries(
+        original_function=original_function,
+        num_retries=2,
+        retry_strategy="constant_retry",
+    )
+
+    assert result == "ok"
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_retries_retries_after_provider_error() -> None:
+    calls: Final[list[int]] = []
+
+    async def original_function(*args: object, **kwargs: object) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            raise _rate_limit_error({"retry-after": "0"})
+        return "ok"
+
+    result = await litellm_main.acompletion_with_retries(
+        original_function=original_function,
+        num_retries=2,
+        retry_strategy="constant_retry",
+    )
+
+    assert result == "ok"
+    assert len(calls) == 2
 
 
 @pytest.mark.asyncio
