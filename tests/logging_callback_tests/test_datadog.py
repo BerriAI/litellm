@@ -1,39 +1,36 @@
-import io
-import os
-
-from litellm.integrations.datadog.datadog_handler import (
-    get_datadog_source,
-    get_datadog_service,
-    get_datadog_env,
-    get_datadog_pod_name,
-    get_datadog_hostname,
-    get_datadog_tags,
-)
-
-
 import asyncio
 import gzip
+import io
 import json
 import logging
+import os
 import time
+from datetime import datetime as datetime_class, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import litellm
+import litellm.integrations.datadog.datadog as datadog_module
 from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.integrations.datadog.datadog import *
-import litellm.integrations.datadog.datadog as datadog_module
-from datetime import datetime, timedelta
-from litellm.types.utils import (
-    StandardLoggingPayload,
-    StandardLoggingModelInformation,
-    StandardLoggingMetadata,
-    StandardLoggingHiddenParams,
-    LiteLLMCommonStrings,
+from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_env,
+    get_datadog_hostname,
+    get_datadog_pod_name,
+    get_datadog_service,
+    get_datadog_source,
+    get_datadog_tags,
 )
 from litellm.types.integrations.datadog import DatadogInitParams
+from litellm.types.utils import (
+    LiteLLMCommonStrings,
+    StandardLoggingHiddenParams,
+    StandardLoggingMetadata,
+    StandardLoggingModelInformation,
+    StandardLoggingPayload,
+)
 
 verbose_logger.setLevel(logging.DEBUG)
 
@@ -120,8 +117,8 @@ async def test_create_datadog_logging_payload():
     dd_payload = dd_logger.create_datadog_logging_payload(
         kwargs=kwargs,
         response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=datetime_class.now(),
+        end_time=datetime_class.now(),
     )
 
     # Verify payload structure
@@ -147,8 +144,8 @@ async def test_datadog_failure_logging():
     dd_payload = dd_logger.create_datadog_logging_payload(
         kwargs=kwargs,
         response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=datetime_class.now(),
+        end_time=datetime_class.now(),
     )
 
     assert (
@@ -460,23 +457,6 @@ async def test_datadog_log_redis_failures():
         pytest.fail(f"Test failed with exception: {str(e)}")
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="local-only test, to test if everything works fine.")
-async def test_datadog_logging():
-    try:
-        litellm.success_callback = ["datadog"]
-        litellm.set_verbose = True
-        response = await litellm.acompletion(
-            model="gpt-4.1-mini",
-            messages=[{"role": "user", "content": "what llm are u"}],
-            max_tokens=10,
-            temperature=0.2,
-        )
-        print(response)
-
-        await asyncio.sleep(5)
-    except Exception as e:
-        print(e)
 
 
 @pytest.mark.asyncio
@@ -501,8 +481,8 @@ async def test_datadog_payload_environment_variables():
             dd_payload = dd_logger.create_datadog_logging_payload(
                 kwargs={"standard_logging_object": standard_payload},
                 response_obj=None,
-                start_time=datetime.now(),
-                end_time=datetime.now(),
+                start_time=datetime_class.now(),
+                end_time=datetime_class.now(),
             )
 
             print("dd payload=", json.dumps(dd_payload, indent=2))
@@ -559,8 +539,8 @@ async def test_datadog_payload_content_truncation():
     dd_payload = dd_logger.create_datadog_logging_payload(
         kwargs={"standard_logging_object": standard_payload},
         response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=datetime_class.now(),
+        end_time=datetime_class.now(),
     )
 
     print("dd_payload", json.dumps(dd_payload, indent=2))
@@ -576,6 +556,32 @@ async def test_datadog_payload_content_truncation():
     assert (
         len(str(message_dict["response"])) < 10_100
     ), "response not truncated correctly"
+
+
+@pytest.mark.asyncio
+async def test_datadog_payload_truncation_leaves_shared_payload_intact(monkeypatch):
+    """
+    Every callback of a request shares one standard logging object, so the datadog truncation
+    must not turn its messages into a string for the callbacks that run after it (the prompt
+    caching router check reads `messages` as a list to pin the deployment holding the cache)
+    """
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    dd_logger = DataDogLogger()
+    standard_payload = create_standard_logging_payload()
+    original_messages = [{"role": "user", "content": "x" * 80_000}]
+    standard_payload["messages"] = original_messages
+    kwargs = {"standard_logging_object": standard_payload}
+
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime_class.now(),
+        end_time=datetime_class.now(),
+    )
+
+    assert kwargs["standard_logging_object"]["messages"] is original_messages
+    assert len(json.loads(dd_payload["message"])["messages"]) < 10_100
 
 
 def test_datadog_static_methods():
@@ -634,7 +640,7 @@ async def test_datadog_non_serializable_messages():
 
     # Create payload with non-serializable content
     standard_payload = create_standard_logging_payload()
-    non_serializable_obj = datetime.now()  # datetime objects aren't JSON serializable
+    non_serializable_obj = datetime_class.now()  # datetime objects aren't JSON serializable
     standard_payload["messages"] = [{"role": "user", "content": non_serializable_obj}]
     standard_payload["response"] = {
         "choices": [{"message": {"content": non_serializable_obj}}]
@@ -646,8 +652,8 @@ async def test_datadog_non_serializable_messages():
     dd_payload = dd_logger.create_datadog_logging_payload(
         kwargs=kwargs,
         response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=datetime_class.now(),
+        end_time=datetime_class.now(),
     )
 
     # Verify payload can be serialized

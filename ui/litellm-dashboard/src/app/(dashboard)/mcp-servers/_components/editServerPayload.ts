@@ -1,3 +1,4 @@
+import type { McpDcrCredentials } from "@/hooks/useMcpOAuthFlow";
 import {
   ADMIN_CONFIG_CREDENTIAL_KEYS,
   AUTH_TYPE,
@@ -73,6 +74,7 @@ export interface EditServerPayload {
 }
 
 export interface EditServerUiState {
+  readonly dcrClient?: McpDcrCredentials | null;
   readonly mcpServer: MCPServer;
   readonly logoUrl: string | undefined;
   readonly costConfig: MCPServerCostInfo;
@@ -217,6 +219,8 @@ const buildCredentials = (credentialValues: unknown): Readonly<Record<string, un
 };
 
 interface CredentialsEntryInput {
+  readonly dcrClient?: McpDcrCredentials | null;
+  readonly oauthFlow?: string;
   readonly authType: string | undefined;
   readonly credentials: Readonly<Record<string, unknown>> | undefined;
   readonly includeCredentials: boolean;
@@ -228,11 +232,16 @@ interface CredentialsEntryInput {
 // updates), so removal must be an explicit-null write: encrypt skips nulls and the merge overrides
 // the stored keys, returning the server to dynamic client registration.
 const resolveCredentialsEntry = ({
+  dcrClient,
+  oauthFlow,
   authType,
   credentials,
   includeCredentials,
   removeStoredApp,
 }: CredentialsEntryInput): { readonly credentials?: Readonly<Record<string, unknown>> } => {
+  if (dcrClient && authType === AUTH_TYPE.OAUTH2 && oauthFlow !== OAUTH_FLOW.M2M) {
+    return { credentials: { ...credentials, ...dcrClient } };
+  }
   if (removeStoredApp && isClientForwardedTokenMode(authType)) {
     return { credentials: { client_id: null, client_secret: null } };
   }
@@ -334,6 +343,8 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
   const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
   const credentialsEntryInput: CredentialsEntryInput = {
+    dcrClient: ui.dcrClient,
+    oauthFlow: restValues.oauth_flow_type,
     authType: restValues.auth_type,
     credentials: submitCredentials,
     includeCredentials: Boolean(includeCredentials),

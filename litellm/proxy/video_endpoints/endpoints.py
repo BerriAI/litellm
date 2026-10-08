@@ -57,7 +57,7 @@ async def video_generation(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "model": "sora-2",
@@ -89,7 +89,7 @@ async def video_generation(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        generated: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -114,6 +114,8 @@ async def video_generation(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return generated
 
 
 @router.get(
@@ -142,7 +144,7 @@ async def video_list(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -174,7 +176,7 @@ async def video_list(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        listed: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -199,6 +201,8 @@ async def video_list(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return listed
 
 
 @router.get(
@@ -228,7 +232,7 @@ async def video_status(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos/video_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -272,7 +276,7 @@ async def video_status(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        status: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -297,6 +301,8 @@ async def video_status(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return status
 
 
 @router.get(
@@ -326,7 +332,7 @@ async def video_content(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --output video.mp4
     ```
     """
@@ -431,7 +437,7 @@ async def video_remix(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/video_123/remix" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "prompt": "A new version with different colors"
@@ -478,7 +484,7 @@ async def video_remix(
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        remixed: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -503,6 +509,8 @@ async def video_remix(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return remixed
 
 
 @router.post(
@@ -533,7 +541,7 @@ async def video_create_character(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/characters" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F "video=@character_video.mp4" \
         -F "name=my_character"
     ```
@@ -571,7 +579,7 @@ async def video_create_character(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -635,7 +643,7 @@ async def video_get_character(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos/characters/char_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -678,7 +686,7 @@ async def video_get_character(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -740,7 +748,7 @@ async def video_edit(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/edits" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
     ```
@@ -789,7 +797,7 @@ async def video_edit(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        edited: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -814,6 +822,8 @@ async def video_edit(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return edited
 
 
 @router.post(
@@ -842,7 +852,7 @@ async def video_extension(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/extensions" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
     ```
@@ -884,7 +894,7 @@ async def video_extension(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        extended: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -909,3 +919,5 @@ async def video_extension(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    else:
+        return extended

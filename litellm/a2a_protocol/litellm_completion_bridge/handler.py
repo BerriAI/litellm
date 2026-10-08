@@ -15,6 +15,7 @@ from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.a2a_protocol.card_resolver import AGENT_CARD_PATH_PARAM
 from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
     A2ACompletionBridgeTransformation,
     A2AStreamingContext,
@@ -36,6 +37,7 @@ _AGENT_ONLY_PARAMS: Final = frozenset(
         "agent_name",
         "agent_id",
         "agent_card_params",
+        AGENT_CARD_PATH_PARAM,
         A2A_USER_API_KEY_HASH_PARAM,
     }
 )

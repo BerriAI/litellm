@@ -1,29 +1,29 @@
-"""Concrete `httpx.Auth` objects the resolver returns for the self-contained modes.
+"""Concrete `httpx2.Auth` objects the resolver returns for the self-contained modes.
 
-These are the egress credential as the SDK consumes it: an `httpx.Auth` attached to the
+These are the egress credential as the SDK consumes it: an `httpx2.Auth` attached to the
 upstream `AsyncClient`. The OAuth-flow modes (`authorization_code`, `client_credentials`,
 `token_exchange`) return SDK-provided auth objects instead and land later.
 
-`auth_flow` mutating the outbound request is the `httpx.Auth` contract, not a house-style
-violation: the request is httpx's object, and these carry no state of their own.
+`auth_flow` mutating the outbound request is the `httpx2.Auth` contract, not a house-style
+violation: the request is httpx2's object, and these carry no state of their own.
 """
 
 from __future__ import annotations
 
 from collections.abc import Generator
 
-import httpx
+import httpx2
 from pydantic import SecretStr
 
 
-class NoOpAuth(httpx.Auth):
+class NoOpAuth(httpx2.Auth):
     """Attaches nothing — the `none` mode (and the seam-level default)."""
 
-    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+    def auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:
         yield request
 
 
-class StaticHeaderAuth(httpx.Auth):
+class StaticHeaderAuth(httpx2.Auth):
     """Sets one fixed header on every request — the `api_key` family and `passthrough`.
 
     The header value is a live credential (a bearer token, an API key, a forwarded user
@@ -36,6 +36,6 @@ class StaticHeaderAuth(httpx.Auth):
         self.header_name = header_name
         self._header_value = SecretStr(header_value)
 
-    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+    def auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:
         request.headers[self.header_name] = self._header_value.get_secret_value()
         yield request

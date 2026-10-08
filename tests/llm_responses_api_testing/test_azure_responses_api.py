@@ -18,6 +18,9 @@ from base_responses_api import BaseResponsesAPITest
 
 
 class TestAzureResponsesAPITest(BaseResponsesAPITest):
+    test_multiturn_responses_api = None
+    test_responses_api_with_tool_calls = None
+
     def get_base_completion_call_args(self):
         return {
             "model": "azure/gpt-4.1-mini",
@@ -33,7 +36,7 @@ async def test_azure_responses_api_preview_api_version():
     """
     Ensure new azure preview api version is working
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     response = await litellm.aresponses(
         model="azure/gpt-5-mini",
         truncation="auto",

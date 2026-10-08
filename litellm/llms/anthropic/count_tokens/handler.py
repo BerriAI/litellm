@@ -4,9 +4,11 @@ Anthropic CountTokens API handler.
 Uses httpx for HTTP requests instead of the Anthropic SDK.
 """
 
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,6 +17,8 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+_COUNT_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
 
 
 class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
@@ -27,21 +31,22 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
     async def handle_count_tokens_request(
         self,
         model: str,
-        messages: list[dict[str, Any]],
-        api_key: str,
+        messages: list[dict[str, JsonValue]],
+        auth_header: Mapping[str, str],
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
-    ) -> dict[str, Any]:
+        tools: list[dict[str, JsonValue]] | None = None,
+        system: JsonValue = None,
+        optional_params: Mapping[str, JsonValue] | None = None,
+    ) -> dict[str, JsonValue]:
         """
         Handle a CountTokens request using httpx.
 
         Args:
             model: The model identifier (e.g., "claude-3-5-sonnet-20241022")
             messages: The messages to count tokens for
-            api_key: The Anthropic API key
-            api_base: Optional custom API base URL
+            auth_header: The resolved Anthropic auth header (``AnthropicModelInfo.get_auth_header``)
+            api_base: Optional deployment api_base the count-tokens path is appended to
             timeout: Optional timeout for the request (defaults to litellm.request_timeout)
 
         Returns:
@@ -52,7 +57,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
         """
         try:
             # Validate the request
-            self.validate_request(model, messages)
+            self.validate_request(model, messages, system=system, tools=tools)
 
             verbose_logger.debug("Processing Anthropic CountTokens request for model: %s", model)
 
@@ -62,17 +67,18 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 messages=messages,
                 tools=tools,
                 system=system,
+                optional_params=optional_params,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)
 
             # Get endpoint URL
-            endpoint_url: Final = api_base or self.get_anthropic_count_tokens_endpoint()
+            endpoint_url: Final = self.get_anthropic_count_tokens_endpoint(api_base)
 
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
             # Get required headers
-            headers: Final = self.get_required_headers(api_key)
+            headers: Final = self.get_count_tokens_headers(auth_header)
 
             # Use LiteLLM's async httpx client
             async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
@@ -97,7 +103,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                     message=error_text,
                 )
 
-            anthropic_response: Final = response.json()
+            anthropic_response: Final = _COUNT_RESPONSE.validate_json(response.content)
 
             verbose_logger.debug("Anthropic response: %s", anthropic_response)
 
