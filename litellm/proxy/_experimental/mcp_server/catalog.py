@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import time
 from collections import UserDict
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, MutableMapping, Sequence
 from contextlib import ExitStack, asynccontextmanager
@@ -14,11 +15,14 @@ from dataclasses import dataclass, replace
 from functools import partial, wraps
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, ParamSpec, TypeAlias, TypeVar, cast
 
+from mcp.types import CacheableResult
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy._experimental.mcp_server.result_conversion import age_freshness, aggregate_freshness
 
 if TYPE_CHECKING:
     from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
@@ -659,6 +663,7 @@ async def paginate_catalog(
             result,
         )
 
+    started: Final = time.monotonic()
     tasks: Final = tuple(asyncio.create_task(advance(position)) for position in state.positions)
     try:
         results: Final = await asyncio.gather(*tasks)
@@ -668,7 +673,12 @@ async def paginate_catalog(
         await asyncio.gather(*tasks, return_exceptions=True)
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
 
-    pages: Final = tuple(result for _, result in results if result is not None)
+    elapsed: Final = time.monotonic() - started
+    pages: Final = tuple(
+        age_freshness(result, elapsed) if isinstance(result, CacheableResult) else result
+        for _, result in results
+        if result is not None
+    )
     page_outcomes: Final = (
         _OUTCOME_VALUES.validate_python((result.meta or {}).get(SERVER_OUTCOMES_META_KEY, {})) for result in pages
     )
@@ -720,6 +730,10 @@ async def list_tools_page(
     )
     return ListToolsResult(
         tools=list(chain.from_iterable(page.tools for page in pages)),
+        ttl_ms=0
+        if any(isinstance(value, dict) and value.get("tag") != "ok" for value in outcomes.values())
+        else aggregate_freshness(pages).ttl_ms,
+        cache_scope="private",
         next_cursor=next_cursor,
         _meta={SERVER_OUTCOMES_META_KEY: dict(outcomes)} if outcomes else None,
     )
@@ -830,7 +844,7 @@ async def get_filtered_server_tools(
         listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
         if params is None:
             page = ListToolsResult(
-                tools=await global_mcp_server_manager._get_tools_from_server(
+                tools=await global_mcp_server_manager.get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
@@ -952,24 +966,48 @@ async def aggregate_gateway_tools(
     prefetched: Mapping[str, OAuthCredentialPayload],
     *,
     record_listing: bool = False,
+    enforce_rate_limits: bool = True,
 ) -> AggregateToolListing:
     import time
 
-    from mcp.types import PaginatedRequestParams
+    from mcp.types import ListToolsResult, PaginatedRequestParams
     from pydantic import TypeAdapter
 
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
         SERVER_OUTCOMES_META_KEY,
         AggregateToolListing,
         ServerOutcome,
+        classify_list_exception,
     )
-    from litellm.proxy._experimental.mcp_server.operations import _aggregate_server_key, global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _aggregate_server_key,
+        _mcp_server_rate_limit_rejection,
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
     async with global_mcp_server_manager.catalog.operation() as snapshot:
         servers: Final = {server.server_id: server for server in allowed}
         listing_updates: Final = ExitStack()
+        rejections: Final[list[ProxyRateLimitError]] = []  # mutable-ok: concurrent fetches share first-page errors
 
         async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
+            if enforce_rate_limits:
+                error: Final = await _mcp_server_rate_limit_rejection(servers[server_id], context.user_api_key_auth)
+                if error is not None:
+                    if cursor is not None:
+                        raise error
+                    rejections.append(error)
+                    return ListToolsResult(
+                        tools=[],
+                        _meta={
+                            SERVER_OUTCOMES_META_KEY: {
+                                _aggregate_server_key(servers[server_id]): classify_list_exception(error).model_dump(
+                                    mode="json"
+                                )
+                            }
+                        },
+                    )
             result, outcome = await get_filtered_server_tools(
                 servers[server_id],
                 context=context,
@@ -1003,6 +1041,8 @@ async def aggregate_gateway_tools(
             fetch=fetch,
             now=int(time.time()),
         )
+        if params.cursor is None and servers and len(rejections) == len(servers):
+            raise rejections[0]
         listing_updates.close()
         return AggregateToolListing(
             tools=result.tools,
@@ -1010,6 +1050,7 @@ async def aggregate_gateway_tools(
                 (result.meta or {}).get(SERVER_OUTCOMES_META_KEY, {})
             ),
             next_cursor=result.next_cursor,
+            ttl_ms=result.ttl_ms,
         )
 
 
@@ -1039,6 +1080,8 @@ async def list_gateway_tools(
     return ListToolsResult(
         tools=listing.tools,
         next_cursor=listing.next_cursor,
+        ttl_ms=listing.ttl_ms,
+        cache_scope="private",
         _meta={
             SERVER_OUTCOMES_META_KEY: {key: outcome_wire_value(outcome) for key, outcome in listing.outcomes.items()}
         }
@@ -1063,6 +1106,7 @@ async def list_gateway_catalog(
         global_mcp_server_manager,
         raise_denied_scoped_mcp_access,
     )
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
     context = replace(context, _caller=await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth))
     params: Final = request.params or PaginatedRequestParams()
@@ -1080,6 +1124,7 @@ async def list_gateway_catalog(
                 requested_names=list(scope), user_api_key_auth=caller, client_ip=client_ip
             )
         servers: Final = {server.server_id: server for server in allowed}
+        rejections: Final[list[ProxyRateLimitError]] = []  # mutable-ok: concurrent fetches share first-page errors
 
         async def fetch(server_id: str, cursor: str | None) -> CatalogListResult:
             server: Final = servers[server_id]
@@ -1090,7 +1135,26 @@ async def list_gateway_catalog(
                 SERVER_OUTCOMES_META_KEY,
                 classify_list_exception,
             )
-            from litellm.proxy._experimental.mcp_server.operations import _aggregate_server_key
+            from litellm.proxy._experimental.mcp_server.operations import (
+                _aggregate_server_key,
+                _mcp_server_rate_limit_rejection,
+            )
+
+            error: Final = await _mcp_server_rate_limit_rejection(server, caller)
+            if error is not None:
+                if cursor is not None:
+                    raise error
+                rejections.append(error)
+                return combine_optional_catalog(
+                    request,
+                    (),
+                    None,
+                    {
+                        SERVER_OUTCOMES_META_KEY: {
+                            _aggregate_server_key(server): classify_list_exception(error).model_dump(mode="json")
+                        }
+                    },
+                )
 
             try:
                 page: Final = await fetch_optional_catalog_page(context, request, server, allowed, cursor)
@@ -1126,6 +1190,8 @@ async def list_gateway_catalog(
             fetch=fetch,
             now=int(time.time()),
         )
+        if params.cursor is None and servers and len(rejections) == len(servers):
+            raise rejections[0]
         from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
             SERVER_OUTCOMES_META_KEY,
             ServerOutcome,
@@ -1191,10 +1257,19 @@ def combine_optional_catalog(
         ListResourceTemplatesResult,
     )
 
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+
+    outcomes: Final = (meta or {}).get(SERVER_OUTCOMES_META_KEY)
+    incomplete: Final = isinstance(outcomes, dict) and any(
+        isinstance(value, dict) and value.get("tag") != "ok" for value in outcomes.values()
+    )
+    ttl_ms: Final = 0 if incomplete else aggregate_freshness(pages).ttl_ms
     if isinstance(request, ListPromptsRequest):
         return ListPromptsResult(
             prompts=list(chain.from_iterable(page.prompts for page in pages if isinstance(page, ListPromptsResult))),
             next_cursor=next_cursor,
+            ttl_ms=ttl_ms,
+            cache_scope="private",
             _meta=dict(meta) if meta is not None else None,
         )
     if isinstance(request, ListResourcesRequest):
@@ -1203,6 +1278,8 @@ def combine_optional_catalog(
                 chain.from_iterable(page.resources for page in pages if isinstance(page, ListResourcesResult))
             ),
             next_cursor=next_cursor,
+            ttl_ms=ttl_ms,
+            cache_scope="private",
             _meta=dict(meta) if meta is not None else None,
         )
     return ListResourceTemplatesResult(
@@ -1212,5 +1289,90 @@ def combine_optional_catalog(
             )
         ),
         next_cursor=next_cursor,
+        ttl_ms=ttl_ms,
+        cache_scope="private",
         _meta=dict(meta) if meta is not None else None,
     )
+
+
+_DiscoveryPage = TypeVar("_DiscoveryPage", bound=CacheableResult)
+_DiscoveryKey: TypeAlias = tuple[str, str | None]
+_DISCOVERY_CACHE_LIMIT: Final = 1024
+_DISCOVERY_ENTRY: Final = TypeAdapter(tuple[float, bytes])
+
+
+class _DiscoveryCache(Generic[_DiscoveryPage]):
+    def __init__(self, ttl: float, clock: Callable[[], float], adapter: TypeAdapter[_DiscoveryPage]) -> None:
+        self._ttl = ttl
+        self._clock = clock
+        self._adapter = adapter
+        self._entries = InMemoryCache(max_size_in_memory=_DISCOVERY_CACHE_LIMIT, max_size_per_item=64, clock=clock)
+        self._pending: dict[_DiscoveryKey, asyncio.Task[_DiscoveryPage]] = {}
+        self._waiters: dict[asyncio.Task[_DiscoveryPage], int] = {}  # mutable-ok: constant-time waiter accounting
+
+    def invalidate(self, server_id: str) -> None:
+        prefix: Final = f"[{json.dumps(server_id)},"
+        keys: Final = cast(  # cast-ok: private cache contains only JSON string keys
+            "tuple[str, ...]", tuple(self._entries.cache_dict)
+        )
+        for entry_key in keys:
+            if entry_key.startswith(prefix):
+                self._entries.delete_cache(entry_key)
+        for key in tuple(self._pending):
+            if key[0] == server_id:
+                self._pending.pop(key)
+
+    @staticmethod
+    def _observe_completion(task: asyncio.Task[_DiscoveryPage]) -> None:
+        if not task.cancelled():
+            task.exception()
+
+    async def get(self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]]) -> _DiscoveryPage:
+        if self._ttl <= 0:
+            return await fetch()
+        entry: Final[object] = self._entries.get_cache(json.dumps(key))
+        if entry is not None:
+            expires_at, payload = _DISCOVERY_ENTRY.validate_python(entry)
+            remaining: Final = max(0, int((expires_at - self._clock()) * 1000))
+            if remaining > 0:
+                return self._adapter.validate_json(payload).model_copy(update={"ttl_ms": remaining})
+            self._entries.delete_cache(json.dumps(key))
+        pending: Final = self._pending.get(key)
+        if pending is not None:
+            return await self._await_fetch(key, pending)
+        if len(self._pending) >= _DISCOVERY_CACHE_LIMIT:
+            return await fetch()
+        task: Final = asyncio.create_task(self._fetch(key, fetch))
+        self._pending[key] = task
+        task.add_done_callback(self._observe_completion)
+        return await self._await_fetch(key, task)
+
+    async def _await_fetch(self, key: _DiscoveryKey, task: asyncio.Task[_DiscoveryPage]) -> _DiscoveryPage:
+        self._waiters[task] = self._waiters.get(task, 0) + 1
+        try:
+            return (await asyncio.shield(task)).model_copy(deep=True)
+        finally:
+            remaining: Final = self._waiters[task] - 1
+            if remaining:
+                self._waiters[task] = remaining
+            else:
+                self._waiters.pop(task)
+                if self._pending.get(key) is task:
+                    self._pending.pop(key)
+                if not task.done():
+                    task.cancel()
+
+    async def _fetch(self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]]) -> _DiscoveryPage:
+        try:
+            items: Final = await fetch()
+            ttl: Final = min(self._ttl, items.ttl_ms / 1000)
+            if ttl > 0 and self._pending.get(key) is asyncio.current_task():
+                self._entries.set_cache(
+                    json.dumps(key),
+                    _DISCOVERY_ENTRY.dump_json((self._clock() + ttl, self._adapter.dump_json(items))),
+                    ttl=ttl,
+                )
+            return items
+        finally:
+            if self._pending.get(key) is asyncio.current_task():
+                self._pending.pop(key)

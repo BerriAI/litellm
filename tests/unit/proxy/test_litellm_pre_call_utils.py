@@ -22,9 +22,9 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _apply_credential_overrides_from_model_config,
     _extract_credential_from_entry,
-    _get_dynamic_logging_metadata,
+    get_dynamic_logging_metadata,
     _get_enforced_params,
-    _get_metadata_variable_name,
+    get_metadata_variable_name,
     _match_and_track_policies,
     _promoted_trace_control_fields,
     _resolve_credential_from_model_config,
@@ -84,45 +84,45 @@ class TestGetMetadataVariableName:
 
     def test_returns_litellm_metadata_for_thread_routes(self):
         request = self._make_request("/v1/threads/thread_123/messages")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_assistant_routes(self):
         request = self._make_request("/v1/assistants/asst_123")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_batches_route(self):
         request = self._make_request("/v1/batches")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_messages_route(self):
         request = self._make_request("/v1/messages")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_files_route(self):
         request = self._make_request("/v1/files")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_metadata_for_chat_completions(self):
         request = self._make_request("/chat/completions")
-        assert _get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request) == "metadata"
 
     def test_returns_metadata_for_completions(self):
         request = self._make_request("/v1/completions")
-        assert _get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request) == "metadata"
 
     def test_returns_metadata_for_embeddings(self):
         request = self._make_request("/v1/embeddings")
-        assert _get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request) == "metadata"
 
     def test_returns_litellm_metadata_for_bedrock_invoke(self):
         # GH#30629: bedrock passthrough must use litellm_metadata
         # to prevent key-level tags from leaking into provider body
         request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_bedrock_converse(self):
         request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/converse")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
 
 def test_get_enforced_params_for_service_account_settings():
@@ -902,7 +902,7 @@ async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_l
     monkeypatch: pytest.MonkeyPatch, pre_call_ran: bool
 ) -> None:
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import OPTIONAL_PresidioPIIMasking
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
 
@@ -921,7 +921,7 @@ async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_l
     logging_obj.update_messages(messages)
     snapshot: Final = logging_obj.shadow_eval_request_snapshot
     assert (snapshot is not None) is pre_call_ran
-    guardrail: Final = _OPTIONAL_PresidioPIIMasking(
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
         mock_testing=True, logging_only=True, mock_redacted_text={"text": "email [EMAIL]", "items": []}
     )
 
@@ -2419,7 +2419,7 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     mock_proxy_config = MagicMock()
 
     # Call the function
-    result = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=mock_proxy_config)
+    result = get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=mock_proxy_config)
 
     # Verify the result
     assert result is not None
@@ -2466,7 +2466,7 @@ def test_get_dynamic_logging_metadata_ignores_env_reference_from_key_metadata(
         team_metadata={},
     )
 
-    result = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
+    result = get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
 
     assert result is None
 
@@ -3674,6 +3674,106 @@ def test_add_litellm_metadata_from_request_headers_explicit_trace_id_beats_trace
     assert data["litellm_session_id"] == "explicit-trace-id-value"
 
 
+def test_add_litellm_metadata_from_request_headers_body_trace_id_beats_traceparent():
+    headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    data = {"metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_body_session_id_beats_baggage():
+    headers = {"baggage": "session.id=baggage-session-42"}
+    data = {"metadata": {"session_id": "caller-chosen-session-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["session_id"] == "caller-chosen-session-id"
+    assert "litellm_session_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_body_steering_is_per_field():
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {"metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert data["litellm_session_id"] == "baggage-session-42"
+
+
+def test_add_litellm_metadata_from_request_headers_litellm_metadata_steering_honoured():
+    headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    data = {"litellm_metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert data["litellm_metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert "litellm_trace_id" not in data
+
+
+@pytest.mark.parametrize("empty_session_id", ["", None])
+def test_add_litellm_metadata_from_request_headers_empty_body_session_id_falls_back_to_baggage(
+    empty_session_id: str | None,
+):
+    headers = {"baggage": "session.id=baggage-session-42"}
+    data = {"metadata": {"session_id": empty_session_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == "baggage-session-42"
+    assert data["metadata"]["session_id"] == "baggage-session-42"
+
+
+@pytest.mark.parametrize("field", ["trace_id", "session_id"])
+def test_add_litellm_metadata_from_request_headers_promoted_metadata_beats_headers(field: str):
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {"metadata": {field: "caller-chosen"}, "litellm_metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert field not in data["litellm_metadata"]
+    assert f"litellm_{field}" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_equal_ids_still_stamp_root_fields():
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=matching-session-42",
+    }
+    data = {
+        "metadata": {"trace_id": "4bf92f3577b34da6a3ce929d0e0e4736", "session_id": "matching-session-42"},
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["litellm_session_id"] == "matching-session-42"
+    assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["metadata"]["session_id"] == "matching-session-42"
+
+
+@pytest.mark.parametrize("non_string_session_id", [4815162342, True, {"session": "nested"}])
+def test_add_litellm_metadata_from_request_headers_non_string_body_session_id_falls_back_to_baggage(
+    non_string_session_id: object,
+):
+    headers = {"baggage": "session.id=header-session-42"}
+    data = {"metadata": {"session_id": non_string_session_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == "header-session-42"
+    assert data["metadata"]["session_id"] == "header-session-42"
+
+
 def _otel_span_with_trace_id(trace_id: int) -> NonRecordingSpan:
     return NonRecordingSpan(SpanContext(trace_id=trace_id, span_id=0x00F067AA0BA902B7, is_remote=False))
 
@@ -4008,7 +4108,7 @@ async def test_team_guardrails_append_to_key_guardrails():
         team_metadata={"guardrails": ["team-guardrail-1", "key-guardrail-1"]},
     )
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data = await add_litellm_data_to_request(
             data=data,
             request=request_mock,
@@ -4057,7 +4157,7 @@ async def test_request_guardrails_do_not_override_key_guardrails():
         "guardrails": [],
     }
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data_empty = await add_litellm_data_to_request(
             data=data_with_empty,
             request=request_mock,
@@ -4103,7 +4203,7 @@ async def test_project_guardrails_merge_with_key_and_team():
         project_metadata={"guardrails": ["project-guardrail-1", "team-guardrail-1"]},
     )
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data = await add_litellm_data_to_request(
             data=data,
             request=request_mock,
@@ -4152,7 +4252,7 @@ async def test_project_guardrails_only():
         project_metadata={"guardrails": ["project-guardrail-1", "project-guardrail-2"]},
     )
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data = await add_litellm_data_to_request(
             data=data,
             request=request_mock,
@@ -5459,7 +5559,7 @@ async def test_team_guardrail_merges_with_global_policy():
     attachment_registry._initialized = True
 
     try:
-        with patch("litellm.proxy.utils._premium_user_check"):
+        with patch("litellm.proxy.utils.premium_user_check"):
             await move_guardrails_to_metadata(
                 data=data,
                 _metadata_variable_name="metadata",
@@ -7127,7 +7227,7 @@ class TestPromotedTraceControlFields:
         )
 
     def test_returns_litellm_metadata_for_responses_route(self):
-        assert _get_metadata_variable_name(self._make_request("/v1/responses")) == "litellm_metadata"
+        assert get_metadata_variable_name(self._make_request("/v1/responses")) == "litellm_metadata"
 
     def test_promotes_trace_prefixed_and_allow_listed_fields(self):
         requester_metadata = {
@@ -8224,6 +8324,85 @@ async def test_missing_session_id_omit_keeps_client_supplied_session_id():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("path", "client_body"),
+    [
+        ("/v1/chat/completions", {"model": "gpt-4o", "messages": [], "metadata": {"session_id": ""}}),
+        ("/v1/responses", {"model": "gpt-4o", "input": "hi"}),
+    ],
+)
+async def test_missing_session_id_reject_accepts_baggage_session_id(path: str, client_body: dict[str, object]):
+    request = _request_for(path)
+    request.headers = {"baggage": "session.id=baggage-session-42"}
+
+    updated = await add_litellm_data_to_request(
+        data=client_body,
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "reject"},
+    )
+
+    assert updated["litellm_session_id"] == "baggage-session-42"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize("policy", [None, "reject", "generate"])
+async def test_promoted_caller_trace_ids_beat_traceparent_and_baggage(path: str, policy: str | None):
+    request = _request_for(path)
+    request.headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "metadata": {"trace_id": "caller-trace", "session_id": "caller-session"}},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": policy} if policy else {},
+    )
+
+    assert updated["litellm_metadata"]["trace_id"] == "caller-trace"
+    assert updated["litellm_metadata"]["session_id"] == "caller-session"
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_reject_ignores_requester_session_id_shadowed_by_empty_litellm_metadata():
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data={
+                "model": "gpt-4o",
+                "input": "hi",
+                "metadata": {"session_id": "caller-session"},
+                "litellm_metadata": {"session_id": ""},
+            },
+            request=_request_for("/v1/responses"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"missing_session_id": "reject"},
+        )
+    assert exc_info.value.code == "400"
+
+
+def test_add_litellm_metadata_from_request_headers_empty_litellm_metadata_field_falls_back_to_headers():
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {
+        "metadata": {"trace_id": "caller-trace", "session_id": "caller-session"},
+        "litellm_metadata": {"trace_id": "", "session_id": ""},
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["litellm_session_id"] == "baggage-session-42"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "client_body",
     [
         {"model": "gpt-4o", "messages": [], "litellm_session_id": "cust-sess-1"},
@@ -8339,6 +8518,91 @@ async def test_missing_session_id_generate_reuses_traceparent_trace_id():
 
     assert updated["metadata"]["session_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert _spend_log_session_id(updated) == "4bf92f3577b34da6a3ce929d0e0e4736"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+        {},
+    ],
+    ids=["with_traceparent", "no_traceparent"],
+)
+async def test_missing_session_id_generate_reuses_promoted_caller_trace_id(path: str, headers: dict[str, str]):
+    request = _request_for(path)
+    request.headers = headers
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "input": "hi", "metadata": {"trace_id": "caller-trace"}},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "generate"},
+    )
+
+    caller_trace_msg: Final = "generate must derive the session from the caller's un-promoted metadata.trace_id"
+    assert updated["litellm_session_id"] == "caller-trace", caller_trace_msg
+    assert updated["litellm_metadata"]["session_id"] == "caller-trace", caller_trace_msg
+    assert updated["litellm_metadata"][SESSION_ID_GENERATED_METADATA_KEY] is True, (
+        "the derived session id must still be marked generated"
+    )
+    assert _spend_log_session_id(updated, "litellm_metadata") == "caller-trace", (
+        "spend log and callback session ids must agree on the caller trace id"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["generate", "reject"])
+async def test_missing_session_id_policy_promotes_caller_session_to_root_field(policy: str):
+    """A caller-supplied usable session id satisfies the missing_session_id policies on
+    litellm_metadata routes (where it is not yet the managed metadata field) and must also
+    land on the root ``litellm_session_id`` field: consumers that read the root field
+    (router fallbacks, spend logs, sandbox reuse) otherwise mint a fresh uuid4 per request."""
+    request = _request_for("/v1/responses")
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "input": "hi",
+            "litellm_trace_id": "root-trace-42",
+            "metadata": {"session_id": "caller-session-42"},
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": policy},
+    )
+
+    assert updated["litellm_trace_id"] == "root-trace-42"
+    assert updated["litellm_session_id"] == "caller-session-42"
+    assert updated["litellm_metadata"]["session_id"] == "caller-session-42"
+    assert SESSION_ID_GENERATED_METADATA_KEY not in updated["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_generate_ignores_non_string_caller_session_id():
+    """A non-string session id is not a usable session: the generate policy must fall through
+    to generation instead of letting an unusable value strand the root session field."""
+    request = _request_for("/v1/responses")
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "input": "hi",
+            "litellm_trace_id": "root-trace-42",
+            "metadata": {"session_id": 4815162342},
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "generate"},
+    )
+
+    assert updated["litellm_session_id"] == "root-trace-42"
+    assert updated["litellm_metadata"]["session_id"] == "root-trace-42"
+    assert updated["litellm_metadata"][SESSION_ID_GENERATED_METADATA_KEY] is True
 
 
 @pytest.mark.asyncio

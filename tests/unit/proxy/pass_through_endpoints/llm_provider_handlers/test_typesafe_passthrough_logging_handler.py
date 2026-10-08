@@ -213,9 +213,9 @@ async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
 
     from litellm.caching.caching import DualCache
     from litellm.exceptions import BudgetExceededError
-    from litellm.proxy.hooks.model_max_budget_limiter import _PROXY_VirtualKeyModelMaxBudgetLimiter
+    from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 
-    budget_limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache())
+    budget_limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache())
     assert await budget_limiter.is_key_within_model_budget(auth, f"{provider}/{requested}")
     await budget_limiter.async_log_success_event(logged, None, start, datetime.now())
     with pytest.raises(BudgetExceededError):

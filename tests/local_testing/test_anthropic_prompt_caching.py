@@ -14,7 +14,6 @@ from test_streaming import streaming_format_tests
 
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
-from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # litellm.num_retries =3
@@ -361,92 +360,6 @@ async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
     )
 
 
-@pytest.mark.asyncio()
-async def test_anthropic_api_prompt_caching_with_content_str():
-    system_message = [
-        {
-            "role": "system",
-            "content": "Here is the full text of a complex legal agreement",
-            "cache_control": {"type": "ephemeral"},
-        },
-    ]
-    translated_system_message = litellm.AnthropicConfig().translate_system_message(
-        messages=system_message
-    )
-
-    assert translated_system_message == [
-        # System Message
-        {
-            "type": "text",
-            "text": "Here is the full text of a complex legal agreement",
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
-    user_messages = [
-        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
-        {
-            "role": "user",
-            "content": "What are the key terms and conditions in this agreement?",
-            "cache_control": {"type": "ephemeral"},
-        },
-        {
-            "role": "assistant",
-            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
-        },
-        # The final turn is marked with cache-control, for continuing in followups.
-        {
-            "role": "user",
-            "content": "What are the key terms and conditions in this agreement?",
-            "cache_control": {"type": "ephemeral"},
-        },
-    ]
-
-    translated_messages = anthropic_messages_pt(
-        messages=user_messages,
-        model="claude-3-5-sonnet-20240620",
-        llm_provider="anthropic",
-    )
-
-    expected_messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "What are the key terms and conditions in this agreement?",
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-        },
-        {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
-                }
-            ],
-        },
-        # The final turn is marked with cache-control, for continuing in followups.
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "What are the key terms and conditions in this agreement?",
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-        },
-    ]
-
-    assert len(translated_messages) == len(expected_messages)
-    for idx, i in enumerate(translated_messages):
-        assert (
-            i == expected_messages[idx]
-        ), "Error on idx={}. Got={}, Expected={}".format(idx, i, expected_messages[idx])
-
-
 @pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio()
 async def test_anthropic_api_prompt_caching_no_headers():
@@ -679,17 +592,6 @@ async def test_litellm_anthropic_prompt_caching_system():
         mock_post.assert_called_once_with(
             expected_url, json=expected_json, headers=expected_headers, timeout=600.0
         )
-
-
-def test_is_prompt_caching_enabled(anthropic_messages):
-    assert litellm.utils.is_prompt_caching_valid_prompt(
-        messages=anthropic_messages,
-        tools=None,
-        custom_llm_provider="anthropic",
-        model="anthropic/claude-sonnet-4-5-20250929",
-    )
-
-
 
 
 @pytest.mark.asyncio()

@@ -381,7 +381,7 @@ def test_transform_generate_content_request_normalizes_response_schema_2_5():
 
 def test_transform_generate_content_request_flattens_response_schema_1_5():
     """For Gemini 1.5, ``responseSchema`` is kept but flattened via
-    ``_build_vertex_schema`` so ``$defs``/``$ref`` are unpacked."""
+    ``build_vertex_schema`` so ``$defs``/``$ref`` are unpacked."""
     config = GoogleGenAIConfig()
 
     schema = {

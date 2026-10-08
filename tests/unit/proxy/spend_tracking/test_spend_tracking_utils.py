@@ -11,16 +11,9 @@ import pytest
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm.constants import (
-    LITELLM_TRUNCATED_PAYLOAD_FIELD,
-    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
-    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-    MAX_SPEND_LOG_MODEL_NAME_LENGTH,
-    REDACTED_BY_LITELM_STRING,
-    SESSION_ID_OMITTED_METADATA_KEY,
-    UNKNOWN_MODEL_SPEND_LOG_MODEL,
-)
+import litellm.constants as litellm_constants
+import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
@@ -34,10 +27,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_session_id_for_spend_log,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
-    _is_master_key,
+    is_master_key,
     _redact_logged_api_key,
     _redact_prompt_leaks_in_error_string,
-    _sanitize_error_information_for_spend_logs,
+    sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _scrub_raw_model_from_error_information,
@@ -517,6 +510,165 @@ def test_sanitize_request_body_for_spend_logs_payload_basic():
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
     }
     assert _sanitize_request_body_for_spend_logs_payload(request_body) == request_body
+
+
+def test_large_request_no_truncation_threshold():
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB constant is used for request body sanitization
+    and that the new truncation logic keeps beginning (35%) and end (65%) of the string
+    """
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+
+    # Create a large string that exceeds the threshold
+    # Use a pattern that allows us to verify beginning and end are preserved
+    start_pattern = "START" * 250  # 1250 chars
+    middle_pattern = "MIDDLE" * 200  # 1200 chars
+    end_pattern = "END" * 250  # 750 chars
+    large_content = start_pattern + middle_pattern + end_pattern
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify the content was truncated
+    truncated_content = sanitized["messages"][0]["content"]
+
+    # Calculate expected character counts (35% start, 65% end)
+    expected_start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+
+    # Should keep first 35% of MAX_STRING_LENGTH_PROMPT_IN_DB chars
+    assert truncated_content.startswith(large_content[:expected_start_chars])
+
+    # Should keep last 65% of MAX_STRING_LENGTH_PROMPT_IN_DB chars
+    assert truncated_content.endswith(large_content[-expected_end_chars:])
+
+    # Should have truncation marker
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+
+
+def test_small_request_no_truncation():
+    """
+    Test that small strings are not truncated by MAX_STRING_LENGTH_PROMPT_IN_DB
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    # Create a small string that's under the threshold
+    small_content = "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB - 100)
+
+    request_body = {
+        "messages": [{"role": "user", "content": small_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify the content was NOT truncated
+    assert sanitized["messages"][0]["content"] == small_content
+    assert (
+        len(sanitized["messages"][0]["content"]) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
+    )
+
+
+def test_configurable_string_length_env_var(monkeypatch):
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB can be configured via environment variable
+    """
+    # Set environment variable to a custom value
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+
+    # Import after setting env var to ensure it picks up the new value
+    import importlib
+    import litellm.constants
+    import litellm.proxy.spend_tracking.spend_tracking_utils
+
+    importlib.reload(litellm.constants)
+    importlib.reload(litellm.proxy.spend_tracking.spend_tracking_utils)
+
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _sanitize_request_body_for_spend_logs_payload,
+    )
+
+    # Verify the constant was set to the env var value
+    assert MAX_STRING_LENGTH_PROMPT_IN_DB == 1000
+
+    # Test truncation with the custom value
+    large_content = "A" * 500 + "B" * 800 + "C" * 500  # 1800 chars total
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify truncation occurred with 35% beginning and 65% end preserved
+    truncated_content = sanitized["messages"][0]["content"]
+    expected_start = int(1000 * 0.35)  # 350 chars from beginning
+    expected_end = int(1000 * 0.65)  # 650 chars from end
+
+    assert truncated_content.startswith(large_content[:expected_start])
+    assert truncated_content.endswith(large_content[-expected_end:])
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+    assert "800" in truncated_content  # Should mention skipped 800 chars
+
+
+def test_truncation_preserves_beginning_and_end():
+    """
+    Test that truncation preserves the beginning (35%) and end (65%) of content for better debugging
+    """
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+
+    # Create content with distinct beginning, middle, and end
+    beginning = "BEGIN_" * 200  # 1200 chars
+    middle = "MIDDLE_" * 300  # 2100 chars
+    end = "_END" * 300  # 1200 chars
+    large_content = beginning + middle + end
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    truncated_content = sanitized["messages"][0]["content"]
+
+    # Calculate expected splits (35% beginning, 65% end)
+    expected_start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+
+    # Check that beginning is preserved
+    expected_beginning = large_content[:expected_start_chars]
+    assert truncated_content.startswith(expected_beginning)
+
+    # Check that end is preserved
+    expected_end = large_content[-expected_end_chars:]
+    assert truncated_content.endswith(expected_end)
+
+    # Check truncation marker is present
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+
+    # Calculate expected skipped chars
+    total_chars = len(large_content)
+    kept_chars = expected_start_chars + expected_end_chars
+    expected_skipped = total_chars - kept_chars
+    assert str(expected_skipped) in truncated_content
 
 
 def test_sanitize_request_body_for_spend_logs_payload_long_string():
@@ -1324,7 +1476,7 @@ def test_get_logging_payload_persists_no_raw_model_for_a_prompt_shaped_moderatio
         model=_RAW_MODEL_WITH_PROMPT,
         llm_provider="openai",
     )
-    error_information: Final = _sanitize_error_information_for_spend_logs(
+    error_information: Final = sanitize_error_information_for_spend_logs(
         StandardLoggingPayloadSetup.get_error_information(
             original_exception=provider_rejection,
             traceback_str=(
@@ -1491,7 +1643,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     If this test fails in CI/CD, the build MUST fail.
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
     from litellm.proxy.utils import hash_token
 
     # Setup
@@ -1575,7 +1727,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     exception = Exception("BadRequestError: Invalid parameter 'invalid_param'")
 
     # Execute the ACTUAL failure hook code path
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         await logger.async_post_call_failure_hook(
@@ -2641,19 +2793,19 @@ class TestIsMasterKey:
 
     def test_none_api_key_returns_false(self):
         """Regression: _is_master_key(None, 'sk-master') should return False, not raise TypeError."""
-        assert _is_master_key(api_key=None, _master_key="sk-master-key") is False
+        assert is_master_key(api_key=None, _master_key="sk-master-key") is False
 
     def test_none_master_key_returns_false(self):
-        assert _is_master_key(api_key="sk-some-key", _master_key=None) is False
+        assert is_master_key(api_key="sk-some-key", _master_key=None) is False
 
     def test_both_none_returns_false(self):
-        assert _is_master_key(api_key=None, _master_key=None) is False
+        assert is_master_key(api_key=None, _master_key=None) is False
 
     def test_matching_key_returns_true(self):
-        assert _is_master_key(api_key="sk-master", _master_key="sk-master") is True
+        assert is_master_key(api_key="sk-master", _master_key="sk-master") is True
 
     def test_non_matching_key_returns_false(self):
-        assert _is_master_key(api_key="sk-other", _master_key="sk-master") is False
+        assert is_master_key(api_key="sk-other", _master_key="sk-master") is False
 
     def test_master_key_hash_is_rejected(self):
         """
@@ -2664,7 +2816,7 @@ class TestIsMasterKey:
 
         master = "sk-master-key-123"
         hashed = hash_token(master)
-        assert _is_master_key(api_key=hashed, _master_key=master) is False
+        assert is_master_key(api_key=hashed, _master_key=master) is False
 
 
 def test_sanitize_request_body_strips_secret_fields():
@@ -3047,7 +3199,7 @@ def test_sanitize_error_information_redacts_when_not_storing_prompts(
         ),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "leaked-prompt-content" not in sanitized["error_message"]
@@ -3072,7 +3224,7 @@ def test_sanitize_error_information_skips_redaction_when_storing_prompts(
         "error_message": ('OpenAIException - {"error":{"input":[{"role":"user","content":"kept"}]}}'),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     # User opted in via store_prompts_in_spend_logs — no key-level redaction.
@@ -3099,7 +3251,7 @@ def test_sanitize_error_information_caps_size_regardless_of_prompt_flag(
         "error_message": huge_error,
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert len(sanitized["error_message"]) < len(huge_error)
@@ -3108,7 +3260,7 @@ def test_sanitize_error_information_caps_size_regardless_of_prompt_flag(
 
 
 def test_sanitize_error_information_none_passthrough():
-    assert _sanitize_error_information_for_spend_logs(None) is None
+    assert sanitize_error_information_for_spend_logs(None) is None
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
@@ -3139,7 +3291,7 @@ def test_sanitize_error_information_reproduces_lit_2992(mock_should_store):
         "error_message": error_message,
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert huge_conversation_blob not in sanitized["error_message"]
@@ -3218,7 +3370,7 @@ def test_sanitize_error_information_redacts_traceback_when_not_storing_prompts(
         "error_message": "invalid request",
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "tb-leaked-prompt" not in sanitized["traceback"]
@@ -3242,7 +3394,7 @@ def test_sanitize_error_information_skips_traceback_redaction_when_storing_promp
         "error_message": "invalid request",
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "tb-kept" in sanitized["traceback"]
@@ -3358,7 +3510,7 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
         ),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "leaked-via-pydantic-msg" not in sanitized["error_message"]
@@ -3383,7 +3535,7 @@ def test_sanitize_error_information_persists_no_raw_model_for_an_unknown_model_r
 ):
     error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=original_exception)
 
-    sanitized: Final = _sanitize_error_information_for_spend_logs(
+    sanitized: Final = sanitize_error_information_for_spend_logs(
         error_information, original_exception=original_exception
     )
 

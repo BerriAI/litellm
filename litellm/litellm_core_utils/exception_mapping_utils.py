@@ -2147,7 +2147,10 @@ def _map_openrouter_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
-    if hasattr(original_exception, "status_code"):
+    received_status: Final = hasattr(original_exception, "status_code") and not getattr(
+        original_exception, "status_code_is_synthesized", False
+    )
+    if received_status:
         if original_exception.status_code == 400:
             raise BadRequestError(
                 message=f"{exception_provider} - {error_str}",

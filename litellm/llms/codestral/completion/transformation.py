@@ -123,3 +123,9 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
             finish_reason=finish_reason,
             logprobs=logprobs,
         )
+
+    def chunk_parser(
+        self,
+        chunk_data: str,
+    ) -> GenericStreamingChunk:
+        return self._chunk_parser(chunk_data)
