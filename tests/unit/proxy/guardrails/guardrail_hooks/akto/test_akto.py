@@ -5,6 +5,8 @@ import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from typing import Final, Literal
+
 import httpx
 import pytest
 from fastapi import HTTPException
@@ -1872,7 +1874,26 @@ async def test_a_modified_verdict_that_changed_no_text_blocks(akto_pre_call, sam
     assert exc_info.value.message == "Content masked by Akto guardrail policy could not be applied"
 
 
-def _logged_call(text="Hello, how are you?"):
+REQUEST_CHECK: Final = {"akto_connector": "litellm", "guardrails": "true", "ingest_data": "true"}
+RESPONSE_CHECK: Final = {"akto_connector": "litellm", "response_guardrails": "true", "ingest_data": "true"}
+
+
+def _logging_only_akto(
+    post: AsyncMock, unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed"
+) -> AktoGuardrail:
+    handler: Final = MagicMock(spec=AsyncHTTPHandler)
+    handler.post = post
+    return AktoGuardrail(
+        async_handler=handler,
+        akto_base_url="http://localhost:9090",
+        akto_api_key="test-token",
+        guardrail_name="test-logging_only",
+        event_hook="logging_only",
+        unreachable_fallback=unreachable_fallback,
+    )
+
+
+def _logged_call(text: str = "Hello, how are you?") -> dict[str, object]:
     return {
         "model": "gpt-5.5",
         "messages": [{"role": "user", "content": text}],
@@ -1882,57 +1903,59 @@ def _logged_call(text="Hello, how are you?"):
     }
 
 
-def _logged_response(text="Fine, thanks"):
+def _logged_response(text: str = "Fine, thanks") -> ModelResponse:
     return ModelResponse(id="resp-1", choices=[{"message": {"role": "assistant", "content": text}}])
 
 
-def test_logging_only_is_a_supported_mode():
+def _recorded_entries(logged_kwargs: dict[str, object]) -> list[dict[str, object]]:
+    standard_logging_object: Final = logged_kwargs["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict), logged_kwargs
+    entries: Final = standard_logging_object["guardrail_information"]
+    assert isinstance(entries, list), standard_logging_object
+    return entries
+
+
+def test_logging_only_is_a_supported_mode() -> None:
     assert GuardrailEventHooks.logging_only in AktoGuardrail.get_supported_event_hooks()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("input_type", ["request", "response"])
-async def test_logging_only_handles_both_directions(input_type):
-    g = _akto("logging_only")
-    g.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
-    request_data = _with_complete_response({}) if input_type == "response" else {}
+@pytest.mark.parametrize(("input_type", "flags"), [("request", REQUEST_CHECK), ("response", RESPONSE_CHECK)])
+async def test_logging_only_handles_both_directions(
+    input_type: Literal["request", "response"], flags: dict[str, str]
+) -> None:
+    guardrail: Final = _logging_only_akto(AsyncMock(return_value=_mock_allowed_response()))
+    request_data: Final = _with_complete_response({}) if input_type == "response" else {}
 
-    await g.apply_guardrail(
+    await guardrail.apply_guardrail(
         inputs=GenericGuardrailAPIInputs(texts=["hi"]), request_data=request_data, input_type=input_type
     )
 
-    g.async_handler.post.assert_called_once()
+    assert [params for params, _ in _calls(guardrail)] == [flags]
 
 
 @pytest.mark.asyncio
-async def test_logging_only_checks_and_records_the_logged_request_and_response():
-    g = _akto("logging_only")
-    g.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
+async def test_logging_only_checks_and_records_the_logged_request_and_response() -> None:
+    guardrail: Final = _logging_only_akto(AsyncMock(return_value=_mock_allowed_response()))
 
-    await g.async_logging_hook(_logged_call(), _logged_response(), "acompletion")
+    await guardrail.async_logging_hook(_logged_call(), _logged_response(), "acompletion")
 
-    sent = _calls(g)
-    assert [params for params, _ in sent] == [
-        {"akto_connector": "litellm", "guardrails": "true", "ingest_data": "true"},
-        {"akto_connector": "litellm", "response_guardrails": "true", "ingest_data": "true"},
-    ]
+    sent: Final = _calls(guardrail)
+    assert [params for params, _ in sent] == [REQUEST_CHECK, RESPONSE_CHECK]
     assert "Hello, how are you?" in sent[0][1]["requestPayload"]
     assert "Fine, thanks" in sent[1][1]["responsePayload"]
 
 
 @pytest.mark.asyncio
-async def test_logging_only_block_verdict_is_recorded_without_raising():
-    g = _akto("logging_only")
-    g.async_handler.post = AsyncMock(return_value=_mock_blocked_response("Rejected"))
-    response = _logged_response()
+async def test_logging_only_block_verdict_is_recorded_without_raising() -> None:
+    guardrail: Final = _logging_only_akto(AsyncMock(return_value=_mock_blocked_response("Rejected")))
+    response: Final = _logged_response()
 
-    out_kwargs, out_result = await g.async_logging_hook(_logged_call(), response, "acompletion")
+    out_kwargs, out_result = await guardrail.async_logging_hook(_logged_call(), response, "acompletion")
 
     assert out_result is response
-    assert [params for params, _ in _calls(g)] == [
-        {"akto_connector": "litellm", "guardrails": "true", "ingest_data": "true"}
-    ]
-    [entry] = out_kwargs["standard_logging_object"]["guardrail_information"]
+    assert [params for params, _ in _calls(guardrail)] == [REQUEST_CHECK]
+    [entry] = _recorded_entries(out_kwargs)
     assert (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"]) == (
         "test-logging_only",
         "logging_only",
@@ -1941,15 +1964,14 @@ async def test_logging_only_block_verdict_is_recorded_without_raising():
 
 
 @pytest.mark.asyncio
-async def test_logging_only_ignores_an_unreachable_akto_even_when_fail_closed():
-    g = _akto("logging_only", unreachable_fallback="fail_closed")
-    g.async_handler.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
-    response = _logged_response()
+async def test_logging_only_ignores_an_unreachable_akto_even_when_fail_closed() -> None:
+    guardrail: Final = _logging_only_akto(AsyncMock(side_effect=httpx.ConnectError("refused")), "fail_closed")
+    response: Final = _logged_response()
 
-    out_kwargs, out_result = await g.async_logging_hook(_logged_call(), response, "acompletion")
+    out_kwargs, out_result = await guardrail.async_logging_hook(_logged_call(), response, "acompletion")
 
     assert out_result is response
-    [entry] = out_kwargs["standard_logging_object"]["guardrail_information"]
+    [entry] = _recorded_entries(out_kwargs)
     assert (entry["guardrail_mode"], entry["guardrail_response"]) == (
         "logging_only",
         "Akto guardrail service unreachable",
@@ -1957,15 +1979,14 @@ async def test_logging_only_ignores_an_unreachable_akto_even_when_fail_closed():
 
 
 @pytest.mark.asyncio
-async def test_logging_only_sends_each_attachment_once():
-    g = _akto("logging_only")
-    g.async_handler.post = _file_verdict({"Allowed": True})
-    image = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
-    call = {**_logged_call(), "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}, image]}]}
+async def test_logging_only_sends_each_attachment_once() -> None:
+    guardrail: Final = _logging_only_akto(_file_verdict({"Allowed": True}))
+    image: Final = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+    call: Final = {**_logged_call(), "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}, image]}]}
 
-    await g.async_logging_hook(call, _logged_response(), "acompletion")
+    await guardrail.async_logging_hook(call, _logged_response(), "acompletion")
 
-    [file_call] = _file_calls(g)
+    [file_call] = _file_calls(guardrail)
     assert json.loads(file_call.kwargs["data"])["files"] == [
         {"filename": "a.png", "type": "image", "url": "https://example.com/a.png"}
     ]
