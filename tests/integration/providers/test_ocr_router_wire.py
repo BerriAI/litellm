@@ -19,11 +19,6 @@ _MISTRAL_OCR_BODY: Final = json.dumps(
 
 
 def _mistral_ocr_peer(request: Request) -> Reply:
-    assert request.method == "POST" and request.target == "/v1/ocr", request.target
-    body: Final = json.loads(request.body)
-    assert body["model"] == "mistral-ocr-latest", body
-    assert body["document"]["type"] == "document_url", body
-    assert body["document"]["document_url"] == _DOCUMENT_URL, body
     return Reply(body=_MISTRAL_OCR_BODY)
 
 
@@ -39,10 +34,16 @@ def test_router_aocr_routes_to_mistral_and_logs_spend(gateway: Gateway) -> None:
             "POST", "/v1/ocr", {"model": model, "document": {"type": "document_url", "document_url": _DOCUMENT_URL}}
         )
         assert response.status_code == 200, response.text
-        assert len(wire.drain()) == 1
+        upstream: Final = wire.drain()
+        assert len(upstream) == 1, upstream
+        assert (upstream[0].method, upstream[0].target) == ("POST", "/v1/ocr"), upstream[0]
+        sent: Final = json.loads(upstream[0].body)
+        assert sent["model"] == "mistral-ocr-latest", sent
+        assert sent["document"]["type"] == "document_url", sent
+        assert sent["document"]["document_url"] == _DOCUMENT_URL, sent
         payload: Final = response.json()
         assert payload["object"] == "ocr", payload
-        assert payload["model"] == "mistral-ocr-latest", payload
+        assert payload["model"] == model, payload
         assert [page["index"] for page in payload["pages"]] == [0], payload
         assert payload["pages"][0]["markdown"] == "Test PDF File", payload
         assert payload["usage_info"]["pages_processed"] == len(payload["pages"]), payload
