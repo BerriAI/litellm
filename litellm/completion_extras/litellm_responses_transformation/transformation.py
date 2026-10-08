@@ -5,6 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
 
@@ -128,13 +129,16 @@ def _breakpoint_of(part: object) -> object:
     return content_part.get("prompt_cache_breakpoint")
 
 
-def _trailing_audio_breakpoint(content: list[object], index: int) -> object:
-    following: Final = content[index + 1 :]
-    run_length: Final = next(
-        (offset for offset, part in enumerate(following) if not _is_audio_input_part(part)), len(following)
-    )
-    markers: Final = tuple(marker for part in following[:run_length] if (marker := _breakpoint_of(part)) is not None)
-    return markers[-1] if markers else None
+def _pending_audio_breakpoint(pending: object, part: object) -> object:
+    if not _is_audio_input_part(part):
+        return None
+    return pending if pending is not None else _breakpoint_of(part)
+
+
+def _carried_breakpoints(content: Sequence[object]) -> tuple[object, ...]:
+    seeded_from_the_end: Final = chain((None,), reversed(content))
+    pending_after_each: Final = tuple(accumulate(seeded_from_the_end, _pending_audio_breakpoint))
+    return tuple(reversed(pending_after_each[:-1]))
 
 
 def _with_carried_breakpoint(part: object, marker: object) -> object:
@@ -148,9 +152,11 @@ def _without_audio_input_parts_in_content(value: object) -> object:
     if not isinstance(value, list):
         return value
     content: Final = cast(list[object], value)  # cast-ok: isinstance confirms a list of content blocks
+    if not any(_is_audio_input_part(part) for part in content):
+        return value
     return [
-        _with_carried_breakpoint(part, _trailing_audio_breakpoint(content, index))
-        for index, part in enumerate(content)
+        _with_carried_breakpoint(part, marker)
+        for part, marker in zip(content, _carried_breakpoints(content))
         if not _is_audio_input_part(part)
     ]
 

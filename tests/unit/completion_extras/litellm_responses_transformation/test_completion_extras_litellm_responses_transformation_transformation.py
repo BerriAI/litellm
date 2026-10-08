@@ -3,6 +3,7 @@ import datetime
 import json
 import os
 import unittest
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
@@ -4796,18 +4797,21 @@ def registered_audio_models(monkeypatch: pytest.MonkeyPatch) -> None:
 def _bridge_input(
     model: str,
     drop_params: bool | None,
-    messages: list | None = None,
+    messages: Sequence[Mapping[str, object]] | None = None,
     **extra_litellm_params: object,
-) -> list:
+) -> list[dict[str, object]]:
+    chat_messages: Final = cast(
+        List[AllMessageValues], list(messages or [{"role": "user", "content": [_TEXT_PART, _AUDIO_PART]}])
+    )  # cast-ok: the tests build chat messages as plain mappings
     request: Final = LiteLLMResponsesTransformationHandler().transform_request(
         model=model,
-        messages=messages or [{"role": "user", "content": [_TEXT_PART, _AUDIO_PART]}],
+        messages=chat_messages,
         optional_params={},
         litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params, **extra_litellm_params},
         headers={},
         litellm_logging_obj=Mock(),
     )
-    return request["input"]
+    return cast(list[dict[str, object]], request["input"])  # cast-ok: the bridge emits message item mappings
 
 
 def test_transform_request_forwards_input_audio_without_drop_params(
