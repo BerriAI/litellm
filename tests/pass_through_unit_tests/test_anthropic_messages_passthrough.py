@@ -118,19 +118,6 @@ class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
         """
         return "gpt-4.1-mini"
 
-    class TestCustomLogger(CustomLogger):
-        def __init__(self):
-            super().__init__()
-            self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
-
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-            print("inside async_log_success_event")
-            self.logged_standard_logging_payload = kwargs.get("standard_logging_object")
-
-            pass
-
-
-
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_litellm_router_non_streaming():
