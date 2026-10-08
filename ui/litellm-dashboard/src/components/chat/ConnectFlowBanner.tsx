@@ -3,7 +3,6 @@
 import React from "react";
 import { CheckCircle } from "lucide-react";
 import { getProxyBaseUrl, ConnectFlowStatus } from "@/components/networking";
-import { Button } from "@/components/ui/button";
 import { OAuth2ConnectButton } from "@/components/chat/MCPAppsPanel";
 
 interface Props {
@@ -69,10 +68,14 @@ const canFinishConnectFlow = (state: ConnectFlowStatus["state"], flow: ConnectFl
 const vendorServersFor = (
   state: ConnectFlowStatus["state"],
   flow: ConnectFlowStatus | undefined,
-): NonNullable<ConnectFlowStatus["servers"]> => {
-  if (state === "multi") return (flow?.servers ?? []).filter((server) => !server.connected);
+): { server_id: string; server_name: string | null }[] => {
+  if (state === "multi") {
+    return (flow?.servers ?? [])
+      .filter((server) => !server.connected)
+      .map(({ server_id, server_name }) => ({ server_id, server_name }));
+  }
   if (state !== "interactive" || flow?.connected !== false || flow.server_id === null) return [];
-  return [{ server_id: flow.server_id, server_name: flow.server_name, connected: false }];
+  return [{ server_id: flow.server_id, server_name: flow.server_name }];
 };
 
 const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onConnected, failed }) => {
@@ -108,20 +111,22 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
           <form method="POST" action={action}>
             <input type="hidden" name="flow" value={flowHandle} />
             {canFinish && (
-              <Button type="submit" className="h-[38px] px-4 font-semibold">
+              <button
+                type="submit"
+                className="h-[38px] rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+              >
                 Finish connecting
-              </Button>
+              </button>
             )}
             {canCancel && (
-              <Button
+              <button
                 type="submit"
                 name="decision"
                 value="deny"
-                variant="outline"
-                className="ml-2 h-[38px] px-4 font-semibold"
+                className="ml-2 h-[38px] rounded-md border px-4 text-sm font-semibold text-foreground hover:bg-accent/40"
               >
                 Cancel
-              </Button>
+              </button>
             )}
             {loopbackClient && (
               <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">

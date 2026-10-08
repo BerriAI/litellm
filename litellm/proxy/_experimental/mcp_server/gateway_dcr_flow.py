@@ -591,8 +591,10 @@ def resolve_scoped_servers_from_scope(
     if any(server is None for server in resolved):
         return InvalidGatewayScope()
     servers: Final = tuple(server for server in resolved if server is not None)
-    server_ids: Final = tuple(dict.fromkeys(server.server_id for server in servers))
-    return tuple(next(server for server in servers if server.server_id == server_id) for server_id in server_ids)
+    servers_by_id: Final[dict[str, MCPServer]] = {}
+    for server in servers:
+        servers_by_id.setdefault(server.server_id, server)
+    return tuple(servers_by_id.values())
 
 
 def aggregate_authorize(
@@ -615,9 +617,9 @@ def aggregate_authorize(
     request scope the flow to those servers. The scope is sealed into the flow, carried
     into the code, and bound into the session token.
 
-    Validation failures respond directly with 400 and never redirect: per RFC 6749
-    section 4.1.2.1 an unvalidated redirect URI must not receive an error redirect, and
-    once the client is at fault there is no trusted place to send the browser.
+    Validation failures respond directly with 400, except for an unknown gateway scope,
+    which is redirected to the already-validated ``redirect_uri`` as ``invalid_scope`` per
+    RFC 6749 section 4.1.2.1.
     """
     rejected: Final = _rejected_authorize_request(
         client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type
@@ -631,6 +633,9 @@ def aggregate_authorize(
         if resource_scoped_server is not None or not scope_fallback_allowed
         else resolve_scoped_servers_from_scope(scope)
     )
+    base_url: Final = get_request_base_url(request)
+    if session_user_id is None:
+        return _login_redirect(base_url, request)
     if isinstance(scope_resolution, InvalidGatewayScope):
         invalid_scope_location: Final = _append_query_params(
             redirect_uri,
@@ -641,9 +646,6 @@ def aggregate_authorize(
             ),
         )
         return RedirectResponse(invalid_scope_location, status_code=303)
-    base_url: Final = get_request_base_url(request)
-    if session_user_id is None:
-        return _login_redirect(base_url, request)
     scoped_servers: Final = (resource_scoped_server,) if resource_scoped_server is not None else scope_resolution or ()
     handle: Final = secrets.token_urlsafe(24)
     flow: Final = _new_connect_flow(

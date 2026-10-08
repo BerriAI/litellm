@@ -265,10 +265,17 @@ async def test_tampered_client_id_does_not_open():
 
 
 def _authorize(
-    client_id, session_user_id, redirect_uri=REDIRECT_URI, challenge=CODE_CHALLENGE, method="S256", response_type="code"
+    client_id,
+    session_user_id,
+    redirect_uri=REDIRECT_URI,
+    challenge=CODE_CHALLENGE,
+    method="S256",
+    response_type="code",
+    scope: str | None = None,
 ):
+    query: Final = f"client_id={client_id}" if scope is None else f"client_id={client_id}&scope={scope}"
     return aggregate_authorize(
-        request=_request(query=f"client_id={client_id}"),
+        request=_request(query=query),
         client_id=client_id,
         redirect_uri=redirect_uri,
         state="client-state-123",
@@ -276,6 +283,7 @@ def _authorize(
         code_challenge_method=method,
         response_type=response_type,
         session_user_id=session_user_id,
+        scope=scope,
     )
 
 
@@ -296,11 +304,12 @@ async def test_authorize_validation_failures_never_redirect_to_client():
 @pytest.mark.asyncio
 async def test_authorize_without_session_redirects_to_login_with_return_to():
     client_id = (await _register([REDIRECT_URI]))["client_id"]
-    response = _authorize(client_id, session_user_id=None)
+    response = _authorize(client_id, session_user_id=None, scope="litellm:mcp_server:missing")
     assert response.status_code == 303
     location = response.headers["location"]
     assert location.startswith("https://llm.example.com/sso/key/generate?return_to=")
     assert "return_to=%2Fauthorize" in location
+    assert "scope=litellm:mcp_server:missing" in parse_qs(urlparse(location).query)["return_to"][0]
 
 
 @pytest.mark.asyncio
@@ -1333,7 +1342,7 @@ async def test_unknown_server_scope_redirects_with_invalid_scope_and_state() -> 
         response: Final = _scoped_authorize(
             client_id,
             "https://llm.example.com/mcp",
-            session_user_id=None,
+            session_user_id="u1",
             scope="openid litellm:mcp_server:missing",
         )
 
