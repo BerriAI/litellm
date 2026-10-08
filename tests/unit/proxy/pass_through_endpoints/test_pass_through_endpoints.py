@@ -107,6 +107,36 @@ async def test_parse_request_data_by_content_type_returns_no_envelope_for_non_ob
     assert await _parse_request_data_by_content_type(request) == (None, None, None, None)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", ["application/json", "multipart/form-data; boundary=test"])
+@pytest.mark.parametrize("with_custom_body", [False, True])
+async def test_parse_request_data_by_content_type_preserves_object_envelope(
+    content_type: str, with_custom_body: bool
+) -> None:
+    # Some clients send JSON with a multipart content type. Both paths must
+    # preserve the query, upstream body, and stream flag without coercing them.
+    envelope = {"query_params": {"version": "2026"}, "stream": False, "model": "m"}
+    if with_custom_body:
+        envelope["custom_body"] = {"messages": [{"role": "user", "content": "hi"}]}
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": json.dumps(envelope).encode(), "more_body": False}
+
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/", "headers": [(b"content-type", content_type.encode())]},
+        receive,
+    )
+    expected_body = (
+        envelope["custom_body"]
+        if with_custom_body
+        else envelope
+        if content_type.startswith("multipart/")
+        else None
+    )
+
+    assert await _parse_request_data_by_content_type(request) == (envelope["query_params"], expected_body, None, False)
+
+
 def test_with_trace_context_without_opentelemetry(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "litellm.integrations.otel.plumbing.context", None)
 
@@ -3315,7 +3345,8 @@ async def test_create_pass_through_route_custom_body_url_target():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_non_streaming_uses_content_for_state_raw_body():
+@pytest.mark.parametrize("mutable_body", [False, True], ids=["bytes", "bytearray"])
+async def test_pass_through_request_non_streaming_uses_content_for_state_raw_body(mutable_body):
     """
     Bedrock SigV4 path: exact signed bytes live on request.state; upstream must receive
     content=... even if pre_call_hook mutates the parsed dict (would change json=).
@@ -3329,7 +3360,7 @@ async def test_pass_through_request_non_streaming_uses_content_for_state_raw_bod
     mock_request.query_params = QueryParams({})
     mock_request.headers = Headers({"Content-Type": "application/json"})
     mock_request.state = SimpleNamespace()
-    setattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_signed)
+    setattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, bytearray(raw_signed) if mutable_body else raw_signed)
     mock_request.body = AsyncMock(return_value=json.dumps(parsed_from_wire).encode("utf-8"))
 
     mock_user = MagicMock()
@@ -3346,7 +3377,7 @@ async def test_pass_through_request_non_streaming_uses_content_for_state_raw_bod
     )
 
     mock_async_client = AsyncMock()
-    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.build_request = MagicMock(side_effect=httpx.Request)
     mock_async_client.send = AsyncMock(return_value=upstream)
     mock_client_obj = MagicMock()
     mock_client_obj.client = mock_async_client
@@ -3388,11 +3419,13 @@ async def test_pass_through_request_non_streaming_uses_content_for_state_raw_bod
     assert build_kw.get("content") == raw_signed
     assert "json" not in build_kw
     mock_async_client.send.assert_awaited_once()
+    assert mock_async_client.send.call_args.args[0].read() == raw_signed
     assert mock_async_client.send.call_args.kwargs.get("stream") is True
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_streaming_uses_content_for_state_raw_body():
+@pytest.mark.parametrize("mutable_body", [False, True], ids=["bytes", "bytearray"])
+async def test_pass_through_request_streaming_uses_content_for_state_raw_body(mutable_body):
     """Streaming pass-through with state raw body must use build_request(..., content=...)."""
     raw_signed = b'{"model":"m","stream":true}'
     parsed_from_wire = {"model": "m", "stream": True}
@@ -3402,15 +3435,14 @@ async def test_pass_through_request_streaming_uses_content_for_state_raw_body():
     mock_request.query_params = QueryParams({})
     mock_request.headers = Headers({"Content-Type": "application/json"})
     mock_request.state = SimpleNamespace()
-    setattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_signed)
+    setattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, bytearray(raw_signed) if mutable_body else raw_signed)
     mock_request.body = AsyncMock(return_value=json.dumps(parsed_from_wire).encode("utf-8"))
 
     mock_user = MagicMock()
     mock_user.api_key = "sk-test"
 
-    mock_built = MagicMock()
     mock_async_client = AsyncMock()
-    mock_async_client.build_request = MagicMock(return_value=mock_built)
+    mock_async_client.build_request = MagicMock(side_effect=httpx.Request)
     stream_resp = httpx.Response(
         status_code=200,
         headers={"content-type": "text/event-stream"},
@@ -3454,6 +3486,7 @@ async def test_pass_through_request_streaming_uses_content_for_state_raw_body():
     br_kw = mock_async_client.build_request.call_args[1]
     assert br_kw.get("content") == raw_signed
     assert "json" not in br_kw
+    assert mock_async_client.send.call_args.args[0].read() == raw_signed
 
 
 @pytest.mark.asyncio
