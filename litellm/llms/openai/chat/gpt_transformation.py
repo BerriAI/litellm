@@ -414,6 +414,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 AllMessageValues,
                 filter_value_from_dict(message, "cache_control"),
             )
+            if message.get("role") == "tool":
+                # litellm's anthropic adapter carries tool_result.is_error on
+                # the intermediate tool message so error-aware translations
+                # can restore it; real OpenAI has no such field (#44979).
+                messages[i] = cast(
+                    AllMessageValues,
+                    filter_value_from_dict(message, "is_error"),
+                )
         if tools is not None:
             for i, tool in enumerate(tools):
                 tools[i] = cast(
