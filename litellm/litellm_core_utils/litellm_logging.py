@@ -144,7 +144,6 @@ from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
-    SEPARATE_CHARGE_PRICING_FIELDS,
     CachingDetails,
     CallTypes,
     CostBreakdown,
@@ -324,9 +323,7 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 ### GLOBAL VARIABLES ###
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
-_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = (
-    frozenset(CustomPricingLiteLLMParams.model_fields.keys()) - SEPARATE_CHARGE_PRICING_FIELDS
-)
+_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")

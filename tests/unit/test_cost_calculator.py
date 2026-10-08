@@ -5930,20 +5930,23 @@ def test_context_cache_storage_uses_the_deployment_storage_rate(_storage_cost_ma
 _STORAGE_DEPLOYMENT_MODEL: Final = "gemini-2.5-flash"
 
 
-def _routed_request_cost(deployment_pricing: Mapping[str, float], token_hours: float) -> float | None:
+def _routed_request_cost(
+    token_prices: Mapping[str, float], token_hours: float, *, storage_rate: float | None = None
+) -> float | None:
     from litellm import Router
 
     router: Final = Router(
         model_list=[
             {
                 "model_name": "storage-cost-deployment",
-                "litellm_params": {"model": f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}", **deployment_pricing},
+                "litellm_params": {"model": f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}", **token_prices},
+                "model_info": {} if storage_rate is None else {_STORAGE_RATE_KEY: storage_rate},
             }
         ]
     )
     deployment_id: Final = router.model_list[0]["model_info"]["id"]
     assert isinstance(deployment_id, str)
-    return _vertex_request_cost({**deployment_pricing, "metadata": {"model_info": {"id": deployment_id}}}, token_hours)
+    return _vertex_request_cost({**token_prices, "metadata": {"model_info": {"id": deployment_id}}}, token_hours)
 
 
 def _vertex_request_cost(litellm_params: Mapping[str, object], token_hours: float) -> float | None:
@@ -5976,15 +5979,24 @@ def test_a_storage_only_override_keeps_the_underlying_token_prices(_storage_cost
     cost_map_rate: Final = litellm.get_model_info(f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}")[_STORAGE_RATE_KEY]
     assert isinstance(cost_map_rate, float)
     deployment_rate: Final = cost_map_rate * 3
-    storage_only: Final[dict[str, float]] = {_STORAGE_RATE_KEY: deployment_rate}
 
     no_override: Final = _vertex_request_cost({}, token_hours=0.0)
-    without_storage: Final = _routed_request_cost(storage_only, token_hours=0.0)
-    with_storage: Final = _routed_request_cost(storage_only, token_hours=500.0)
+    without_storage: Final = _routed_request_cost({}, token_hours=0.0, storage_rate=deployment_rate)
+    with_storage: Final = _routed_request_cost({}, token_hours=500.0, storage_rate=deployment_rate)
 
     assert no_override is not None and no_override > 0
     assert without_storage == pytest.approx(no_override)
     assert with_storage == pytest.approx(no_override + 500.0 * deployment_rate)
+
+
+def test_a_deployment_storage_rate_stays_off_the_shared_backend_key(_storage_cost_map: None) -> None:
+    backend_key: Final = f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}"
+    cost_map_rate: Final = litellm.get_model_info(backend_key)[_STORAGE_RATE_KEY]
+    assert isinstance(cost_map_rate, float)
+
+    _routed_request_cost({}, token_hours=0.0, storage_rate=cost_map_rate * 3)
+
+    assert litellm.get_model_info(backend_key)[_STORAGE_RATE_KEY] == cost_map_rate
 
 
 def test_custom_pricing_as_completion_cost_param():

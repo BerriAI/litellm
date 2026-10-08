@@ -299,6 +299,10 @@ def _get_additional_costs(
     return None
 
 
+def _recorded_cache_storage_token_hours(litellm_logging_obj: LitellmLoggingObject | None) -> object:
+    return litellm_logging_obj.context_cache_storage_token_hours if litellm_logging_obj else 0.0
+
+
 def _context_cache_storage_cost(
     litellm_logging_obj: LitellmLoggingObject | None,
     *,
@@ -309,7 +313,7 @@ def _context_cache_storage_cost(
     router_model_id: str | None,
     region_name: str | None,
 ) -> float:
-    token_hours: Final = litellm_logging_obj.context_cache_storage_token_hours if litellm_logging_obj else 0.0
+    token_hours: Final = _recorded_cache_storage_token_hours(litellm_logging_obj)
     if not isinstance(token_hours, int | float) or token_hours <= 0:
         return 0.0
     underlying_model: Final = select_model_name_for_cost_calc(
@@ -1935,7 +1939,10 @@ def completion_cost(
                     _final_cost += sum(additional_costs.values())
                 if cache_storage_cost > 0:
                     _final_cost += cache_storage_cost
-                    additional_costs = {**(additional_costs or {}), "cache_storage_cost": cache_storage_cost}
+                    if additional_costs is None:
+                        additional_costs = {"cache_storage_cost": cache_storage_cost}
+                    else:
+                        additional_costs["cache_storage_cost"] = cache_storage_cost
 
                 original_cost = _final_cost
                 if litellm.cost_discount_config:

@@ -35967,8 +35967,6 @@ export interface components {
             cache_read_input_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost Ultrafast */
             cache_read_input_token_cost_ultrafast?: number | null;
-            /** Cache Storage Cost Per Token Per Hour */
-            cache_storage_cost_per_token_per_hour?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Client Id */
@@ -50825,6 +50823,8 @@ export interface components {
             cache_creation_input_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
+            /** Cache Storage Cost Per Token Per Hour */
+            cache_storage_cost_per_token_per_hour?: number | null;
             /** Cost Per Ptu Per Hour */
             cost_per_ptu_per_hour?: number | null;
             /** Created At */
@@ -51166,8 +51166,6 @@ export interface components {
             cache_read_input_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost Ultrafast */
             cache_read_input_token_cost_ultrafast?: number | null;
-            /** Cache Storage Cost Per Token Per Hour */
-            cache_storage_cost_per_token_per_hour?: number | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Client Id */

@@ -3857,7 +3857,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_creation_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
-    cache_storage_cost_per_token_per_hour: float | None = None
     cache_read_input_audio_token_cost: float | None = None
     cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
@@ -3947,7 +3946,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
-SEPARATE_CHARGE_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"cache_storage_cost_per_token_per_hour"})
+DEPLOYMENT_SCOPED_SEPARATE_CHARGE_FIELDS: Final[frozenset[str]] = frozenset({"cache_storage_cost_per_token_per_hour"})
 
 DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_regex_lookaround"})
 
@@ -3955,6 +3954,7 @@ SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
     - frozenset(CustomPricingLiteLLMParams.model_fields)
     - DEPLOYMENT_SCOPED_PRICING_FIELDS
+    - DEPLOYMENT_SCOPED_SEPARATE_CHARGE_FIELDS
     - DEPLOYMENT_SCOPED_CAPABILITY_FIELDS
 )
 
