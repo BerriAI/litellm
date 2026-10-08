@@ -658,9 +658,9 @@ async def retrieve_batch(
             # The DB may store raw provider file IDs (before hooks translate them).
             # Register any missing managed-file rows and return unified IDs.
             if unified_batch_id:
-                batch_response: Final = _require_batch_response(response)
+                terminal_batch_response: Final = _require_batch_response(response)
                 await ensure_batch_response_managed_file_ids(
-                    response=batch_response,
+                    response=terminal_batch_response,
                     managed_files_obj=managed_files_obj,
                     prisma_client=prisma_client,
                     verbose_proxy_logger=verbose_proxy_logger,
@@ -806,9 +806,9 @@ async def retrieve_batch(
         # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
         # Register any missing managed-file rows and return unified IDs.
         if unified_batch_id:
-            batch_response: Final = _require_batch_response(response)
+            retrieved_batch_response: Final = _require_batch_response(response)
             await ensure_batch_response_managed_file_ids(
-                response=batch_response,
+                response=retrieved_batch_response,
                 managed_files_obj=managed_files_obj,
                 prisma_client=prisma_client,
                 verbose_proxy_logger=verbose_proxy_logger,
