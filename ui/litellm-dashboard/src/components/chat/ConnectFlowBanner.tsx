@@ -41,9 +41,13 @@ const copyFor = (flow: ConnectFlowStatus | undefined, failed: boolean): readonly
     ];
   }
   if (flow.state === "multi") {
+    const allServersConnected =
+      flow.servers !== null && flow.servers.length > 0 && flow.servers.every((server) => server.connected);
     return [
       `Allow ${clientLabel} to use ${serverNames}`,
-      `Authorize each requested server below to continue, or cancel to send ${clientLabel} away.`,
+      allServersConnected
+        ? `Click Finish connecting to give ${clientLabel} access to ${serverNames} as you.`
+        : `Authorize each requested server below to continue, or cancel to send ${clientLabel} away.`,
     ];
   }
   if (flow.state === "interactive" && !flow.connected) {
