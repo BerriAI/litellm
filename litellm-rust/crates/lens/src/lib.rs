@@ -113,9 +113,13 @@ pub fn router_with_root_path(state: Arc<State>, server_root_path: &str) -> Route
                     http::header::CONTENT_ENCODING,
                 ]),
         );
-    public
-        .clone()
-        .nest(&format!("{server_root_path}/lens-ingest"), public)
+    let routes = public.clone().nest("/lens-ingest", public.clone());
+    let routes = if server_root_path.is_empty() {
+        routes
+    } else {
+        routes.nest(&format!("{server_root_path}/lens-ingest"), public)
+    };
+    routes
         .merge(
             Router::new()
                 .route("/internal/read", post(read))

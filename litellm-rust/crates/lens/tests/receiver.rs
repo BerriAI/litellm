@@ -327,11 +327,13 @@ async fn ingestion_confirms_storage_and_overwrites_exporter_tenant() {
 }
 
 #[rstest]
-#[case::root("")]
-#[case::nested("/services/llm")]
+#[case::root("", "")]
+#[case::shared("/services/llm", "/services/llm")]
+#[case::explicit("/services/llm", "")]
 #[tokio::test]
 async fn shared_ingress_prefix_exposes_uploads_without_internal_control_routes(
     #[case] server_root_path: &str,
+    #[case] upload_root_path: &str,
 ) {
     let store = MockServer::start().await;
     Mock::given(method("POST"))
@@ -343,7 +345,7 @@ async fn shared_ingress_prefix_exposes_uploads_without_internal_control_routes(
     let client = http_client().unwrap();
     let upload = client
         .post(format!(
-            "{}{server_root_path}/lens-ingest/v1/traces",
+            "{}{upload_root_path}/lens-ingest/v1/traces",
             server.url
         ))
         .bearer_auth(KEY)
@@ -360,7 +362,7 @@ async fn shared_ingress_prefix_exposes_uploads_without_internal_control_routes(
     assert_eq!(health.status(), 200);
     let internal = client
         .get(format!(
-            "{}{server_root_path}/lens-ingest/internal/status",
+            "{}{upload_root_path}/lens-ingest/internal/status",
             server.url
         ))
         .bearer_auth(SERVICE_TOKEN)
@@ -371,7 +373,7 @@ async fn shared_ingress_prefix_exposes_uploads_without_internal_control_routes(
     let preflight = client
         .request(
             http::Method::OPTIONS,
-            format!("{}{server_root_path}/lens-ingest/v1/traces", server.url),
+            format!("{}{upload_root_path}/lens-ingest/v1/traces", server.url),
         )
         .header("origin", "https://dashboard.example")
         .header("access-control-request-method", "POST")
