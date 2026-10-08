@@ -514,3 +514,23 @@ shutdown drain window.
   value: {{ .drainTimeoutSeconds | quote }}
 {{- end }}
 {{- end -}}
+
+{{- define "litellm.lensConnectionEnv" -}}
+{{- if .Values.lensWorker.enabled }}
+- name: LITELLM_LENS_URL
+  value: {{ printf "http://%s-lens-worker:%v" (include "litellm.fullname" .) .Values.lensWorker.service.port | quote }}
+- name: LITELLM_LENS_PUBLIC_URL
+  value: {{ required "lensWorker.publicUrl is required" .Values.lensWorker.publicUrl | quote }}
+- name: LITELLM_LENS_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "lensWorker.serviceTokenSecret.name is required" .Values.lensWorker.serviceTokenSecret.name | quote }}
+      key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensWorker.labels" -}}
+{{- $labels := include "litellm.commonLabels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
+{{- toYaml $labels -}}
+{{- end -}}

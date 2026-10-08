@@ -6,18 +6,15 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { ChevronDown, ChevronRight, Download, Info, Search, Sparkles, X } from "lucide-react";
+import { Download, Search, Sparkles, X } from "lucide-react";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
-import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { BarChart } from "@/components/shared/charts";
+import { StackedUsageChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
-import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Skeleton } from "@/components/ui/skeleton";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
@@ -25,7 +22,6 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { hasCapability } from "@/utils/capabilities";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
@@ -36,10 +32,8 @@ import { filterModelActivity } from "@/components/UsagePage/modelActivityFilter"
 import { Team } from "@/components/key_team_helpers/key_list";
 import { gatewayDailyActivityCall, Organization, tagListCall } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
-import { ChartLoader } from "@/components/shared/chart_loader";
 import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
-import ViewUserSpend from "@/components/view_user_spend";
 import { useAggregatedDailyActivity } from "../hooks/useAggregatedDailyActivity";
 import { ENTITY_API } from "./EntityUsage/entityFetchFns";
 import {
@@ -48,8 +42,6 @@ import {
   type DailyActivityRequest,
 } from "@/components/UsagePage/dailyActivityApi";
 import { keyDetailFromResponse, overallUsageMetrics } from "@/components/UsagePage/keyActivityData";
-import { MetricWithMetadata } from "@/components/UsagePage/types";
-import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import {
   fetchedRangeKey,
   selectForRange,
@@ -62,27 +54,26 @@ import {
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
-import SpendByProvider from "./EntityUsage/SpendByProvider";
-import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import { overviewTotals, rollUpBreakdown } from "./overview/overviewData";
+import TopAgents from "./overview/TopAgents";
+import type { AgentRow } from "./overview/agentCatalog";
+import SpendByProvider from "./EntityUsage/SpendByProvider";
+import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
+import { Panel } from "./overview/Primitives";
+import UsageOverview from "./overview/UsageOverview";
 
 interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
 }
 
-const MetricValue = ({ pending, className, children }: { pending: boolean; className: string; children: ReactNode }) =>
-  pending ? <Skeleton className="h-8 w-24 mt-2" /> : <p className={className}>{children}</p>;
-
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
   const [gatewayActivityData, setGatewayActivityData] = useState<FetchedGatewayActivity | null>(null);
-
-  // Separate loading states for better UX
-  const [isDateChanging, setIsDateChanging] = useState(false);
 
   // Create initial dates outside of state to prevent recreation
   const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
@@ -124,8 +115,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
-  const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
-  const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
   // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
   useEffect(() => {
     if (!isAdmin && userID) {
@@ -199,6 +188,24 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     enabled: dailyActivityRequest !== null,
     deps: [accessToken, startTime, endTime, effectiveUserId],
   });
+  // Tag data is deployment-wide with no per-user dimension, so Top agents only appears where the
+  // rest of the page is deployment-wide too: an admin's global view with no user selected.
+  const showTopAgents = isAdmin && usageView === "global" && effectiveUserId === null;
+  const tagDailyRequest = useMemo<DailyActivityRequest | null>(
+    () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime, entityIds: null } : null),
+    [accessToken, startTime, endTime],
+  );
+  const { data: tagDailyRaw, loading: tagDailyLoading } = useAggregatedDailyActivity({
+    fetch: () => ENTITY_API.tag.aggregated(tagDailyRequest as DailyActivityRequest),
+    enabled: tagDailyRequest !== null && showTopAgents,
+    deps: [accessToken, startTime, endTime, showTopAgents],
+  });
+  const tagDaily = useMemo(() => toDailyData(tagDailyRaw), [tagDailyRaw]);
+  const [agentActivityTags, setAgentActivityTags] = useState<readonly string[] | undefined>(undefined);
+  const openAgentActivity = useCallback((agent: AgentRow) => {
+    setAgentActivityTags(agent.tags);
+    setUsageView("user-agent-activity");
+  }, []);
 
   // Gateway request counts (SGR). Admin-only: the source table is
   // deployment-wide, so a non-admin must not see it.
@@ -239,162 +246,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     [userSpendData],
   );
 
-  useEffect(() => {
-    if (!loading) {
-      setIsDateChanging(false);
-    }
-  }, [loading]);
-
-  // Super responsive date change handler
   const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
-    // Instant visual feedback
-    setIsDateChanging(true);
-
-    // Update date immediately for UI responsiveness
     setDateValue(newValue);
   }, []);
 
-  // Derived states from userSpendData
-  const totalSpend = userSpendData.metadata?.total_spend || 0;
-
-  // Calculate top models from the breakdown data
-  const topModels = useMemo(() => {
-    const modelSpend: { [key: string]: MetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
-        if (!modelSpend[model]) {
-          modelSpend[model] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {},
-            api_key_breakdown: {},
-          };
-        }
-        modelSpend[model].metrics.spend += metrics.metrics.spend;
-        modelSpend[model].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        modelSpend[model].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        modelSpend[model].metrics.total_tokens += metrics.metrics.total_tokens;
-        modelSpend[model].metrics.api_requests += metrics.metrics.api_requests;
-        modelSpend[model].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        modelSpend[model].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        modelSpend[model].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        modelSpend[model].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
-      });
-    });
-
-    return Object.entries(modelSpend)
-      .map(([model, metrics]) => ({
-        key: model,
-        spend: metrics.metrics.spend,
-        requests: metrics.metrics.api_requests,
-        successful_requests: metrics.metrics.successful_requests,
-        failed_requests: metrics.metrics.failed_requests,
-        tokens: metrics.metrics.total_tokens,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, topModelsLimit);
-  }, [userSpendData.results, topModelsLimit]);
-
-  const topModelGroups = useMemo(() => {
-    const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
-        if (!modelGroupSpend[modelGroup]) {
-          modelGroupSpend[modelGroup] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {},
-            api_key_breakdown: {},
-          };
-        }
-        modelGroupSpend[modelGroup].metrics.spend += metrics.metrics.spend;
-        modelGroupSpend[modelGroup].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        modelGroupSpend[modelGroup].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        modelGroupSpend[modelGroup].metrics.total_tokens += metrics.metrics.total_tokens;
-        modelGroupSpend[modelGroup].metrics.api_requests += metrics.metrics.api_requests;
-        modelGroupSpend[modelGroup].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        modelGroupSpend[modelGroup].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        modelGroupSpend[modelGroup].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        modelGroupSpend[modelGroup].metrics.cache_creation_input_tokens +=
-          metrics.metrics.cache_creation_input_tokens || 0;
-      });
-    });
-
-    return Object.entries(modelGroupSpend)
-      .map(([modelGroup, metrics]) => ({
-        key: modelGroup,
-        spend: metrics.metrics.spend,
-        requests: metrics.metrics.api_requests,
-        successful_requests: metrics.metrics.successful_requests,
-        failed_requests: metrics.metrics.failed_requests,
-        tokens: metrics.metrics.total_tokens,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, topModelsLimit);
-  }, [userSpendData.results, topModelsLimit]);
-
-  // Calculate provider spend from the breakdown data
-  const providerSpend = useMemo(() => {
-    const providerSpendMap: { [key: string]: MetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
-        if (!providerSpendMap[provider]) {
-          providerSpendMap[provider] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {},
-            api_key_breakdown: {},
-          };
-        }
-        providerSpendMap[provider].metrics.spend += metrics.metrics.spend;
-        providerSpendMap[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        providerSpendMap[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        providerSpendMap[provider].metrics.total_tokens += metrics.metrics.total_tokens;
-        providerSpendMap[provider].metrics.api_requests += metrics.metrics.api_requests;
-        providerSpendMap[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        providerSpendMap[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        providerSpendMap[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        providerSpendMap[provider].metrics.cache_creation_input_tokens +=
-          metrics.metrics.cache_creation_input_tokens || 0;
-      });
-    });
-
-    return Object.entries(providerSpendMap).map(([provider, metrics]) => ({
-      provider,
-      spend: metrics.metrics.spend,
-      requests: metrics.metrics.api_requests,
-      successful_requests: metrics.metrics.successful_requests,
-      failed_requests: metrics.metrics.failed_requests,
-      tokens: metrics.metrics.total_tokens,
-    }));
-  }, [userSpendData.results]);
+  const totals = useMemo(
+    () => overviewTotals(userSpendData.metadata, gatewayActivity),
+    [userSpendData.metadata, gatewayActivity],
+  );
+  const providerSpend = useMemo(
+    () => rollUpBreakdown(userSpendData.results, "providers").map(({ key, ...row }) => ({ provider: key, ...row })),
+    [userSpendData.results],
+  );
+  const { data: tagSummary, isLoading: tagSummaryLoading } = useTagSummary(startTime, endTime, showTopAgents);
 
   // Calculate top API keys from the breakdown data
   const topKeys = useMemo<TopKeyItem[]>(
@@ -451,42 +315,42 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   );
 
   return (
-    <div style={{ width: "100%" }} className="p-8 relative">
-      {/* Global Date Picker and Tabs - Single Row */}
-      <div className="flex items-end justify-between gap-6 mb-6">
-        <div className="flex-1">
-          <div className="flex items-end justify-between gap-6 mb-4 w-full">
-            <UsageViewSelect
-              value={usageView}
-              onChange={(value) => setUsageView(value)}
-              userRole={userRole}
-              canViewTagUsage={canViewTagUsage}
-              isOrgAdmin={isOrgAdmin}
-            />
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
-          </div>
-          {aggregatedFailed && (
-            <Alert variant="error" className="mb-2">
-              <AlertDescription className="text-inherit">
-                Fetching spend data failed, so the totals below may be empty rather than final. Reload the page to try
-                again.
-              </AlertDescription>
-            </Alert>
+    <div className="relative w-full px-4 pt-3 pb-8 sm:px-6">
+      <header className="mb-3 flex w-full flex-wrap items-center justify-between gap-3 border-b pb-3">
+        <UsageViewSelect
+          value={usageView}
+          onChange={(value) => setUsageView(value)}
+          userRole={userRole}
+          canViewTagUsage={canViewTagUsage}
+          isOrgAdmin={isOrgAdmin}
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          {isAdmin && usageView === "global" && (
+            <div className="w-64">
+              <UserDropdown value={selectedUserId} onChange={setSelectedUserId} />
+            </div>
           )}
+          <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+        </div>
+      </header>
+      {aggregatedFailed && (
+        <Alert variant="error" className="mb-3">
+          <AlertDescription className="text-inherit">
+            Fetching spend data failed, so the totals below may be empty rather than final. Reload the page to try
+            again.
+          </AlertDescription>
+        </Alert>
+      )}
+      <div>
+        <div>
           {/* Your Usage / Global Usage Panel */}
           {(usageView === "global" || usageView === "my-usage") && (
             <>
-              {isAdmin && usageView === "global" && (
-                <div className="mb-4">
-                  <p className="mb-2 text-sm text-foreground">Filter by user</p>
-                  <UserDropdown value={selectedUserId} onChange={setSelectedUserId} />
-                </div>
-              )}
-              <Tabs defaultValue="cost">
-                <div className="flex justify-between items-center">
-                  <TabsList className="mt-1">
+              <Tabs defaultValue="cost" className="gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <TabsList variant="line">
                     <TabsTrigger value="cost" className="flex-none px-3">
-                      Cost
+                      Overview
                     </TabsTrigger>
                     <TabsTrigger value="models" className="flex-none px-3">
                       Model Activity
@@ -502,370 +366,69 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     </TabsTrigger>
                   </TabsList>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" onClick={() => setIsAiChatOpen(true)}>
+                    <Button variant="outline" size="sm" onClick={() => setIsAiChatOpen(true)}>
                       <Sparkles />
                       Ask AI
                     </Button>
-                    <Button variant="outline" onClick={() => setIsGlobalExportModalOpen(true)}>
+                    <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
                       <Download />
                       Export Data
                     </Button>
                   </div>
                 </div>
-                {/* Cost Panel */}
                 <TabsContent value="cost" keepMounted>
-                  <div className="grid grid-cols-2 gap-2 w-full">
-                    {/* Total Spend Card */}
-                    <div className="col-span-2">
-                      <div className="flex items-center gap-4 mt-2 mb-2">
-                        <p className="text-lg text-muted-foreground">
-                          Project Spend{" "}
-                          {dateValue.from && dateValue.to && (
-                            <>
-                              {dateValue.from.toLocaleDateString("en-US", {
-                                month: "short",
-                                day: "numeric",
-                                year:
-                                  dateValue.from.getFullYear() !== dateValue.to.getFullYear() ? "numeric" : undefined,
-                              })}
-                              {" - "}
-                              {dateValue.to.toLocaleDateString("en-US", {
-                                month: "short",
-                                day: "numeric",
-                                year: "numeric",
-                              })}
-                            </>
-                          )}
-                        </p>
-                      </div>
-
-                      {!loading && (
-                        <ViewUserSpend
-                          userSpend={totalSpend}
-                          selectedTeam={null}
-                          userMaxBudget={currentUser?.max_budget || null}
-                        />
-                      )}
-                    </div>
-
-                    <div className="col-span-2">
-                      <ShadcnCard>
-                        <CardContent>
-                          <h3 className="text-lg font-medium text-foreground">Usage Metrics</h3>
-                          <div className="grid grid-cols-5 gap-4 mt-4">
-                            <ShadcnCard>
-                              <CardContent>
-                                <h3 className="text-lg font-medium text-foreground">Total Requests</h3>
-                                <MetricValue pending={requestCountsPending} className="text-2xl font-bold mt-2">
-                                  {(gatewayActivity
-                                    ? gatewayActivity.total_successful_requests + gatewayActivity.total_failed_requests
-                                    : userSpendData.metadata?.total_api_requests
-                                  )?.toLocaleString() || 0}
-                                </MetricValue>
-                              </CardContent>
-                            </ShadcnCard>
-                            <ShadcnCard>
-                              <CardContent>
-                                <div className="flex items-center gap-2">
-                                  <h3 className="text-lg font-medium text-foreground">Successful Requests</h3>
-                                  {gatewayActivity && (
-                                    <Tooltip>
-                                      <TooltipTrigger
-                                        render={<Info className="size-4 text-muted-foreground hover:text-foreground" />}
-                                      />
-                                      <TooltipContent>
-                                        Counted by the gateway when it answers a request, independent of spend logging.
-                                        Deployment-wide, so it will not match the per-key or per-model breakdowns below.
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  )}
-                                </div>
-                                {/*
-                                  TODO: drop the userSpendData fallback once every deployment
-                                  is writing LiteLLM_DailyGatewayRequests. It covers two cases
-                                  today: a non-admin (who may not read deployment-wide counts)
-                                  and an admin on a proxy whose table is still backfilling.
-                                */}
-                                <MetricValue
-                                  pending={requestCountsPending}
-                                  className="text-2xl font-bold mt-2 text-success"
-                                >
-                                  {(
-                                    gatewayActivity?.total_successful_requests ??
-                                    userSpendData.metadata?.total_successful_requests
-                                  )?.toLocaleString() || 0}
-                                </MetricValue>
-                              </CardContent>
-                            </ShadcnCard>
-                            <ShadcnCard>
-                              <CardContent>
-                                <div className="flex items-center gap-2">
-                                  <h3 className="text-lg font-medium text-foreground">Failed Requests</h3>
-                                  <Tooltip>
-                                    <TooltipTrigger
-                                      render={<Info className="size-4 text-muted-foreground hover:text-foreground" />}
-                                    />
-                                    <TooltipContent>
-                                      {gatewayActivity
-                                        ? "Counted by the gateway when it answers a request, independent of spend logging. Deployment-wide, so it will not match the per-key or per-model breakdowns below."
-                                        : "Includes requests that failed to route to a provider, tool usage failures, and other request errors where the provider cannot be determined."}
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </div>
-                                {/* Same source as Successful Requests: the two must agree, or the
-                                    tile disagrees with the endpoint breakdown chart below it. */}
-                                <MetricValue
-                                  pending={requestCountsPending}
-                                  className="text-2xl font-bold mt-2 text-destructive"
-                                >
-                                  {(
-                                    gatewayActivity?.total_failed_requests ??
-                                    userSpendData.metadata?.total_failed_requests
-                                  )?.toLocaleString() || 0}
-                                </MetricValue>
-                              </CardContent>
-                            </ShadcnCard>
-                            <ShadcnCard>
-                              <CardContent>
-                                <h3 className="text-lg font-medium text-foreground">Average Cost per Request</h3>
-                                <MetricValue pending={loading} className="text-2xl font-bold mt-2">
-                                  $
-                                  {formatNumberWithCommas(
-                                    (totalSpend || 0) / (userSpendData.metadata?.total_api_requests || 1),
-                                    4,
-                                  )}
-                                </MetricValue>
-                              </CardContent>
-                            </ShadcnCard>
-                            <ShadcnCard
-                              className="cursor-pointer hover:bg-accent transition-colors"
-                              onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
-                            >
-                              <CardContent>
-                                <div className="flex items-center gap-2">
-                                  <h3 className="text-lg font-medium text-foreground">Total Tokens</h3>
-                                  {showTokenBreakdown ? (
-                                    <ChevronDown className="size-3 text-muted-foreground" />
-                                  ) : (
-                                    <ChevronRight className="size-3 text-muted-foreground" />
-                                  )}
-                                </div>
-                                <MetricValue pending={loading} className="text-2xl font-bold mt-2">
-                                  {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
-                                </MetricValue>
-                              </CardContent>
-                            </ShadcnCard>
-                          </div>
-                          {showTokenBreakdown && (
-                            <div className="grid grid-cols-4 gap-4 mt-4">
-                              <ShadcnCard>
-                                <CardContent>
-                                  <h3 className="text-lg font-medium text-foreground">Input Tokens</h3>
-                                  <MetricValue pending={loading} className="text-2xl font-bold mt-2 text-info">
-                                    {(userSpendData.metadata?.total_prompt_tokens || 0).toLocaleString()}
-                                  </MetricValue>
-                                </CardContent>
-                              </ShadcnCard>
-                              <ShadcnCard>
-                                <CardContent>
-                                  <h3 className="text-lg font-medium text-foreground">Output Tokens</h3>
-                                  <MetricValue pending={loading} className="text-2xl font-bold mt-2 text-info">
-                                    {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
-                                  </MetricValue>
-                                </CardContent>
-                              </ShadcnCard>
-                              <ShadcnCard>
-                                <CardContent>
-                                  <h3 className="text-lg font-medium text-foreground">Cache Read Tokens</h3>
-                                  <MetricValue pending={loading} className="text-2xl font-bold mt-2 text-success">
-                                    {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
-                                  </MetricValue>
-                                </CardContent>
-                              </ShadcnCard>
-                              <ShadcnCard>
-                                <CardContent>
-                                  <h3 className="text-lg font-medium text-foreground">Cache Write Tokens</h3>
-                                  <MetricValue pending={loading} className="text-2xl font-bold mt-2 text-purple-600">
-                                    {userSpendData.metadata?.total_cache_creation_input_tokens?.toLocaleString() || 0}
-                                  </MetricValue>
-                                </CardContent>
-                              </ShadcnCard>
-                            </div>
-                          )}
-                        </CardContent>
-                      </ShadcnCard>
-                    </div>
-
-                    {/* Daily Spend Chart */}
-                    <div className="col-span-2">
-                      <ShadcnCard>
-                        <CardHeader>
-                          <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                          {loading ? (
-                            <ChartLoader isDateChanging={isDateChanging} />
-                          ) : (
-                            <BarChart
-                              data={sortedDailyResults}
-                              index="date"
-                              categories={["metrics.spend"]}
-                              colors={["cyan"]}
-                              valueFormatter={valueFormatterSpend}
-                              yAxisWidth={100}
-                              showLegend={false}
-                              customTooltip={({ payload, active }) => {
-                                if (!active || !payload?.[0]) return null;
-                                const data = payload[0].payload;
-                                return (
-                                  <div className="bg-card p-4 shadow-lg rounded-lg border">
-                                    <p className="font-bold">{data.date}</p>
-                                    <p className="text-info">Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
-                                    <p className="text-muted-foreground">Requests: {data.metrics.api_requests}</p>
-                                    <p className="text-muted-foreground">
-                                      Successful: {data.metrics.successful_requests}
-                                    </p>
-                                    <p className="text-muted-foreground">Failed: {data.metrics.failed_requests}</p>
-                                    <p className="text-muted-foreground">Tokens: {data.metrics.total_tokens}</p>
-                                  </div>
-                                );
-                              }}
-                            />
-                          )}
-                        </CardContent>
-                      </ShadcnCard>
-                    </div>
-                    {/* Gateway Requests by Endpoint (SGR) */}
-                    {gatewayActivity && gatewayActivity.by_route.length > 0 && (
-                      <div className="col-span-2">
-                        <ShadcnCard data-testid="gateway-requests-by-endpoint">
-                          <CardHeader>
-                            <CardTitle className="text-base font-semibold">
-                              Gateway Requests by Endpoint
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={
-                                    <Info className="ml-2 inline size-4 text-muted-foreground hover:text-foreground" />
-                                  }
-                                />
-                                <TooltipContent>
-                                  Counted by the gateway middleware as each request is answered. Covers LLM, MCP and A2A
-                                  endpoints across the whole deployment.
-                                </TooltipContent>
-                              </Tooltip>
-                            </CardTitle>
-                          </CardHeader>
-                          <CardContent>
-                            <BarChart
-                              data={gatewayRequestsByRoute}
-                              index="route"
-                              categories={["successful_requests", "failed_requests"]}
-                              colors={["green", "red"]}
-                              stack={true}
-                              yAxisWidth={100}
-                              valueFormatter={(value: number) => value.toLocaleString()}
-                            />
-                          </CardContent>
-                        </ShadcnCard>
-                      </div>
-                    )}
-                    {/* Top API Keys */}
-                    <div>
-                      <ShadcnCard className="h-full">
-                        <CardContent>
-                          <h3 className="text-lg font-medium text-foreground">Top Virtual Keys</h3>
-                          <TopKeyView
-                            topKeys={topKeys}
-                            teams={null}
-                            topKeysLimit={topKeysLimit}
-                            setTopKeysLimit={setTopKeysLimit}
-                          />
-                        </CardContent>
-                      </ShadcnCard>
-                    </div>
-
-                    {/* Top Models */}
-                    <div>
-                      <ShadcnCard className="h-full">
-                        <CardContent>
-                          <h3 className="text-lg font-medium text-foreground">
-                            {modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models"}
-                          </h3>
-                          <div className="flex justify-between items-center mb-4">
-                            <Tabs
-                              value={String(topModelsLimit)}
-                              onValueChange={(value: string) => setTopModelsLimit(Number(value))}
-                            >
-                              <TabsList>
-                                {TOP_MODEL_LIMITS.map((limit) => (
-                                  <TabsTrigger key={limit} value={String(limit)} className="flex-none px-3">
-                                    {limit}
-                                  </TabsTrigger>
-                                ))}
-                              </TabsList>
-                            </Tabs>
-                            <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
-                          </div>
-                          {loading ? (
-                            <ChartLoader isDateChanging={isDateChanging} />
-                          ) : (
-                            <div className="relative max-h-[600px] overflow-y-auto">
-                              {(() => {
-                                const modelData = modelViewType === "groups" ? topModelGroups : topModels;
-                                return (
-                                  <BarChart
-                                    className="mt-4"
-                                    style={{ height: Math.min(modelData.length, topModelsLimit) * 52 }}
-                                    data={modelData}
-                                    index="key"
-                                    categories={["spend"]}
-                                    colors={["cyan"]}
-                                    valueFormatter={valueFormatterSpend}
-                                    layout="vertical"
-                                    yAxisWidth={200}
-                                    showLegend={false}
-                                    customTooltip={({ payload, active }) => {
-                                      if (!active || !payload?.[0]) return null;
-                                      const data = payload[0].payload;
-                                      return (
-                                        <div className="bg-card p-4 shadow-lg rounded-lg border">
-                                          <p className="font-bold">{data.key}</p>
-                                          <p className="text-info">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
-                                          <p className="text-muted-foreground">
-                                            Total Requests: {data.requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-success">
-                                            Successful: {data.successful_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-destructive">
-                                            Failed: {data.failed_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-muted-foreground">
-                                            Tokens: {data.tokens.toLocaleString()}
-                                          </p>
-                                        </div>
-                                      );
-                                    }}
-                                  />
-                                );
-                              })()}
-                            </div>
-                          )}
-                        </CardContent>
-                      </ShadcnCard>
-                    </div>
-
-                    {/* Spend by Provider */}
-                    <div className="col-span-2">
-                      <SpendByProvider
-                        loading={loading}
-                        isDateChanging={isDateChanging}
-                        providerSpend={providerSpend}
+                  <UsageOverview
+                    results={sortedDailyResults}
+                    totals={totals}
+                    loading={loading}
+                    requestCountsPending={requestCountsPending}
+                    budget={currentUser?.max_budget ?? null}
+                    topKeys={
+                      <TopKeyView
+                        topKeys={topKeys}
+                        teams={null}
+                        topKeysLimit={topKeysLimit}
+                        setTopKeysLimit={setTopKeysLimit}
                       />
-                    </div>
-
-                    {/* Usage Metrics */}
-                  </div>
+                    }
+                    gatewayByEndpoint={
+                      gatewayActivity && gatewayActivity.by_route.length > 0 ? (
+                        <Panel
+                          testId="gateway-requests-by-endpoint"
+                          title="Gateway Requests by Endpoint"
+                          subtitle="Successful and failed requests per route"
+                          bodyClassName="px-2 pt-4"
+                        >
+                          <StackedUsageChart
+                            data={gatewayRequestsByRoute.map((row) => ({
+                              route: row.route,
+                              Successful: row.successful_requests,
+                              Failed: row.failed_requests,
+                            }))}
+                            series={["Successful", "Failed"]}
+                            colors={["#2b3fd6", "#ef4444"]}
+                            xKey="route"
+                            format={(value) => value.toLocaleString()}
+                            className="h-64"
+                          />
+                        </Panel>
+                      ) : null
+                    }
+                    topAgents={
+                      showTopAgents ? (
+                        <TopAgents
+                          rows={tagSummary}
+                          daily={tagDaily}
+                          loading={tagSummaryLoading || tagDailyLoading}
+                          totalTokens={totals.tokens}
+                          onOpenAgent={openAgentActivity}
+                        />
+                      ) : null
+                    }
+                    providerBreakdown={
+                      <SpendByProvider loading={loading} isDateChanging={false} providerSpend={providerSpend} />
+                    }
+                  />
                 </TabsContent>
 
                 {/* Activity Panel */}
@@ -1043,7 +606,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           )}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (
-            <UserAgentActivity accessToken={accessToken} userRole={userRole} dateValue={dateValue} />
+            <UserAgentActivity
+              // Remount when opened from a different agent so its tags become the starting filter.
+              key={agentActivityTags?.join("|") ?? "all"}
+              accessToken={accessToken}
+              userRole={userRole}
+              dateValue={dateValue}
+              initialTags={agentActivityTags}
+            />
           )}
         </div>
       </div>

@@ -2,54 +2,16 @@ import io
 
 
 import litellm
-from litellm import completion
 
 litellm.failure_callback = ["lunary"]
 litellm.success_callback = ["lunary"]
 litellm.set_verbose = True
 
 
-def test_lunary_logging():
-    try:
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "what llm are u"}],
-            max_tokens=10,
-            temperature=0.2,
-            user="test-user",
-        )
-        print(response)
-    except Exception as e:
-        print(e)
 
 
-def test_lunary_template():
-    import lunary
-
-    try:
-        template = lunary.render_template("test-template", {"question": "Hello!"})
-        response = completion(**template)
-        print(response)
-    except Exception as e:
-        print(e)
 
 
-def test_lunary_logging_with_metadata():
-    try:
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "what llm are u"}],
-            max_tokens=10,
-            temperature=0.2,
-            metadata={
-                "run_name": "litellmRUN",
-                "project_name": "litellm-completion",
-                "tags": ["tag1", "tag2"],
-            },
-        )
-        print(response)
-    except Exception as e:
-        print(e)
 
 
 def test_lunary_with_tools():
@@ -93,22 +55,3 @@ def test_lunary_with_tools():
     assert response.choices[0].message.tool_calls
     assert all(call.function.name == "get_current_weather" for call in response.choices[0].message.tool_calls)
     print("\nLLM Response:\n", response.choices[0].message)
-
-
-def test_lunary_logging_with_streaming_and_metadata():
-    try:
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "what llm are u"}],
-            max_tokens=10,
-            temperature=0.2,
-            metadata={
-                "run_name": "litellmRUN",
-                "project_name": "litellm-completion",
-            },
-            stream=True,
-        )
-        for chunk in response:
-            continue
-    except Exception as e:
-        print(e)

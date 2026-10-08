@@ -65,6 +65,7 @@ from litellm.router_utils.cooldown_handlers import (
 )
 from litellm.router_utils.fallback_event_handlers import DISABLE_FALLBACKS_METADATA_KEY
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
+from litellm.scheduler import FlowItem
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import (
     CustomRoutingStrategyBase,
@@ -3650,7 +3651,11 @@ def test_completion_streaming_iterator_adopts_the_deployment_that_served_a_neste
             }
             return chunk
 
-    with patch.object(router, "function_with_fallbacks", return_value=NestedFallbackStream()):
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=NestedFallbackStream()),
+    ):
         result = router._completion_streaming_iterator(
             model_response=FailedStream(),
             messages=[{"role": "user", "content": "hi"}],
@@ -3665,6 +3670,126 @@ def test_completion_streaming_iterator_adopts_the_deployment_that_served_a_neste
 
     assert result._response_headers == {"x-request-id": "req-SERVED"}
     assert result._hidden_params["model_id"] == "served-deployment"
+
+
+def test_completion_streaming_fallback_resumes_chain_without_retrying_primary():
+    class FailingStream(CustomStreamWrapper):
+        def __init__(self, model: str):
+            super().__init__(
+                completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock()
+            )
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise MidStreamFallbackError(
+                message=f"provider 500 from {self.model}",
+                model=self.model,
+                llm_provider="openai",
+                generated_content="",
+                is_pre_first_chunk=True,
+                original_exception=litellm.InternalServerError(
+                    message=f"provider 500 from {self.model}", model=self.model, llm_provider="openai"
+                ),
+            )
+
+    class OkStream(FailingStream):
+        def __init__(self, model: str):
+            super().__init__(model)
+            self._chunks = iter(
+                [litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": f"ok-from-{model}"}}])]
+            )
+
+        def __next__(self):
+            return next(self._chunks)
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "backup", "litellm_params": {"model": "openai/backup-model", "api_key": "fake-key"}},
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    primary_calls: Final = iter(range(2))
+
+    def fake_completion(**kwargs):
+        model_group: Final = kwargs["metadata"]["model_group"]
+        if model_group == "backup":
+            return OkStream(kwargs["model"])
+        if next(primary_calls) > 0:
+            raise RuntimeError("primary group retried")
+        return FailingStream(kwargs["model"])
+
+    with patch("litellm.completion", side_effect=fake_completion) as provider_calls:
+        response: Final = router.completion(model="primary", messages=[{"role": "user", "content": "hi"}], stream=True)
+        content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in response)
+
+    assert content == "ok-from-openai/backup-model"
+    assert [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list] == [
+        "primary",
+        "backup",
+    ]
+
+
+def test_completion_mid_stream_fallback_walks_every_entry_of_the_configured_list():
+    class FailingStream(CustomStreamWrapper):
+        def __init__(self, model: str):
+            super().__init__(
+                completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock()
+            )
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise MidStreamFallbackError(
+                message=f"provider 500 from {self.model}",
+                model=self.model,
+                llm_provider="openai",
+                generated_content="",
+                is_pre_first_chunk=True,
+                original_exception=litellm.InternalServerError(
+                    message=f"provider 500 from {self.model}", model=self.model, llm_provider="openai"
+                ),
+            )
+
+    class OkStream(FailingStream):
+        def __init__(self, model: str):
+            super().__init__(model)
+            self._chunks = iter(
+                [litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": f"ok-from-{model}"}}])]
+            )
+
+        def __next__(self):
+            return next(self._chunks)
+
+    def fake_completion(**kwargs):
+        if "fb2" in kwargs["model"]:
+            return OkStream(kwargs["model"])
+        return FailingStream(kwargs["model"])
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "fake-key"}},
+            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "fake-key"}},
+        ],
+        fallbacks=[{"primary": ["fb1", "fb2"]}],
+        num_retries=0,
+    )
+
+    with patch("litellm.completion", side_effect=fake_completion) as provider_calls:
+        response: Final = router.completion(model="primary", messages=[{"role": "user", "content": "hi"}], stream=True)
+        content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in response if chunk is not None)
+
+    assert content == "ok-from-openai/fb2-model"
+    assert [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list] == [
+        "primary",
+        "fb1",
+        "fb2",
+    ]
 
 
 @pytest.mark.asyncio
@@ -3828,7 +3953,11 @@ def test_completion_streaming_iterator_adopts_fallback_response_headers():
         def __iter__(self):
             return iter([])
 
-    with patch.object(router, "function_with_fallbacks", return_value=FallbackStream()):
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=FallbackStream()),
+    ):
         result = router._completion_streaming_iterator(
             model_response=FailedStream(),
             messages=[{"role": "user", "content": "hi"}],
@@ -3895,8 +4024,8 @@ def test_completion_streaming_iterator_fallback_on_429():
 
     with patch.object(
         router,
-        "function_with_fallbacks",
-        return_value=mock_fallback_response,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=mock_fallback_response),
     ) as mock_fallback:
         result = router._completion_streaming_iterator(
             model_response=mock_response,
@@ -3906,12 +4035,12 @@ def test_completion_streaming_iterator_fallback_on_429():
 
         collected_chunks = list(result)
 
-        assert mock_fallback.called
-        call_kwargs = mock_fallback.call_args
+        mock_fallback.assert_awaited_once()
+        call_kwargs = mock_fallback.await_args.kwargs["kwargs"]
         # Pre-first-chunk: should use original messages, no continuation prompt
-        assert call_kwargs.kwargs.get("messages") == messages
+        assert call_kwargs.get("messages") == messages
         # Verify original_function is _completion (sync)
-        assert call_kwargs.kwargs.get("original_function") == router._completion
+        assert call_kwargs.get("original_function") == router._completion
 
 
 def test_completion_streaming_iterator_preserves_hidden_params():
@@ -19819,6 +19948,64 @@ def test_access_windows_filter_reserved_deployments_method():
             request_team_id="team-a",
         )
     ] == ["reserved-deployment", "open-deployment"]
+
+
+def _scheduled_router(timeout: float) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "sched-model",
+                "litellm_params": {"model": "openai/sched-model", "api_key": "sk-fake", "mock_response": "hi"},
+                "model_info": {"id": "sched-deployment"},
+            }
+        ],
+        timeout=timeout,
+    )
+
+
+async def _send_scheduled_chat(router: Router, priority: int) -> object:
+    return await router.acompletion(
+        model="sched-model", messages=[{"role": "user", "content": "hi"}], priority=priority
+    )
+
+
+async def _send_scheduled_text(router: Router, priority: int) -> object:
+    return await router.atext_completion(model="sched-model", prompt="hi", priority=priority)
+
+
+@pytest.mark.parametrize(
+    "send", [_send_scheduled_chat, _send_scheduled_text], ids=["schedule_acompletion", "schedule_factory"]
+)
+@pytest.mark.asyncio
+async def test_admitted_prioritized_request_does_not_block_later_request_during_cooldown(
+    send: Callable[[Router, int], Awaitable[object]],
+):
+    from litellm.types.router import RouterRateLimitError
+
+    router: Final = _scheduled_router(timeout=1)
+    await send(router, 1)
+    _cool_down(router, "sched-deployment")
+
+    with pytest.raises(RouterRateLimitError, match="cooldown"):
+        await send(router, 2)
+
+
+@pytest.mark.parametrize("stop_waiting", ["cancel", "timeout"])
+@pytest.mark.asyncio
+async def test_prioritized_request_leaves_queue_when_it_stops_waiting(stop_waiting: Literal["cancel", "timeout"]):
+    router: Final = _scheduled_router(timeout=0.5)
+    _cool_down(router, "sched-deployment")
+    await router.scheduler.add_request(FlowItem(priority=0, request_id="head-of-queue", model_name="sched-model"))
+    waiting: Final = asyncio.create_task(_send_scheduled_chat(router, 5))
+    await asyncio.sleep(0.05)
+    assert len(await router.scheduler.get_queue("sched-model")) == 2
+
+    if stop_waiting == "cancel":
+        waiting.cancel()
+    with pytest.raises(asyncio.CancelledError if stop_waiting == "cancel" else litellm.Timeout):
+        await waiting
+
+    assert await router.scheduler.get_queue("sched-model") == [(0, "head-of-queue")]
 
 
 @pytest.mark.asyncio

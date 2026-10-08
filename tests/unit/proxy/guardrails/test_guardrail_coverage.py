@@ -605,9 +605,9 @@ async def test_azure_content_safety_pre_call_fires_on_runtime_call_types(
     ``aresponses`` for the Responses API. The hook must inspect text
     fragments under both, not only the literal ``"completion"`` string
     used by some SDK callers."""
-    from litellm.proxy.hooks.azure_content_safety import _PROXY_AzureContentSafety
+    from litellm.proxy.hooks.azure_content_safety import PROXY_AzureContentSafety
 
-    guard = _PROXY_AzureContentSafety.__new__(_PROXY_AzureContentSafety)
+    guard = PROXY_AzureContentSafety.__new__(PROXY_AzureContentSafety)
     seen = []
 
     async def fake_test_violation(content, source=None):
@@ -628,9 +628,9 @@ async def test_azure_content_safety_post_call_checks_all_choices(user_api_key):
     """Krrish blocker: ``n>1`` responses must not bypass Azure Content Safety
     by placing the unsafe text in ``choices[1+]``."""
     from fastapi import HTTPException
-    from litellm.proxy.hooks.azure_content_safety import _PROXY_AzureContentSafety
+    from litellm.proxy.hooks.azure_content_safety import PROXY_AzureContentSafety
 
-    guard = _PROXY_AzureContentSafety.__new__(_PROXY_AzureContentSafety)
+    guard = PROXY_AzureContentSafety.__new__(PROXY_AzureContentSafety)
     seen_outputs = []
 
     async def fake_test_violation(content, source=None):
