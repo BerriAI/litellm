@@ -559,9 +559,7 @@ def github_copilot_auth_mode(litellm_credential_name: object, auth_type_value: o
             return isinstance(values, Mapping) and (
                 cast(  # cast-ok: value is Mapping-checked or dict-shaped at runtime
                     Mapping[object, object], values
-                ).get(
-                    GITHUB_COPILOT_AUTH_TYPE_KEY
-                )
+                ).get(GITHUB_COPILOT_AUTH_TYPE_KEY)
                 == GITHUB_COPILOT_PER_USER_AUTH_TYPE
             )
         return auth_type_value == GITHUB_COPILOT_PER_USER_AUTH_TYPE
