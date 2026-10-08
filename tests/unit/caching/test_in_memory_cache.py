@@ -274,3 +274,19 @@ def test_in_memory_cache_injected_clock_controls_expiry_and_eviction() -> None:
     assert cache.get_cache("second") is None
     assert cache.get_cache("third") == "replacement"
     assert cache.get_cache("fourth") == "new"
+
+
+def test_in_memory_cache_refresh_ttl_extends_a_live_key_and_rejects_an_absent_or_expired_one() -> None:
+    clock = MagicMock(return_value=0.0)
+    cache = InMemoryCache(clock=clock)
+    cache.set_cache("live", "v", ttl=10)
+    cache.set_cache("stale", "v", ttl=10)
+    clock.return_value = 9.0
+    assert cache.refresh_ttl("live", 100) is True
+    assert cache.refresh_ttl("absent", 100) is False
+    clock.return_value = 11.0
+    assert cache.refresh_ttl("stale", 100) is False
+    assert cache.get_cache("stale") is None
+    assert cache.get_cache("live") == "v"
+    clock.return_value = 110.0
+    assert cache.get_cache("live") is None

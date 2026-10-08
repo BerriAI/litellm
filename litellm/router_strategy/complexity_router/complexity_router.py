@@ -4283,6 +4283,16 @@ class ComplexityRouter(CustomLogger):
         caller_scope: Final = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
         return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
 
+    async def _retain_session_pin(
+        self, cache_key: str, pinned_value: object, model: str, tier: ComplexityTier | str | None
+    ) -> None:
+        retained_value: Final = _session_affinity_cache_value(model, tier)
+        ttl: Final = self.config.session_affinity_ttl_seconds
+        if retained_value == pinned_value:
+            await self.litellm_router_instance.cache.async_refresh_ttl(key=cache_key, ttl=ttl)
+            return
+        await self.litellm_router_instance.cache.async_set_cache(key=cache_key, value=retained_value, ttl=ttl)
+
     @property
     def _uses_tier_pin(self) -> bool:
         """classification_mode 'user_turn' implies the tier pin machinery: the pin write after each
@@ -4358,7 +4368,7 @@ class ComplexityRouter(CustomLogger):
         )
 
         if cache_key is not None and pin_replay_allowed:
-            pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
+            pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache_redis_first(key=cache_key)
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
                 user_message: Final = _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None
@@ -4451,13 +4461,7 @@ class ComplexityRouter(CustomLogger):
                         if pin_placement is not None and pin_context_original_tier is not None
                         else floor_model
                     )
-                    # Refresh the TTL on every hit so an active session doesn't lose its
-                    # pin mid-conversation just because it outlives the original write.
-                    await self.litellm_router_instance.cache.async_set_cache(
-                        key=cache_key,
-                        value=_session_affinity_cache_value(session_model, resolved_pin_tier),
-                        ttl=self.config.session_affinity_ttl_seconds,
-                    )
+                    await self._retain_session_pin(cache_key, pinned_value, session_model, resolved_pin_tier)
                     if self.config.adaptive:
                         from litellm.router_strategy.adaptive_router.config import (
                             ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,

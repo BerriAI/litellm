@@ -179,6 +179,14 @@ class InMemoryCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
 
+    def refresh_ttl(self, key: str, ttl: float) -> bool:
+        if key not in self.cache_dict or self.evict_element_if_expired(key):
+            return False
+        expires_at: Final = self._clock() + float(ttl)
+        self.ttl_dict[key] = expires_at
+        heapq.heappush(self.expiration_heap, (expires_at, key))
+        return True
+
     async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
         for cache_key, cache_value in cache_list:
             if ttl is not None:

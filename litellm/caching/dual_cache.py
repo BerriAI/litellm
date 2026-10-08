@@ -296,6 +296,21 @@ class DualCache(BaseCache):
                 verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_get_cache", e, with_traceback=True
             )
 
+    async def async_get_cache_redis_first(self, key: str) -> object:
+        if self.redis_cache is None:
+            return await self.in_memory_cache.async_get_cache(key)
+        try:
+            return await self.redis_cache.async_get_cache(key)
+        except Exception as e:
+            log_redis_failure(
+                verbose_logger,
+                logging.ERROR,
+                "LiteLLM Cache: exception in async_get_cache_redis_first",
+                e,
+                with_traceback=True,
+            )
+            return await self.in_memory_cache.async_get_cache(key)
+
     def _reserve_redis_batch_keys(
         self,
         current_time: float,
@@ -737,3 +752,15 @@ class DualCache(BaseCache):
         if ttl is None and self.redis_cache is not None:
             ttl = await self.redis_cache.async_get_ttl(key)
         return ttl
+
+    async def async_refresh_ttl(self, key: str, ttl: int) -> bool:
+        memory_refreshed: Final = self.in_memory_cache.refresh_ttl(key, ttl)
+        if self.redis_cache is None:
+            return memory_refreshed
+        try:
+            return await self.redis_cache.async_refresh_ttl(key, ttl)
+        except Exception as e:
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_refresh_ttl", e, with_traceback=True
+            )
+            return False

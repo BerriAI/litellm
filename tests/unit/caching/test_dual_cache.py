@@ -1022,3 +1022,70 @@ async def test_async_batch_reads_of_missing_keys_hit_redis_once_per_expiry_windo
     dual_cache.last_redis_batch_access_time.update({key: time.time() - 61 for key in keys})
     await dual_cache.async_batch_get_cache(keys)
     assert redis_cache.async_batch_get_cache.await_count == 2
+
+
+class _RecordingRedis:
+    def __init__(self, values: dict[str, object]) -> None:
+        self.values = values
+        self.refreshed: list[tuple[str, int | None]] = []
+
+    async def async_get_cache(self, key, **kwargs):
+        return self.values.get(key)
+
+    async def async_refresh_ttl(self, key: str, ttl: int | None = None) -> bool:
+        self.refreshed.append((key, ttl))
+        return key in self.values
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_serves_redis_over_the_local_copy():
+    """The ordinary read serves this process's copy first; the Redis-first read is for a value another
+    process may have replaced since this one last wrote it."""
+    cache = DualCache(redis_cache=_RecordingRedis({"pin": "from-redis"}))
+    await cache.in_memory_cache.async_set_cache("pin", "from-memory")
+    assert await cache.async_get_cache_redis_first("pin") == "from-redis"
+    assert await cache.async_get_cache("pin") == "from-memory"
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_treats_a_redis_miss_as_a_miss():
+    cache = DualCache(redis_cache=_RecordingRedis({}))
+    await cache.in_memory_cache.async_set_cache("pin", "from-memory")
+    assert await cache.async_get_cache_redis_first("pin") is None
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_reads_memory_without_redis():
+    cache = DualCache()
+    await cache.async_set_cache("pin", "local")
+    assert await cache.async_get_cache_redis_first("pin") == "local"
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_falls_back_to_the_local_copy_when_redis_raises():
+    cache = DualCache(redis_cache=_OpenBreakerRedis())
+    await cache.in_memory_cache.async_set_cache("pin", "local")
+    assert await cache.async_get_cache_redis_first("pin") == "local"
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_refresh_ttl_extends_memory_and_expires_redis_without_a_rewrite():
+    redis = _RecordingRedis({"pin": "v"})
+    clock = MagicMock(return_value=1_000.0)
+    cache = DualCache(in_memory_cache=InMemoryCache(clock=clock), redis_cache=redis)
+    await cache.in_memory_cache.async_set_cache("pin", "v", ttl=30)
+    assert await cache.async_refresh_ttl("pin", 300) is True
+    clock.return_value = 1_200.0
+    assert cache.in_memory_cache.get_cache("pin") == "v"
+    assert redis.refreshed == [("pin", 300)]
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_refresh_ttl_without_redis_reports_whether_memory_held_the_key():
+    clock = MagicMock(return_value=1_000.0)
+    cache = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    await cache.async_set_cache("pin", "v", ttl=30)
+    assert await cache.async_refresh_ttl("pin", 300) is True
+    assert await cache.async_refresh_ttl("absent", 300) is False
+    clock.return_value = 1_200.0
+    assert await cache.async_get_cache("pin") == "v"
