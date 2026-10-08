@@ -1,22 +1,30 @@
+use indexmap::IndexMap;
 use litellm_llms_types::formats::messages::{
-    AdvisorToolResultContent, AllowedCaller, BashCodeExecutionOutput,
-    BashCodeExecutionToolResultContent, BlockContent, BrowserStateChange, BuiltinMessagesTool,
-    CacheMissReason, Citation, CodeExecutionOutput, CodeExecutionToolResultContent,
-    ContainerReference, ContentSource, ContextManagementResponse, ContextTrigger, CustomTool,
-    CustomToolType, FallbackTrigger, McpServer, McpToolResultContent, McpToolResultText,
-    MessageRole, MessageType, MessagesCompaction, MessagesContainer, MessagesContentPart,
-    MessagesDiagnostics, MessagesDiagnosticsParam, MessagesMetadata, MessagesToolParam,
-    MessagesUsage, OutputFormat, ResponseInclusion, Safeguard, SkillType, StopDetails,
-    StopDetailsType, StopReason, TextEditorCodeExecutionToolResultContent, TextEditorFileType,
-    ToolCaller, ToolChange, ToolChangeTarget, ToolChoice, ToolChoiceType, ToolResultUrlSource,
-    ToolSearchReference, ToolSearchToolResultContent, UrlSourceToolReference, UsageIterationType,
-    UserInputUrlSource, WebFetchDocument, WebFetchToolResultContent, WebSearchToolResultContent,
+    AdvisorTool, AdvisorToolName, AdvisorToolResultContent, AllowedCaller, BashCodeExecutionOutput,
+    BashCodeExecutionToolResultContent, BashToolName, BlockContent, BrowserStateChange,
+    BrowserToolsetConfigs, BuiltinMessagesTool, CacheControl, CacheMissReason, Citation,
+    CitationsConfig, ClientTool, CodeExecutionOutput, CodeExecutionToolName,
+    CodeExecutionToolResultContent, ComputerTool, ComputerTool20251124, ComputerToolName,
+    ComputerToolsetConfigs, ContainerReference, ContentSource, ContextManagementResponse,
+    ContextTrigger, CustomTool, CustomToolType, FallbackTrigger, McpListedTool, McpServer,
+    McpToolResultContent, McpToolResultText, McpToolset, MemoryToolName, MessageRole, MessageType,
+    MessagesCompaction, MessagesContainer, MessagesContentPart, MessagesDiagnostics,
+    MessagesDiagnosticsParam, MessagesMetadata, MessagesToolParam, MessagesUsage, OutputFormat,
+    ResponseInclusion, Safeguard, ServerTool, SkillType, StopDetails, StopDetailsType, StopReason,
+    StrReplaceBasedEditToolName, StrReplaceEditorName, TextEditorCodeExecutionToolResultContent,
+    TextEditorFileType, TextEditorTool20250728, ToolCaller, ToolChange, ToolChangeTarget,
+    ToolChoice, ToolChoiceType, ToolResultUrlSource, ToolSearchBm25ToolName, ToolSearchReference,
+    ToolSearchRegexToolName, ToolSearchToolResultContent, Toolset, ToolsetToolConfig,
+    UrlSourceToolReference, UsageIterationType, UserInputUrlSource, UserLocationType,
+    WebFetchDocument, WebFetchTool, WebFetchTool20260309, WebFetchTool20260318, WebFetchToolName,
+    WebFetchToolResultContent, WebFetchUrlSources, WebSearchTool, WebSearchTool20260318,
+    WebSearchToolName, WebSearchToolResultContent, WebSearchUserLocation,
 };
-use litellm_llms_types::json_schema::JsonSchema;
+use litellm_llms_types::json_schema::{JsonSchema, JsonSchemaObject, JsonSchemaType};
 use litellm_llms_types::recognized::Recognized;
 use rstest::rstest;
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 fn round_trip<T>(wire: Value) -> T
 where
@@ -147,27 +155,25 @@ fn stop_details_expose_refusal_and_keep_unknown_types() {
 }
 
 #[rstest]
-#[case::skill_without_id(
-    json!({"skills":[{"type":"custom","version":"1"}]}),
-    |wire| serde_json::from_value::<MessagesContainer>(wire).is_err()
-)]
-#[case::mcp_server_without_url(
-    json!({"type":"url","name":"search"}),
-    |wire| serde_json::from_value::<McpServer>(wire).is_err()
-)]
-#[case::mcp_server_without_name(
-    json!({"type":"url","url":"https://example.test/mcp"}),
-    |wire| serde_json::from_value::<McpServer>(wire).is_err()
-)]
-#[case::output_format_without_schema(
-    json!({"type":"json_schema"}),
-    |wire| serde_json::from_value::<OutputFormat>(wire).is_err()
-)]
-fn metadata_contracts_reject_missing_required_fields(
-    #[case] wire: Value,
-    #[case] rejects: fn(Value) -> bool,
-) {
-    assert!(rejects(wire));
+fn container_rejects_skill_without_id() {
+    assert!(
+        serde_json::from_value::<MessagesContainer>(
+            json!({"skills":[{"type":"custom","version":"1"}]})
+        )
+        .is_err()
+    );
+}
+
+#[rstest]
+#[case::without_url(json!({"type":"url","name":"search"}))]
+#[case::without_name(json!({"type":"url","url":"https://example.test/mcp"}))]
+fn mcp_server_rejects_missing_required_fields(#[case] wire: Value) {
+    assert!(serde_json::from_value::<McpServer>(wire).is_err());
+}
+
+#[rstest]
+fn output_format_rejects_missing_schema() {
+    assert!(serde_json::from_value::<OutputFormat>(json!({"type":"json_schema"})).is_err());
 }
 
 #[rstest]
@@ -321,289 +327,484 @@ fn content_sources_round_trip(#[case] wire: Value) {
     round_trip::<ContentSource>(wire);
 }
 
+fn client_tool<N>(name: N) -> ClientTool<N> {
+    ClientTool {
+        name,
+        allowed_callers: None,
+        cache_control: None,
+        defer_loading: None,
+        input_examples: None,
+        strict: None,
+        extra: Map::new(),
+    }
+}
+
+fn server_tool<N>(name: N) -> ServerTool<N> {
+    ServerTool {
+        name,
+        allowed_callers: None,
+        cache_control: None,
+        defer_loading: None,
+        strict: None,
+        extra: Map::new(),
+    }
+}
+
+fn computer_tool(display_width_px: u64, display_height_px: u64) -> ComputerTool {
+    ComputerTool {
+        name: ComputerToolName::Computer,
+        display_width_px,
+        display_height_px,
+        display_number: None,
+        allowed_callers: None,
+        cache_control: None,
+        defer_loading: None,
+        input_examples: None,
+        strict: None,
+        extra: Map::new(),
+    }
+}
+
+fn web_search_tool() -> WebSearchTool {
+    WebSearchTool {
+        name: WebSearchToolName::WebSearch,
+        allowed_callers: None,
+        allowed_domains: None,
+        blocked_domains: None,
+        cache_control: None,
+        defer_loading: None,
+        max_uses: None,
+        strict: None,
+        user_location: None,
+        extra: Map::new(),
+    }
+}
+
+fn web_fetch_tool() -> WebFetchTool {
+    WebFetchTool {
+        name: WebFetchToolName::WebFetch,
+        allowed_callers: None,
+        allowed_domains: None,
+        blocked_domains: None,
+        cache_control: None,
+        citations: None,
+        defer_loading: None,
+        max_content_tokens: None,
+        max_uses: None,
+        strict: None,
+        url_sources: None,
+        extra: Map::new(),
+    }
+}
+
+fn web_fetch_url_sources() -> WebFetchUrlSources {
+    WebFetchUrlSources {
+        client_tool_results: None,
+        server_tool_results: None,
+        user_input: None,
+        extra: Map::new(),
+    }
+}
+
+fn tool_reference(name: &str) -> UrlSourceToolReference {
+    UrlSourceToolReference::ToolReference {
+        name: String::from(name),
+        extra: Map::new(),
+    }
+}
+
+fn toolset_config(enabled: Option<bool>, defer_loading: Option<bool>) -> ToolsetToolConfig {
+    ToolsetToolConfig {
+        defer_loading,
+        enabled,
+        extra: Map::new(),
+    }
+}
+
+fn cache_control(cache_type: &str, ttl: &str) -> CacheControl {
+    CacheControl {
+        cache_type: Some(String::from(cache_type)),
+        ttl: Some(String::from(ttl)),
+        ..CacheControl::default()
+    }
+}
+
+fn browser_toolset_configs() -> BrowserToolsetConfigs {
+    BrowserToolsetConfigs {
+        type_text: None,
+        close_tab: None,
+        double_click: None,
+        file_upload: None,
+        find: None,
+        form_input: None,
+        get_page_text: None,
+        hold_key: None,
+        hover: None,
+        javascript_exec: None,
+        key: None,
+        left_click: None,
+        left_click_drag: None,
+        left_mouse_down: None,
+        left_mouse_up: None,
+        list_tabs: None,
+        middle_click: None,
+        mouse_move: None,
+        navigate: None,
+        new_tab: None,
+        read_console: None,
+        read_network: None,
+        read_page: None,
+        right_click: None,
+        screenshot: None,
+        scroll: None,
+        scroll_to: None,
+        switch_tab: None,
+        triple_click: None,
+        wait: None,
+        zoom: None,
+        extra: Map::new(),
+    }
+}
+
+fn computer_toolset_configs() -> ComputerToolsetConfigs {
+    ComputerToolsetConfigs {
+        type_text: None,
+        cursor_position: None,
+        double_click: None,
+        hold_key: None,
+        key: None,
+        left_click: None,
+        left_click_drag: None,
+        left_mouse_down: None,
+        left_mouse_up: None,
+        middle_click: None,
+        mouse_move: None,
+        right_click: None,
+        screenshot: None,
+        scroll: None,
+        triple_click: None,
+        wait: None,
+        zoom: None,
+        extra: Map::new(),
+    }
+}
+
 #[rstest]
 #[case::bash_20241022(
     json!({"type":"bash_20241022","name":"bash","input_examples":[{"command":"ls"}]}),
-    |tool| {
-        let BuiltinMessagesTool::Bash20241022(bash) = tool else { panic!("expected bash_20241022") };
-        assert_eq!(bash.input_examples.unwrap()[0]["command"], "ls");
-        assert!(bash.extra.is_empty());
-    }
+    BuiltinMessagesTool::Bash20241022(ClientTool {
+        input_examples: Some(vec![Map::from_iter([(String::from("command"), json!("ls"))])]),
+        ..client_tool(BashToolName::Bash)
+    })
 )]
 #[case::bash_20250124(
     json!({"type":"bash_20250124","name":"bash","allowed_callers":["direct","code_execution_20260521"]}),
-    |tool| {
-        let BuiltinMessagesTool::Bash20250124(bash) = tool else { panic!("expected bash_20250124") };
-        assert_eq!(
-            bash.allowed_callers.as_deref(),
-            Some([AllowedCaller::Direct, AllowedCaller::CodeExecution20260521].as_slice())
-        );
-        assert!(bash.extra.is_empty());
-    }
+    BuiltinMessagesTool::Bash20250124(ClientTool {
+        allowed_callers: Some(vec![AllowedCaller::Direct, AllowedCaller::CodeExecution20260521]),
+        ..client_tool(BashToolName::Bash)
+    })
 )]
 #[case::text_editor_20241022(
     json!({"type":"text_editor_20241022","name":"str_replace_editor","defer_loading":true}),
-    |tool| {
-        let BuiltinMessagesTool::TextEditor20241022(editor) = tool else { panic!("expected text_editor_20241022") };
-        assert_eq!(editor.defer_loading, Some(true));
-        assert!(editor.extra.is_empty());
-    }
+    BuiltinMessagesTool::TextEditor20241022(ClientTool {
+        defer_loading: Some(true),
+        ..client_tool(StrReplaceEditorName::StrReplaceEditor)
+    })
 )]
 #[case::text_editor_20250124(
     json!({"type":"text_editor_20250124","name":"str_replace_editor","strict":true}),
-    |tool| {
-        let BuiltinMessagesTool::TextEditor20250124(editor) = tool else { panic!("expected text_editor_20250124") };
-        assert_eq!(editor.strict, Some(true));
-        assert!(editor.extra.is_empty());
-    }
+    BuiltinMessagesTool::TextEditor20250124(ClientTool {
+        strict: Some(true),
+        ..client_tool(StrReplaceEditorName::StrReplaceEditor)
+    })
 )]
 #[case::text_editor_20250429(
     json!({"type":"text_editor_20250429","name":"str_replace_based_edit_tool","cache_control":{"type":"ephemeral","ttl":"1h"}}),
-    |tool| {
-        let BuiltinMessagesTool::TextEditor20250429(editor) = tool else { panic!("expected text_editor_20250429") };
-        assert_eq!(editor.cache_control.unwrap().ttl.as_deref(), Some("1h"));
-        assert!(editor.extra.is_empty());
-    }
+    BuiltinMessagesTool::TextEditor20250429(ClientTool {
+        cache_control: Some(cache_control("ephemeral", "1h")),
+        ..client_tool(StrReplaceBasedEditToolName::StrReplaceBasedEditTool)
+    })
 )]
 #[case::text_editor_20250728(
     json!({"type":"text_editor_20250728","name":"str_replace_based_edit_tool","max_characters":10000}),
-    |tool| {
-        let BuiltinMessagesTool::TextEditor20250728(editor) = tool else { panic!("expected text_editor_20250728") };
-        assert_eq!(editor.max_characters, Some(10000));
-        assert!(editor.extra.is_empty());
-    }
+    BuiltinMessagesTool::TextEditor20250728(TextEditorTool20250728 {
+        name: StrReplaceBasedEditToolName::StrReplaceBasedEditTool,
+        allowed_callers: None,
+        cache_control: None,
+        defer_loading: None,
+        input_examples: None,
+        max_characters: Some(10000),
+        strict: None,
+        extra: Map::new(),
+    })
 )]
 #[case::memory_20250818(
     json!({"type":"memory_20250818","name":"memory","allowed_callers":["code_execution_20250825"]}),
-    |tool| {
-        let BuiltinMessagesTool::Memory20250818(memory) = tool else { panic!("expected memory_20250818") };
-        assert_eq!(memory.allowed_callers, Some(vec![AllowedCaller::CodeExecution20250825]));
-        assert!(memory.extra.is_empty());
-    }
+    BuiltinMessagesTool::Memory20250818(ClientTool {
+        allowed_callers: Some(vec![AllowedCaller::CodeExecution20250825]),
+        ..client_tool(MemoryToolName::Memory)
+    })
 )]
 #[case::computer_20241022(
     json!({"type":"computer_20241022","name":"computer","display_width_px":1024,"display_height_px":768,"display_number":1}),
-    |tool| {
-        let BuiltinMessagesTool::Computer20241022(computer) = tool else { panic!("expected computer_20241022") };
-        assert_eq!((computer.display_width_px, computer.display_height_px), (1024, 768));
-        assert_eq!(computer.display_number, Some(1));
-        assert!(computer.extra.is_empty());
-    }
+    BuiltinMessagesTool::Computer20241022(ComputerTool {
+        display_number: Some(1),
+        ..computer_tool(1024, 768)
+    })
 )]
 #[case::computer_20250124(
     json!({"type":"computer_20250124","name":"computer","display_width_px":1280,"display_height_px":800}),
-    |tool| {
-        let BuiltinMessagesTool::Computer20250124(computer) = tool else { panic!("expected computer_20250124") };
-        assert_eq!((computer.display_width_px, computer.display_height_px), (1280, 800));
-        assert!(computer.display_number.is_none());
-        assert!(computer.extra.is_empty());
-    }
+    BuiltinMessagesTool::Computer20250124(computer_tool(1280, 800))
 )]
 #[case::computer_20251124(
     json!({"type":"computer_20251124","name":"computer","display_width_px":1920,"display_height_px":1080,"enable_zoom":true}),
-    |tool| {
-        let BuiltinMessagesTool::Computer20251124(computer) = tool else { panic!("expected computer_20251124") };
-        assert_eq!((computer.display_width_px, computer.display_height_px), (1920, 1080));
-        assert_eq!(computer.enable_zoom, Some(true));
-        assert!(computer.extra.is_empty());
-    }
+    BuiltinMessagesTool::Computer20251124(ComputerTool20251124 {
+        name: ComputerToolName::Computer,
+        display_width_px: 1920,
+        display_height_px: 1080,
+        display_number: None,
+        enable_zoom: Some(true),
+        allowed_callers: None,
+        cache_control: None,
+        defer_loading: None,
+        input_examples: None,
+        strict: None,
+        extra: Map::new(),
+    })
 )]
 #[case::code_execution_20250522(
     json!({"type":"code_execution_20250522","name":"code_execution","strict":false}),
-    |tool| {
-        let BuiltinMessagesTool::CodeExecution20250522(code) = tool else { panic!("expected code_execution_20250522") };
-        assert_eq!(code.strict, Some(false));
-        assert!(code.extra.is_empty());
-    }
+    BuiltinMessagesTool::CodeExecution20250522(ServerTool {
+        strict: Some(false),
+        ..server_tool(CodeExecutionToolName::CodeExecution)
+    })
 )]
 #[case::code_execution_20250825(
     json!({"type":"code_execution_20250825","name":"code_execution","defer_loading":false}),
-    |tool| {
-        let BuiltinMessagesTool::CodeExecution20250825(code) = tool else { panic!("expected code_execution_20250825") };
-        assert_eq!(code.defer_loading, Some(false));
-        assert!(code.extra.is_empty());
-    }
+    BuiltinMessagesTool::CodeExecution20250825(ServerTool {
+        defer_loading: Some(false),
+        ..server_tool(CodeExecutionToolName::CodeExecution)
+    })
 )]
 #[case::code_execution_20260120(
     json!({"type":"code_execution_20260120","name":"code_execution","allowed_callers":["direct"]}),
-    |tool| {
-        let BuiltinMessagesTool::CodeExecution20260120(code) = tool else { panic!("expected code_execution_20260120") };
-        assert_eq!(code.allowed_callers, Some(vec![AllowedCaller::Direct]));
-        assert!(code.extra.is_empty());
-    }
+    BuiltinMessagesTool::CodeExecution20260120(ServerTool {
+        allowed_callers: Some(vec![AllowedCaller::Direct]),
+        ..server_tool(CodeExecutionToolName::CodeExecution)
+    })
 )]
 #[case::code_execution_20260521(
     json!({"type":"code_execution_20260521","name":"code_execution","allowed_callers":["code_execution_20260120"]}),
-    |tool| {
-        let BuiltinMessagesTool::CodeExecution20260521(code) = tool else { panic!("expected code_execution_20260521") };
-        assert_eq!(code.allowed_callers, Some(vec![AllowedCaller::CodeExecution20260120]));
-        assert!(code.extra.is_empty());
-    }
+    BuiltinMessagesTool::CodeExecution20260521(ServerTool {
+        allowed_callers: Some(vec![AllowedCaller::CodeExecution20260120]),
+        ..server_tool(CodeExecutionToolName::CodeExecution)
+    })
 )]
 #[case::tool_search_regex_20251119(
     json!({"type":"tool_search_tool_regex_20251119","name":"tool_search_tool_regex","defer_loading":true}),
-    |tool| {
-        let BuiltinMessagesTool::ToolSearchRegex20251119(search) = tool else { panic!("expected tool_search_tool_regex_20251119") };
-        assert_eq!(search.defer_loading, Some(true));
-        assert!(search.extra.is_empty());
-    }
+    BuiltinMessagesTool::ToolSearchRegex20251119(ServerTool {
+        defer_loading: Some(true),
+        ..server_tool(ToolSearchRegexToolName::ToolSearchToolRegex)
+    })
 )]
 #[case::tool_search_regex(
     json!({"type":"tool_search_tool_regex","name":"tool_search_tool_regex","strict":true}),
-    |tool| {
-        let BuiltinMessagesTool::ToolSearchRegex(search) = tool else { panic!("expected tool_search_tool_regex") };
-        assert_eq!(search.strict, Some(true));
-        assert!(search.extra.is_empty());
-    }
+    BuiltinMessagesTool::ToolSearchRegex(ServerTool {
+        strict: Some(true),
+        ..server_tool(ToolSearchRegexToolName::ToolSearchToolRegex)
+    })
 )]
 #[case::tool_search_bm25_20251119(
     json!({"type":"tool_search_tool_bm25_20251119","name":"tool_search_tool_bm25","defer_loading":false}),
-    |tool| {
-        let BuiltinMessagesTool::ToolSearchBm2520251119(search) = tool else { panic!("expected tool_search_tool_bm25_20251119") };
-        assert_eq!(search.defer_loading, Some(false));
-        assert!(search.extra.is_empty());
-    }
+    BuiltinMessagesTool::ToolSearchBm2520251119(ServerTool {
+        defer_loading: Some(false),
+        ..server_tool(ToolSearchBm25ToolName::ToolSearchToolBm25)
+    })
 )]
 #[case::tool_search_bm25(
     json!({"type":"tool_search_tool_bm25","name":"tool_search_tool_bm25","strict":false}),
-    |tool| {
-        let BuiltinMessagesTool::ToolSearchBm25(search) = tool else { panic!("expected tool_search_tool_bm25") };
-        assert_eq!(search.strict, Some(false));
-        assert!(search.extra.is_empty());
-    }
+    BuiltinMessagesTool::ToolSearchBm25(ServerTool {
+        strict: Some(false),
+        ..server_tool(ToolSearchBm25ToolName::ToolSearchToolBm25)
+    })
 )]
 #[case::web_search_20250305(
     json!({"type":"web_search_20250305","name":"web_search","max_uses":3,"allowed_domains":["example.test"],
         "user_location":{"type":"approximate","city":"San Francisco","country":"US","timezone":"America/Los_Angeles"}}),
-    |tool| {
-        let BuiltinMessagesTool::WebSearch20250305(search) = tool else { panic!("expected web_search_20250305") };
-        assert_eq!(search.max_uses, Some(3));
-        assert_eq!(search.allowed_domains, Some(vec![String::from("example.test")]));
-        let location = search.user_location.unwrap();
-        assert_eq!(location.city.as_deref(), Some("San Francisco"));
-        assert_eq!(location.timezone.as_deref(), Some("America/Los_Angeles"));
-        assert!(location.extra.is_empty());
-        assert!(search.extra.is_empty());
-    }
+    BuiltinMessagesTool::WebSearch20250305(WebSearchTool {
+        max_uses: Some(3),
+        allowed_domains: Some(vec![String::from("example.test")]),
+        user_location: Some(WebSearchUserLocation {
+            location_type: UserLocationType::Approximate,
+            city: Some(String::from("San Francisco")),
+            country: Some(String::from("US")),
+            region: None,
+            timezone: Some(String::from("America/Los_Angeles")),
+            extra: Map::new(),
+        }),
+        ..web_search_tool()
+    })
 )]
 #[case::web_search_20260209(
     json!({"type":"web_search_20260209","name":"web_search","blocked_domains":["blocked.test"]}),
-    |tool| {
-        let BuiltinMessagesTool::WebSearch20260209(search) = tool else { panic!("expected web_search_20260209") };
-        assert_eq!(search.blocked_domains, Some(vec![String::from("blocked.test")]));
-        assert!(search.extra.is_empty());
-    }
+    BuiltinMessagesTool::WebSearch20260209(WebSearchTool {
+        blocked_domains: Some(vec![String::from("blocked.test")]),
+        ..web_search_tool()
+    })
 )]
 #[case::web_search_20260318(
     json!({"type":"web_search_20260318","name":"web_search","response_inclusion":"excluded"}),
-    |tool| {
-        let BuiltinMessagesTool::WebSearch20260318(search) = tool else { panic!("expected web_search_20260318") };
-        assert_eq!(search.response_inclusion, Some(ResponseInclusion::Excluded));
-        assert!(search.extra.is_empty());
-    }
+    BuiltinMessagesTool::WebSearch20260318(WebSearchTool20260318 {
+        name: WebSearchToolName::WebSearch,
+        allowed_callers: None,
+        allowed_domains: None,
+        blocked_domains: None,
+        cache_control: None,
+        defer_loading: None,
+        max_uses: None,
+        response_inclusion: Some(ResponseInclusion::Excluded),
+        strict: None,
+        user_location: None,
+        extra: Map::new(),
+    })
 )]
 #[case::web_fetch_20250910(
     json!({"type":"web_fetch_20250910","name":"web_fetch","max_content_tokens":5000,"citations":{"enabled":true},
         "url_sources":{"client_tool_results":{"type":"only","tools":[{"type":"tool_reference","name":"lookup"}]},
             "server_tool_results":{"type":"all"},"user_input":{"type":"none"}}}),
-    |tool| {
-        let BuiltinMessagesTool::WebFetch20250910(fetch) = tool else { panic!("expected web_fetch_20250910") };
-        assert_eq!(fetch.max_content_tokens, Some(5000));
-        assert_eq!(fetch.citations.unwrap().enabled, Some(true));
-        let sources = fetch.url_sources.unwrap();
-        let Some(ToolResultUrlSource::Only { tools, .. }) = &sources.client_tool_results else {
-            panic!("expected only client tool results");
-        };
-        assert!(matches!(tools.as_slice(), [UrlSourceToolReference::ToolReference { name, .. }] if name == "lookup"));
-        assert!(matches!(sources.server_tool_results, Some(ToolResultUrlSource::All { .. })));
-        assert!(matches!(sources.user_input, Some(UserInputUrlSource::None { .. })));
-        assert!(sources.extra.is_empty());
-        assert!(fetch.extra.is_empty());
-    }
+    BuiltinMessagesTool::WebFetch20250910(WebFetchTool {
+        max_content_tokens: Some(5000),
+        citations: Some(CitationsConfig {
+            enabled: Some(true),
+            extra: Map::new(),
+        }),
+        url_sources: Some(WebFetchUrlSources {
+            client_tool_results: Some(ToolResultUrlSource::Only {
+                tools: vec![tool_reference("lookup")],
+                extra: Map::new(),
+            }),
+            server_tool_results: Some(ToolResultUrlSource::All { extra: Map::new() }),
+            user_input: Some(UserInputUrlSource::None { extra: Map::new() }),
+            extra: Map::new(),
+        }),
+        ..web_fetch_tool()
+    })
 )]
 #[case::web_fetch_20260209(
     json!({"type":"web_fetch_20260209","name":"web_fetch","url_sources":{"server_tool_results":{"type":"except","tools":[{"type":"tool_reference","name":"web_search"}]}}}),
-    |tool| {
-        let BuiltinMessagesTool::WebFetch20260209(fetch) = tool else { panic!("expected web_fetch_20260209") };
-        assert!(matches!(
-            fetch.url_sources.unwrap().server_tool_results,
-            Some(ToolResultUrlSource::Except { tools, .. }) if tools.len() == 1
-        ));
-        assert!(fetch.extra.is_empty());
-    }
+    BuiltinMessagesTool::WebFetch20260209(WebFetchTool {
+        url_sources: Some(WebFetchUrlSources {
+            server_tool_results: Some(ToolResultUrlSource::Except {
+                tools: vec![tool_reference("web_search")],
+                extra: Map::new(),
+            }),
+            ..web_fetch_url_sources()
+        }),
+        ..web_fetch_tool()
+    })
 )]
 #[case::web_fetch_20260309(
     json!({"type":"web_fetch_20260309","name":"web_fetch","use_cache":false}),
-    |tool| {
-        let BuiltinMessagesTool::WebFetch20260309(fetch) = tool else { panic!("expected web_fetch_20260309") };
-        assert_eq!(fetch.use_cache, Some(false));
-        assert!(fetch.extra.is_empty());
-    }
+    BuiltinMessagesTool::WebFetch20260309(WebFetchTool20260309 {
+        name: WebFetchToolName::WebFetch,
+        allowed_callers: None,
+        allowed_domains: None,
+        blocked_domains: None,
+        cache_control: None,
+        citations: None,
+        defer_loading: None,
+        max_content_tokens: None,
+        max_uses: None,
+        strict: None,
+        url_sources: None,
+        use_cache: Some(false),
+        extra: Map::new(),
+    })
 )]
 #[case::web_fetch_20260318(
     json!({"type":"web_fetch_20260318","name":"web_fetch","use_cache":true,"response_inclusion":"full"}),
-    |tool| {
-        let BuiltinMessagesTool::WebFetch20260318(fetch) = tool else { panic!("expected web_fetch_20260318") };
-        assert_eq!(fetch.use_cache, Some(true));
-        assert_eq!(fetch.response_inclusion, Some(ResponseInclusion::Full));
-        assert!(fetch.extra.is_empty());
-    }
+    BuiltinMessagesTool::WebFetch20260318(WebFetchTool20260318 {
+        name: WebFetchToolName::WebFetch,
+        allowed_callers: None,
+        allowed_domains: None,
+        blocked_domains: None,
+        cache_control: None,
+        citations: None,
+        defer_loading: None,
+        max_content_tokens: None,
+        max_uses: None,
+        response_inclusion: Some(ResponseInclusion::Full),
+        strict: None,
+        url_sources: None,
+        use_cache: Some(true),
+        extra: Map::new(),
+    })
 )]
 #[case::advisor_20260301(
     json!({"type":"advisor_20260301","name":"advisor","model":"claude-opus-5-5","max_tokens":2048,"caching":{"type":"ephemeral","ttl":"5m"}}),
-    |tool| {
-        let BuiltinMessagesTool::Advisor20260301(advisor) = tool else { panic!("expected advisor_20260301") };
-        assert_eq!(advisor.model, "claude-opus-5-5");
-        assert_eq!(advisor.max_tokens, Some(2048));
-        assert_eq!(advisor.caching.unwrap().ttl.as_deref(), Some("5m"));
-        assert!(advisor.cache_control.is_none());
-        assert!(advisor.extra.is_empty());
-    }
+    BuiltinMessagesTool::Advisor20260301(AdvisorTool {
+        name: AdvisorToolName::Advisor,
+        model: String::from("claude-opus-5-5"),
+        allowed_callers: None,
+        cache_control: None,
+        caching: Some(cache_control("ephemeral", "5m")),
+        defer_loading: None,
+        max_tokens: Some(2048),
+        max_uses: None,
+        strict: None,
+        extra: Map::new(),
+    })
 )]
 #[case::browser_toolset_20260801(
     json!({"type":"browser_toolset_20260801","configs":{"type":{"enabled":false},"javascript_exec":{"defer_loading":true}}}),
-    |tool| {
-        let BuiltinMessagesTool::BrowserToolset20260801(toolset) = tool else { panic!("expected browser_toolset_20260801") };
-        let configs = toolset.configs.unwrap();
-        assert_eq!(configs.type_text.unwrap().enabled, Some(false));
-        assert_eq!(configs.javascript_exec.unwrap().defer_loading, Some(true));
-        assert!(configs.navigate.is_none());
-        assert!(configs.extra.is_empty());
-        assert!(toolset.extra.is_empty());
-    }
+    BuiltinMessagesTool::BrowserToolset20260801(Toolset {
+        cache_control: None,
+        configs: Some(Box::new(BrowserToolsetConfigs {
+            type_text: Some(toolset_config(Some(false), None)),
+            javascript_exec: Some(toolset_config(None, Some(true))),
+            ..browser_toolset_configs()
+        })),
+        extra: Map::new(),
+    })
 )]
 #[case::computer_toolset_20260801(
     json!({"type":"computer_toolset_20260801","configs":{"zoom":{"enabled":false},"cursor_position":{"enabled":true}}}),
-    |tool| {
-        let BuiltinMessagesTool::ComputerToolset20260801(toolset) = tool else { panic!("expected computer_toolset_20260801") };
-        let configs = toolset.configs.unwrap();
-        assert_eq!(configs.zoom.unwrap().enabled, Some(false));
-        assert_eq!(configs.cursor_position.unwrap().enabled, Some(true));
-        assert!(configs.extra.is_empty());
-        assert!(toolset.extra.is_empty());
-    }
+    BuiltinMessagesTool::ComputerToolset20260801(Toolset {
+        cache_control: None,
+        configs: Some(Box::new(ComputerToolsetConfigs {
+            zoom: Some(toolset_config(Some(false), None)),
+            cursor_position: Some(toolset_config(Some(true), None)),
+            ..computer_toolset_configs()
+        })),
+        extra: Map::new(),
+    })
 )]
 #[case::mcp_toolset(
     json!({"type":"mcp_toolset","mcp_server_name":"kb","default_config":{"enabled":false},
         "configs":{"search":{"enabled":true,"defer_loading":true}},
         "tools":[{"name":"search","input_schema":{"type":"object"},"description":"Search"}]}),
-    |tool| {
-        let BuiltinMessagesTool::McpToolset(toolset) = tool else { panic!("expected mcp_toolset") };
-        assert_eq!(toolset.mcp_server_name, "kb");
-        assert_eq!(toolset.default_config.unwrap().enabled, Some(false));
-        let configs = toolset.configs.unwrap();
-        assert_eq!(configs["search"].enabled, Some(true));
-        assert_eq!(configs["search"].defer_loading, Some(true));
-        let [listed] = toolset.tools.as_deref().unwrap() else { panic!("expected one pinned tool") };
-        assert_eq!(listed.description.as_deref(), Some("Search"));
-        assert!(toolset.extra.is_empty());
-    }
+    BuiltinMessagesTool::McpToolset(McpToolset {
+        mcp_server_name: String::from("kb"),
+        cache_control: None,
+        configs: Some(IndexMap::from([(String::from("search"), toolset_config(Some(true), Some(true)))])),
+        default_config: Some(toolset_config(Some(false), None)),
+        tools: Some(vec![McpListedTool {
+            name: String::from("search"),
+            description: Some(String::from("Search")),
+            input_schema: JsonSchema::Object(Box::new(JsonSchemaObject {
+                schema_type: Some(JsonSchemaType::Name(String::from("object"))),
+                ..JsonSchemaObject::default()
+            })),
+            extra: Map::new(),
+        }]),
+        extra: Map::new(),
+    })
 )]
 fn builtin_tools_decode_typed_definitions(
     #[case] wire: Value,
-    #[case] check: fn(BuiltinMessagesTool),
+    #[case] expected: BuiltinMessagesTool,
 ) {
-    check(round_trip::<BuiltinMessagesTool>(wire));
+    assert_eq!(round_trip::<BuiltinMessagesTool>(wire), expected);
 }
 
 #[rstest]
