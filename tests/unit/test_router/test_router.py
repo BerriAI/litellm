@@ -1039,6 +1039,10 @@ def test_team_model_lookup_prefers_team_deployment_after_stale_index():
         "public-model", model_alias="mapped-public-model", team_id="team-1"
     )
     assert [model["model_name"] for model in aliased_result] == ["mapped-public-model"]
+    scanned_result: Final = router._scan_current_deployments(
+        model_name="public-model", team_id="team-1"
+    )
+    assert [model["model_info"]["id"] for model in scanned_result] == ["team-deployment"]
 
 
 def test_get_all_deployments_preserves_survivor_from_stale_model_name_index():
