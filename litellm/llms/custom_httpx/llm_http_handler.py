@@ -70,6 +70,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.files.transformation import (
@@ -122,6 +123,7 @@ from litellm.types.containers.main import (
     ContainerObject,
     DeleteContainerResult,
 )
+from litellm.types.decisions import DecisionsRequest, DecisionsResponse
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
@@ -1479,6 +1481,103 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             api_key=api_key,
             request_data=request_data,
+        )
+
+    def _prepare_decisions_request(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        request: DecisionsRequest,
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+    ) -> tuple[str, dict[str, str], dict[str, object]]:
+        outbound_headers: Final = provider_config.validate_environment(headers=headers, model=model, api_key=api_key)
+        url: Final = provider_config.get_complete_url(api_base=api_base, model=model)
+        data: Final = provider_config.transform_decisions_request(
+            model=model, request=request, custom_llm_provider=custom_llm_provider
+        )
+        if logging_obj is not None:
+            logging_obj.pre_call(
+                input=data,
+                api_key=api_key,
+                model=model,
+                additional_args={"api_base": url, "complete_input_dict": data, "headers": outbound_headers},
+            )
+        return url, outbound_headers, data
+
+    def decisions(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        request: DecisionsRequest,
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        timeout: float | httpx.Timeout | None,
+        client: HTTPHandler | None = None,
+    ) -> DecisionsResponse:
+        url, outbound_headers, data = self._prepare_decisions_request(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            request=request,
+            api_base=api_base,
+            api_key=api_key,
+            headers=headers,
+        )
+        sync_httpx_client: Final = client if client is not None else get_httpx_client()
+        try:
+            response: Final = sync_httpx_client.post(
+                url, json=data, headers=outbound_headers, timeout=timeout, logging_obj=logging_obj
+            )
+        except httpx.HTTPError as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+        return provider_config.transform_decisions_response(
+            model=model, custom_llm_provider=custom_llm_provider, raw_response=response, request=request
+        )
+
+    async def adecisions(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        request: DecisionsRequest,
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        timeout: float | httpx.Timeout | None,
+        client: AsyncHTTPHandler | None = None,
+    ) -> DecisionsResponse:
+        url, outbound_headers, data = self._prepare_decisions_request(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            request=request,
+            api_base=api_base,
+            api_key=api_key,
+            headers=headers,
+        )
+        async_httpx_client: Final = (
+            client
+            if client is not None
+            else get_async_httpx_client(llm_provider=litellm.LlmProviders(custom_llm_provider))
+        )
+        try:
+            response: Final = await async_httpx_client.post(
+                url, json=data, headers=outbound_headers, timeout=timeout, logging_obj=logging_obj
+            )
+        except httpx.HTTPError as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+        return provider_config.transform_decisions_response(
+            model=model, custom_llm_provider=custom_llm_provider, raw_response=response, request=request
         )
 
     def _prepare_audio_transcription_request(
@@ -6156,6 +6255,7 @@ class BaseLLMHTTPHandler:
         e: Exception,
         provider_config: Union[
             BaseConfig,
+            BaseDecisionsConfig,
             BaseRerankConfig,
             BaseResponsesAPIConfig,
             BaseImageEditConfig,
