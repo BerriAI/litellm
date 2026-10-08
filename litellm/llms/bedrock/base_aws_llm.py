@@ -8,7 +8,6 @@ import re
 import urllib.parse
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from threading import Lock
@@ -36,7 +35,7 @@ from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag, BearerPreparedRequest
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
@@ -44,14 +43,6 @@ if TYPE_CHECKING:
 else:
     Credentials = Any
     AWSPreparedRequest = Any
-
-
-@dataclass(frozen=True)
-class BearerPreparedRequest:
-    method: str
-    url: str
-    headers: Mapping[str, str]
-    body: bytes
 
 
 # Real AWS region names are lowercase letters, digits, and hyphens

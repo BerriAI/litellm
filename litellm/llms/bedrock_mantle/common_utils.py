@@ -67,7 +67,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         return resolve_mantle_bearer_token(api_key)
 
     @staticmethod
-    def _resolve_region(params: dict) -> str:
+    def _resolve_region(params: Mapping[str, object]) -> str:
         return resolve_mantle_region(params)
 
     def sign_request(
@@ -82,7 +82,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         fake_stream: bool | None = None,
     ) -> tuple[dict, bytes | None]:
         bearer: Final = self._resolve_bearer_token(api_key)
-        sign: Final = partial(
+        sign: Final[partial[tuple[dict[str, str | bytes], bytes | None]]] = partial(
             self._aws_signer._sign_request,
             service_name="bedrock",
             request_data=request_data,
