@@ -15064,7 +15064,7 @@ async def _apply_search_filter_to_models(
     size: int = 50,
     sort_by: str | None = None,
     model_name: str | None = None,
-) -> tuple[list[dict[str, Any]], int | None]:
+) -> tuple[list[dict[str, object]], int | None]:
     """
     Apply search filter to models, querying database for additional matching models.
 
@@ -15214,10 +15214,10 @@ def _normalize_datetime_for_sorting(dt: object) -> datetime | None:
 
 
 def _sort_models(
-    all_models: list[dict[str, Any]],
+    all_models: list[dict[str, object]],
     sort_by: str | None,
     sort_order: str = "asc",
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Sort models by the specified field and order.
 
@@ -15507,7 +15507,7 @@ async def _filter_models_by_team_id(
     prisma_client: PrismaClient,
     llm_router: Router,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Filter models by team ID. Returns models where:
     - team_id matches the model's BYOK team_id, OR

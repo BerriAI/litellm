@@ -34,6 +34,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.utils import (
     Choices,
+    CompletionTokensDetailsWrapper,
     LiteLLMBatch,
     Message,
     ModelResponse,
@@ -306,13 +307,13 @@ class AnthropicPassthroughLoggingHandler:
                 if not line.startswith("data:"):
                     continue
                 try:
-                    data = json.loads(line[len("data:") :].strip())
+                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
                 except (json.JSONDecodeError, ValueError):
                     continue
                 if not isinstance(data, dict):
                     continue
                 if data.get("type") == "message_start":
-                    value = (data.get("message") or {}).get(field)
+                    value = _JSON_OBJECT.validate_python(data.get("message") or {}).get(field)
                     if isinstance(value, str) and value:
                         return value
         return None
@@ -398,7 +399,7 @@ class AnthropicPassthroughLoggingHandler:
         # Anthropic costing reads completion_tokens_details.text_tokens, so the
         # stale message_start placeholder there must be corrected too or spend
         # stays undercounted even after completion_tokens is fixed.
-        details: Final = getattr(usage, "completion_tokens_details", None)
+        details: Final[CompletionTokensDetailsWrapper | None] = getattr(usage, "completion_tokens_details", None)
         if details is not None and getattr(details, "text_tokens", None) is not None:
             details.text_tokens = recovered_output_tokens
         return usage

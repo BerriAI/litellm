@@ -51,6 +51,10 @@ _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
 )
 
+_INVOKE_PROVIDERS: Final = TypeAdapter(tuple[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]).validate_python(
+    get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL)
+)
+
 
 def _bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
     try:
@@ -568,7 +572,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if provider is not None:
             return provider
 
-        for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+        for provider in _INVOKE_PROVIDERS:
             if provider in model:
                 return provider
         return None

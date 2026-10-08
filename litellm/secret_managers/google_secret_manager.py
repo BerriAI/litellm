@@ -1,6 +1,9 @@
 import base64
 import os
+from collections.abc import Mapping
 from typing import Final
+
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -10,6 +13,9 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.secret_managers.main import KeyManagementSystem
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_BASE64_TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class GoogleSecretManager(GCSBucketBase):
@@ -86,12 +92,14 @@ class GoogleSecretManager(GCSBucketBase):
         )
 
         # Parse the JSON response and return the secret value
-        secret_data: Final = response.json()
-        _base64_encoded_value: Final = secret_data.get("payload", {}).get("data")
+        secret_data: Final = _JSON_OBJECT.validate_python(response.json())
+        _base64_encoded_value: Final = _JSON_OBJECT.validate_python(secret_data.get("payload", {})).get("data")
 
         # decode the base64 encoded value
         if _base64_encoded_value is not None:
-            _decoded_value: Final = base64.b64decode(_base64_encoded_value).decode("utf-8")
+            _decoded_value: Final = base64.b64decode(_BASE64_TEXT.validate_python(_base64_encoded_value)).decode(
+                "utf-8"
+            )
             self.cache.set_cache(secret_name, _decoded_value)  # Cache the retrieved secret
             return _decoded_value
 

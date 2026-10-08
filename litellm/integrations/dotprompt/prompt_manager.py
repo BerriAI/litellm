@@ -70,7 +70,7 @@ class PromptManager:
         self,
         prompt_id: str | None = None,
         prompt_directory: str | None = None,
-        prompt_data: dict[str, dict[str, Any]] | None = None,
+        prompt_data: dict[str, dict[str, object]] | None = None,
         prompt_file: str | None = None,
     ):
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
@@ -372,6 +372,6 @@ class PromptManager:
             }
         return result
 
-    def load_prompts_from_json_data(self, prompt_data: dict[str, dict[str, Any]]) -> None:
+    def load_prompts_from_json_data(self, prompt_data: dict[str, dict[str, object]]) -> None:
         """Load additional prompts from JSON data (merges with existing prompts)."""
         self._load_prompts_from_json(prompt_data)

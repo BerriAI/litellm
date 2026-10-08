@@ -5726,7 +5726,7 @@ def get_model_cost_key(potential_key: str) -> str | None:
 _get_model_cost_key = get_model_cost_key
 
 
-def _get_model_info_from_model_cost(key: str) -> dict[str, Any]:
+def _get_model_info_from_model_cost(key: str) -> dict[str, object]:
     return litellm.model_cost[key]
 
 
@@ -8474,7 +8474,7 @@ _get_bundled_model_cost_map = get_bundled_model_cost_map
 def _get_model_cost_entry_for_provider_config(
     model: str,
     provider: LlmProviders,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     candidate_keys: Final = (model, f"{provider.value}/{model}")
     for model_key in candidate_keys:
         model_info = litellm.model_cost.get(model_key)

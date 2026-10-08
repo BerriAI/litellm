@@ -147,7 +147,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         )
 
         if "error" in response_json:
-            error: Final = response_json["error"]
+            error: Final[object] = response_json["error"]
             message: Final = error.get("message", str(error)) if isinstance(error, dict) else str(error)
             raise DashScopeError(
                 status_code=raw_response.status_code,

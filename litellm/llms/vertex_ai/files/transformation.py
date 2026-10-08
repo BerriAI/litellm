@@ -663,7 +663,7 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
 
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
-    map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
+    map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
 ) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.

@@ -1528,7 +1528,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        general_settings: dict[str, Any] | None = None,
+        general_settings: dict[str, object] | None = None,
     ) -> LitellmDataForBackendLLMCall:
         """
         - Adds user from headers

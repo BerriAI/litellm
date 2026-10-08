@@ -3,6 +3,8 @@ import httpx
 import pytest
 
 
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
     OpenRouterChatCompletionStreamingHandler,
@@ -613,3 +615,85 @@ def test_openrouter_reasoning_effort_high_passes_through():
     )
 
     assert result["reasoning_effort"] == "high"
+
+
+OPENROUTER_COST_HEADER = "llm_provider-x-litellm-response-cost"
+
+
+def _complete_with_openrouter_usage(usage):
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "gen-1",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "openai/gpt-4o",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hi"}}],
+                "usage": usage,
+            },
+        )
+
+    return litellm.completion(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="sk-test",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+
+
+@pytest.mark.parametrize(
+    ("cost", "expected"),
+    [
+        pytest.param(0.00015, 0.00015, id="float"),
+        pytest.param(3, 3.0, id="int"),
+        pytest.param(0, 0.0, id="zero"),
+        pytest.param("0.5", 0.5, id="numeric-string"),
+        pytest.param(" 1.5 ", 1.5, id="padded-numeric-string"),
+        pytest.param(True, 1.0, id="bool"),
+    ],
+)
+def test_openrouter_completion_stores_usage_cost_as_float_cost_header(cost, expected):
+    response = _complete_with_openrouter_usage(
+        {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": cost, "is_byok": False}
+    )
+
+    stored = response._hidden_params["additional_headers"][OPENROUTER_COST_HEADER]
+    assert type(stored) is float
+    assert stored == expected
+    assert response._hidden_params["response_cost"] == expected
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}, id="cost-missing"),
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": None}, id="cost-null"),
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": "abc"}, id="cost-text"),
+        pytest.param({"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": [1]}, id="cost-list"),
+        pytest.param(
+            {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30, "cost": {"upstream": 1.0}},
+            id="cost-object",
+        ),
+        pytest.param({}, id="usage-empty"),
+        pytest.param(None, id="usage-null"),
+    ],
+)
+def test_openrouter_completion_without_usable_cost_returns_response_without_cost_header(usage):
+    response = _complete_with_openrouter_usage(usage)
+
+    assert response.choices[0].message.content == "hi"
+    assert OPENROUTER_COST_HEADER not in response._hidden_params["additional_headers"]
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param([{"cost": 1.0}], id="usage-list"),
+        pytest.param("cost", id="usage-text"),
+        pytest.param(5, id="usage-number"),
+    ],
+)
+def test_openrouter_completion_with_non_object_usage_raises_api_connection_error(usage):
+    with pytest.raises(litellm.APIConnectionError):
+        _complete_with_openrouter_usage(usage)

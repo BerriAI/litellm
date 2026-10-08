@@ -5,6 +5,12 @@ import os
 from collections.abc import Callable
 from typing import Any, Final, Literal, get_type_hints
 
+from typing_extensions import ReadOnly, TypedDict
+
+
+class _AttributeView(TypedDict):
+    value: ReadOnly[object]
+
 
 def get_instance_fn(value: str, config_file_path: str | None = None) -> Any:
     module_name = value
@@ -52,7 +58,8 @@ def get_instance_fn(value: str, config_file_path: str | None = None) -> Any:
             module = importlib.import_module(module_name)
 
         # Get the instance from the module
-        instance: Final[object] = getattr(module, instance_name)
+        attribute: Final[_AttributeView] = {"value": getattr(module, instance_name)}
+        instance: Final[object] = attribute["value"]
 
         return instance
     except ImportError as e:
@@ -167,7 +174,8 @@ def _load_instance_from_remote_storage(remote_url: str, config_file_path: str | 
         spec.loader.exec_module(module)
 
         # Get the instance
-        instance: Final[object] = getattr(module, instance_name)
+        attribute: Final[_AttributeView] = {"value": getattr(module, instance_name)}
+        instance: Final[object] = attribute["value"]
 
         # Clean up the temporary file
         try:

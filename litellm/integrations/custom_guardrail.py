@@ -463,7 +463,7 @@ class CustomGuardrail(CustomLogger):
             sticky_session_routing=self.sticky_session_routing,
         )
 
-    def _get_session_id_from_request_data(self, request_data: dict[str, Any]) -> str | None:
+    def _get_session_id_from_request_data(self, request_data: dict[str, object]) -> str | None:
         """Extract session_id from request data."""
         return get_session_id_from_request_data(request_data)
 

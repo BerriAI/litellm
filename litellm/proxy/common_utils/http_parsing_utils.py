@@ -545,7 +545,7 @@ async def convert_upload_files_to_file_data(
     return data
 
 
-async def get_request_body(request: Request) -> dict[str, Any]:
+async def get_request_body(request: Request) -> dict[str, object]:
     """
     Read the request body and parse it as JSON.
     """

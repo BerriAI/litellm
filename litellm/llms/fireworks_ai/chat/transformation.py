@@ -1,8 +1,9 @@
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -48,6 +49,10 @@ from ..common_utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str)
 
 
 def _map_reasoning_effort(value: object) -> object:
@@ -744,7 +749,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         additional_headers: Final = get_response_headers(raw_response_headers)
 
-        response: Final = ModelResponse(**completion_response)
+        completion_fields: Final = _JSON_DICT.validate_python(completion_response)
+        response: Final = ModelResponse(**completion_fields)
 
         if response.model is not None:
             response.model = "fireworks_ai/" + response.model
@@ -758,7 +764,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         response.hidden_params = {
             "additional_headers": additional_headers,
-            **_extract_fireworks_hidden_params(completion_response),
+            **_extract_fireworks_hidden_params(completion_fields),
         }
 
         return response
@@ -819,9 +825,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 f"Failed to fetch models from Fireworks AI. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        models: Final = response.json()["models"]
+        models: Final = _JSON_OBJECTS.validate_python(_JSON_DICT.validate_python(response.json())["models"])
 
-        return ["fireworks_ai/" + model["name"] for model in models]
+        return ["fireworks_ai/" + _STR.validate_python(model["name"]) for model in models]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:

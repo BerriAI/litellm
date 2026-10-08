@@ -1,5 +1,5 @@
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -35,6 +35,9 @@ else:
 
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
+    Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
@@ -308,25 +311,27 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             model_response.data = []
 
         # Gemini image generation models return in candidates format
-        candidates: Final = response_data.get("candidates", [])
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        candidates: Final = _JSON_CONTAINER.validate_python(response_object.get("candidates", []))
         for candidate in candidates:
-            content = candidate.get("content", {})
-            parts = content.get("parts", [])
-            for part in parts:
+            content = _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_python(candidate).get("content", {}))
+            parts = _JSON_CONTAINER.validate_python(content.get("parts", []))
+            for raw_part in parts:
+                part = raw_part if isinstance(raw_part, str) else _JSON_CONTAINER.validate_python(raw_part)
                 # Look for inlineData with image
                 if "inlineData" in part:
-                    inline_data = part["inlineData"]
+                    part_object = _JSON_OBJECT.validate_python(part)
+                    inline_data = _JSON_CONTAINER.validate_python(part_object["inlineData"])
                     if "data" in inline_data:
-                        thought_sig = part.get("thoughtSignature")
+                        thought_sig = part_object.get("thoughtSignature")
                         model_response.data.append(
                             ImageObject(
-                                b64_json=inline_data["data"],
+                                b64_json=_JSON_OBJECT.validate_python(inline_data)["data"],
                                 url=None,
                                 provider_specific_fields=({"thought_signature": thought_sig} if thought_sig else None),
                             )
                         )
 
-        response_object: Final = _JSON_OBJECT.validate_python(response_data)
         if usage_metadata := response_object.get("usageMetadata", None):
             model_response.usage = self._transform_image_usage(_JSON_DICT.validate_python(usage_metadata))
 

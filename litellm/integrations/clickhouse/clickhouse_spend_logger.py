@@ -80,7 +80,7 @@ def _json(value: object) -> str:
     return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
-def _json_mapping(value: Mapping[str, Any]) -> str:
+def _json_mapping(value: Mapping[str, object]) -> str:
     return _json(dict(value))
 
 

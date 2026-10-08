@@ -1,13 +1,14 @@
 import base64
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from io import BufferedRandom, BufferedReader, BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -25,6 +26,11 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
+    Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
@@ -208,15 +214,18 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
                 headers=raw_response.headers,
             )
 
-        predictions: Final = response_json.get("predictions", [])
+        predictions: Final = _JSON_CONTAINER.validate_python(response_json.get("predictions", []))
         data_list: Final[list[ImageObject]] = []
 
-        for prediction in predictions:
+        for raw_prediction in predictions:
+            prediction = (
+                raw_prediction if isinstance(raw_prediction, str) else _JSON_CONTAINER.validate_python(raw_prediction)
+            )
             # Imagen returns images as bytesBase64Encoded
             if "bytesBase64Encoded" in prediction:
                 data_list.append(
                     ImageObject(
-                        b64_json=prediction["bytesBase64Encoded"],
+                        b64_json=_JSON_OBJECT.validate_python(prediction)["bytesBase64Encoded"],
                         url=None,
                     )
                 )
