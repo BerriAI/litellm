@@ -138,13 +138,22 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
 
 
 class ForwardedApiKeyScope(NamedTuple):
-    """The (provider, api_base) audiences a proxy-forwarded client api_key was sent for, and that key's sha256."""
+    """Where a client api_key forwarded by the proxy may be sent.
+
+    `audiences` are the (provider, api_base) pairs of the deployments in the model group the client
+    asked for. `key_sha256` identifies the forwarded key without holding it, so the stamp is safe to
+    carry in request metadata and logs.
+    """
 
     audiences: tuple[tuple[str, str], ...]
     key_sha256: str
 
 
 def deployment_audience(litellm_params: Mapping[str, object] | LiteLLM_Params) -> tuple[str, str] | None:
+    """The (provider, api_base) a deployment sends credentials to, or None if the provider can't be resolved.
+
+    A trailing slash on api_base is dropped and an unset api_base is "", so the same endpoint compares equal.
+    """
     params: Final = (
         litellm_params
         if isinstance(litellm_params, Mapping)
@@ -162,6 +171,7 @@ def deployment_audience(litellm_params: Mapping[str, object] | LiteLLM_Params) -
 
 
 def _is_strategy_router(litellm_params: Mapping[str, object]) -> bool:
+    """True for `auto_router/` deployments (semantic, complexity, adaptive), which pick a target per request."""
     model: Final = litellm_params.get("model")
     return isinstance(model, str) and classify_strategy_router_model(model) is not None
 
@@ -169,7 +179,11 @@ def _is_strategy_router(litellm_params: Mapping[str, object]) -> bool:
 def forwarded_api_key_scope(
     api_key: str, deployment_params: Iterable[Mapping[str, object]]
 ) -> ForwardedApiKeyScope | None:
-    """None when the audiences cannot be known up front: no deployments, a strategy router, or an unresolvable one."""
+    """Build the scope for a client api_key forwarded to the model group whose deployments are given.
+
+    Returns None when the audiences can't be known up front (no deployments, a strategy router, or a
+    deployment whose provider can't be resolved). The request is then left unscoped, as before this check.
+    """
     params: Final = tuple(deployment_params)
     if not params or any(_is_strategy_router(litellm_params) for litellm_params in params):
         return None
@@ -185,6 +199,10 @@ def forwarded_api_key_scope(
 
 
 def _stamped_scope(metadata: object) -> ForwardedApiKeyScope | None:
+    """The scope stored in one metadata dict, if it is a real ForwardedApiKeyScope.
+
+    The proxy stores the NamedTuple itself, so a client-supplied JSON value under the same key never matches.
+    """
     if not isinstance(metadata, Mapping):
         return None
     stamp: Final = STR_KEYED_MAPPING.validate_python(metadata).get(FORWARDED_API_KEY_SCOPE_METADATA_KEY)
@@ -192,6 +210,7 @@ def _stamped_scope(metadata: object) -> ForwardedApiKeyScope | None:
 
 
 def stamped_forwarded_api_key_scope(request_kwargs: Mapping[str, object]) -> ForwardedApiKeyScope | None:
+    """The scope the proxy stamped on this request, from `litellm_metadata` or `metadata`, or None if unscoped."""
     return next(
         (stamp for key in _METADATA_KWARGS if (stamp := _stamped_scope(request_kwargs.get(key))) is not None),
         None,
@@ -199,12 +218,17 @@ def stamped_forwarded_api_key_scope(request_kwargs: Mapping[str, object]) -> For
 
 
 def is_forwarded_api_key(value: object, scope: ForwardedApiKeyScope) -> bool:
+    """True if `value` is the client key the scope was built for.
+
+    Lets the router drop only that key and keep one set by an admin, e.g. on a fallback target.
+    """
     from litellm.proxy._types import hash_token
 
     return isinstance(value, str) and hash_token(value) == scope.key_sha256
 
 
 def _without_forwarded_x_api_key(headers: Mapping[str, object], scope: ForwardedApiKeyScope) -> Mapping[str, object]:
+    """`headers` minus any x-api-key (any casing) whose value is the forwarded client key."""
     return {
         name: value
         for name, value in headers.items()

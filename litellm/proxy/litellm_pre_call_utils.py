@@ -2701,6 +2701,10 @@ async def add_litellm_data_to_request(
 def _forwarded_api_key_scope_for(
     llm_router: Router | None, api_key: str, model: object, team_id: str | None
 ) -> ForwardedApiKeyScope | None:
+    """Scope a forwarded client api_key to the deployments of the model group the client requested.
+
+    The router later drops the key on any deployment outside that scope, such as a fallback to another provider.
+    """
     if llm_router is None or not isinstance(model, str):
         return None
     return forwarded_api_key_scope(
