@@ -577,7 +577,7 @@ def test_bedrock_passthrough_count_tokens_still_answers_the_runtime_rejection(
         assert mantle.drain() == ()
 
 
-def test_responses_input_tokens_with_instructions_still_counts_locally(
+def test_responses_input_tokens_with_instructions_counts_through_mantle(
     counting_proxy: OwnedProxy, mantle_port: int
 ) -> None:
     gateway: Final = counting_proxy.gateway
@@ -592,14 +592,9 @@ def test_responses_input_tokens_with_instructions_still_counts_locally(
             "/v1/responses/input_tokens",
             {"model": model, "input": "Count this message", "instructions": "Be terse"},
         )
-        payload: Final = _payload(response)
+        assert _payload(response) == {"object": "response.input_tokens", "input_tokens": _MANTLE_COUNT}, response.text
         assert len(_runtime_count_targets(runtime)) == 1
-        (sent,) = _mantle_bodies(mantle)
-        messages: Final = sent["messages"]
-        assert isinstance(messages, list) and messages[0] == {"role": "system", "content": "Be terse"}, sent
-        assert "system" not in sent, sent
-        local: Final = _local_count(gateway, {"model": model, "messages": messages})
-        assert payload == {"object": "response.input_tokens", "input_tokens": local}, response.text
+        assert _mantle_bodies(mantle) == (_mantle_body(system=[{"type": "text", "text": "Be terse"}]),)
 
 
 @pytest.mark.parametrize("status", [400, 403, 404, 500, 503])
