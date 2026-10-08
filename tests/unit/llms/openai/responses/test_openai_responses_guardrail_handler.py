@@ -2467,23 +2467,27 @@ class CustomToolCallRewriteGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        messages = list(inputs.get("structured_messages") or [])
-        message = messages[0]
-        tool_calls = message.get("tool_calls")
+        messages: Final = list(inputs.get("structured_messages") or [])
+        message: Final = messages[0]
+        tool_calls: Final = message.get("tool_calls")
         if not isinstance(tool_calls, list) or not tool_calls:
             return inputs
-        tool_call = tool_calls[0]
-        function = tool_call.get("function")
+        tool_call: Final = tool_calls[0]
+        function: Final = tool_call.get("function")
         if not isinstance(function, dict):
             return inputs
-        rewritten_tool_call = {
+        rewritten_tool_call: Final = {
             **tool_call,
             "function": {
                 **function,
                 "arguments": json.dumps({"content": "echo [REDACTED]"}),
             },
         }
-        return {**inputs, "structured_messages": [{**message, "tool_calls": [rewritten_tool_call]}]}
+        rewritten_messages: Final = [
+            {**message, "tool_calls": [rewritten_tool_call, *tool_calls[1:]]},
+            *messages[1:],
+        ]
+        return {**inputs, "structured_messages": rewritten_messages}
 
 
 class DroppingRewriteGuardrail(CustomGuardrail):
@@ -2661,8 +2665,8 @@ class TestStructuredMessagesWriteBack:
 
     @pytest.mark.asyncio
     async def test_custom_tool_only_input_is_guardrailed_in_place(self):
-        handler = OpenAIResponsesHandler()
-        custom_tool_call_item = {
+        handler: Final = OpenAIResponsesHandler()
+        custom_tool_call_item: Final = {
             "id": "ctc_456",
             "type": "custom_tool_call",
             "call_id": "call_exec",
@@ -2670,11 +2674,39 @@ class TestStructuredMessagesWriteBack:
             "input": "echo sensitive-value",
             "status": "completed",
         }
-        data = {"model": "gpt-5.6", "input": [custom_tool_call_item]}
+        data: Final = {"model": "gpt-5.6", "input": [custom_tool_call_item]}
 
-        result = await handler.process_input_messages(data, CustomToolCallRewriteGuardrail())
+        result: Final = await handler.process_input_messages(data, CustomToolCallRewriteGuardrail())
 
         assert result["input"] == [{**custom_tool_call_item, "input": "echo [REDACTED]"}]
+
+    @pytest.mark.asyncio
+    async def test_consecutive_custom_tool_calls_keep_their_type(self):
+        handler: Final = OpenAIResponsesHandler()
+        first_call: Final = {
+            "id": "ctc_1",
+            "type": "custom_tool_call",
+            "call_id": "call_1",
+            "name": "exec",
+            "input": "echo sensitive-value",
+            "status": "completed",
+        }
+        second_call: Final = {
+            "id": "ctc_2",
+            "type": "custom_tool_call",
+            "call_id": "call_2",
+            "name": "exec",
+            "input": "echo public-value",
+            "status": "completed",
+        }
+        data: Final = {"model": "gpt-5.6", "input": [first_call, second_call]}
+
+        result: Final = await handler.process_input_messages(data, CustomToolCallRewriteGuardrail())
+
+        assert result["input"] == [
+            {**first_call, "input": "echo [REDACTED]"},
+            second_call,
+        ]
 
     @pytest.mark.asyncio
     async def test_web_search_call_item_preserved_verbatim(self):

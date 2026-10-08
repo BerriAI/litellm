@@ -29,7 +29,6 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 """
 
 import copy
-import json
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -64,6 +63,9 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     unappliable_request_rewrite,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.responses.litellm_completion_transformation.custom_tools import (
+    unwrap_custom_tool_arguments,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -123,6 +125,30 @@ class _ToolCallFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     function: _ToolCallFunctionFields
+
+
+class _CustomToolCallArguments(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    content: str
+
+
+_MAPPING_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+
+
+def _mapping_fields(value: object) -> Mapping[str, object] | None:
+    try:
+        return _MAPPING_FIELDS_ADAPTER.validate_python(value, strict=True)
+    except ValidationError:
+        return None
+
+
+def _object_list(value: object) -> tuple[object, ...] | None:
+    try:
+        return tuple(_OBJECT_LIST_ADAPTER.validate_python(value, strict=True))
+    except ValidationError:
+        return None
 
 
 def _tool_call_shapes(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> tuple[_ToolCallShape, ...]:
@@ -260,31 +286,28 @@ def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
 
 
 def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
-    if item.get("type") == "custom_tool_call" and isinstance(rewritten, Mapping):
-        tool_calls: Final = rewritten.get("tool_calls")
-        if not isinstance(tool_calls, list) or len(tool_calls) != 1 or not isinstance(tool_calls[0], Mapping):
+    rewritten_mapping: Final = _mapping_fields(rewritten)
+    if item.get("type") == "custom_tool_call" and rewritten_mapping is not None:
+        tool_calls: Final = _object_list(rewritten_mapping.get("tool_calls"))
+        if tool_calls is None or len(tool_calls) != 1:
             return None
-        function: Final = tool_calls[0].get("function")
-        if not isinstance(function, Mapping) or not isinstance(function.get("arguments"), str):
+        rewritten_tool_call: Final = _returned_tool_call_shape(tool_calls[0])
+        if rewritten_tool_call is None:
             return None
         try:
-            arguments: Final = json.loads(function["arguments"])
-        except json.JSONDecodeError:
+            arguments: Final = _CustomToolCallArguments.model_validate_json(rewritten_tool_call.arguments)
+        except ValidationError:
             return None
-        if (
-            not isinstance(arguments, dict)
-            or set(arguments) != {"content"}
-            or not isinstance(arguments["content"], str)
-        ):
-            return None
-        return {**item, "input": arguments["content"]}
+        return {**item, "input": arguments.content}
     field: Final = _item_rewrite_field(item)
-    if field is None or not isinstance(rewritten, Mapping):
+    if field is None or rewritten_mapping is None:
         return None
-    rewritten_content: Final = rewritten.get("content")
+    rewritten_content: Final = rewritten_mapping.get("content")
     if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
         return {**item, field: rewritten_content}
-    rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
+    rewritten_row: Final = cast(  # cast-ok: guardrails hand back chat-shaped rows
+        "AllMessageValues", rewritten_mapping
+    )
     converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
         [rewritten_row]
     )
@@ -295,6 +318,20 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
     if converted_value is None:
         return None
     return {**item, field: converted_value}
+
+
+def _restore_custom_tool_call_item(item: object, custom_tool_calls: Mapping[str, Mapping[str, object]]) -> object:
+    item_fields: Final = _mapping_fields(item)
+    if item_fields is None or item_fields.get("type") != "function_call":
+        return item
+    call_id: Final = item_fields.get("call_id")
+    arguments: Final = item_fields.get("arguments")
+    original: Final = custom_tool_calls.get(call_id) if isinstance(call_id, str) else None
+    return (
+        {**original, "input": unwrap_custom_tool_arguments(arguments)}
+        if original is not None and isinstance(arguments, str)
+        else item
+    )
 
 
 def _is_tool_call_item(item: object) -> bool:
@@ -519,7 +556,17 @@ def _patch_or_convert_request_fields(
     input_items, converted_instructions = (
         LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(structured_messages)
     )
-    return _RequestFields(input=tuple(input_items), instructions=converted_instructions)
+    raw_items: Final = _object_list(raw_input) or ()
+    custom_tool_call_entries: Final = tuple(
+        (call_id, item)
+        for raw_item in raw_items
+        if (item := _mapping_fields(raw_item)) is not None
+        and item.get("type") == "custom_tool_call"
+        and isinstance(call_id := item.get("call_id"), str)
+    )
+    custom_tool_calls: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(dict(custom_tool_call_entries))
+    restored_items: Final = tuple(_restore_custom_tool_call_item(item, custom_tool_calls) for item in input_items)
+    return _RequestFields(input=restored_items, instructions=converted_instructions)
 
 
 def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> int:
