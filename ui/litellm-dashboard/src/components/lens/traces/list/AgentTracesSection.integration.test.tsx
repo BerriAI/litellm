@@ -81,7 +81,6 @@ const unrated = (traces: TraceKey[]): TraceFeedbackSummary[] =>
     lowest: null,
   }));
 
-/** Routes the shared POST mock: findings get `findings`, the feedback summary gets `feedback`. */
 const stubPost = (
   findings: (traces: TraceKey[]) => Promise<unknown>,
   feedback: (traces: TraceKey[]) => Promise<TraceFeedbackSummary[]> = async (traces) => unrated(traces),

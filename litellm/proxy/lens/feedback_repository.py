@@ -1,6 +1,7 @@
 import hashlib
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from itertools import chain
 from typing import Final, Protocol
 
 from litellm.proxy.lens.feedback_models import Feedback, FeedbackInput, TraceFeedback, TraceFeedbackSummary
@@ -165,7 +166,7 @@ class ClickHouseFeedbackStore:
                 **access_parameters(scope).model_dump(), trace_ids=sorted({t.trace_id for t in traces})
             ),
         )
-        return tuple(summary for trace in traces for summary in _summaries(trace, rows))
+        return tuple(chain.from_iterable(_summaries(trace, rows) for trace in traces))
 
 
 def _summaries(trace: TraceIdentity, rows: tuple[FeedbackSummaryRow, ...]) -> tuple[TraceFeedbackSummary, ...]:

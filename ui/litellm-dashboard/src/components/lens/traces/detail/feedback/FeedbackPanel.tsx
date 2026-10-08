@@ -46,7 +46,6 @@ function Entry({ entry }: { entry: Feedback }) {
   );
 }
 
-/** End-user feedback on this run, shown first so a developer reads what the user said before the steps. */
 export function FeedbackPanel({ summary, accessToken }: FeedbackPanelProps) {
   const api = useTracesApi(accessToken);
   const traceRef = summary.trace_ref ?? "";

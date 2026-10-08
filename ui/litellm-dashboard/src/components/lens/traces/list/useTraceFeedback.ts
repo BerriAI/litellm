@@ -13,7 +13,6 @@ export type TraceFeedbackState =
 
 export const traceFeedbackKey = (accessToken: string) => ["traceFeedback", accessToken] as const;
 
-/** A run some end user scored at or below the low-score threshold. */
 export const isLowFeedback = (state: TraceFeedbackState | undefined): boolean =>
   state?.status === "ready" && state.summary.count > 0 && (state.summary.lowest ?? Infinity) <= LOW_SCORE;
 
