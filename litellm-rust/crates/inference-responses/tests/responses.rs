@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use futures_util::TryStreamExt;
 use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
+use litellm_inference::Connection;
 use litellm_inference_responses::{
     route::Responses,
     types::{ResponsesCall, ResponsesOutput},
@@ -22,13 +23,23 @@ use support::*;
 fn call() -> ResponsesCall {
     ResponsesCall {
         model: "openai/test-model".into(),
+        custom_llm_provider: None,
         input: json!("hello"),
         optional_params: Default::default(),
-        api_key: Some("test-key".into()),
-        api_base: None,
-        custom_llm_provider: None,
-        extra_headers: None,
-        timeout: None,
+        connection: Connection {
+            api_key: Some("test-key".into()),
+            ..Connection::default()
+        },
+    }
+}
+
+fn at(base: String, call: ResponsesCall) -> ResponsesCall {
+    ResponsesCall {
+        connection: Connection {
+            api_base: Some(base),
+            ..call.connection
+        },
+        ..call
     }
 }
 
@@ -39,10 +50,7 @@ fn call() -> ResponsesCall {
 async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] hosted: bool) {
     let body = json!({"id": "response-1", "model": "test-model", "output": [{"type":"message", "content":[]}], "usage":{"total_tokens":7}, "provider_extra": true});
     let upstream = upstream([json_response(body.clone())]).await;
-    let host = RecordingCall::<Responses>::new(ResponsesCall {
-        api_base: Some(upstream.uri()),
-        ..call
-    });
+    let host = RecordingCall::<Responses>::new(at(upstream.uri(), call));
     let response = if hosted {
         let HostedCompletion::Complete(response) = litellm_host_native::in_process::run_hosted(
             responses_route(no_secrets())
@@ -101,9 +109,8 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
         .set_body_raw(body, "text/event-stream")])
     .await;
     let host = RecordingCall::<Responses>::new(ResponsesCall {
-        api_base: Some(upstream.uri()),
         optional_params: json!({"stream":true}).as_object().unwrap().clone(),
-        ..call
+        ..at(upstream.uri(), call)
     });
     let (headers, bytes) = if hosted {
         assert_eq!(
@@ -173,10 +180,7 @@ async fn provider_failures_emit_failure_once(
     #[case] body: serde_json::Value,
 ) {
     let upstream = upstream([ResponseTemplate::new(status).set_body_json(body)]).await;
-    let host = RecordingCall::<Responses>::new(ResponsesCall {
-        api_base: Some(upstream.uri()),
-        ..call
-    });
+    let host = RecordingCall::<Responses>::new(at(upstream.uri(), call));
     let call = host.request.lock().unwrap().take().unwrap();
     assert!(
         responses_route(no_secrets())
@@ -218,8 +222,11 @@ async fn credentials_and_endpoint_are_resolved_only_when_needed(
         ("OPENAI_BASE_URL", base.as_str()),
     ]));
     let call = ResponsesCall {
-        api_key: explicit.then(|| key.into()),
-        api_base: explicit.then(|| base.clone()),
+        connection: Connection {
+            api_key: explicit.then(|| key.into()),
+            api_base: explicit.then(|| base.clone()),
+            ..call.connection
+        },
         ..call
     };
     responses_route(secrets.clone())
@@ -252,8 +259,7 @@ async fn unsupported_providers_fail_before_secrets_or_transport(
     let call = ResponsesCall {
         model: model.into(),
         custom_llm_provider: Some(provider.into()),
-        api_base: Some(upstream.uri()),
-        ..call
+        ..at(upstream.uri(), call)
     };
     assert!(
         responses_route(secrets.clone())
@@ -280,9 +286,12 @@ async fn route_tracing_covers_native_and_hosted_outcomes(
 ) {
     let upstream = upstream([status_response(status, body)]).await;
     let host = RecordingCall::<Responses>::new(ResponsesCall {
-        api_base: Some(upstream.uri()),
         input: json!("private-prompt-sentinel"),
-        api_key: Some("private-key-sentinel".into()),
+        connection: Connection {
+            api_key: Some("private-key-sentinel".into()),
+            api_base: Some(upstream.uri()),
+            ..call.connection
+        },
         ..call
     });
     let route = responses_route(no_secrets());
@@ -341,9 +350,8 @@ async fn stream_trace_survives_handoff_and_closes_before_the_stream_object_is_dr
             responses_route(no_secrets())
                 .execute(
                     ResponsesCall {
-                        api_base: Some(upstream.uri()),
                         optional_params: json!({"stream":true}).as_object().unwrap().clone(),
-                        ..call
+                        ..at(upstream.uri(), call)
                     },
                     &(),
                     None,

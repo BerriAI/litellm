@@ -34,13 +34,13 @@ impl AudioTranscriptionRoute {
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
         route = "audio_transcription",
-        model = request.model,
+        model = %request.model,
         provider,
         resolved_model,
         stream = false,
         outcome
     ))]
-    pub async fn execute(&self, request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
+    pub async fn execute(&self, request: AudioTranscriptionRequest) -> Result<Value, Error> {
         litellm_inference::diagnostic::unary(async {
             let request =
                 prepare_audio_transcription_provider_call(request, self.secrets.as_ref()).await?;

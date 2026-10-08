@@ -27,16 +27,13 @@ pub(crate) async fn create(
 
     let call = ResponsesCall {
         model: deployment.model.clone(),
+        custom_llm_provider: deployment.custom_llm_provider.clone(),
         input: body.get("input").cloned().unwrap_or_default(),
         optional_params: body
             .into_iter()
             .filter(|(name, _)| !matches!(name.as_str(), "model" | "input"))
             .collect(),
-        api_key: deployment.api_key.clone(),
-        api_base: deployment.api_base.clone(),
-        custom_llm_provider: deployment.custom_llm_provider.clone(),
-        extra_headers: None,
-        timeout: deployment.timeout,
+        connection: deployment.connection(),
     };
     let machine = route.machine(call, cache_options.policy);
     let stream = Sse::<Responses, _, _>::new(Json, |error| {

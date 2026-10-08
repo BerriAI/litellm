@@ -1,3 +1,4 @@
+use litellm_inference::Connection;
 use litellm_inference_transcription::{Error, types::AudioTranscriptionRequest};
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
@@ -8,7 +9,7 @@ use support::*;
 
 const MODEL: &str = "mistral.voxtral-mini-3b-2507";
 
-async fn transcribe(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
+async fn transcribe(request: AudioTranscriptionRequest) -> Result<Value, Error> {
     audio_transcription_route().execute(request).await
 }
 
@@ -25,16 +26,23 @@ fn aws_params(region: &str) -> Map<String, Value> {
 }
 
 #[fixture]
-fn request() -> AudioTranscriptionRequest<'static> {
+fn request() -> AudioTranscriptionRequest {
     AudioTranscriptionRequest {
-        model: MODEL,
+        model: MODEL.into(),
+        custom_llm_provider: Some("bedrock".into()),
         audio: json!({"data": "AQI=", "format": "wav", "filename": "audio.wav"}),
-        api_key: None,
-        api_base: None,
-        custom_llm_provider: Some("bedrock"),
-        extra_headers: None,
         optional_params: aws_params("us-east-1"),
-        timeout: None,
+        connection: Connection::default(),
+    }
+}
+
+fn at(base: &str, request: AudioTranscriptionRequest) -> AudioTranscriptionRequest {
+    AudioTranscriptionRequest {
+        connection: Connection {
+            api_base: Some(base.into()),
+            ..request.connection
+        },
+        ..request
     }
 }
 
@@ -43,16 +51,15 @@ fn request() -> AudioTranscriptionRequest<'static> {
 #[case::eu_west_1("eu-west-1")]
 #[tokio::test]
 async fn bedrock_converse_request_is_signed_for_the_requested_region(
-    request: AudioTranscriptionRequest<'static>,
+    request: AudioTranscriptionRequest,
     #[case] region: &str,
 ) {
     let upstream = upstream([transcript_response("hello")]).await;
     let base = upstream.uri();
 
     let response = transcribe(AudioTranscriptionRequest {
-        api_base: Some(&base),
         optional_params: aws_params(region),
-        ..request
+        ..at(&base, request)
     })
     .await
     .expect("transcription");
@@ -76,16 +83,15 @@ async fn bedrock_converse_request_is_signed_for_the_requested_region(
 
 #[rstest]
 #[tokio::test]
-async fn the_provider_can_come_from_the_model_prefix(request: AudioTranscriptionRequest<'static>) {
+async fn the_provider_can_come_from_the_model_prefix(request: AudioTranscriptionRequest) {
     let upstream = upstream([transcript_response("hello")]).await;
     let base = upstream.uri();
     let model = format!("bedrock/{MODEL}");
 
     transcribe(AudioTranscriptionRequest {
-        model: &model,
+        model,
         custom_llm_provider: None,
-        api_base: Some(&base),
-        ..request
+        ..at(&base, request)
     })
     .await
     .expect("transcription");
@@ -99,7 +105,7 @@ async fn the_provider_can_come_from_the_model_prefix(request: AudioTranscription
 #[rstest]
 #[tokio::test]
 async fn audio_and_transcription_params_reach_the_converse_body(
-    request: AudioTranscriptionRequest<'static>,
+    request: AudioTranscriptionRequest,
     #[values("wav", "mp3", "flac", "ogg")] format: &str,
 ) {
     let upstream = upstream([transcript_response("hello")]).await;
@@ -114,9 +120,8 @@ async fn audio_and_transcription_params_reach_the_converse_body(
 
     transcribe(AudioTranscriptionRequest {
         audio: json!({"data": "AQI=", "format": format}),
-        api_base: Some(&base),
         optional_params,
-        ..request
+        ..at(&base, request)
     })
     .await
     .expect("transcription");
@@ -138,7 +143,7 @@ async fn audio_and_transcription_params_reach_the_converse_body(
 #[case::not_an_object(json!("AQI="))]
 #[tokio::test]
 async fn invalid_audio_is_rejected_before_sending(
-    request: AudioTranscriptionRequest<'static>,
+    request: AudioTranscriptionRequest,
     #[case] audio: Value,
 ) {
     let upstream = upstream([transcript_response("hello")]).await;
@@ -146,8 +151,7 @@ async fn invalid_audio_is_rejected_before_sending(
 
     let error = transcribe(AudioTranscriptionRequest {
         audio,
-        api_base: Some(&base),
-        ..request
+        ..at(&base, request)
     })
     .await
     .expect_err("invalid audio is rejected");
@@ -171,16 +175,15 @@ async fn invalid_audio_is_rejected_before_sending(
 )]
 #[tokio::test]
 async fn unsupported_providers_are_rejected_before_sending(
-    request: AudioTranscriptionRequest<'static>,
+    request: AudioTranscriptionRequest,
     #[case] model: &'static str,
     #[case] provider: Option<&'static str>,
     #[case] reported: &str,
 ) {
     let error = transcribe(AudioTranscriptionRequest {
-        model,
-        custom_llm_provider: provider,
-        api_base: Some(UNREACHABLE_BASE),
-        ..request
+        model: model.into(),
+        custom_llm_provider: provider.map(str::to_owned),
+        ..at(UNREACHABLE_BASE, request)
     })
     .await
     .expect_err("unsupported provider errors");
@@ -190,10 +193,13 @@ async fn unsupported_providers_are_rejected_before_sending(
 
 #[rstest]
 #[tokio::test]
-async fn a_non_string_extra_header_is_rejected(request: AudioTranscriptionRequest<'static>) {
+async fn a_non_string_extra_header_is_rejected(request: AudioTranscriptionRequest) {
     let error = transcribe(AudioTranscriptionRequest {
-        extra_headers: Some(Map::from_iter([("x-count".to_string(), json!(3))])),
-        api_base: Some(UNREACHABLE_BASE),
+        connection: Connection {
+            api_base: Some(UNREACHABLE_BASE.into()),
+            extra_headers: Some(Map::from_iter([("x-count".to_string(), json!(3))])),
+            ..Connection::default()
+        },
         ..request
     })
     .await
@@ -207,19 +213,16 @@ async fn a_non_string_extra_header_is_rejected(request: AudioTranscriptionReques
 #[case::server_error(500)]
 #[tokio::test]
 async fn an_upstream_error_keeps_its_status_and_body(
-    request: AudioTranscriptionRequest<'static>,
+    request: AudioTranscriptionRequest,
     #[case] status: u16,
 ) {
     let upstream =
         upstream([ResponseTemplate::new(status).set_body_string("upstream said no")]).await;
     let base = upstream.uri();
 
-    let error = transcribe(AudioTranscriptionRequest {
-        api_base: Some(&base),
-        ..request
-    })
-    .await
-    .expect_err("upstream error propagates");
+    let error = transcribe(at(&base, request))
+        .await
+        .expect_err("upstream error propagates");
 
     assert_eq!(
         error,
@@ -235,18 +238,15 @@ async fn an_upstream_error_keeps_its_status_and_body(
 #[case::no_output(json_response(json!({"unexpected": true})))]
 #[tokio::test]
 async fn an_unreadable_success_body_is_an_invalid_response(
-    request: AudioTranscriptionRequest<'static>,
+    request: AudioTranscriptionRequest,
     #[case] response: ResponseTemplate,
 ) {
     let upstream = upstream([response]).await;
     let base = upstream.uri();
 
-    let error = transcribe(AudioTranscriptionRequest {
-        api_base: Some(&base),
-        ..request
-    })
-    .await
-    .expect_err("an unreadable body fails");
+    let error = transcribe(at(&base, request))
+        .await
+        .expect_err("an unreadable body fails");
 
     assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
 }
@@ -254,18 +254,15 @@ async fn an_unreadable_success_body_is_an_invalid_response(
 #[rstest]
 #[tokio::test]
 async fn transcription_records_route_and_resolved_provider(
-    request: AudioTranscriptionRequest<'static>,
+    request: AudioTranscriptionRequest,
     traces: TraceCapture,
 ) {
     let upstream = upstream([transcript_response("hello")]).await;
     let base = upstream.uri();
-    let model = request.model;
+    let model = request.model.clone();
     traces
         .logger()
-        .instrument(transcribe(AudioTranscriptionRequest {
-            api_base: Some(&base),
-            ..request
-        }))
+        .instrument(transcribe(at(&base, request)))
         .await
         .unwrap();
     let summaries = traces.summaries("litellm.route");

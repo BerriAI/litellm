@@ -58,16 +58,13 @@ async fn handle(
         route.machine(
             ChatCompletionsCall {
                 model: deployment.model.clone(),
+                custom_llm_provider: deployment.custom_llm_provider.clone(),
                 messages,
                 optional_params: body
                     .into_iter()
                     .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
                     .collect(),
-                api_key: deployment.api_key.clone(),
-                api_base: deployment.api_base.clone(),
-                custom_llm_provider: deployment.custom_llm_provider.clone(),
-                extra_headers: None,
-                timeout: deployment.timeout,
+                connection: deployment.connection(),
             },
             cache_options.policy,
         ),

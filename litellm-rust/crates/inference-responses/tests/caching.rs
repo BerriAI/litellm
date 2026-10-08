@@ -279,13 +279,10 @@ async fn responses_cache_identity_follows_resolved_configuration_and_request_cal
             .execute(
                 ResponsesCall {
                     model: "test".into(),
+                    custom_llm_provider: None,
                     input: json!("hello"),
                     optional_params: Default::default(),
-                    api_key: None,
-                    api_base: None,
-                    custom_llm_provider: None,
-                    extra_headers: None,
-                    timeout: None,
+                    connection: Default::default(),
                 },
                 &hooks,
                 None,

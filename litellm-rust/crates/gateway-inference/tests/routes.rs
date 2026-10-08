@@ -9,8 +9,9 @@ use axum::{
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
 };
+use litellm_inference::Connection;
 use litellm_inference::resources::CoreResources;
-use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsRequest};
+use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsCall};
 use rstest::rstest;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -93,19 +94,20 @@ async fn chat_errors_come_from_core(
         Arc::new(support::NoSecrets),
     )
     .execute(
-        ChatCompletionsRequest {
-            model: "anthropic/test-model",
+        ChatCompletionsCall {
+            model: "anthropic/test-model".into(),
+            custom_llm_provider: None,
             messages: fields.get("messages").cloned().unwrap_or_default(),
             optional_params: fields
                 .iter()
                 .filter(|(name, _)| name.as_str() != "messages")
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect(),
-            api_key: Some("test-key"),
-            api_base: Some(&base),
-            custom_llm_provider: None,
-            extra_headers: None,
-            timeout: None,
+            connection: Connection {
+                api_key: Some("test-key".into()),
+                api_base: Some(base.clone()),
+                ..Connection::default()
+            },
         },
         &(),
         None,

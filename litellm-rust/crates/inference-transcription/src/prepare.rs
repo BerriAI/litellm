@@ -31,12 +31,12 @@ fn provider_config(provider: LlmProviders) -> Option<&'static dyn BaseAudioTrans
 
 #[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
 pub async fn prepare_audio_transcription_provider_call(
-    request: AudioTranscriptionRequest<'_>,
+    request: AudioTranscriptionRequest,
     secrets: &dyn SecretSource,
 ) -> Result<ProviderAudioTranscriptionRequest, Error> {
     let provider_info = resolve_llm_provider(
-        request.model,
-        request.custom_llm_provider,
+        &request.model,
+        request.custom_llm_provider.as_deref(),
         "audio transcription",
     )?;
     let model = provider_info.model.to_string();
@@ -44,7 +44,7 @@ pub async fn prepare_audio_transcription_provider_call(
         .ok_or_else(|| Error::InvalidProvider(<&str>::from(provider_info.provider).to_string()))?;
     let snapshot = secrets.resolve(&config.secret_names()).await?;
     let env_lookup = |key: &str| snapshot.get(key);
-    let forwarded = string_headers("audio transcription", request.extra_headers)?;
+    let forwarded = string_headers("audio transcription", request.connection.extra_headers)?;
     let validated =
         config.validate_environment(forwarded, &model, &request.optional_params, &env_lookup)?;
     let environment = ValidatedEnvironment {
@@ -52,7 +52,7 @@ pub async fn prepare_audio_transcription_provider_call(
         auth: validated.auth,
     };
     let url = config.get_complete_url(
-        request.api_base,
+        request.connection.api_base.as_deref(),
         &model,
         &request.optional_params,
         &env_lookup,
@@ -68,6 +68,6 @@ pub async fn prepare_audio_transcription_provider_call(
         body: transformed.body,
         environment,
         secrets: snapshot,
-        timeout: request.timeout,
+        timeout: request.connection.timeout,
     })
 }

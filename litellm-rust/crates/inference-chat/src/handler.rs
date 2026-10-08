@@ -179,7 +179,7 @@ mod tests {
     use super::*;
     use crate::{
         prepare::{prepare_provider_request, resolve_request},
-        types::ChatCompletionsRequest,
+        types::ChatCompletionsCall,
     };
 
     const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
@@ -219,15 +219,16 @@ mod tests {
 
     fn prepared(api_base: &str) -> ProviderChatCompletionsRequest {
         prepare_provider_request(
-            resolve_request(ChatCompletionsRequest {
-                model: "anthropic/claude-sonnet-4-5",
+            resolve_request(ChatCompletionsCall {
+                model: "anthropic/claude-sonnet-4-5".into(),
+                custom_llm_provider: None,
                 messages: json!([{"role": "user", "content": "hi"}]),
                 optional_params: json!({"max_tokens": 16}).as_object().unwrap().clone(),
-                api_key: Some("sk-test"),
-                api_base: Some(api_base),
-                custom_llm_provider: None,
-                extra_headers: None,
-                timeout: None,
+                connection: litellm_inference::Connection {
+                    api_key: Some("sk-test".into()),
+                    api_base: Some(api_base.into()),
+                    ..Default::default()
+                },
             })
             .unwrap(),
             std::sync::Arc::new(|_: &str| None),

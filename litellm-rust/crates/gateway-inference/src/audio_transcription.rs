@@ -44,17 +44,14 @@ async fn handle(
     Ok(gateway
         .audio_transcription
         .execute(AudioTranscriptionRequest {
-            model: &deployment.model,
+            model: deployment.model.clone(),
+            custom_llm_provider: deployment.custom_llm_provider.clone(),
             audio,
-            api_key: deployment.api_key.as_deref(),
-            api_base: deployment.api_base.as_deref(),
-            custom_llm_provider: deployment.custom_llm_provider.as_deref(),
-            extra_headers: None,
             optional_params: body
                 .into_iter()
                 .filter(|(name, _)| !matches!(name.as_str(), "model" | "audio"))
                 .collect(),
-            timeout: deployment.timeout,
+            connection: deployment.connection(),
         })
         .await?)
 }

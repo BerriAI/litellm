@@ -9,16 +9,6 @@ use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
-/// The keyword arguments every value route shares, validated at the Python boundary.
-pub(crate) struct RouteOptions {
-    pub(crate) model: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_base: Option<String>,
-    pub(crate) custom_llm_provider: Option<String>,
-    pub(crate) extra_headers: Option<Map<String, Value>>,
-    pub(crate) timeout: Option<Duration>,
-}
-
 fn required_object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
     match value {
         Value::Object(values) => Ok(values),
@@ -82,17 +72,6 @@ pub(crate) fn optional_object_field(
         .map(|value| optional_object(name, &value))
         .transpose()
         .map(Option::flatten)
-}
-
-pub(crate) fn value_route_options(fields: &Bound<'_, PyDict>) -> PyResult<RouteOptions> {
-    Ok(RouteOptions {
-        model: from_py_argument(&required_field(fields, "model")?)?,
-        api_key: optional_field(fields, "api_key")?,
-        api_base: optional_field(fields, "api_base")?,
-        custom_llm_provider: optional_field(fields, "custom_llm_provider")?,
-        extra_headers: optional_object_field(fields, "extra_headers")?,
-        timeout: optional_timeout(optional_field(fields, "timeout_seconds")?),
-    })
 }
 
 /// Builds a route's optional body fields from the caller's Python arguments, in `names` order.

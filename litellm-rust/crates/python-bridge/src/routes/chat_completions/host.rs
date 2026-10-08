@@ -16,16 +16,14 @@ pub(super) fn project(
     py: Python<'_>,
     arguments: &Bound<'_, PyDict>,
 ) -> PyResult<ChatCompletionsCall> {
-    let call = host.project(py, arguments, "messages")?;
+    let model = host.model(py, arguments)?;
+    let custom_llm_provider = host.string(py, arguments, "custom_llm_provider")?;
     Ok(ChatCompletionsCall {
-        model: call.options.model,
-        messages: call.input,
-        optional_params: call.params,
-        api_key: call.options.api_key,
-        api_base: call.options.api_base,
-        custom_llm_provider: call.options.custom_llm_provider,
-        extra_headers: call.options.extra_headers,
-        timeout: call.options.timeout,
+        optional_params: host.parameters(py, arguments)?,
+        connection: host.connection(py, arguments, &model, custom_llm_provider.as_deref())?,
+        messages: host.required(py, arguments, "messages")?,
+        model,
+        custom_llm_provider,
     })
 }
 

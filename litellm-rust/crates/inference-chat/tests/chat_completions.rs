@@ -6,7 +6,8 @@ use litellm_host::{
 use std::time::Duration;
 
 use litellm_http::transport::Error as TransportError;
-use litellm_inference_chat::{Error, types::ChatCompletionsRequest};
+use litellm_inference::Connection;
+use litellm_inference_chat::{Error, types::ChatCompletionsCall};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
@@ -17,7 +18,7 @@ use support::*;
 
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
-async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
+async fn complete(request: ChatCompletionsCall) -> Result<ChatCompletionsResponse, Error> {
     chat_completions_route().execute(request, &(), None).await
 }
 
@@ -37,34 +38,44 @@ fn hi() -> Value {
 }
 
 #[fixture]
-fn request() -> ChatCompletionsRequest<'static> {
-    ChatCompletionsRequest {
-        model: "anthropic/claude-sonnet-4-5",
+fn request() -> ChatCompletionsCall {
+    ChatCompletionsCall {
+        model: "anthropic/claude-sonnet-4-5".into(),
+        custom_llm_provider: None,
         messages: hi(),
         optional_params: object(json!({"max_tokens": 16})),
-        api_key: Some("sk-test"),
-        api_base: None,
-        custom_llm_provider: None,
-        extra_headers: None,
-        timeout: Some(Duration::from_secs(10)),
+        connection: Connection {
+            api_key: Some("sk-test".into()),
+            timeout: Some(Duration::from_secs(10)),
+            ..Connection::default()
+        },
+    }
+}
+
+fn at(base: &str, request: ChatCompletionsCall) -> ChatCompletionsCall {
+    ChatCompletionsCall {
+        connection: Connection {
+            api_base: Some(base.into()),
+            ..request.connection
+        },
+        ..request
     }
 }
 
 #[rstest]
 #[tokio::test]
 async fn anthropic_round_trip_translates_the_conversation_and_normalizes_the_response(
-    request: ChatCompletionsRequest<'static>,
+    request: ChatCompletionsCall,
 ) {
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
 
-    let response = complete(ChatCompletionsRequest {
+    let response = complete(ChatCompletionsCall {
         messages: json!([
             {"role": "system", "content": "be terse"},
             {"role": "user", "content": "hi"}
         ]),
-        api_base: Some(&base),
-        ..request
+        ..at(&base, request)
     })
     .await
     .expect("call succeeds");
@@ -92,17 +103,18 @@ async fn anthropic_round_trip_translates_the_conversation_and_normalizes_the_res
 
 #[rstest]
 #[tokio::test]
-async fn the_deployment_key_replaces_a_caller_supplied_x_api_key(
-    request: ChatCompletionsRequest<'static>,
-) {
+async fn the_deployment_key_replaces_a_caller_supplied_x_api_key(request: ChatCompletionsCall) {
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
 
-    complete(ChatCompletionsRequest {
-        api_base: Some(&base),
-        extra_headers: Some(object(
-            json!({"x-api-key": "caller-key", "x-trace": "kept"}),
-        )),
+    let request = at(&base, request);
+    complete(ChatCompletionsCall {
+        connection: Connection {
+            extra_headers: Some(object(
+                json!({"x-api-key": "caller-key", "x-trace": "kept"}),
+            )),
+            ..request.connection
+        },
         ..request
     })
     .await
@@ -115,7 +127,7 @@ async fn the_deployment_key_replaces_a_caller_supplied_x_api_key(
 
 #[rstest]
 #[tokio::test]
-async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsRequest<'static>) {
+async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsCall) {
     let upstream = upstream([json_response(json!({
         "output": {"message": {"role": "assistant", "content": [{"text": "hello"}]}},
         "stopReason": "end_turn",
@@ -124,15 +136,17 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
     .await;
     let base = upstream.uri();
 
-    let response = complete(ChatCompletionsRequest {
-        model: "bedrock/anthropic.claude-sonnet-4-5",
+    let response = complete(ChatCompletionsCall {
+        model: "bedrock/anthropic.claude-sonnet-4-5".into(),
         optional_params: object(json!({
             "aws_access_key_id": "access-key",
             "aws_secret_access_key": "secret-key",
             "aws_region_name": "eu-west-1"
         })),
-        api_key: None,
-        api_base: Some(&base),
+        connection: Connection {
+            api_base: Some(base),
+            ..Connection::default()
+        },
         ..request
     })
     .await
@@ -167,18 +181,15 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
 #[case::not_json("not json")]
 #[tokio::test]
 async fn a_response_it_cannot_normalize_is_reported_as_already_sent(
-    request: ChatCompletionsRequest<'static>,
+    request: ChatCompletionsCall,
     #[case] body: &str,
 ) {
     let upstream = upstream([anthropic_response(body)]).await;
     let base = upstream.uri();
 
-    let error = complete(ChatCompletionsRequest {
-        api_base: Some(&base),
-        ..request
-    })
-    .await
-    .expect_err("response cannot be normalized");
+    let error = complete(at(&base, request))
+        .await
+        .expect_err("response cannot be normalized");
 
     assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
 }
@@ -188,18 +199,15 @@ async fn a_response_it_cannot_normalize_is_reported_as_already_sent(
 #[case::server_error(500)]
 #[tokio::test]
 async fn an_upstream_error_status_keeps_its_code_and_body(
-    request: ChatCompletionsRequest<'static>,
+    request: ChatCompletionsCall,
     #[case] status: u16,
 ) {
     let upstream = upstream([ResponseTemplate::new(status).set_body_string("slow down")]).await;
     let base = upstream.uri();
 
-    let error = complete(ChatCompletionsRequest {
-        api_base: Some(&base),
-        ..request
-    })
-    .await
-    .expect_err("upstream rejects");
+    let error = complete(at(&base, request))
+        .await
+        .expect_err("upstream rejects");
 
     assert_eq!(
         error,
@@ -213,14 +221,11 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
 #[rstest]
 #[tokio::test]
 async fn a_connection_that_is_never_established_returns_a_connect_error(
-    request: ChatCompletionsRequest<'static>,
+    request: ChatCompletionsCall,
 ) {
-    let error = complete(ChatCompletionsRequest {
-        api_base: Some(UNREACHABLE_BASE),
-        ..request
-    })
-    .await
-    .expect_err("nothing is listening");
+    let error = complete(at(UNREACHABLE_BASE, request))
+        .await
+        .expect_err("nothing is listening");
 
     assert!(
         matches!(error, Error::Transport(TransportError::Connect(_))),
@@ -230,14 +235,17 @@ async fn a_connection_that_is_never_established_returns_a_connect_error(
 
 #[rstest]
 #[tokio::test]
-async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletionsRequest<'static>) {
+async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletionsCall) {
     let upstream =
         upstream([anthropic_response(ANTHROPIC_MESSAGE).set_delay(Duration::from_secs(5))]).await;
     let base = upstream.uri();
 
-    let error = complete(ChatCompletionsRequest {
-        api_base: Some(&base),
-        timeout: Some(Duration::from_millis(100)),
+    let error = complete(ChatCompletionsCall {
+        connection: Connection {
+            api_base: Some(base),
+            timeout: Some(Duration::from_millis(100)),
+            ..request.connection
+        },
         ..request
     })
     .await
@@ -254,7 +262,7 @@ async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletion
 #[case::hosted(true)]
 #[tokio::test]
 async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
-    request: ChatCompletionsRequest<'static>,
+    request: ChatCompletionsCall,
     #[case] hosted: bool,
 ) {
     use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
@@ -262,13 +270,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
 
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
-    let host = RecordingCall::<ChatCompletions>::new(
-        ChatCompletionsRequest {
-            api_base: Some(&base),
-            ..request
-        }
-        .into(),
-    );
+    let host = RecordingCall::<ChatCompletions>::new(at(&base, request));
     let response = if hosted {
         let result = litellm_host_native::in_process::run_hosted(
             chat_completions_route()
@@ -284,20 +286,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
         chat_completions_route()
-            .execute(
-                ChatCompletionsRequest {
-                    model: &call.model,
-                    messages: call.messages,
-                    optional_params: call.optional_params,
-                    api_key: call.api_key.as_deref(),
-                    api_base: call.api_base.as_deref(),
-                    custom_llm_provider: call.custom_llm_provider.as_deref(),
-                    extra_headers: call.extra_headers,
-                    timeout: call.timeout,
-                },
-                &host,
-                Some(host.events.0.sender.clone()),
-            )
+            .execute(call, &host, Some(host.events.0.sender.clone()))
             .await
             .unwrap()
     };
@@ -328,9 +317,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
 
 #[rstest]
 #[tokio::test]
-async fn a_post_call_hook_failure_never_looks_safe_to_retry(
-    request: ChatCompletionsRequest<'static>,
-) {
+async fn a_post_call_hook_failure_never_looks_safe_to_retry(request: ChatCompletionsCall) {
     use litellm_host::interceptors::{Interceptors, RequestContext, WireRequest};
     struct FailingHook;
     impl Interceptors<Error> for FailingHook {
@@ -348,14 +335,7 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
     let error = chat_completions_route()
-        .execute(
-            ChatCompletionsRequest {
-                api_base: Some(&base),
-                ..request
-            },
-            &FailingHook,
-            None,
-        )
+        .execute(at(&base, request), &FailingHook, None)
         .await
         .unwrap_err();
     let Error::PostCallHook(source) = error else {
@@ -368,18 +348,15 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
 #[rstest]
 #[tokio::test]
 async fn completed_chat_records_route_and_resolved_provider(
-    request: ChatCompletionsRequest<'static>,
+    request: ChatCompletionsCall,
     traces: TraceCapture,
 ) {
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
-    let model = request.model;
+    let model = request.model.clone();
     traces
         .logger()
-        .instrument(complete(ChatCompletionsRequest {
-            api_base: Some(&base),
-            ..request
-        }))
+        .instrument(complete(at(&base, request)))
         .await
         .unwrap();
     let summaries = traces.summaries("litellm.route");

@@ -51,7 +51,8 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
     traces: support::TraceCapture,
 ) {
     use litellm_cache_response::ScopedCache;
-    use litellm_inference_chat::types::ChatCompletionsRequest;
+    use litellm_inference::Connection;
+    use litellm_inference_chat::types::ChatCompletionsCall;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     let upstream = MockServer::start().await;
@@ -75,15 +76,16 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
         let response = traces
             .logger()
             .instrument(route.execute(
-                ChatCompletionsRequest {
-                    model: "anthropic/cache-test-model",
+                ChatCompletionsCall {
+                    model: "anthropic/cache-test-model".into(),
+                    custom_llm_provider: None,
                     messages: json!([{"role":"user","content":"hello"}]),
                     optional_params: [("max_tokens".into(), json!(16))].into_iter().collect(),
-                    api_key: Some("test-key"),
-                    api_base: Some(&base),
-                    custom_llm_provider: None,
-                    extra_headers: None,
-                    timeout: None,
+                    connection: Connection {
+                        api_key: Some("test-key".into()),
+                        api_base: Some(base.clone()),
+                        ..Connection::default()
+                    },
                 },
                 &(),
                 Some(observer.clone()),
@@ -199,7 +201,8 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
     #[case] change: &str,
 ) {
     use litellm_cache_response::ScopedCache;
-    use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsRequest};
+    use litellm_inference::Connection;
+    use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsCall};
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     let first = MockServer::start().await;
@@ -245,15 +248,12 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
         )
         .with_cache(cache)
         .execute(
-            ChatCompletionsRequest {
-                model: "anthropic/cache-test-model",
+            ChatCompletionsCall {
+                model: "anthropic/cache-test-model".into(),
+                custom_llm_provider: None,
                 messages: json!([{"role":"user","content":"hello"}]),
                 optional_params: [("max_tokens".into(), json!(32))].into_iter().collect(),
-                api_key: None,
-                api_base: None,
-                custom_llm_provider: None,
-                extra_headers: None,
-                timeout: None,
+                connection: Connection::default(),
             },
             &hooks,
             None,
@@ -298,7 +298,8 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
 #[tokio::test]
 async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheService>) {
     use litellm_cache_response::ScopedCache;
-    use litellm_inference_chat::types::ChatCompletionsRequest;
+    use litellm_inference::Connection;
+    use litellm_inference_chat::types::ChatCompletionsCall;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     let upstream = MockServer::start().await;
@@ -314,11 +315,12 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
         support::chat_completions_route().with_cache(ScopedCache::new(cache, CacheScope::Shared));
     let hooks = ChangingHooks::default();
     for _ in 0..2 {
-        let response = route.execute(ChatCompletionsRequest {
-            model:"bedrock/anthropic.cache-test-model",
+        let response = route.execute(ChatCompletionsCall {
+            model:"bedrock/anthropic.cache-test-model".into(),
+            custom_llm_provider:None,
             messages:json!([{"role":"user","content":"hello"}]),
             optional_params:json!({"aws_access_key_id":"test-access","aws_secret_access_key":"test-secret","aws_region_name":"eu-west-1"}).as_object().unwrap().clone(),
-            api_key:None,api_base:Some(&upstream.uri()),custom_llm_provider:None,extra_headers:None,timeout:None,
+            connection:Connection{api_base:Some(upstream.uri()),..Connection::default()},
         }, &hooks, None).await.unwrap();
         assert_eq!(
             serde_json::to_value(response).unwrap()["usage"]["total_tokens"],

@@ -1,20 +1,18 @@
 use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
+use litellm_inference::Connection;
 use litellm_llms::base_llm::{
     audio_transcription::transformation::BaseAudioTranscriptionConfig, auth::ValidatedEnvironment,
 };
 use serde_json::{Map, Value};
 
-pub struct AudioTranscriptionRequest<'a> {
-    pub model: &'a str,
+pub struct AudioTranscriptionRequest {
+    pub model: String,
+    pub custom_llm_provider: Option<String>,
     pub audio: Value,
-    pub api_key: Option<&'a str>,
-    pub api_base: Option<&'a str>,
-    pub custom_llm_provider: Option<&'a str>,
-    pub extra_headers: Option<Map<String, Value>>,
     pub optional_params: Map<String, Value>,
-    pub timeout: Option<Duration>,
+    pub connection: Connection,
 }
 
 #[derive(Clone)]

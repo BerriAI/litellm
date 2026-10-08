@@ -11,7 +11,7 @@ use super::{
     common_utils::{chat_completions_provider, string_headers},
 };
 use crate::types::{
-    ChatCompletionsRequest, ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
+    ChatCompletionsCall, ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
 use litellm_inference::provider::resolve_llm_provider;
 
@@ -46,20 +46,20 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
 }
 
 pub(super) fn resolve_request(
-    request: ChatCompletionsRequest<'_>,
-) -> Result<ResolvedChatCompletionsRequest<'_>, Error> {
+    call: ChatCompletionsCall,
+) -> Result<ResolvedChatCompletionsRequest, Error> {
     let ResolvedProvider {
         model,
         custom_llm_provider,
         config,
-    } = resolve_provider_config(request.model, request.custom_llm_provider)?;
-    let messages = parse_messages(request.messages)?;
+    } = resolve_provider_config(&call.model, call.custom_llm_provider.as_deref())?;
+    let messages = parse_messages(call.messages)?;
     if messages.is_empty() {
         return Err(Error::InvalidRequest(
             "chat completions requires at least one message".into(),
         ));
     }
-    if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
+    if let Some(reason) = config.unsupported_reason(&messages, &call.optional_params) {
         return Err(Error::Unsupported(reason.0));
     }
     Ok(ResolvedChatCompletionsRequest {
@@ -67,25 +67,22 @@ pub(super) fn resolve_request(
         custom_llm_provider,
         config,
         messages,
-        optional_params: request.optional_params,
-        api_key: request.api_key,
-        api_base: request.api_base,
-        extra_headers: request.extra_headers,
-        timeout: request.timeout,
+        optional_params: call.optional_params,
+        connection: call.connection,
     })
 }
 
 fn validate_environment(
-    request: &ResolvedChatCompletionsRequest<'_>,
+    request: &ResolvedChatCompletionsRequest,
     model: &str,
     config: &dyn BaseConfig,
     secrets: &dyn Lookup,
 ) -> Result<ValidatedEnvironment, Error> {
     let env_lookup = |key: &str| secrets.get(key);
-    let forwarded = string_headers(request.extra_headers.clone())?;
+    let forwarded = string_headers(request.connection.extra_headers.clone())?;
     let validated = config.validate_environment(
         forwarded,
-        request.api_key,
+        request.connection.api_key.as_deref(),
         model,
         &request.optional_params,
         &env_lookup,
@@ -98,7 +95,7 @@ fn validate_environment(
 
 #[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
 pub(super) fn prepare_provider_request(
-    request: ResolvedChatCompletionsRequest<'_>,
+    request: ResolvedChatCompletionsRequest,
     secrets: Secrets,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
     let environment =
@@ -107,7 +104,7 @@ pub(super) fn prepare_provider_request(
     let config = request.config;
     let env_lookup = |key: &str| secrets.get(key);
     let url = config.get_complete_url(
-        request.api_base,
+        request.connection.api_base.as_deref(),
         &model,
         &request.optional_params,
         &env_lookup,
@@ -124,8 +121,8 @@ pub(super) fn prepare_provider_request(
         optional_params: request.optional_params,
         environment,
         secrets,
-        timeout: request.timeout,
-        api_key: request.api_key.map(|key| SecretValue::new(key.to_string())),
+        timeout: request.connection.timeout,
+        api_key: request.connection.api_key.map(SecretValue::new),
     })
 }
 
@@ -138,11 +135,12 @@ mod tests {
     use super::{prepare_provider_request, resolve_request};
     use crate::{
         Error,
-        types::{ChatCompletionsRequest, ProviderChatCompletionsRequest},
+        types::{ChatCompletionsCall, ProviderChatCompletionsRequest},
     };
+    use litellm_inference::Connection;
 
     fn prepare_chat_completions_call(
-        request: ChatCompletionsRequest<'_>,
+        request: ChatCompletionsCall,
     ) -> Result<ProviderChatCompletionsRequest, Error> {
         prepare_provider_request(
             resolve_request(request)?,
@@ -164,28 +162,28 @@ mod tests {
             .headers
     }
 
-    fn request<'a>(
-        model: &'a str,
-        provider: Option<&'a str>,
+    fn request(
+        model: &str,
+        provider: Option<&str>,
         messages: Value,
         optional_params: Value,
-    ) -> ChatCompletionsRequest<'a> {
-        ChatCompletionsRequest {
-            model,
+    ) -> ChatCompletionsCall {
+        ChatCompletionsCall {
+            model: model.into(),
+            custom_llm_provider: provider.map(str::to_owned),
             messages,
             optional_params: match optional_params {
                 Value::Object(map) => map,
                 other => panic!("params must be an object, got {other}"),
             },
-            api_key: Some("sk-test"),
-            api_base: None,
-            custom_llm_provider: provider,
-            extra_headers: None,
-            timeout: None,
+            connection: Connection {
+                api_key: Some("sk-test".into()),
+                ..Connection::default()
+            },
         }
     }
 
-    fn preparation_error(request: ChatCompletionsRequest<'_>) -> Error {
+    fn preparation_error(request: ChatCompletionsCall) -> Error {
         prepare_chat_completions_call(request)
             .err()
             .expect("request preparation should fail")
@@ -253,7 +251,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         );
-        call.extra_headers = Some(Map::from_iter([(
+        call.connection.extra_headers = Some(Map::from_iter([(
             "X-Api-Key".to_string(),
             json!("sk-caller"),
         )]));
@@ -278,7 +276,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         );
-        call.extra_headers = Some(Map::from_iter([
+        call.connection.extra_headers = Some(Map::from_iter([
             (
                 "Authorization".to_string(),
                 json!("Bearer sk-ant-oat01-token"),
@@ -312,7 +310,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         );
-        call.extra_headers = Some(Map::from_iter([
+        call.connection.extra_headers = Some(Map::from_iter([
             ("Authorization".to_string(), json!("Bearer unrelated")),
             ("X-Api-Key".to_string(), json!("sk-caller")),
         ]));
@@ -336,8 +334,8 @@ mod tests {
 
     #[rstest::rstest]
     fn rejects_empty_messages_before_resolving_credentials() {
-        let call = ChatCompletionsRequest {
-            api_key: None,
+        let call = ChatCompletionsCall {
+            connection: Connection::default(),
             ..request("claude-sonnet-4-5", Some("anthropic"), json!([]), json!({}))
         };
         assert!(matches!(preparation_error(call), Error::InvalidRequest(_)));
@@ -403,7 +401,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         );
-        call.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
+        call.connection.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
         assert_eq!(
             preparation_error(call),
             Error::Headers(litellm_http::request::HeaderError {
@@ -422,7 +420,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({"maxTokens": 16}),
         );
-        call.api_key = None;
+        call.connection.api_key = None;
         let prepared = prepare_chat_completions_call(call).expect("prepares");
         assert_eq!(
             prepared.url,
@@ -460,8 +458,8 @@ mod tests {
             }),
         );
         // A key would resolve to a bearer token and never reach the signer.
-        call.api_key = None;
-        call.extra_headers = Some(Map::from_iter([(
+        call.connection.api_key = None;
+        call.connection.extra_headers = Some(Map::from_iter([(
             "x-request-id".to_string(),
             json!("abc-123"),
         )]));
@@ -510,9 +508,11 @@ mod tests {
     #[case::date("Date")]
     #[tokio::test]
     async fn rejects_a_forwarded_header_the_signer_computes(#[case] forwarded: &str) {
-        let call = ChatCompletionsRequest {
-            api_key: None,
-            extra_headers: Some(Map::from_iter([(forwarded.to_string(), json!("forged"))])),
+        let call = ChatCompletionsCall {
+            connection: Connection {
+                extra_headers: Some(Map::from_iter([(forwarded.to_string(), json!("forged"))])),
+                ..Connection::default()
+            },
             ..request(
                 "bedrock/us-east-1/anthropic.claude-v2",
                 None,
@@ -557,7 +557,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({"maxTokens": 16}),
         );
-        call.extra_headers = Some(Map::from_iter([(
+        call.connection.extra_headers = Some(Map::from_iter([(
             "Authorization".to_string(),
             json!("Bearer caller-supplied"),
         )]));
@@ -590,7 +590,7 @@ mod tests {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         );
-        call.extra_headers = Some(Map::from_iter([(
+        call.connection.extra_headers = Some(Map::from_iter([(
             "authorization".to_string(),
             json!("Bearer sk-ant-oat01-forwarded"),
         )]));

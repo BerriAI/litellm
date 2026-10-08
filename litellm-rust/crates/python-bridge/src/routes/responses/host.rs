@@ -16,9 +16,10 @@ pub(super) fn project(
     py: Python<'_>,
     arguments: &Bound<'_, PyDict>,
 ) -> PyResult<ResponsesCall> {
-    let call = host.project(py, arguments, "input")?;
-    let optional_params = call
-        .params
+    let model = host.model(py, arguments)?;
+    let custom_llm_provider = host.string(py, arguments, "custom_llm_provider")?;
+    let optional_params = host
+        .parameters(py, arguments)?
         .into_iter()
         .map(|(name, value)| {
             let value = match (name.as_str(), value) {
@@ -39,14 +40,11 @@ pub(super) fn project(
         })
         .collect::<PyResult<_>>()?;
     Ok(ResponsesCall {
-        model: call.options.model,
-        input: call.input,
         optional_params,
-        api_key: call.options.api_key,
-        api_base: call.options.api_base,
-        custom_llm_provider: call.options.custom_llm_provider,
-        extra_headers: call.options.extra_headers,
-        timeout: call.options.timeout,
+        connection: host.connection(py, arguments, &model, custom_llm_provider.as_deref())?,
+        input: host.required(py, arguments, "input")?,
+        model,
+        custom_llm_provider,
     })
 }
 
