@@ -9,11 +9,15 @@ pub enum ChatContentPart {
         text: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
     ImageUrl {
         image_url: ChatMediaUrl,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
@@ -24,11 +28,15 @@ pub enum ChatContentPart {
     },
     InputAudio {
         input_audio: ChatInputAudio,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
     File {
         file: Box<ChatFile>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt_cache_breakpoint: Option<PromptCacheBreakpoint>,
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
@@ -48,6 +56,20 @@ pub enum ChatContentPart {
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+pub struct PromptCacheBreakpoint {
+    pub mode: PromptCacheMode,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Copy, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptCacheMode {
+    Explicit,
 }
 
 #[macro_rules_attribute::apply(wire_type)]

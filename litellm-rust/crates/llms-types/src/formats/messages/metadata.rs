@@ -1,6 +1,7 @@
 use serde_json::{Map, Value};
 
 use crate::json_schema::JsonSchema;
+use crate::recognized::Recognized;
 
 #[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(wire_type)]
@@ -16,7 +17,7 @@ pub struct MessagesMetadata {
 pub struct OutputFormat {
     #[serde(rename = "type")]
     pub format_type: OutputFormatType,
-    pub schema: Option<JsonSchema>,
+    pub schema: JsonSchema,
     pub strict: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -60,7 +61,7 @@ pub struct MessagesContainer {
 pub struct ContainerSkill {
     #[serde(rename = "type")]
     pub skill_type: SkillType,
-    pub skill_id: Option<String>,
+    pub skill_id: String,
     pub version: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -78,8 +79,8 @@ pub enum SkillType {
 pub struct McpServer {
     #[serde(rename = "type")]
     pub server_type: McpServerType,
-    pub url: Option<String>,
-    pub name: Option<String>,
+    pub url: String,
+    pub name: String,
     pub authorization_token: Option<String>,
     pub tool_configuration: Option<McpToolConfiguration>,
     #[serde(flatten)]
@@ -106,7 +107,7 @@ pub struct McpToolConfiguration {
 #[macro_rules_attribute::apply(wire_type)]
 pub struct StopDetails {
     #[serde(rename = "type")]
-    pub detail_type: StopDetailsType,
+    pub detail_type: Recognized<StopDetailsType>,
     pub category: Option<String>,
     pub explanation: Option<String>,
     #[serde(flatten)]
@@ -137,10 +138,6 @@ pub struct AppliedEdit {
     pub cleared_input_tokens: Option<u64>,
     pub cleared_tool_uses: Option<u64>,
     pub cleared_thinking_turns: Option<u64>,
-    pub summary_input_tokens: Option<u64>,
-    pub summary_output_tokens: Option<u64>,
-    pub error: Option<String>,
-    pub warnings: Option<Vec<String>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

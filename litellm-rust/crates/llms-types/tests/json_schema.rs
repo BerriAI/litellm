@@ -54,6 +54,21 @@ fn recursive_schema_round_trips(#[case] wire: Value) {
 }
 
 #[rstest]
+fn schema_maps_keep_wire_key_order() {
+    let wire = r#"{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}},"$defs":{"y":true,"b":false}}"#;
+    let schema: JsonSchemaObject = serde_json::from_str(wire).unwrap();
+    let names: Vec<&str> = schema
+        .properties
+        .as_ref()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(names, ["zeta", "alpha"]);
+    assert_eq!(serde_json::to_string(&schema).unwrap(), wire);
+}
+
+#[rstest]
 fn schema_object_round_trips_supported_keywords() {
     let schema = round_trip::<JsonSchemaObject>(json!({
         "type":"object",

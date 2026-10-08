@@ -155,96 +155,10 @@ fn ocr_object() -> String {
 #[macro_rules_attribute::apply(wire_type)]
 #[derive(Default)]
 pub struct OcrBoundingBox {
-    pub x: Option<serde_json::Number>,
-    pub y: Option<serde_json::Number>,
-    pub width: Option<serde_json::Number>,
-    pub height: Option<serde_json::Number>,
     pub top_left_x: Option<serde_json::Number>,
     pub top_left_y: Option<serde_json::Number>,
     pub bottom_right_x: Option<serde_json::Number>,
     pub bottom_right_y: Option<serde_json::Number>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
-pub struct OcrTable {
-    #[serde(rename = "rowCount")]
-    pub row_count: Option<u64>,
-    #[serde(rename = "columnCount")]
-    pub column_count: Option<u64>,
-    pub cells: Option<Vec<OcrTableCell>>,
-    #[serde(rename = "boundingRegions")]
-    pub bounding_regions: Option<Vec<OcrBoundingRegion>>,
-    pub spans: Option<Vec<OcrTextSpan>>,
-    pub content: Option<String>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
-pub struct OcrTableCell {
-    #[serde(rename = "rowIndex")]
-    pub row_index: Option<u64>,
-    #[serde(rename = "columnIndex")]
-    pub column_index: Option<u64>,
-    #[serde(rename = "rowSpan")]
-    pub row_span: Option<u64>,
-    #[serde(rename = "columnSpan")]
-    pub column_span: Option<u64>,
-    pub kind: Option<String>,
-    pub content: Option<String>,
-    #[serde(rename = "boundingRegions")]
-    pub bounding_regions: Option<Vec<OcrBoundingRegion>>,
-    pub spans: Option<Vec<OcrTextSpan>>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
-pub struct OcrKeyValuePair {
-    pub key: Option<OcrKeyValueElement>,
-    pub value: Option<OcrKeyValueElement>,
-    pub confidence: Option<serde_json::Number>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
-pub struct OcrKeyValueElement {
-    pub content: Option<String>,
-    #[serde(rename = "boundingRegions")]
-    pub bounding_regions: Option<Vec<OcrBoundingRegion>>,
-    pub spans: Option<Vec<OcrTextSpan>>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
-pub struct OcrBoundingRegion {
-    #[serde(rename = "pageNumber")]
-    pub page_number: Option<u64>,
-    pub polygon: Option<Vec<serde_json::Number>>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
-pub struct OcrTextSpan {
-    pub offset: Option<u64>,
-    pub length: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

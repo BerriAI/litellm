@@ -7,20 +7,20 @@ mod tools;
 mod usage;
 
 pub use content::{
-    AdvisorToolResultContent, BashCodeExecutionToolResultContent, BlockContent, BrowserStateBlock,
-    BrowserStateChange, BrowserTab, CharCitation, Citation, CitationsConfig, CodeExecutionOutput,
-    CodeExecutionResult, CodeExecutionToolResultContent, CompactionBlock, ContainerUploadBlock,
-    ContentBlockCitation, ContentSource, DocumentBlock, EncryptedCodeExecutionResult,
-    FallbackBlock, FallbackModel, FallbackTrigger, ImageBlock, McpListedTool, McpToolListingBlock,
-    McpToolResultBlock, McpToolUseBlock, MessagesContentPart, PageCitation, PromptCacheBreakpoint,
-    PromptCacheMode, RedactedThinkingBlock, SearchResultBlock, SearchResultCitation,
-    ServerToolError, ServerToolResultBlock, ServerToolUseBlock, TextBlock,
-    TextEditorCodeExecutionToolResultContent, TextEditorCreateResult, TextEditorFileType,
-    TextEditorStrReplaceResult, TextEditorViewResult, ThinkingBlock, ToolCaller, ToolChange,
-    ToolChangeBlock, ToolChangeTarget, ToolReferenceBlock, ToolResultBlock, ToolSearchResult,
-    ToolSearchToolResultContent, ToolUseBlock, WebFetchResult, WebFetchToolResultContent,
-    WebSearchCitation, WebSearchResult, WebSearchResultError, WebSearchResultErrorType,
-    WebSearchResultType, WebSearchToolResultContent,
+    AdvisorToolResultContent, BashCodeExecutionOutput, BashCodeExecutionToolResultContent,
+    BlockContent, BrowserStateBlock, BrowserStateChange, BrowserTab, CharCitation, Citation,
+    CitationsConfig, CodeExecutionOutput, CodeExecutionResult, CodeExecutionToolResultContent,
+    CompactionBlock, ContainerUploadBlock, ContentBlockCitation, ContentSource, DocumentBlock,
+    EncryptedCodeExecutionResult, FallbackBlock, FallbackModel, FallbackTrigger, ImageBlock,
+    McpListedTool, McpToolListingBlock, McpToolResultBlock, McpToolUseBlock, MessagesContentPart,
+    PageCitation, RedactedThinkingBlock, SearchResultBlock, SearchResultCitation, ServerToolError,
+    ServerToolResultBlock, ServerToolUseBlock, TextBlock, TextEditorCodeExecutionToolResultContent,
+    TextEditorCreateResult, TextEditorFileType, TextEditorStrReplaceResult, TextEditorViewResult,
+    ThinkingBlock, ToolCaller, ToolChange, ToolChangeBlock, ToolChangeTarget, ToolReferenceBlock,
+    ToolResultBlock, ToolSearchReference, ToolSearchResult, ToolSearchToolResultContent,
+    ToolUseBlock, WebFetchDocument, WebFetchResult, WebFetchToolResultContent, WebSearchCitation,
+    WebSearchResult, WebSearchResultError, WebSearchResultErrorType, WebSearchResultType,
+    WebSearchToolResultContent,
 };
 pub use metadata::{
     AppliedEdit, CompactionType, ContainerReference, ContainerSkill, ContextManagementResponse,
@@ -36,8 +36,15 @@ pub use request::{
 };
 pub use response::MessagesResponse;
 pub use tools::{
-    BuiltinMessagesTool, CustomTool, CustomToolType, MessagesToolParam, ToolChoice, ToolChoiceType,
-    ToolDefinition, UserLocationType, WebSearchUserLocation,
+    AdvisorTool, AdvisorToolName, AllowedCaller, BashToolName, BrowserToolsetConfigs,
+    BuiltinMessagesTool, ClientTool, CodeExecutionToolName, ComputerTool, ComputerTool20251124,
+    ComputerToolName, ComputerToolsetConfigs, CustomTool, CustomToolType, McpToolset,
+    MemoryToolName, MessagesToolParam, ResponseInclusion, ServerTool, StrReplaceBasedEditToolName,
+    StrReplaceEditorName, TextEditorTool20250728, ToolChoice, ToolChoiceType, ToolResultUrlSource,
+    ToolSearchBm25ToolName, ToolSearchRegexToolName, Toolset, ToolsetToolConfig,
+    UrlSourceToolReference, UserInputUrlSource, UserLocationType, WebFetchTool,
+    WebFetchTool20260309, WebFetchTool20260318, WebFetchToolName, WebFetchUrlSources,
+    WebSearchTool, WebSearchTool20260318, WebSearchToolName, WebSearchUserLocation,
 };
 pub use usage::{
     CacheCreationUsage, MessagesOutputTokensDetails, MessagesUsage, ServerToolUsage,

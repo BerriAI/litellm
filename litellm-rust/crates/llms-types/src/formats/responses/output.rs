@@ -237,11 +237,13 @@ pub enum ResponsesWebSearchAction {
         extra: Map<String, Value>,
     },
     OpenPage {
-        url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
-    Find {
+    #[serde(alias = "find")]
+    FindInPage {
         url: String,
         pattern: String,
         #[serde(flatten)]

@@ -15,3 +15,5 @@ These upstream contracts document fields and discriminators. They are documentat
 - https://platform.claude.com/docs/en/api/beta/messages/create.md
 - https://platform.claude.com/docs/en/build-with-claude/streaming.md
 - https://platform.claude.com/docs/en/build-with-claude/context-editing
+
+Anthropic-compatible hosts document their deviations in the `llms/src/<provider>/messages` guides. Copy a host reference into `../../providers/AGENTS.md` only when that host gets a typed extension in `providers`

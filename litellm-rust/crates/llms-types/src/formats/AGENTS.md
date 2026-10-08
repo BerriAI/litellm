@@ -13,6 +13,7 @@ SDK wire definitions:
 ## responses/output.rs and responses/streaming_websocket.rs
 
 - https://developers.openai.com/api/reference/resources/responses
+- https://developers.openai.com/api/reference/resources/responses/streaming-events
 
 SDK wire definitions:
 
@@ -20,4 +21,12 @@ SDK wire definitions:
 - https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_output_item.py
 - https://github.com/openai/openai-python/blob/main/src/openai/types/responses/mcp_tool_call_error.py
 
-Messages references live in `messages/AGENTS.md`. OCR geometry, table, and key/value contracts describe the existing normalized payload shapes; they do not promise native provider schema parity
+## batches.rs
+
+- https://developers.openai.com/api/reference/resources/batches
+
+## audio_transcription.rs
+
+- https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions
+
+Messages references live in `messages/AGENTS.md`. `OcrBoundingBox` describes the corner coordinates providers copy into the normalized `bbox`. Normalized `tables` and `keyValuePairs` stay open because providers pass through different native shapes

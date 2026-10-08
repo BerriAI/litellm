@@ -145,27 +145,12 @@ pub enum Citation {
     SearchResultLocation(SearchResultCitation),
 }
 
-#[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
-pub struct PromptCacheBreakpoint {
-    pub mode: Option<PromptCacheMode>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
-
-#[macro_rules_attribute::apply(wire_type)]
-#[serde(rename_all = "snake_case")]
-pub enum PromptCacheMode {
-    Explicit,
-}
-
 #[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessagesContentPart {
     Text(TextBlock),
     Image(ImageBlock),
-    Document(DocumentBlock),
+    Document(Box<DocumentBlock>),
     SearchResult(SearchResultBlock),
     Thinking(ThinkingBlock),
     RedactedThinking(RedactedThinkingBlock),
@@ -424,10 +409,16 @@ pub enum WebFetchToolResultContent {
 #[macro_rules_attribute::apply(wire_type)]
 pub struct WebFetchResult {
     pub url: String,
-    pub content: Box<MessagesContentPart>,
+    pub content: WebFetchDocument,
     pub retrieved_at: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WebFetchDocument {
+    Document(Box<DocumentBlock>),
 }
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -442,15 +433,15 @@ pub enum CodeExecutionToolResultContent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BashCodeExecutionToolResultContent {
     BashCodeExecutionToolResultError(ServerToolError),
-    BashCodeExecutionResult(CodeExecutionResult),
+    BashCodeExecutionResult(CodeExecutionResult<BashCodeExecutionOutput>),
 }
 
 #[macro_rules_attribute::apply(wire_type)]
-pub struct CodeExecutionResult {
+pub struct CodeExecutionResult<O = CodeExecutionOutput> {
     pub stdout: String,
     pub stderr: String,
     pub return_code: i64,
-    pub content: Vec<CodeExecutionOutput>,
+    pub content: Vec<O>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -473,6 +464,11 @@ pub enum CodeExecutionOutput {
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BashCodeExecutionOutput {
     BashCodeExecutionOutput {
         file_id: String,
         #[serde(flatten)]
@@ -538,9 +534,15 @@ pub enum ToolSearchToolResultContent {
 
 #[macro_rules_attribute::apply(wire_type)]
 pub struct ToolSearchResult {
-    pub tool_references: Vec<MessagesContentPart>,
+    pub tool_references: Vec<ToolSearchReference>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolSearchReference {
+    ToolReference(ToolReferenceBlock),
 }
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -588,7 +590,7 @@ pub struct McpToolUseBlock {
 #[macro_rules_attribute::apply(wire_type)]
 pub struct McpToolResultBlock {
     pub tool_use_id: String,
-    pub content: BlockContent,
+    pub content: Option<BlockContent>,
     pub is_error: Option<bool>,
     pub cache_control: Option<CacheControl>,
     #[serde(flatten)]
@@ -668,11 +670,12 @@ pub enum ToolChangeTarget {
     },
 }
 
+#[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(wire_type)]
 pub struct FallbackBlock {
     pub from: FallbackModel,
     pub to: FallbackModel,
-    pub trigger: FallbackTrigger,
+    pub trigger: Option<FallbackTrigger>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

@@ -1,16 +1,18 @@
-use litellm_llms_types::formats::chat_completions::{ChatContentPart, ChatLogprobs, ChatMediaUrl};
+use litellm_llms_types::formats::chat_completions::{
+    ChatContentPart, ChatLogprobs, ChatMediaUrl, PromptCacheMode,
+};
 use litellm_llms_types::formats::messages::ContentSource;
 use rstest::rstest;
 use serde_json::{Value, json};
 
 #[rstest]
 #[case::parts(json!([
-    {"type":"text","text":"hello","cache_control":{"type":"ephemeral"}},
-    {"type":"image_url","image_url":{"url":"https://example.test/image","detail":"high"}},
+    {"type":"text","text":"hello","cache_control":{"type":"ephemeral"},"prompt_cache_breakpoint":{"mode":"explicit"}},
+    {"type":"image_url","image_url":{"url":"https://example.test/image","detail":"high","format":"image/png"}},
     {"type":"video_url","video_url":"https://example.test/video"},
     {"type":"input_audio","input_audio":{"data":"AA==","format":"wav"}},
-    {"type":"file","file":{"file_id":"file_1","video_metadata":{"fps":1,"start_offset":"1s"}}},
-    {"type":"document","source":{"type":"text","media_type":"text/plain","data":"doc"},"citations":{"enabled":true}},
+    {"type":"file","file":{"file_id":"file_1","file_data":"JVBE","filename":"a.mp4","format":"video/mp4","detail":"low","video_metadata":{"fps":1,"start_offset":"1s","end_offset":"2s"}}},
+    {"type":"document","source":{"type":"text","media_type":"text/plain","data":"doc"},"title":"T","context":"C","citations":{"enabled":true}},
     {"type":"refusal","refusal":"refused"}
 ]))]
 fn content_parts_round_trip(#[case] wire: Value) {
@@ -19,10 +21,12 @@ fn content_parts_round_trip(#[case] wire: Value) {
         ChatContentPart::Text {
             text,
             cache_control,
-            ..
+            prompt_cache_breakpoint: Some(breakpoint),
+            extra: text_extra,
         },
         ChatContentPart::ImageUrl {
             image_url: ChatMediaUrl::Parameters(image),
+            prompt_cache_breakpoint: None,
             ..
         },
         ChatContentPart::VideoUrl {
@@ -33,6 +37,8 @@ fn content_parts_round_trip(#[case] wire: Value) {
         ChatContentPart::File { file, .. },
         ChatContentPart::Document {
             source,
+            title: Some(title),
+            context: Some(context),
             citations: Some(citations),
             ..
         },
@@ -46,13 +52,27 @@ fn content_parts_round_trip(#[case] wire: Value) {
         cache_control.as_ref().unwrap().cache_type.as_deref(),
         Some("ephemeral")
     );
+    assert_eq!(breakpoint.mode, PromptCacheMode::Explicit);
+    assert!(breakpoint.extra.is_empty());
+    assert!(text_extra.is_empty());
     assert_eq!(image.url, "https://example.test/image");
     assert_eq!(image.detail.as_deref(), Some("high"));
+    assert_eq!(image.format.as_deref(), Some("image/png"));
+    assert!(image.extra.is_empty());
     assert_eq!(video, "https://example.test/video");
     assert_eq!(input_audio.data, "AA==");
     assert_eq!(input_audio.format, "wav");
     assert_eq!(file.file_id.as_deref(), Some("file_1"));
-    assert_eq!(file.video_metadata.as_ref().unwrap().fps, Some(1.into()));
+    assert_eq!(file.file_data.as_deref(), Some("JVBE"));
+    assert_eq!(file.filename.as_deref(), Some("a.mp4"));
+    assert_eq!(file.format.as_deref(), Some("video/mp4"));
+    assert_eq!(file.detail.as_deref(), Some("low"));
+    assert!(file.extra.is_empty());
+    let metadata = file.video_metadata.as_ref().unwrap();
+    assert_eq!(metadata.fps, Some(1.into()));
+    assert_eq!(metadata.start_offset.as_deref(), Some("1s"));
+    assert_eq!(metadata.end_offset.as_deref(), Some("2s"));
+    assert!(metadata.extra.is_empty());
     let ContentSource::Text {
         data, media_type, ..
     } = source.as_ref()
@@ -61,6 +81,8 @@ fn content_parts_round_trip(#[case] wire: Value) {
     };
     assert_eq!(data, "doc");
     assert_eq!(media_type, "text/plain");
+    assert_eq!(title, "T");
+    assert_eq!(context, "C");
     assert_eq!(citations.enabled, Some(true));
     assert_eq!(refusal, "refused");
     assert_eq!(serde_json::to_value(parts).unwrap(), wire);
@@ -93,6 +115,13 @@ fn logprobs_round_trip_with_tokens_and_alternatives() {
 #[case::image_missing_url(json!({"type":"image_url","image_url":{"detail":"high"}}))]
 #[case::file_metadata(json!({"type":"file","file":{"video_metadata":{"fps":"fast"}}}))]
 #[case::document_source(json!({"type":"document","source":{"type":"url","url":false}}))]
+#[case::refusal_missing_text(json!({"type":"refusal"}))]
+#[case::file_missing_file(json!({"type":"file"}))]
+#[case::document_missing_source(json!({"type":"document"}))]
+#[case::video_missing_url(json!({"type":"video_url"}))]
+#[case::cache_control_shape(json!({"type":"text","text":"t","cache_control":"ephemeral"}))]
+#[case::breakpoint_missing_mode(json!({"type":"text","text":"t","prompt_cache_breakpoint":{}}))]
+#[case::breakpoint_unknown_mode(json!({"type":"text","text":"t","prompt_cache_breakpoint":{"mode":"auto"}}))]
 #[case::unknown_tag(json!({"type":"future"}))]
 fn content_parts_reject_malformed_typed_fields(#[case] wire: Value) {
     assert!(serde_json::from_value::<ChatContentPart>(wire).is_err());
@@ -102,7 +131,12 @@ fn content_parts_reject_malformed_typed_fields(#[case] wire: Value) {
 fn partial_file_preserves_extensions_and_omits_null_optionals() {
     let wire = json!({"type":"file","file":{"file_id":null,"filename":"a.pdf","extension":[1,null]},"future":true});
     let part: ChatContentPart = serde_json::from_value(wire).unwrap();
-    let ChatContentPart::File { file, extra } = &part else {
+    let ChatContentPart::File {
+        file,
+        prompt_cache_breakpoint: None,
+        extra,
+    } = &part
+    else {
         panic!("expected file")
     };
     assert!(file.file_id.is_none());

@@ -4,7 +4,7 @@ use strum::IntoStaticStr;
 mod content;
 pub use content::{
     ChatContentPart, ChatFile, ChatInputAudio, ChatLogprobs, ChatMediaUrl, ChatMediaUrlParameters,
-    ChatTokenLogprob, ChatTopLogprob, ChatVideoMetadata,
+    ChatTokenLogprob, ChatTopLogprob, ChatVideoMetadata, PromptCacheBreakpoint, PromptCacheMode,
 };
 
 /// Reasoning effort level accepted or applied by the model.

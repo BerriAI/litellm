@@ -1,5 +1,5 @@
+use indexmap::IndexMap;
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
 
 #[macro_rules_attribute::apply(wire_type)]
 #[serde(untagged)]
@@ -21,13 +21,13 @@ pub enum JsonSchemaType {
 pub struct JsonSchemaObject {
     #[serde(rename = "type")]
     pub schema_type: Option<JsonSchemaType>,
-    pub properties: Option<BTreeMap<String, JsonSchema>>,
+    pub properties: Option<IndexMap<String, JsonSchema>>,
     pub required: Option<Vec<String>>,
     #[serde(rename = "additionalProperties")]
     pub additional_properties: Option<Box<JsonSchema>>,
     pub items: Option<Box<JsonSchema>>,
     #[serde(rename = "$defs")]
-    pub defs: Option<BTreeMap<String, JsonSchema>>,
+    pub defs: Option<IndexMap<String, JsonSchema>>,
     #[serde(rename = "$ref")]
     pub reference: Option<String>,
     #[serde(rename = "anyOf")]

@@ -3,6 +3,7 @@ use litellm_llms_types::formats::responses::{
     ResponsesOutputItem, ResponsesWebSearchAction,
     streaming_websocket::{ResponsesEventResponse, ResponsesWsEventType},
 };
+use litellm_llms_types::recognized::Recognized;
 use rstest::rstest;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -185,7 +186,7 @@ fn nested_event_response_exposes_typed_output_and_preserves_extensions() {
     let Some(output) = &response.output else {
         panic!("expected typed output");
     };
-    let [ResponsesOutputItem::FunctionCall(call)] = output.as_slice() else {
+    let [Recognized::Known(ResponsesOutputItem::FunctionCall(call))] = output.as_slice() else {
         panic!("expected function call");
     };
     assert_eq!(call.name.as_deref(), Some("lookup"));
@@ -201,14 +202,78 @@ fn nested_event_response_accepts_partial_metadata(#[case] wire: Value) {
 }
 
 #[rstest]
-#[case::missing_tag(json!({"output":[{}]}))]
-#[case::unknown_tag(json!({"output":[{"type":"future"}]}))]
 #[case::wrong_model(json!({"model":7}))]
+#[case::wrong_status(json!({"status":false}))]
 #[case::wrong_output(json!({"output":{}}))]
-#[case::wrong_known_nested_field(json!({"output":[{"type":"message","content":[{"type":"output_text","text":7}]}]}))]
-#[case::wrong_action(json!({"output":[{"type":"web_search_call","action":{"type":"find","url":"u","pattern":false}}]}))]
 fn event_response_rejects_malformed_typed_fields(#[case] wire: Value) {
     assert!(serde_json::from_value::<ResponsesEventResponse>(wire).is_err());
+}
+
+#[rstest]
+#[case::compaction(json!({"type":"compaction","id":"cmp_1","encrypted_content":"opaque"}))]
+#[case::approval(json!({"type":"mcp_approval_request","id":"apr_1","server_label":"s","name":"n","arguments":"{}"}))]
+#[case::missing_tag(json!({"id":"item_1"}))]
+#[case::malformed_known(json!({"type":"message","content":[{"type":"output_text","text":7}]}))]
+fn event_response_keeps_unmodeled_output_items_beside_typed_ones(#[case] item: Value) {
+    let wire = json!({"output":[{"type":"function_call","name":"lookup"}, item.clone()]});
+    let response: ResponsesEventResponse = serde_json::from_value(wire.clone()).unwrap();
+    let Some(
+        [
+            Recognized::Known(ResponsesOutputItem::FunctionCall(call)),
+            Recognized::Unrecognized(kept),
+        ],
+    ) = response.output.as_deref()
+    else {
+        panic!("expected one typed item and one preserved item");
+    };
+    assert_eq!(call.name.as_deref(), Some("lookup"));
+    assert_eq!(kept, &item);
+    assert_eq!(serde_json::to_value(response).unwrap(), wire);
+}
+
+#[rstest]
+#[case::find_in_page(
+    json!({"type":"find_in_page","url":"https://example.test","pattern":"needle"}),
+    json!({"type":"find_in_page","url":"https://example.test","pattern":"needle"})
+)]
+#[case::legacy_find(
+    json!({"type":"find","url":"https://example.test","pattern":"needle"}),
+    json!({"type":"find_in_page","url":"https://example.test","pattern":"needle"})
+)]
+fn web_search_find_action_exposes_url_and_pattern(#[case] wire: Value, #[case] serialized: Value) {
+    let action: ResponsesWebSearchAction = serde_json::from_value(wire).unwrap();
+    let ResponsesWebSearchAction::FindInPage {
+        url,
+        pattern,
+        extra,
+    } = &action
+    else {
+        panic!("expected find_in_page action");
+    };
+    assert_eq!(url, "https://example.test");
+    assert_eq!(pattern, "needle");
+    assert!(extra.is_empty());
+    assert_eq!(serde_json::to_value(action).unwrap(), serialized);
+}
+
+#[rstest]
+#[case::with_url(json!({"type":"open_page","url":"https://example.test"}), Some("https://example.test"))]
+#[case::without_url(json!({"type":"open_page"}), None)]
+fn web_search_open_page_url_is_optional(#[case] wire: Value, #[case] expected: Option<&str>) {
+    let action: ResponsesWebSearchAction = serde_json::from_value(wire.clone()).unwrap();
+    let ResponsesWebSearchAction::OpenPage { url, .. } = &action else {
+        panic!("expected open_page action");
+    };
+    assert_eq!(url.as_deref(), expected);
+    assert_eq!(serde_json::to_value(action).unwrap(), wire);
+}
+
+#[rstest]
+#[case::find_pattern(json!({"type":"find_in_page","url":"u","pattern":false}))]
+#[case::find_missing_url(json!({"type":"find_in_page","pattern":"p"}))]
+#[case::open_page_url(json!({"type":"open_page","url":7}))]
+fn web_search_action_rejects_malformed_fields(#[case] wire: Value) {
+    assert!(serde_json::from_value::<ResponsesWebSearchAction>(wire).is_err());
 }
 
 #[rstest]

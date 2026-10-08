@@ -1,4 +1,5 @@
 use super::ResponsesOutputItem;
+use crate::recognized::Recognized;
 use serde_json::{Map, Value};
 
 #[derive(
@@ -98,7 +99,7 @@ pub struct ResponsesEventResponse {
     pub id: Option<String>,
     pub model: Option<String>,
     pub status: Option<String>,
-    pub output: Option<Vec<ResponsesOutputItem>>,
+    pub output: Option<Vec<Recognized<ResponsesOutputItem>>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
