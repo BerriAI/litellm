@@ -1565,8 +1565,8 @@ if MCP_AVAILABLE:
                 detail=f"API key does not have access to toolset '{toolset_id}'.",
             )
         if _is_mcp_admitted_user_subject(acting):
-            resource_server_id: Final = acting.mcp_session_resource_server_id
-            if resource_server_id is not None and resource_server_id not in (
+            resource_server_ids: Final = acting.mcp_session_resource_server_ids
+            if resource_server_ids is not None and frozenset(resource_server_ids).isdisjoint(
                 await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(
                     toolset_ids=[toolset_id], requires_fresh_policy=acting.requires_fresh_policy
                 )

@@ -365,6 +365,11 @@ def iter_known_server_prefixes(server: _McpServerLike) -> Iterator[str]:
     yield from _emit(server_id)
 
 
+def server_answers_to(server: _McpServerLike, name: str) -> bool:
+    requested: Final = name.lower()
+    return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)
+
+
 def iter_known_tool_name_spellings(tool_name: str, server: MCPServer) -> Iterator[str]:
     """Yield every name that denotes the bare ``tool_name`` on ``server``: the bare name,
     then its wire spelling under each prefix ``iter_known_server_prefixes`` accepts.

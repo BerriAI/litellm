@@ -68,7 +68,7 @@ def test_explicit_server_scope_setting_only_rejects_unscoped_aggregate_requests(
         None if auth_state is None else UserAPIKeyAuth(api_key=None, user_id="scope-test")
     )
     if auth_state == "sealed" and auth is not None:
-        auth.mcp_session_resource_server_id = "alpha-id"
+        auth.mcp_session_resource_server_ids = ("alpha-id",)
 
     with patch("litellm.proxy.proxy_server.general_settings", settings):
         if raises:

@@ -248,7 +248,7 @@ def _gateway_dcr_challenge_target(
     targets: Final = _parse_mcp_server_names_from_path(route, mcp_servers)
     if targets is None:
         return None
-    server: Final = global_mcp_server_manager.get_mcp_server_by_name(targets[0], client_ip=client_ip)
+    server: Final = global_mcp_server_manager.get_mcp_server_by_identifier(targets[0], client_ip=client_ip)
     if server is None or not server.advertises_gateway_authorization_server:
         return None
     return targets[0]
@@ -259,18 +259,30 @@ def _gateway_dcr_challenge_scope(
     mcp_servers: list[str] | None,
     client_ip: str | None,
 ) -> str | None:
-    if MCPRequestHandler.extract_target_server_names_from_path(route) or mcp_servers is None or len(mcp_servers) != 1:
+    if MCPRequestHandler.extract_target_server_names_from_path(route) or not mcp_servers:
         return None
     from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import gateway_server_scope
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
-    server_name: Final = mcp_servers[0]
-    server: Final = global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
-    if server is None or not server.advertises_gateway_authorization_server:
+    resolved: Final = tuple(
+        (entry, global_mcp_server_manager.get_mcp_server_by_identifier(entry, client_ip=client_ip))
+        for entry in mcp_servers
+    )
+    if any(server is None or not server.advertises_gateway_authorization_server for _, server in resolved):
         return None
-    return gateway_server_scope(server_name)
+    servers: Final = tuple((entry, server) for entry, server in resolved if server is not None)
+    server_ids: Final = tuple(dict.fromkeys(server.server_id for _, server in servers))
+    unique_servers: Final = tuple(
+        next(pair for pair in servers if pair[1].server_id == server_id) for server_id in server_ids
+    )
+    tokens: Final = tuple(
+        gateway_server_scope(entry) or gateway_server_scope(server.server_id) for entry, server in unique_servers
+    )
+    if any(token is None for token in tokens):
+        return None
+    return " ".join(token for token in tokens if token is not None)
 
 
 def _is_gateway_dcr_challenge_scope(
@@ -1045,7 +1057,7 @@ class MCPRequestHandler:
             case SessionBearerAdmitted():
                 try:
                     admitted: Final = await MCPRequestHandler.reload_admitted_user(result.principal.user_id)
-                    admitted.mcp_session_resource_server_id = result.principal.resource_server_id
+                    admitted.mcp_session_resource_server_ids = result.principal.resource_server_ids
                     await MCPRequestHandler._enforce_admitted_live_policy(
                         admitted=admitted, request=request, route=route
                     )

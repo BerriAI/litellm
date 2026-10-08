@@ -21,6 +21,7 @@ const unscoped = (client_origin: string): ConnectFlowStatus => ({
   server_id: null,
   server_name: null,
   connected: null,
+  servers: null,
 });
 
 const renderBanner = (clientOrigin: string) =>
@@ -45,6 +46,33 @@ describe("ConnectFlowBanner", () => {
     expect(form.innerHTML).not.toContain("token");
     expect(screen.getByRole("button", { name: /finish connecting/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+  });
+
+  it("lists multi-server consent and requires every server before finishing", () => {
+    render(
+      <ConnectFlowBanner
+        flowHandle="flow-handle-123"
+        flow={{
+          state: "multi",
+          client_origin: "https://claude.ai",
+          server_id: null,
+          server_name: null,
+          connected: null,
+          servers: [
+            { server_id: "alpha-id", server_name: "alpha", connected: false },
+            { server_id: "beta-id", server_name: "beta", connected: false },
+          ],
+        }}
+        accessToken="tok"
+        onConnected={vi.fn()}
+        failed={false}
+      />,
+    );
+
+    expect(screen.getByText("Allow https://claude.ai to use alpha, beta")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Connect" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /finish connecting/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
   it("offers manual delivery only for a loopback client, posted only when checked", () => {

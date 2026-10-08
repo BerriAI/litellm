@@ -32,12 +32,19 @@ vi.mock("@/hooks/useUserMcpOAuthFlow", () => ({
   },
 }));
 
-const flow = (state: "unscoped" | "interactive" | "m2m" | "stale", connected: boolean | null = null) => ({
+const flow = (state: "unscoped" | "interactive" | "m2m" | "multi" | "stale", connected: boolean | null = null) => ({
   state,
   client_origin: "https://claude.ai",
   server_id: state === "interactive" || state === "m2m" ? "s-design" : null,
   server_name: state === "interactive" || state === "m2m" ? "design_tool" : null,
   connected,
+  servers:
+    state === "multi"
+      ? [
+          { server_id: "s-alpha", server_name: "alpha", connected: false },
+          { server_id: "s-beta", server_name: "beta", connected: false },
+        ]
+      : null,
 });
 
 const renderSurface = () =>

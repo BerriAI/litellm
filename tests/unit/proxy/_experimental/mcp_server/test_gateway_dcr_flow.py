@@ -995,7 +995,7 @@ _MANAGER_PATCH = "litellm.proxy._experimental.mcp_server.mcp_server_manager.glob
 def _scoped_authorize(
     client_id: str,
     resource: str | None,
-    session_user_id: str = "u1",
+    session_user_id: str | None = "u1",
     scope: str | None = None,
 ) -> Response:
     return aggregate_authorize(
@@ -1112,16 +1112,16 @@ async def test_scoped_authorize_runs_connect_page_with_sealed_scope():
     client_id = (await _register([REDIRECT_URI]))["client_id"]
     github = _scoped_mcp_server()
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = github
+        manager.get_mcp_server_by_identifier.return_value = github
         response = _scoped_authorize(client_id, SCOPED_RESOURCE)
     assert response.status_code == 303
     location = urlparse(response.headers["location"])
     assert location.path == "/ui/connect"
     assert set(parse_qs(location.query)) == {"connect_flow"}
     _, cookies = _flow_cookie_from(response)
-    assert (
-        _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")["resource_server_id"] == "github-id"
-    )
+    assert _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")["resource_server_ids"] == [
+        "github-id"
+    ]
     described = await _describe_page(response, scoped_server=github, vendor=_VendorCredential("absent"))
     assert json.loads(described.body) == {
         "state": "interactive",
@@ -1129,6 +1129,7 @@ async def test_scoped_authorize_runs_connect_page_with_sealed_scope():
         "server_id": "github-id",
         "server_name": "github",
         "connected": False,
+        "servers": None,
     }
     cache = DualCache()
     premature = await _complete_page(response, scoped_server=github, vendor=_VendorCredential("absent"), cache=cache)
@@ -1139,14 +1140,13 @@ async def test_scoped_authorize_runs_connect_page_with_sealed_scope():
     assert completed.status_code == 303
     assert present.calls == [("u1", "github-id")]
     code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
-    assert (
-        _sealed_wire_json(code, GATEWAY_AUTH_CODE_PREFIX, "gateway_authorization_code")["resource_server_id"]
-        == "github-id"
-    )
+    assert _sealed_wire_json(code, GATEWAY_AUTH_CODE_PREFIX, "gateway_authorization_code")["resource_server_ids"] == [
+        "github-id"
+    ]
     token_response = await _redeem(code, client_id)
     assert token_response.status_code == 200
     principal = _opened_principal(json.loads(token_response.body))
-    assert principal.resource_server_id == "github-id"
+    assert principal.resource_server_ids == ("github-id",)
     assert principal.user_id == "u1"
 
 
@@ -1157,7 +1157,7 @@ async def test_aggregate_scope_seals_server_through_redemption_and_refresh() -> 
     client_id: Final = (await _register([REDIRECT_URI]))["client_id"]
     github: Final = _scoped_mcp_server()
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = github
+        manager.get_mcp_server_by_identifier.return_value = github
         response: Final = _scoped_authorize(
             client_id,
             "https://llm.example.com/mcp",
@@ -1166,7 +1166,7 @@ async def test_aggregate_scope_seals_server_through_redemption_and_refresh() -> 
     assert response.status_code == 303
     _, cookies = _flow_cookie_from(response)
     sealed_flow: Final = _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
-    assert sealed_flow["resource_server_id"] == "github-id"
+    assert sealed_flow["resource_server_ids"] == ["github-id"]
 
     code: Final = await _finish_connect_page(response, scoped_server=github)
     cache: Final = DualCache()
@@ -1178,7 +1178,7 @@ async def test_aggregate_scope_seals_server_through_redemption_and_refresh() -> 
     )
     assert token_response.status_code == 200
     payload: Final = json.loads(token_response.body)
-    assert _opened_principal(payload).resource_server_id == "github-id"
+    assert _opened_principal(payload).resource_server_ids == ("github-id",)
 
     rotated: Final = await _redeem(
         None,
@@ -1189,7 +1189,119 @@ async def test_aggregate_scope_seals_server_through_redemption_and_refresh() -> 
         resource="https://llm.example.com/mcp",
     )
     assert rotated.status_code == 200
-    assert _opened_principal(json.loads(rotated.body)).resource_server_id == "github-id"
+    assert _opened_principal(json.loads(rotated.body)).resource_server_ids == ("github-id",)
+
+
+@pytest.mark.asyncio
+async def test_multi_server_scope_seals_set_through_consent_redemption_and_refresh() -> None:
+    from unittest.mock import patch
+
+    client_id: Final = (await _register([REDIRECT_URI]))["client_id"]
+    alpha: Final = _scoped_mcp_server(name="alpha")
+    beta: Final = _scoped_mcp_server(name="beta", oauth2_flow="client_credentials")
+    servers_by_name: Final = {"alpha": alpha, "beta": beta}
+    servers_by_id: Final = {alpha.server_id: alpha, beta.server_id: beta}
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_identifier.side_effect = servers_by_name.get
+        response: Final = _scoped_authorize(
+            client_id,
+            "https://llm.example.com/mcp",
+            scope="litellm:mcp_server:alpha litellm:mcp_server:beta",
+        )
+    assert response.status_code == 303
+    handle, cookies = _flow_cookie_from(response)
+    sealed_flow: Final = _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
+    assert sealed_flow["resource_server_ids"] == ["alpha-id", "beta-id"]
+
+    vendor: Final = _VendorCredential("absent")
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_id.side_effect = servers_by_id.get
+        described: Final = await describe_connect_flow(
+            request=_request("/authorize/flow", cookies=cookies),
+            flow_handle=handle,
+            session_user_id="u1",
+            lookup_vendor_credential=vendor,
+            lookup_server_reachability=_ServerReachability(),
+        )
+    assert json.loads(described.body) == {
+        "state": "multi",
+        "client_origin": "https://claude.ai",
+        "server_id": None,
+        "server_name": None,
+        "connected": None,
+        "servers": [
+            {"server_id": "alpha-id", "server_name": "alpha", "connected": False},
+            {"server_id": "beta-id", "server_name": "beta", "connected": True},
+        ],
+    }
+    assert vendor.calls == [("u1", "alpha-id")]
+
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_id.side_effect = servers_by_id.get
+        blocked: Final = await complete_connect_flow(
+            request=_request("/authorize/complete", cookies=cookies, method="POST"),
+            flow_handle=handle,
+            session_user_id="u1",
+            cache=DualCache(),
+            lookup_vendor_credential=_VendorCredential("absent"),
+            lookup_server_reachability=_ServerReachability(),
+        )
+    assert blocked.status_code == 400
+    assert "authorize the requested MCP server" in json.loads(blocked.body)["error_description"]
+
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_id.side_effect = servers_by_id.get
+        completed: Final = await complete_connect_flow(
+            request=_request("/authorize/complete", cookies=cookies, method="POST"),
+            flow_handle=handle,
+            session_user_id="u1",
+            cache=DualCache(),
+            lookup_vendor_credential=_VendorCredential("present"),
+            lookup_server_reachability=_ServerReachability(),
+        )
+    assert completed.status_code == 303
+    code: Final = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
+    sealed_code: Final = _sealed_wire_json(code, GATEWAY_AUTH_CODE_PREFIX, "gateway_authorization_code")
+    assert sealed_code["resource_server_ids"] == ["alpha-id", "beta-id"]
+
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_identifier.return_value = alpha
+        conflict: Final = await _redeem(code, client_id, resource="https://llm.example.com/mcp/alpha")
+    assert json.loads(conflict.body)["error"] == "invalid_target"
+
+    cache: Final = DualCache()
+    token_response: Final = await _redeem(
+        code,
+        client_id,
+        cache=cache,
+        resource="https://llm.example.com/mcp",
+    )
+    assert token_response.status_code == 200
+    payload: Final = json.loads(token_response.body)
+    assert _opened_principal(payload).resource_server_ids == ("alpha-id", "beta-id")
+
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_identifier.return_value = alpha
+        refresh_conflict: Final = await _redeem(
+            None,
+            client_id,
+            cache=cache,
+            grant_type="refresh_token",
+            refresh_token=payload["refresh_token"],
+            resource="https://llm.example.com/mcp/alpha",
+        )
+    assert json.loads(refresh_conflict.body)["error"] == "invalid_target"
+
+    refreshed: Final = await _redeem(
+        None,
+        client_id,
+        cache=cache,
+        grant_type="refresh_token",
+        refresh_token=payload["refresh_token"],
+        resource="https://llm.example.com/mcp",
+    )
+    assert refreshed.status_code == 200
+    assert _opened_principal(json.loads(refreshed.body)).resource_server_ids == ("alpha-id", "beta-id")
 
 
 @pytest.mark.asyncio
@@ -1200,7 +1312,7 @@ async def test_per_server_resource_takes_precedence_over_conflicting_scope() -> 
     github: Final = _scoped_mcp_server()
     linear: Final = _scoped_mcp_server(name="linear")
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.side_effect = (github, linear)
+        manager.get_mcp_server_by_identifier.side_effect = (github, linear)
         response: Final = _scoped_authorize(
             client_id,
             SCOPED_RESOURCE,
@@ -1208,30 +1320,33 @@ async def test_per_server_resource_takes_precedence_over_conflicting_scope() -> 
         )
     _, cookies = _flow_cookie_from(response)
     sealed_flow: Final = _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
-    assert sealed_flow["resource_server_id"] == "github-id"
+    assert sealed_flow["resource_server_ids"] == ["github-id"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("scope", "server_available"),
-    [
-        ("openid litellm:mcp_server:github litellm:mcp_server:linear", True),
-        ("openid litellm:mcp_server:missing", False),
-    ],
-)
-async def test_ambiguous_or_unknown_server_scope_does_not_seal_a_grant(
-    scope: str, server_available: bool
-) -> None:
+async def test_unknown_server_scope_redirects_with_invalid_scope_and_state() -> None:
     from unittest.mock import patch
 
     client_id: Final = (await _register([REDIRECT_URI]))["client_id"]
-    resolved_server: Final = _scoped_mcp_server() if server_available else None
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = resolved_server
-        response: Final = _scoped_authorize(client_id, "https://llm.example.com/mcp", scope=scope)
-    _, cookies = _flow_cookie_from(response)
-    sealed_flow: Final = _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
-    assert "resource_server_id" not in sealed_flow
+        manager.get_mcp_server_by_identifier.return_value = None
+        response: Final = _scoped_authorize(
+            client_id,
+            "https://llm.example.com/mcp",
+            session_user_id=None,
+            scope="openid litellm:mcp_server:missing",
+        )
+
+    assert response.status_code == 303
+    location: Final = urlparse(response.headers["location"])
+    assert location.scheme == "https"
+    assert location.netloc == "claude.ai"
+    assert location.path == "/api/mcp/auth_callback"
+    assert parse_qs(location.query) == {
+        "error": ["invalid_scope"],
+        "error_description": ["unknown or unsupported MCP server scope"],
+        "state": ["client-state-123"],
+    }
 
 
 @pytest.mark.parametrize(
@@ -1277,14 +1392,14 @@ async def test_unscoped_resources_leave_flow_and_token_byte_identical(resource, 
 
     client_id = (await _register([REDIRECT_URI]))["client_id"]
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = None if resolves is None else _scoped_mcp_server()
+        manager.get_mcp_server_by_identifier.return_value = None if resolves is None else _scoped_mcp_server()
         response = _scoped_authorize(client_id, resource)
     assert response.status_code == 303
     location = urlparse(response.headers["location"])
     assert location.path == "/ui/connect"
     assert set(parse_qs(location.query)) == {"connect_flow"}
     _, cookies = _flow_cookie_from(response)
-    assert "resource_server_id" not in _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
+    assert "resource_server_ids" not in _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
     vendor = _VendorCredential("absent")
     described = await _describe_page(response, vendor=vendor)
     assert json.loads(described.body)["state"] == "unscoped"
@@ -1292,13 +1407,14 @@ async def test_unscoped_resources_leave_flow_and_token_byte_identical(resource, 
     completed = await _complete_page(response, vendor=vendor)
     assert vendor.calls == []
     code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
-    assert "resource_server_id" not in _sealed_wire_json(code, GATEWAY_AUTH_CODE_PREFIX, "gateway_authorization_code")
+    assert "resource_server_ids" not in _sealed_wire_json(code, GATEWAY_AUTH_CODE_PREFIX, "gateway_authorization_code")
     token_response = await _redeem(code, client_id)
     payload = json.loads(token_response.body)
-    assert _opened_principal(payload).resource_server_id is None
+    assert _opened_principal(payload).resource_server_ids is None
     jwt_payload_segment = payload["access_token"].removeprefix("llm_session_").split(".")[1]
     claims = json.loads(base64.urlsafe_b64decode(jwt_payload_segment + "=" * (-len(jwt_payload_segment) % 4)))
     assert "resource_server_id" not in claims
+    assert "resource_server_ids" not in claims
 
 
 @pytest.mark.asyncio
@@ -1310,7 +1426,7 @@ async def test_scoped_authorize_delegate_server_stays_unscoped():
 
     client_id = (await _register([REDIRECT_URI]))["client_id"]
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = _scoped_mcp_server(delegate_auth_to_upstream=True)
+        manager.get_mcp_server_by_identifier.return_value = _scoped_mcp_server(delegate_auth_to_upstream=True)
         response = _scoped_authorize(client_id, SCOPED_RESOURCE)
     location = urlparse(response.headers["location"])
     assert location.path == "/ui/connect"
@@ -1318,7 +1434,7 @@ async def test_scoped_authorize_delegate_server_stays_unscoped():
     assert json.loads((await _describe_page(response)).body)["server_id"] is None
     code = await _finish_connect_page(response)
     token_response = await _redeem(code, client_id)
-    assert _opened_principal(json.loads(token_response.body)).resource_server_id is None
+    assert _opened_principal(json.loads(token_response.body)).resource_server_ids is None
 
 
 @pytest.mark.asyncio
@@ -1330,7 +1446,7 @@ async def test_m2m_scoped_flow_mints_without_a_user_credential():
     client_id = (await _register([REDIRECT_URI]))["client_id"]
     m2m = _scoped_mcp_server(oauth2_flow="client_credentials")
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = m2m
+        manager.get_mcp_server_by_identifier.return_value = m2m
         response = _scoped_authorize(client_id, SCOPED_RESOURCE)
     vendor = _VendorCredential("unavailable")
     described = await _describe_page(response, scoped_server=m2m, vendor=vendor)
@@ -1350,7 +1466,7 @@ async def test_unreachable_scoped_flow_cannot_describe_or_finish(oauth2_flow):
     client_id = (await _register([REDIRECT_URI]))["client_id"]
     server = _scoped_mcp_server(oauth2_flow=oauth2_flow)
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = server
+        manager.get_mcp_server_by_identifier.return_value = server
         response = _scoped_authorize(client_id, SCOPED_RESOURCE)
     reachable = _ServerReachability(False)
     vendor = _VendorCredential("present")
@@ -1361,6 +1477,7 @@ async def test_unreachable_scoped_flow_cannot_describe_or_finish(oauth2_flow):
         "server_id": None,
         "server_name": None,
         "connected": None,
+        "servers": None,
     }
     cache = DualCache()
     refused = await _complete_page(response, scoped_server=server, reachable=reachable, vendor=vendor, cache=cache)
@@ -1379,7 +1496,7 @@ async def test_stale_scoped_flow_remains_distinct_from_unscoped():
 
     client_id = (await _register([REDIRECT_URI]))["client_id"]
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = _scoped_mcp_server()
+        manager.get_mcp_server_by_identifier.return_value = _scoped_mcp_server()
         response = _scoped_authorize(client_id, SCOPED_RESOURCE)
     described = await _describe_page(response, scoped_server=None)
     assert json.loads(described.body)["state"] == "stale"
@@ -1399,7 +1516,7 @@ async def test_scoped_flow_deny_and_stale_server_never_need_the_vendor_credentia
     client_id = (await _register([REDIRECT_URI]))["client_id"]
     github = _scoped_mcp_server()
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = github
+        manager.get_mcp_server_by_identifier.return_value = github
         response = _scoped_authorize(client_id, SCOPED_RESOURCE)
     cache = DualCache()
     skipped_reachability = _ServerReachability(False)
@@ -1459,22 +1576,22 @@ async def test_token_rejects_resource_conflicting_with_sealed_scope():
     github = _scoped_mcp_server()
     linear = _scoped_mcp_server(name="linear")
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = github
+        manager.get_mcp_server_by_identifier.return_value = github
         response = _scoped_authorize(client_id, SCOPED_RESOURCE)
     code = await _finish_connect_page(response, scoped_server=github)
 
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = linear
+        manager.get_mcp_server_by_identifier.return_value = linear
         mismatched = await _redeem(code, client_id, resource="https://llm.example.com/mcp/linear")
     assert json.loads(mismatched.body)["error"] == "invalid_target"
 
     cache = DualCache()
     token_response = await _redeem(code, client_id, cache=cache)
     payload = json.loads(token_response.body)
-    assert _opened_principal(payload).resource_server_id == "github-id"
+    assert _opened_principal(payload).resource_server_ids == ("github-id",)
 
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = linear
+        manager.get_mcp_server_by_identifier.return_value = linear
         refresh_mismatch = await _redeem(
             None,
             client_id,
@@ -1489,7 +1606,7 @@ async def test_token_rejects_resource_conflicting_with_sealed_scope():
         None, client_id, cache=cache, grant_type="refresh_token", refresh_token=payload["refresh_token"]
     )
     assert rotated.status_code == 200
-    assert _opened_principal(json.loads(rotated.body)).resource_server_id == "github-id"
+    assert _opened_principal(json.loads(rotated.body)).resource_server_ids == ("github-id",)
 
 
 @pytest.mark.asyncio
@@ -1515,7 +1632,7 @@ async def test_resolve_scoped_resource_server_matrix():
         (None, github, None),
     ]:
         with patch(_MANAGER_PATCH) as manager:
-            manager.get_mcp_server_by_name.return_value = resolved_server
+            manager.get_mcp_server_by_identifier.return_value = resolved_server
             result = resolve_scoped_resource_server(request, resource)
         assert (result.server_id if result is not None else None) == expected, resource
 
@@ -1531,10 +1648,10 @@ async def test_resource_resolution_is_identity_not_ip_filtered_access():
     from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import resolve_scoped_resource_server
 
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = _scoped_mcp_server()
+        manager.get_mcp_server_by_identifier.return_value = _scoped_mcp_server()
         result = resolve_scoped_resource_server(_request(), SCOPED_RESOURCE)
     assert result is not None
-    manager.get_mcp_server_by_name.assert_called_once_with("github")
+    manager.get_mcp_server_by_identifier.assert_called_once_with("github")
 
 
 LOOPBACK_REDIRECT_URI = "http://127.0.0.1:51234/callback"
@@ -1669,7 +1786,7 @@ async def test_native_authorize_renders_consent_page_and_sets_flow_cookie():
     assert flow["client_id"] == client_id
     assert flow["redirect_uri"] == LOOPBACK_REDIRECT_URI
     assert flow["user_id"] == "u1"
-    assert "resource_server_id" not in flow
+    assert "resource_server_ids" not in flow
     assert handle not in body.replace(f'value="{handle}"', "")
 
 
@@ -2318,6 +2435,34 @@ async def test_introspect_active_access_token_reports_rfc7662_claims():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resource_server_ids", "claim", "expected", "other_claim"),
+    [
+        (("alpha-id",), "resource_server_id", "alpha-id", "resource_server_ids"),
+        (("alpha-id", "beta-id"), "resource_server_ids", ["alpha-id", "beta-id"], "resource_server_id"),
+    ],
+)
+async def test_introspect_reports_server_scope_as_scalar_or_list(
+    resource_server_ids: tuple[str, ...],
+    claim: str,
+    expected: str | list[str],
+    other_claim: str,
+):
+    keys, now, _ = _introspection_fixtures()
+    principal = SessionPrincipal(
+        user_id="u1",
+        client_id="llm_dcrc_client",
+        resource_server_ids=resource_server_ids,
+    )
+    minted = mint_session_token(principal, keys, now)
+    status, body = await _introspect(minted.token.get_secret_value())
+
+    assert status == 200
+    assert body[claim] == expected
+    assert other_claim not in body
+
+
+@pytest.mark.asyncio
 async def test_introspect_invalid_tokens_answer_active_false():
     keys, now, principal = _introspection_fixtures()
     wrong_key = mint_session_token(principal, session_keys_from_master_key("sk-a-rotated-master-key"), now)
@@ -2483,7 +2628,7 @@ async def test_gateway_owned_resource_stays_scoped_through_consent_and_refresh(a
     server = _scoped_mcp_server(auth_type=auth_type)
     vendor = _VendorCredential("absent")
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = server
+        manager.get_mcp_server_by_identifier.return_value = server
         response = _scoped_authorize(client_id, resource)
     described = await _describe_page(response, scoped_server=server, vendor=vendor)
     assert json.loads(described.body) == {
@@ -2492,6 +2637,7 @@ async def test_gateway_owned_resource_stays_scoped_through_consent_and_refresh(a
         "server_id": "github-id",
         "server_name": "github",
         "connected": True,
+        "servers": None,
     }
     unreachable = await _complete_page(response, scoped_server=server, reachable=_ServerReachability(False))
     assert unreachable.status_code == 400
@@ -2501,16 +2647,16 @@ async def test_gateway_owned_resource_stays_scoped_through_consent_and_refresh(a
     assert vendor.calls == []
     code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_name.return_value = server
+        manager.get_mcp_server_by_identifier.return_value = server
         redeemed = await _redeem(code, client_id, cache=cache, resource=resource)
     assert redeemed.status_code == 200
     payload = json.loads(redeemed.body)
-    assert _opened_principal(payload).resource_server_id == "github-id"
+    assert _opened_principal(payload).resource_server_ids == ("github-id",)
     renewed = await _redeem(
         None, client_id, cache=cache, grant_type="refresh_token", refresh_token=payload["refresh_token"]
     )
     assert renewed.status_code == 200
-    assert _opened_principal(json.loads(renewed.body)).resource_server_id == "github-id"
+    assert _opened_principal(json.loads(renewed.body)).resource_server_ids == ("github-id",)
 
 
 JWT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:jwt"
