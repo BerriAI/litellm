@@ -95,7 +95,9 @@ jobs:
       - name: test_e2e_metadata
         env:
           PYTHONPATH: tests/e2e
-        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_metadata.py tests/code_coverage_tests/test_e2e_junit_report.py
+        run: |
+          export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)"
+          uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_metadata.py tests/code_coverage_tests/test_e2e_junit_report.py
 
       - name: Check merge smoke harness
         run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_merge_smoke.py
@@ -162,6 +164,12 @@ jobs:
 
       - name: check_migrations_no_data_rewrites
         run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_no_data_rewrites.py
+
+      - name: check_no_publicly_known_master_key
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_no_publicly_known_master_key.py
+
+      - name: test_check_no_publicly_known_master_key
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_no_publicly_known_master_key.py
 
       - name: check_unbounded_in_lists (fails on findings not in the baseline)
         run: uv run --no-sync python ./tests/code_coverage_tests/check_unbounded_in_lists.py

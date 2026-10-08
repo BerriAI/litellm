@@ -16,7 +16,7 @@ from urllib.parse import quote, unquote, urlencode
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
@@ -47,6 +47,7 @@ from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams, BedrockBatchRecordKind
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -75,7 +76,7 @@ LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 LIST_FILES_LOCATION_PARAM: Final = "_s3_list_files_location"
 
 
-class _S3DeleteContext(BaseModel):
+class _S3DeleteContext(LiteLLMBaseModel):
     file_id: str = Field(min_length=1)
 
 
@@ -154,7 +155,7 @@ class _S3RequestTarget:
     request_params: _BedrockS3RequestParams
 
 
-class _TrustedS3ModelCredentials(BaseModel):
+class _TrustedS3ModelCredentials(LiteLLMBaseModel):
     """The S3 buckets the server trusts file ids against, from the deployment snapshot."""
 
     model_config = ConfigDict(extra="ignore")
@@ -816,7 +817,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             non_default_params=non_default_params,
             optional_params={},
         )
-        return dict(titan_config._transform_request(input=input_text, inference_params=inference_params))
+        return dict(titan_config.transform_request(input=input_text, inference_params=inference_params))
 
     @staticmethod
     def _transform_text_completion_body_to_chat_body(
@@ -1022,6 +1023,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
             bedrock_jsonl_content.append(bedrock_record)
         return bedrock_jsonl_content
+
+    def transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        self,
+        openai_jsonl_content: Sequence[_OpenAIBatchRecord],
+        target_model: str = "",
+    ) -> list[_BedrockBatchRecord]:  # mutable-ok: mirrors override contract
+        return self._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content, target_model)
 
     def transform_create_file_request(
         self,
@@ -1534,7 +1542,7 @@ class BedrockJsonlFilesTransformation:
         Delegate to the main BedrockFilesConfig transformation method
         """
         config: Final = BedrockFilesConfig()
-        return config._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
+        return config.transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
 
     def _get_s3_object_name(
         self,

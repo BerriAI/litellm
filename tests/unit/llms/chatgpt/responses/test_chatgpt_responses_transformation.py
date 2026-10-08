@@ -6,6 +6,7 @@ Source: litellm/llms/chatgpt/responses/transformation.py
 
 import json
 from collections.abc import Generator
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -31,8 +32,52 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Generator[None, Non
 
 class TestChatGPTResponsesAPITransformation:
     @pytest.mark.parametrize(
+        ("requested_tier", "expected_tier"),
+        [("default", "default"), ("priority", "priority"), ("fast", "priority")],
+    )
+    @pytest.mark.parametrize("effort", ["low", "high"])
+    def test_chatgpt_preserves_service_tier(self, requested_tier: str, expected_tier: str, effort: str) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input=[{"role": "user", "content": "Reply with OK"}],
+            response_api_optional_request_params={
+                "service_tier": requested_tier,
+                "reasoning": {"effort": effort},
+                "max_output_tokens": 16,
+                "prompt_cache_options": {"ttl": "30m"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["service_tier"] == expected_tier
+        assert request["reasoning"] == {"effort": effort}
+        assert request["stream"] is True
+        assert request["store"] is False
+        assert "max_output_tokens" not in request
+        assert "prompt_cache_options" not in request
+
+    @pytest.mark.parametrize("requested_tier", [None, "auto", "flex", "unknown"])
+    def test_chatgpt_does_not_introduce_unsupported_service_tier(self, requested_tier: str | None) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input=[{"role": "user", "content": "Reply with OK"}],
+            response_api_optional_request_params={} if requested_tier is None else {"service_tier": requested_tier},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "service_tier" not in request
+
+    @pytest.mark.parametrize(
         "model_name",
         [
+            "chatgpt/gpt-6-sol",
+            "chatgpt/gpt-6-luna",
+            "chatgpt/gpt-6-astra",
+            "chatgpt/gpt-6.1-sol",
             "chatgpt/gpt-5.5",
             "chatgpt/gpt-5.6-luna",
             "chatgpt/gpt-5.6-sol",
@@ -55,10 +100,13 @@ class TestChatGPTResponsesAPITransformation:
         assert isinstance(config, ChatGPTResponsesAPIConfig)
         assert config.custom_llm_provider == LlmProviders.CHATGPT
 
-
     @pytest.mark.parametrize(
         "model_name",
         [
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-6-astra",
+            "gpt-6.1-sol",
             "gpt-5.5",
             "gpt-5.6-luna",
             "gpt-5.6-sol",
@@ -70,7 +118,7 @@ class TestChatGPTResponsesAPITransformation:
     ) -> None:
         """A chat completions request for these models must take the Responses bridge.
 
-        `gpt-5.6-*` also exists as an openai chat model, so an unregistered
+        These models also exist as openai chat models, so an unregistered
         chatgpt model resolves to mode "chat" here and never reaches the bridge.
         """
         model_info, resolved_model = responses_api_bridge_check(
@@ -92,14 +140,10 @@ class TestChatGPTResponsesAPITransformation:
         url = config.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://chatgpt.example.com/responses"
 
-        custom_url = config.get_complete_url(
-            api_base="https://custom.chatgpt.com", litellm_params={}
-        )
+        custom_url = config.get_complete_url(api_base="https://custom.chatgpt.com", litellm_params={})
         assert custom_url == "https://custom.chatgpt.com/responses"
 
-        url_with_slash = config.get_complete_url(
-            api_base="https://chatgpt.example.com/", litellm_params={}
-        )
+        url_with_slash = config.get_complete_url(api_base="https://chatgpt.example.com/", litellm_params={})
         assert url_with_slash == "https://chatgpt.example.com/responses"
 
     @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
@@ -162,9 +206,7 @@ class TestChatGPTResponsesAPITransformation:
                 "user": "user_123",
                 "temperature": 0.2,
                 "top_p": 0.9,
-                "context_management": [
-                    {"type": "compaction", "compact_threshold": 200000}
-                ],
+                "context_management": [{"type": "compaction", "compact_threshold": 200000}],
                 "metadata": {"foo": "bar"},
                 "max_output_tokens": 123,
                 "stream_options": {"include_usage": True},
@@ -203,9 +245,7 @@ class TestChatGPTResponsesAPITransformation:
             ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
         ],
     )
-    def test_chatgpt_non_stream_sse_response_parsing(
-        self, model_name: str, response_model: str
-    ):
+    def test_chatgpt_non_stream_sse_response_parsing(self, model_name: str, response_model: str):
         config = ChatGPTResponsesAPIConfig()
         response_payload = {
             "id": "resp_test",
@@ -228,9 +268,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
@@ -248,9 +286,7 @@ class TestChatGPTResponsesAPITransformation:
             ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
         ],
     )
-    def test_chatgpt_non_stream_sse_response_recovers_output_items(
-        self, model_name: str, response_model: str
-    ):
+    def test_chatgpt_non_stream_sse_response_recovers_output_items(self, model_name: str, response_model: str):
         config = ChatGPTResponsesAPIConfig()
         response_payload = {
             "id": "resp_test",
@@ -273,9 +309,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
@@ -315,9 +349,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
@@ -350,9 +382,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            502, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(502, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         with pytest.raises(OpenAIError) as exc_info:

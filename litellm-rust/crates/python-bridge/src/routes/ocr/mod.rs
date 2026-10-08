@@ -5,9 +5,9 @@ mod project;
 
 use host::OcrPythonHost;
 use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_core::ocr::provider_config;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::to_py;
+use litellm_inference_ocr::provider_config;
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use pyo3::{
     prelude::*,
@@ -58,7 +58,7 @@ fn run_ocr(
                 crate::secrets::source(py)?,
             )
             .map_err(http::client_error)?;
-            let route = litellm_core::ocr::OcrRoute::new(client);
+            let route = litellm_inference_ocr::OcrRoute::new(client);
             Ok(route.machine(request, None))
         },
         OcrPythonHost::new(request.unbind()),
@@ -81,23 +81,15 @@ fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
 }
 
 #[pyfunction]
-pub(crate) fn ocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, false)
+pub(crate) fn ocr(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let call = super::NativeCall::extract(&call)?;
+    run_ocr(py, call.bound.into_any(), call.args, call.kwargs, false)
 }
 
 #[pyfunction]
-pub(crate) fn aocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, true)
+pub(crate) fn aocr(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let call = super::NativeCall::extract(&call)?;
+    run_ocr(py, call.bound.into_any(), call.args, call.kwargs, true)
 }
 
 #[pyfunction]

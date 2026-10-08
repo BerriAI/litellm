@@ -42,9 +42,10 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     resolve_litellm_executed_provider,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     extract_nested_form_metadata,
+    read_request_body,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
@@ -70,8 +71,8 @@ from litellm.proxy.openai_files_endpoints.batch_guardrails import (
     rewrite_batch_input_file,
     scan_batch_input_file,
 )
-from litellm.proxy.openai_files_endpoints.common_utils import (
-    _is_base64_encoded_unified_file_id,
+from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
@@ -79,10 +80,16 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     extract_file_creation_params,
     get_authorized_credentials_for_model,
     handle_model_based_routing,
+    is_base64_encoded_unified_file_id,
     prepare_data_with_credentials,
     validate_file_list_limit,
     validate_managed_files_requirement,
     validate_managed_id_requirement,
+)
+from litellm.proxy.openai_files_endpoints.file_usage_caps import (
+    batch_file_record_limit,
+    enforce_batch_file_upload_limit,
+    enforce_file_download_limit,
 )
 from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     MB,
@@ -564,7 +571,7 @@ async def create_file(
     Example Curl
     ```
     curl http://localhost:4000/v1/files \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F purpose="batch" \
         -F file="@mydata.jsonl"
         -F expires_after[anchor]="created_at" \
@@ -574,6 +581,7 @@ async def create_file(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
+        general_settings_view,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -614,7 +622,7 @@ async def create_file(
         )
 
         # Extract file creation parameters using utility function
-        request_body: Final = await _read_request_body(request=request) or {}
+        request_body: Final = await read_request_body(request=request) or {}
         file_params: Final = await extract_file_creation_params(
             request=request,
             request_body=request_body,
@@ -672,6 +680,7 @@ async def create_file(
                 file_source,
                 _MAX_BATCH_FILE_SIZE_MB_ADAPTER.validate_python(general_settings.get("max_batch_file_size_mb")),
                 PASSTHROUGH_BATCH_LINE_SHAPE if passthrough else BATCH_LINE_SHAPE,
+                batch_file_record_limit(user_api_key_dict, general_settings_view()),
             )
             if batch_file_failure is not None:
                 raise_batch_file_validation_failure(batch_file_failure)
@@ -746,6 +755,11 @@ async def create_file(
             expires_after = FileExpiresAfter(
                 anchor="created_at",  # Literal, not expires_after_anchor variable
                 seconds=expires_after_seconds,
+            )
+
+        if purpose == "batch":
+            await enforce_batch_file_upload_limit(
+                proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings_view()
             )
 
         # Include original request and headers in the data
@@ -958,12 +972,13 @@ async def get_file_content(
     Example Curl
     ```
     curl http://localhost:4000/v1/files/file-abc123/content \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        general_settings_view,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -977,6 +992,9 @@ async def get_file_content(
             resource_kind="file",
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+        await enforce_file_download_limit(
+            proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings_view(), file_id
         )
 
         # Include original request and headers in the data
@@ -1003,7 +1021,7 @@ async def get_file_content(
         )
 
         ## check if file_id is a litellm managed file
-        is_base64_unified_file_id: Final = _is_base64_encoded_unified_file_id(file_id)
+        is_base64_unified_file_id: Final = is_base64_encoded_unified_file_id(file_id)
         if is_base64_unified_file_id:
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
@@ -1216,6 +1234,8 @@ async def get_file_content(
         )
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.retrieve_file_content(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, ProxyException):
+            raise e
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
@@ -1264,7 +1284,7 @@ async def get_file(
     Example Curl
     ```
     curl http://localhost:4000/v1/files/file-abc123 \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
     """
@@ -1348,7 +1368,7 @@ async def get_file(
             )
 
         ## EXISTING: check if file_id is a litellm managed file
-        elif _is_base64_encoded_unified_file_id(file_id):
+        elif is_base64_encoded_unified_file_id(file_id):
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
                 raise ProxyException(
@@ -1558,7 +1578,7 @@ async def delete_file(
             )
 
         ## EXISTING: check if file_id is a litellm managed file
-        elif _is_base64_encoded_unified_file_id(file_id):
+        elif is_base64_encoded_unified_file_id(file_id):
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
                 raise ProxyException(
@@ -1652,7 +1672,8 @@ async def delete_file(
 def _as_file_list_page(response: object) -> object:
     if not isinstance(response, list):
         return response
-    return FileListPage(**build_list_page(_LISTED_FILES_ADAPTER.validate_python(response)))
+    page: Final = build_list_page(_LISTED_FILES_ADAPTER.validate_python(response))
+    return FileListPage.model_validate(page)
 
 
 @router.get(
@@ -1689,7 +1710,7 @@ async def list_files(
     Example Curl
     ```
     curl http://localhost:4000/v1/files\
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
     """

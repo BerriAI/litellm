@@ -1,9 +1,9 @@
 use litellm_auth::SecretValue;
-use litellm_core::ocr::{
+use litellm_host_python::from_py;
+use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };
-use litellm_host_python::from_py;
 use litellm_llms::base_llm::ocr::error::Error;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
@@ -121,7 +121,8 @@ pub(super) fn project_request(
     let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
         .map_err(ocr_error_to_pyerr)?;
     let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
-    let optional_params = project_optional_fields(kwargs, &names)?;
+    let optional_params =
+        project_optional_fields(names.iter().copied(), |name| kwargs.get_item(name))?;
     let input_sources = request_input_sources(
         kwargs,
         names
