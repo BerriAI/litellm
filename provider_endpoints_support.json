@@ -749,7 +749,7 @@
       "url": "https://docs.litellm.ai/docs/providers/dahl",
       "endpoints": {
         "chat_completions": true,
-        "messages": false,
+        "messages": true,
         "responses": true,
         "embeddings": false,
         "image_generations": false,
