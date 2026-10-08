@@ -491,7 +491,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
           </div>
         }
       >
-        {/* Date range is controlled by the parent page header */}
         {summaryLoading ? (
           <ChartSkeleton className="h-32" />
         ) : (
@@ -519,7 +518,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                 />
               );
             })}
-            {/* Fill remaining slots if less than 4 agents */}
             {Array.from({ length: Math.max(0, SUMMARY_SLOTS - summaryRows.length) }).map((_, index) => (
               <SummaryCell
                 key={`empty-${index}`}
