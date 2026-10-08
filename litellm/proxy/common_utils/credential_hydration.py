@@ -68,13 +68,11 @@ def decrypted_or_stored(key: str, value: str) -> str | None:
 
 
 def decrypted_values(values: Mapping[str, str]) -> Mapping[str, str]:
-    """``values`` with every entry decrypted, plaintext entries kept, and unreadable legacy entries dropped."""
     resolved: Final = {key: decrypted_or_stored(key, value) for key, value in values.items()}
     return MappingProxyType({key: value for key, value in resolved.items() if value is not None})
 
 
 def _decrypted(db_credential: CredentialItem) -> CredentialItem:
-    """The stored credential with every value decrypted, leaving already-plaintext values alone."""
     return CredentialItem(
         credential_name=db_credential.credential_name,
         credential_values=decrypted_values(db_credential.credential_values),  # pyright: ignore[reportArgumentType]  # declared dict[str, str], and pydantic copies this mapping into one on validation; LIT002 rules out building that dict here

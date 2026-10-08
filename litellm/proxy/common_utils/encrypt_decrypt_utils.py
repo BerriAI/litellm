@@ -270,9 +270,6 @@ def legacy_unreadable(value: object) -> bool:
 
 
 def decrypt_for_rewrite(value: str, key: str) -> str | None:
-    """Decrypt a value a config writer submitted for storage: ciphertext read back from the store or a first-write
-    plaintext. Without PyNaCl an unprefixed value cannot be told apart from plaintext, so it is kept as submitted
-    instead of being dropped."""
     if legacy_unreadable(value):
         return value
     return decrypt_value_helper(value=value, key=key, return_original_value=True)
