@@ -1288,8 +1288,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             effort_value, model
                         )
                     elif VertexGeminiConfig._is_gemma_4(model):
-                        optional_params["thinkingConfig"] = (
-                            VertexGeminiConfig._map_reasoning_effort_to_gemma_thinking_level(effort_value)
+                        # `optional_params` is a bare dict upstream and the dict-form
+                        # effort extraction leaves `effort_value` partially unknown;
+                        # the runtime shapes match what the helpers declare.
+                        optional_params.update(  # pyright: ignore[reportUnknownMemberType]  # optional_params is a bare dict upstream; thinkingConfig matches the GeminiThinkingConfig TypedDict the helper returns
+                            thinkingConfig=VertexGeminiConfig._map_reasoning_effort_to_gemma_thinking_level(
+                                effort_value  # pyright: ignore[reportUnknownArgumentType]  # the dict-form extraction above can leave a non-str payload; the helper validates and raises on unsupported values
+                            )
                         )
                     else:
                         optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
