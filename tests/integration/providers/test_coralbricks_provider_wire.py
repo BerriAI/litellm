@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from itertools import count
 from typing import Final
 
 import pytest
@@ -416,12 +417,12 @@ def test_hostile_model_field_is_rejected_without_crashing(gateway: Gateway, mode
 
 def test_identical_uncached_chats_are_each_forwarded_and_billed(gateway: Gateway) -> None:
     prefix: Final = f"req_{uuid.uuid4().hex}"
-    counter: Final[list[int]] = []
+    calls: Final = count(1)
 
     def respond(request: Request) -> Reply:
-        if not is_readiness_probe(request):
-            counter.append(len(counter))
-        return provider(f"{prefix}-{len(counter)}")(request)
+        if is_readiness_probe(request):
+            return provider(f"{prefix}-probe")(request)
+        return provider(f"{prefix}-{next(calls)}")(request)
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         alias: Final = deployment(scenario, wire)
