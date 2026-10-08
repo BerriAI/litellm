@@ -1191,8 +1191,9 @@ async def test_background_health_check_observes_the_concurrency_limit_and_queue(
             },
             "model_info": {"id": f"audio-{index}", "mode": "audio_speech"},
         }
-        for index in range(6)
+        for index in range(10)
     ]
+    tasks_before: Final = len(asyncio.all_tasks())
     perform_task: Final = asyncio.create_task(hc_module.perform_health_check(model_list, max_concurrency=2))
 
     try:
@@ -1200,17 +1201,16 @@ async def test_background_health_check_observes_the_concurrency_limit_and_queue(
         await asyncio.wait_for(request_started.get(), timeout=1)
         for _ in range(20):
             await asyncio.sleep(0)
-        assert request_started.empty()
-    except TimeoutError:
-        release.set()
-        _, unhealthy, _ = await perform_task
-        pytest.fail(f"Expected two active provider requests, got {upstream.call_count}; unhealthy={unhealthy}")
+        extra_requests_started: Final = request_started.qsize()
+        tasks_while_blocked: Final = len(asyncio.all_tasks()) - tasks_before
     finally:
         release.set()
     healthy, unhealthy, _ = await perform_task
 
-    assert upstream.call_count == 6
-    assert len(healthy) == 6
+    assert extra_requests_started == 0
+    assert tasks_while_blocked <= 5
+    assert upstream.call_count == 10
+    assert len(healthy) == 10
     assert unhealthy == []
 
 

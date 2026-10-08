@@ -38,6 +38,8 @@ from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.humanloop import HumanloopLogger
+from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
+from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.duration_parser import (
     _extract_from_regex,
@@ -52,7 +54,7 @@ from litellm.proxy.utils import is_valid_api_key
 from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
@@ -8982,18 +8984,21 @@ def test_get_valid_models_returns_static_fireworks_models_without_endpoint_check
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setenv("FIREWORKS_AI_API_KEY", "fireworks-test-key")
     expected_models: Final = litellm.models_by_provider["fireworks_ai"]
 
     actual_models: Final = get_valid_models(
         check_provider_endpoint=False,
         custom_llm_provider="fireworks_ai",
     )
+    env_inferred_models: Final = get_valid_models()
 
     assert set(actual_models) == expected_models
     assert actual_models
+    assert expected_models <= set(env_inferred_models)
 
 
-def test_get_valid_models_uses_per_call_anthropic_api_key() -> None:
+def test_get_valid_models_uses_the_litellm_params_anthropic_api_key() -> None:
     model_id: Final = "claude-test-model"
     models_url: Final = "https://api.anthropic.com/v1/models"
     response_body: Final = {
@@ -9022,12 +9027,12 @@ def test_get_valid_models_uses_per_call_anthropic_api_key() -> None:
         bad_key_models: Final = get_valid_models(
             check_provider_endpoint=True,
             custom_llm_provider="anthropic",
-            api_key="bad-test-key",
+            litellm_params=LiteLLM_Params(model="anthropic/*", api_key="bad-test-key"),
         )
         good_key_models: Final = get_valid_models(
             check_provider_endpoint=True,
             custom_llm_provider="anthropic",
-            api_key="good-test-key",
+            litellm_params=LiteLLM_Params(model="anthropic/*", api_key="good-test-key"),
         )
 
         assert bad_key_models == []
@@ -9049,12 +9054,12 @@ def test_add_custom_logger_to_success_callback_registers_once(
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
 
-    add_custom_logger_callback_to_specific_event("humanloop", "success")
+    add_custom_logger_callback_to_specific_event("langfuse", "success")
 
     assert len(litellm.success_callback) == 1
-    assert isinstance(litellm.success_callback[0], HumanloopLogger)
+    assert isinstance(litellm.success_callback[0], LangfusePromptManagement)
     assert len(litellm._async_success_callback) == 1
-    assert isinstance(litellm._async_success_callback[0], HumanloopLogger)
+    assert isinstance(litellm._async_success_callback[0], LangfusePromptManagement)
     assert litellm.failure_callback == []
     assert litellm._async_failure_callback == []
 
@@ -9071,7 +9076,6 @@ def test_add_custom_logger_callback_does_not_duplicate_existing_success_logger(
     registered_lists: tuple[str, ...],
 ) -> None:
     logger: Final = HumanloopLogger()
-    setattr(logger, "test_duplicate_key", "existing")
     async_success_callbacks: Final = [logger] if "_async_success_callback" in registered_lists else []
     success_callbacks: Final = [logger] if "success_callback" in registered_lists else []
     monkeypatch.setattr(litellm, "callbacks", [])
@@ -9093,7 +9097,42 @@ def test_add_custom_logger_callback_does_not_duplicate_existing_success_logger(
     assert litellm._async_failure_callback == []
 
 
-def test_custom_logger_in_global_callbacks_registers_once_across_completion_calls(
+@pytest.mark.parametrize(
+    ("registered_lists", "expected_async_success_callback_count"),
+    [
+        (("success_callback", "_async_success_callback"), 1),
+        (("success_callback",), 0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_acompletion_does_not_duplicate_a_logger_already_in_success_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+    registered_lists: tuple[str, ...],
+    expected_async_success_callback_count: int,
+) -> None:
+    logger: Final = HumanloopLogger()
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [logger])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_input_callback", [])
+    monkeypatch.setattr(
+        litellm, "_async_success_callback", [logger] if "_async_success_callback" in registered_lists else []
+    )
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+
+    await litellm.acompletion(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "callback registration"}],
+        mock_response="ok",
+    )
+
+    assert litellm.success_callback == [logger]
+    assert litellm._async_success_callback == [logger] * expected_async_success_callback_count
+
+
+@pytest.mark.asyncio
+async def test_custom_logger_in_global_callbacks_registers_once_across_completion_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     logger: Final = HumanloopLogger()
@@ -9105,16 +9144,12 @@ def test_custom_logger_in_global_callbacks_registers_once_across_completion_call
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
 
-    litellm.completion(
-        model="gpt-5-mini",
-        messages=[{"role": "user", "content": "callback registration"}],
-        mock_response="ok",
-    )
-    litellm.completion(
-        model="gpt-5-mini",
-        messages=[{"role": "user", "content": "callback registration"}],
-        mock_response="ok",
-    )
+    for _ in range(11):
+        await litellm.acompletion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "callback registration"}],
+            mock_response="ok",
+        )
 
     assert litellm.callbacks == [logger]
     assert litellm.input_callback == [logger]
@@ -9123,6 +9158,21 @@ def test_custom_logger_in_global_callbacks_registers_once_across_completion_call
     assert litellm._async_input_callback == []
     assert litellm._async_success_callback == [logger]
     assert litellm._async_failure_callback == [logger]
+
+
+def test_get_provider_audio_transcription_config_resolves_for_every_provider() -> None:
+    configs: Final = {
+        provider: ProviderConfigManager.get_provider_audio_transcription_config(model="whisper-1", provider=provider)
+        for provider in LlmProviders
+    }
+    unexpected: Final = {
+        provider: config
+        for provider, config in configs.items()
+        if config is not None and not isinstance(config, BaseAudioTranscriptionConfig)
+    }
+
+    assert unexpected == {}
+    assert isinstance(configs[LlmProviders.OPENAI], litellm.OpenAIWhisperAudioTranscriptionConfig)
 
 
 def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):

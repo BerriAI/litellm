@@ -2198,39 +2198,55 @@ def test_log_event_returns_the_v2_dict_shape_for_the_alerting_trace_id_cache():
 
 
 @pytest.mark.parametrize(
-    ("metadata", "litellm_trace_id", "expected_trace_id"),
+    ("metadata", "expected_source"),
     [
-        ({"existing_trace_id": "a" * 32, "trace_id": "b" * 32}, "c" * 32, "a" * 32),
-        ({"trace_id": "b" * 32}, "c" * 32, "b" * 32),
-        ({}, "c" * 32, "c" * 32),
+        ({}, None),
+        ({"trace_id": "my-unique-trace-id"}, "my-unique-trace-id"),
+        ({"existing_trace_id": "my-unique-existing-trace-id"}, "my-unique-existing-trace-id"),
+        (
+            {"trace_id": "my-unique-trace-id", "existing_trace_id": "my-unique-existing-trace-id"},
+            "my-unique-existing-trace-id",
+        ),
     ],
 )
-def test_langfuse_trace_id_uses_existing_then_metadata_then_litellm(
+def test_logging_get_trace_id_reports_the_langfuse_trace_that_won_precedence(
+    monkeypatch: pytest.MonkeyPatch,
     metadata: dict[str, str],
-    litellm_trace_id: str,
-    expected_trace_id: str,
+    expected_source: str | None,
 ) -> None:
-    logger, exporter = _steering_logger()
-    fixed_time: Final = datetime.datetime(2025, 1, 1)
-    kwargs: Final = {
-        "call_type": "completion",
-        "litellm_call_id": "trace-precedence-call",
-        "litellm_trace_id": litellm_trace_id,
-        "litellm_params": {"metadata": metadata},
-        "messages": [{"role": "user", "content": "trace precedence"}],
-        "optional_params": {},
-    }
-    response: Final = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
-    logged: Final = logger.log_event_on_langfuse(
-        kwargs=kwargs,
-        response_obj=response,
-        start_time=fixed_time,
-        end_time=fixed_time,
+    logger, exporter = _steering_logger()
+    monkeypatch.setattr(litellm_logging, "langFuseLogger", logger)
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    call_id: Final = f"trace-precedence-{len(metadata)}-{expected_source}"
+    logging_obj: Final = Logging(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        litellm_call_id=call_id,
+        start_time=datetime.datetime.now(),
+        function_id="trace-precedence",
     )
 
-    assert logged["trace_id"] == resolve_trace_id(expected_trace_id)
-    assert _span_trace_id(_exported_span(logger, exporter)) == resolve_trace_id(expected_trace_id)
+    litellm.completion(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "trace precedence"}],
+        mock_response="ok",
+        litellm_logging_obj=logging_obj,
+        metadata=dict(metadata),
+    )
+    deadline: Final = time.monotonic() + 5
+    while logging_obj.get_trace_id(service_name="langfuse") is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    expected_trace_id: Final = resolve_trace_id(expected_source or logging_obj.litellm_trace_id)
+    assert logging_obj.get_trace_id(service_name="langfuse") == expected_trace_id
+    assert _span_trace_id(_exported_span(logger, exporter)) == expected_trace_id
 
 
 def test_parse_langfuse_debug_only_enables_on_true_strings():
