@@ -1,8 +1,12 @@
+from collections.abc import Mapping, Sequence
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 
 import litellm
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -36,7 +40,9 @@ def test_response_api_handler_merges_metadata_and_service_tier_without_error():
 async def test_async_response_api_handler_merges_trace_id_without_error():
     handler = LiteLLMCompletionTransformationHandler()
 
-    async def fake_session_handler(previous_response_id, litellm_completion_request):
+    async def fake_session_handler(
+        previous_response_id: str, litellm_completion_request: dict[str, object], instructions: str | None = None
+    ) -> dict[str, object]:
         litellm_completion_request["litellm_trace_id"] = "session-trace"
         return litellm_completion_request
 
@@ -94,3 +100,117 @@ async def test_aresponses_forwards_timeout_to_acompletion():
         "this means Router(timeout=N) silently fails for providers on the "
         "completion transformation path."
     )
+
+
+class _FakeSpendLogsDB:
+    def __init__(self, spend_logs: Sequence[Mapping[str, object]]) -> None:
+        self._spend_logs = spend_logs
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        return self._spend_logs
+
+
+class _FakePrismaClient:
+    def __init__(self, spend_logs: Sequence[Mapping[str, object]]) -> None:
+        self.db = _FakeSpendLogsDB(spend_logs)
+
+
+class _AnthropicBlock(BaseModel):
+    type: str
+    id: str | None = None
+    tool_use_id: str | None = None
+    text: str | None = None
+
+
+class _AnthropicMessage(BaseModel):
+    role: str
+    content: tuple[_AnthropicBlock, ...]
+
+
+class _AnthropicRequest(BaseModel):
+    messages: tuple[_AnthropicMessage, ...]
+    system: tuple[_AnthropicBlock, ...]
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_tool_output_with_new_instructions_builds_valid_anthropic_request():
+    """
+    A continuation that resends `instructions` must not land a system message between the replayed
+    tool_use and its tool_result, and the previous turn's instructions do not carry over (OpenAI semantics)
+    """
+    model: Final = "anthropic/claude-sonnet-5-5"
+    first_turn: Final = {
+        "request_id": "chatcmpl-first-turn",
+        "call_type": "aresponses",
+        "session_id": "session-1",
+        "proxy_server_request": {
+            "model": model,
+            "input": "What is the weather in Tokyo?",
+            "instructions": "Be terse.",
+        },
+        "response": {
+            "id": "chatcmpl-first-turn",
+            "object": "chat.completion",
+            "created": 0,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "toolu_weather",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([first_turn])),
+        patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion,
+    ):
+        mock_acompletion.return_value = ModelResponse(
+            id="id", created=0, model=model, object="chat.completion", choices=[]
+        )
+        await litellm.aresponses(
+            model=model,
+            previous_response_id="chatcmpl-first-turn",
+            input=[{"type": "function_call_output", "call_id": "toolu_weather", "output": "47C"}],
+            instructions="Answer in French.",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                }
+            ],
+            api_key="sk-ant-fake",
+        )
+
+    anthropic_request: Final = _AnthropicRequest.model_validate(
+        AnthropicConfig().transform_request(
+            model="claude-sonnet-5-5",
+            messages=mock_acompletion.call_args.kwargs["messages"],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+    )
+
+    assert [
+        (message.role, [(block.type, block.id or block.tool_use_id or block.text) for block in message.content])
+        for message in anthropic_request.messages
+    ] == [
+        ("user", [("text", "What is the weather in Tokyo?")]),
+        ("assistant", [("tool_use", "toolu_weather")]),
+        ("user", [("tool_result", "toolu_weather")]),
+    ]
+    assert [block.text for block in anthropic_request.system] == ["Answer in French."]

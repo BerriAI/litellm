@@ -109,14 +109,14 @@ class ResponsesSessionHandler:
             spend_log=spend_log,
         )
         response_input_param: str | ResponseInputParam | None = None
-        _messages: str | ResponseInputParam | None = None
 
         ############################################################
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
-            _response_input_param: Final = proxy_server_request_dict.get("input", None)
-            _messages = proxy_server_request_dict.get("messages", None)
+            _response_input_param: Final = proxy_server_request_dict.get("input") or proxy_server_request_dict.get(
+                "messages"
+            )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
             elif isinstance(_response_input_param, dict):
@@ -126,25 +126,14 @@ class ResponsesSessionHandler:
                 )
 
         if response_input_param:
-            chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=response_input_param,
-                responses_api_request=proxy_server_request_dict or {},
-                replay_reasoning=True,
+            # A previous turn's `instructions` don't carry over to the next response (OpenAI Responses semantics)
+            chat_completion_message_history.extend(
+                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                    input=response_input_param,
+                    responses_api_request={},
+                    replay_reasoning=True,
+                )
             )
-            chat_completion_message_history.extend(chat_completion_messages)
-
-        ############################################################
-        # Check if `messages` field is present in the proxy server request dict
-        ############################################################
-        elif _messages:
-            # ensure all messages are /chat/completions/messages
-            # certain requests can be stored as Responses API format - this ensures they are transformed to /chat/completions/messages
-            chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=_messages,
-                responses_api_request=proxy_server_request_dict or {},
-                replay_reasoning=True,
-            )
-            chat_completion_message_history.extend(chat_completion_messages)
 
         ############################################################
         # Add Output messages for this Spend Log
