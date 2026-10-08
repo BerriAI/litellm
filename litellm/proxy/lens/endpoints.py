@@ -81,7 +81,7 @@ from litellm.proxy.lens.state import (
     scheduled_window,
     summarized,
 )
-from litellm.proxy.tracing_runtime import provide_storage
+from litellm.proxy.tracing_runtime import provide_background_storage, provide_storage
 from litellm.router import Router
 from litellm.tracing.remote import LensConnection, bounded_response
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -91,6 +91,7 @@ CLAIM_CANDIDATES: Final = 20
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 StorageDep: TypeAlias = Annotated[Storage | None, Depends(provide_storage)]
+BackgroundStorageDep: TypeAlias = Annotated[Storage | None, Depends(provide_background_storage)]
 SAMPLE_PAGE_SIZE: Final = 10_000
 SAMPLE_PAGE_SIZES: Final = (SAMPLE_PAGE_SIZE, 5_000, 2_500, 1_250, 625, 312, 156, 100)
 SAMPLE_RESPONSE_TOO_LARGE: Final = "ClickHouse query exceeded the response size limit"
@@ -742,7 +743,9 @@ async def cached_reviews(lens_id: str, job_id: str, worker: WorkerAuth, attempt:
 
 
 @router.get("/worker/{lens_id}/{job_id}/sample", response_model=Sample)
-async def sample(lens_id: str, job_id: str, worker: WorkerAuth, storage: StorageDep, attempt: Attempt = 1) -> Sample:
+async def sample(
+    lens_id: str, job_id: str, worker: WorkerAuth, storage: BackgroundStorageDep, attempt: Attempt = 1
+) -> Sample:
     lens, job = await assigned(lens_id, job_id, worker, attempt)
     if job.sample is not None:
         return job.sample
@@ -809,7 +812,7 @@ async def content(
     job_id: str,
     execution_id: str,
     worker: WorkerAuth,
-    storage: StorageDep,
+    storage: BackgroundStorageDep,
     cursor: str = "",
     offset: int = Query(default=0, ge=0),
     attempt: Attempt = 1,
@@ -857,7 +860,7 @@ async def model(
 
 @router.post("/worker/{lens_id}/{job_id}/result", response_model=Lens)
 async def result(
-    lens_id: str, job_id: str, body: Result, worker: WorkerAuth, storage: StorageDep, attempt: Attempt = 1
+    lens_id: str, job_id: str, body: Result, worker: WorkerAuth, storage: BackgroundStorageDep, attempt: Attempt = 1
 ) -> Lens:
     lens: Final = await get_lens(lens_id, worker.scope)
     old: Final = next((j for j in lens.jobs if j.id == job_id), None)
