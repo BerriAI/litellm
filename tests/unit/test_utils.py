@@ -2571,7 +2571,7 @@ def test_get_valid_models_bedrock_lists_what_the_deployment_credentials_can_invo
 
     assert litellm.get_valid_models(
         check_provider_endpoint=True, custom_llm_provider="bedrock", litellm_params=deployment
-    ) == ["bedrock/amazon.nova-micro-v1:0", "bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0"]
+    ) == ["amazon.nova-micro-v1:0", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"]
 
 
 class TestIsCachedMessage:

@@ -1,6 +1,9 @@
+from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
@@ -1054,4 +1057,46 @@ def test_transcribe_is_a_known_provider_for_wildcard_expansion():
     assert get_provider_models("transcribe") == ["transcribe/StartTranscriptionJob"]
     assert get_known_models_from_wildcard("transcribe/*") == [
         "transcribe/StartTranscriptionJob"
+    ]
+
+
+@respx.mock
+def test_partial_bedrock_wildcard_filters_the_discovered_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    region: Final = "ap-south-1"
+    respx.get(f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "modelSummaries": [
+                    {"modelId": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+                    {"modelId": "amazon.nova-micro-v1:0"},
+                ]
+            },
+        )
+    )
+    respx.get(f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "inferenceProfileSummaries": [
+                    {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "status": "ACTIVE"}
+                ]
+            },
+        )
+    )
+    deployment: Final = LiteLLM_Params(
+        model="bedrock/anthropic.*",
+        aws_access_key_id="AKIAPARTIALWILDCARD",
+        aws_secret_access_key="partial-wildcard-secret",
+        aws_region_name=region,
+    )
+
+    assert get_known_models_from_wildcard("bedrock/anthropic.*", deployment) == [
+        "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
     ]

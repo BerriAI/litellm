@@ -12,7 +12,6 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.bedrock import AwsAuthParams
 
-MODEL_PREFIX: Final = "bedrock/"
 LIST_MODELS_TIMEOUT: Final = 10.0
 INFERENCE_PROFILES_PAGE_SIZE: Final = 1000
 INFERENCE_PROFILES_PAGE_CAP: Final = 20
@@ -56,10 +55,7 @@ class BedrockModelLister(BaseAWSLLM):
         self._client: Final = client
 
     def invocable_model_ids(self) -> frozenset[str]:
-        model_ids: Final = frozenset(self._active_inference_profile_ids()) | frozenset(
-            self._on_demand_foundation_model_ids()
-        )
-        return frozenset(MODEL_PREFIX + model_id for model_id in model_ids)
+        return frozenset(self._active_inference_profile_ids()) | frozenset(self._on_demand_foundation_model_ids())
 
     def _on_demand_foundation_model_ids(self) -> Iterator[str]:
         response: Final = ListFoundationModelsResponse.model_validate(

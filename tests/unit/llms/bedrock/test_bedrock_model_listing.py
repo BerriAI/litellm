@@ -40,10 +40,10 @@ PROFILE_PAGES: Final = {
     },
 }
 EXPECTED_MODELS: Final = [
-    "bedrock/amazon.nova-micro-v1:0",
-    "bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-    "bedrock/eu.amazon.nova-micro-v1:0",
-    "bedrock/global.anthropic.claude-opus-4-5-20251101-v1:0",
+    "amazon.nova-micro-v1:0",
+    "anthropic.claude-3-haiku-20240307-v1:0",
+    "eu.amazon.nova-micro-v1:0",
+    "global.anthropic.claude-opus-4-5-20251101-v1:0",
 ]
 SIGV4_AUTHORIZATION: Final = re.compile(
     rf"^AWS4-HMAC-SHA256 Credential={ACCESS_KEY}/\d{{8}}/{REGION}/bedrock/aws4_request, "
