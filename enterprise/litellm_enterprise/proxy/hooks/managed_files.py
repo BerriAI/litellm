@@ -33,6 +33,7 @@ from litellm.caching.caching import DualCache
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
@@ -254,7 +255,7 @@ def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, s
 _MANAGED_FILES_TARGET: Final = "managed_files"
 
 
-class PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
+class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache, prisma_client: PrismaClient):
         self.internal_usage_cache = internal_usage_cache
@@ -1315,7 +1316,10 @@ class PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         model_mappings: Dict[str, str] = {}
 
         for file_object in responses:
-            model_file_id_mapping = file_object._hidden_params.get("model_file_id_mapping")
+            file_hidden_params = cast(  # cast-ok: preserve mapping operations on dynamic file metadata
+                dict[str, object], getattr(file_object, HIDDEN_PARAMS_ATTR)
+            )
+            model_file_id_mapping = file_hidden_params.get("model_file_id_mapping")
             if model_file_id_mapping and isinstance(model_file_id_mapping, dict):
                 model_mappings.update(model_file_id_mapping)
 
@@ -1365,7 +1369,8 @@ class PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         _, file_type = extract_file_metadata(create_file_request["file"])
 
         output_file_id = file_objects[0].id
-        model_id = file_objects[0]._hidden_params.get("model_id")
+        file_hidden_params: Final = cast(dict[str, object], getattr(file_objects[0], HIDDEN_PARAMS_ATTR))
+        model_id = file_hidden_params.get("model_id")
 
         unified_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
             file_type,
@@ -1431,11 +1436,12 @@ class PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if decoded_batch_id and is_litellm_executed_batch(decoded_batch_id):
                 return response
             ## Check if unified_file_id is in the response
-            unified_file_id = response._hidden_params.get("unified_file_id")  # managed file id
-            unified_batch_id = response._hidden_params.get("unified_batch_id")  # managed batch id
-            is_batch_create: Final = response._hidden_params.get(BATCH_CREATE_HIDDEN_PARAM) is True
-            model_id = cast(Optional[str], response._hidden_params.get("model_id"))
-            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            response_hidden_params: Final = cast(dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR))
+            unified_file_id = response_hidden_params.get("unified_file_id")
+            unified_batch_id = response_hidden_params.get("unified_batch_id")
+            is_batch_create: Final = response_hidden_params.get(BATCH_CREATE_HIDDEN_PARAM) is True
+            model_id = cast(Optional[str], response_hidden_params.get("model_id"))
+            model_name = cast(Optional[str], response_hidden_params.get("model_name"))
 
             resolved_model_name = resolve_managed_output_file_model_name(
                 unified_input_file_id=unified_file_id if isinstance(unified_file_id, str) else response.input_file_id,
@@ -1547,12 +1553,12 @@ class PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         elif isinstance(response, LiteLLMFineTuningJob):
             ## Check if unified_file_id is in the response
-            unified_file_id = response._hidden_params.get("unified_file_id")  # managed file id
-            unified_finetuning_job_id = response._hidden_params.get(
-                "unified_finetuning_job_id"
-            )  # managed finetuning job id
-            model_id = cast(Optional[str], response._hidden_params.get("model_id"))
-            model_name = cast(Optional[str], response._hidden_params.get("model_name"))
+            finetuning_response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+                dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+            )
+            unified_file_id = finetuning_response_hidden_params.get("unified_file_id")
+            unified_finetuning_job_id = finetuning_response_hidden_params.get("unified_finetuning_job_id")
+            model_id = cast(Optional[str], finetuning_response_hidden_params.get("model_id"))
             original_response_id = response.id
             if (unified_file_id or unified_finetuning_job_id) and model_id:
                 response.id = self.get_unified_generic_response_id(model_id=model_id, generic_response_id=response.id)
@@ -2104,4 +2110,4 @@ class PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 verbose_logger.debug(
                                     f"Converted file {file_id} from storage backend to base64 with format {content_type}"
                                 )
-_PROXY_LiteLLMManagedFiles = PROXY_LiteLLMManagedFiles
+PROXY_LiteLLMManagedFiles = _PROXY_LiteLLMManagedFiles

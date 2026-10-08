@@ -45,7 +45,7 @@ from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # OpenAI parser module is private
 from openai.types.chat.completion_create_params import ResponseFormat
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, with_config
 
 import litellm
 import litellm.litellm_core_utils
@@ -379,6 +379,7 @@ if TYPE_CHECKING:
     # Type stubs for lazy-loaded config classes and types
     from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
     from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
+    from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
     from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
     from litellm.llms.base_llm.google_genai.transformation import (
@@ -1218,8 +1219,8 @@ def function_setup(
                 else search_query
             )
         elif call_type in (CallTypes.decisions.value, CallTypes.adecisions.value):
-            decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state", "")
-            messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state)
+            decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state") or kwargs.get("input") or ""
+            messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state, default=str)
         elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
             messages = args[1] if len(args) > 1 else kwargs.get("prompt")
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
@@ -1393,10 +1394,10 @@ def _schedule_async_success_logging(
             )
         )
 
-    if not getattr(logging_obj, "defer_async_logging", False):
+    if not logging_obj.defer_async_logging:
         _enqueue_async_logging()
         return
-    if getattr(logging_obj, "enqueue_deferred_logging", None) is not None:
+    if logging_obj.enqueue_deferred_logging is not None:
         return
     logging_obj.enqueue_deferred_logging = _enqueue_async_logging
 
@@ -2961,7 +2962,7 @@ def supports_pdf_input(model: str, custom_llm_provider: str | None = None) -> bo
 
 def supports_audio_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """Check if a given model supports audio output in a chat completion call"""
-    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input")
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_output")
 
 
 def supports_prompt_caching(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -5506,7 +5507,7 @@ def get_max_tokens(model: str) -> int | None:
             response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
             # Parse the JSON response
-            config_json: Final[Mapping[str, int]] = response.json()
+            config_json: Final = _HUGGINGFACE_MODEL_CONFIG.validate_python(response.json())
             # Extract and return the max_position_embeddings
             max_position_embeddings: Final = config_json.get("max_position_embeddings")
             if max_position_embeddings is not None:
@@ -5776,6 +5777,14 @@ def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> 
 from typing_extensions import ReadOnly, TypedDict
 
 
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _HuggingFaceModelConfig(TypedDict, total=False):
+    max_position_embeddings: ReadOnly[int | None]
+
+
+_HUGGINGFACE_MODEL_CONFIG: Final = TypeAdapter(_HuggingFaceModelConfig)
+
+
 class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     split_model: str
     combined_model_name: str
@@ -5923,7 +5932,7 @@ def _get_max_position_embeddings(model_name: str) -> int | None:
         response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
         # Parse the JSON response
-        config_json: Final[Mapping[str, int]] = response.json()
+        config_json: Final = _HUGGINGFACE_MODEL_CONFIG.validate_python(response.json())
 
         # Extract and return the max_position_embeddings
         max_position_embeddings: Final = config_json.get("max_position_embeddings")
@@ -8952,6 +8961,22 @@ class ProviderConfigManager:
 
             return get_dashscope_family_rerank_config(provider.value)
         return litellm.CohereRerankConfig()
+
+    @staticmethod
+    def get_provider_decisions_config(model: str, provider: LlmProviders) -> BaseDecisionsConfig | None:
+        if provider == LlmProviders.PERPLEXITY:
+            return litellm.PerplexityDecisionsConfig()
+        if provider == LlmProviders.TYPESAFE:
+            return litellm.TypeSafeDecisionsConfig()
+        if provider == LlmProviders.OPENROUTER:
+            return litellm.OpenRouterDecisionsConfig()
+        if provider == LlmProviders.CLOUDFLARE:
+            return litellm.CloudflareDecisionsConfig()
+        if provider == LlmProviders.STRANDS_DECIDER:
+            return litellm.StrandsDeciderDecisionsConfig()
+        if provider == LlmProviders.OPENAI:
+            return litellm.OpenAIDecisionsConfig()
+        return None
 
     @staticmethod
     def get_provider_anthropic_messages_config(

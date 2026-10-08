@@ -1,11 +1,12 @@
 import { act, fireEvent, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { readRequest, requestPath } from "@/../tests/lens-test-utils";
 import { LensWorkspace } from "./LensWorkspace";
 import { createLensDemoData } from "./data/demo/fixtures";
 import type { LensList } from "./model/types";
+import { rollUpAgents } from "./agents/agentRollup";
 
 const network = vi.fn<typeof fetch>();
 const list = vi.fn<() => Promise<LensList>>();
@@ -18,16 +19,28 @@ const worker = () => ({
   scope: data.lenses[0].scope,
 });
 
-function serve({ enabled = false, traces = false, requests = false, connected = false } = {}) {
+function serve({ enabled = false, traces = false, requests = false, connected = false, storageReady = true } = {}) {
   list.mockResolvedValue({ lenses: [], workers: connected ? [worker()] : [], tracing_enabled: enabled });
   network.mockImplementation(async (input, init) => {
     const { path, method, body, query } = await readRequest(input, init);
+    if (path === "/lens/service") {
+      const service = {
+        url: "https://traces.test",
+        configured: enabled,
+        connected: enabled,
+        status: { storage_ready: storageReady, credentials_ready: true },
+      };
+      return Response.json(service);
+    }
     if (path === "/v1/traces")
       return enabled
         ? Response.json({ data: traces ? [data.runs[0].trace.summary] : [] })
         : Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+    if (path === "/v1/traces/agents")
+      return Response.json({ agents: traces ? rollUpAgents([data.runs[0].trace.summary]) : [] });
     if (path === "/lens/activity/available") return Response.json({ traces, requests });
     if (path === "/lens/traces/findings") return Response.json([]);
+    if (path === "/lens/feedback/summary") return Response.json([]);
     if (path === "/lens" && method === "POST") {
       const saved = { ...data.lenses[0], settings: { ...data.lenses[0].settings, ...(body as object) } };
       list.mockResolvedValue({ lenses: [saved], workers: [worker()], tracing_enabled: true });
@@ -37,7 +50,8 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
     if (path === "/key/generate") return Response.json({ token_id: worker().analysis_key_id });
     if (path === "/lens/workers/register") {
       list.mockResolvedValue({ lenses: [], workers: [worker()], tracing_enabled: true });
-      return Response.json({ worker: worker(), token: "test-worker-token", image: "test-worker-image" });
+      const created = { worker: worker(), token: "", image: "test-worker-image", managed: true };
+      return Response.json(created);
     }
     if (path === "/models") return Response.json({ data: [{ id: "analysis" }] });
     if (path === "/model_group/info")
@@ -77,7 +91,7 @@ async function connectWorkerFromSettings(user: ReturnType<typeof userEvent.setup
   expect(settings.getByRole("heading", { name: "Connect a worker" })).toBeVisible();
   await user.click(settings.getByRole("combobox", { name: "Analysis model" }));
   await user.click(await screen.findByRole("option", { name: "analysis" }));
-  await user.click(settings.getByRole("button", { name: "Get install command" }));
+  await user.click(settings.getByRole("button", { name: "Enable investigations" }));
   expect(await settings.findByRole("heading", { name: "Worker connected" })).toBeVisible();
   await user.click(settings.getByRole("button", { name: "New investigation" }));
   expect(await screen.findByRole("region", { name: "New investigation" })).toBeVisible();
@@ -133,6 +147,19 @@ describe("Lens introduction", () => {
 });
 
 describe("Lens setup journey", () => {
+  it("waits for storage readiness before completing installation", async () => {
+    serve({ enabled: true, storageReady: false });
+    const user = userEvent.setup();
+    renderWorkspace();
+    const installation = await screen.findByRole("region", { name: /Install Lens/ });
+    expect(await within(installation).findByText(/trace storage is unavailable/)).toBeVisible();
+    expect(screen.queryByText("Trace storage is connected")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Your agent framework" })).not.toBeInTheDocument();
+    serve({ enabled: true });
+    await user.click(within(installation).getByRole("button", { name: "Check setup" }));
+    expect(await screen.findByRole("combobox", { name: "Your agent framework" })).toBeVisible();
+  });
+
   it.each(["/lens", "/lens/activity/available"])(
     "keeps recorded traces visible while %s is pending",
     async (pendingPath) => {
@@ -182,6 +209,41 @@ describe("Lens setup journey", () => {
     await connectWorkerFromSettings(user);
   });
 
+  it("continues to agent setup when a background service check detects the installation", async () => {
+    const user = userEvent.setup();
+    renderWorkspace({ searchParams: "?setup=lens" });
+    const intro = within(await screen.findByRole("region", { name: "Get started with Lens" }));
+    expect(await intro.findByRole("button", { name: "Check setup" })).toBeVisible();
+    serve({ enabled: true });
+    await act(() => testQueryClient.refetchQueries({ queryKey: ["lens-service"] }));
+    await user.click(await intro.findByRole("button", { name: "Continue to your agent" }));
+    expect(await intro.findByRole("combobox", { name: "Your agent framework" })).toBeVisible();
+    expect(intro.getByRole("button", { name: "Generate tracing key" })).toBeEnabled();
+    expect(intro.getByRole("button", { name: "Copy tracing configuration" })).toBeVisible();
+    await chooseSelectOption(user, intro.getByRole("combobox", { name: "Your agent framework" }), "LangGraph");
+    const normal = network.getMockImplementation()!;
+    network.mockImplementation((input, init) =>
+      requestPath(input) === "/lens/tracing/keys"
+        ? Promise.resolve(Response.json({ key: "sk-tracing-setup", active: true }))
+        : normal(input, init),
+    );
+    await user.click(intro.getByRole("button", { name: "Generate tracing key" }));
+    expect(await intro.findByText("Your tracing key")).toBeVisible();
+    serve({ enabled: true, storageReady: false });
+    await act(() => testQueryClient.refetchQueries({ queryKey: ["lens-service"] }));
+    const installation = within(await intro.findByRole("region", { name: /Install Lens/ }));
+    expect(await installation.findByText(/trace storage is unavailable/)).toBeVisible();
+    serve({ enabled: true });
+    await act(() => testQueryClient.refetchQueries({ queryKey: ["lens-service"] }));
+    const agent = within(await intro.findByRole("region", { name: /Send your first trace/ }));
+    expect(await agent.findByRole("combobox", { name: "Your agent framework" })).toHaveTextContent("LangGraph");
+    expect(agent.getByText("Your tracing key")).toBeVisible();
+    expect(agent.queryByRole("button", { name: "Generate tracing key" })).not.toBeInTheDocument();
+    serve({ enabled: true, traces: true });
+    await user.click(intro.getByRole("button", { name: "Check for traces" }));
+    expect(await intro.findByRole("button", { name: "Continue to worker" })).toBeEnabled();
+  });
+
   it("resumes setup from the URL and leaves only when the user chooses traces", async () => {
     serve({ enabled: true, traces: true });
     const user = userEvent.setup();
@@ -212,7 +274,7 @@ describe("Lens setup journey", () => {
     const intro = within(await screen.findByRole("region", { name: "Get started with Lens" }));
     expect(await intro.findByRole("heading", { name: "Before you start" })).toBeVisible();
     expect(intro.getByRole("button", { name: "Connect worker" })).toBeEnabled();
-    await user.click(intro.getByRole("button", { name: /Enable tracing on the gateway/ }));
+    await user.click(intro.getByRole("button", { name: /Install Lens/ }));
     expect(intro.getByRole("button", { name: "Continue with request logs" })).toBeEnabled();
     await user.click(intro.getByRole("button", { name: /Send your first trace/ }));
     await user.click(intro.getByRole("button", { name: "Continue with request logs" }));
@@ -305,8 +367,10 @@ describe("Lens setup journey", () => {
         within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Investigations" }),
       ).toHaveAttribute("aria-selected", "true");
       await waitFor(() => expect(setupParam(onUrlUpdate)).toBeNull());
-      const requests = await Promise.all(network.mock.calls.map(([input, init]) => readRequest(input, init)));
-      const create = requests.find((request) => request.path === "/lens" && request.method === "POST");
+      const creates = network.mock.calls.filter(
+        ([input, init]) => requestPath(input) === "/lens" && (init?.method ?? (input as Request).method) === "POST",
+      );
+      const [create] = await Promise.all(creates.map(([input, init]) => readRequest(input, init)));
       expect(create).toBeDefined();
       expect(create?.body).toEqual(expect.objectContaining({ name: "My first review", source }));
     },

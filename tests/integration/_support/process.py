@@ -9,12 +9,18 @@ import uuid
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from ipaddress import IPv4Address
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import httpx
 import psutil
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from integration._support.client import GATEWAY_LIMITS, Gateway
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
@@ -113,7 +119,7 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
 
 
 _PORT_ATTEMPTS: Final = 3
-_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE)
+_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE).lower()
 
 
 def _free_port() -> int:
@@ -145,7 +151,7 @@ def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str]
 
 
 def _lost_port_race(exit_code: int | None, log: Path) -> bool:
-    return exit_code is not None and _BIND_COLLISION in log.read_text()
+    return exit_code is not None and _BIND_COLLISION in log.read_text().lower()
 
 
 def _wait_until_ready(launch: _Launch) -> None:
@@ -254,6 +260,8 @@ def owned_proxy_process(
         "127.0.0.1",
         "--num_workers",
         str(workers),
+        "--timeout_worker_healthcheck",
+        str(int(graceful_stop_seconds())),
         *database_setup,
         *extra_arguments,
     )
@@ -288,6 +296,8 @@ def owned_gateway_image(
         str(workers),
         "--host",
         "127.0.0.1",
+        "--timeout-worker-healthcheck",
+        str(int(graceful_stop_seconds())),
     )
     launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
     try:
@@ -347,22 +357,66 @@ def refused_boot_log(
 
 
 _UPSTREAM_READY_SECONDS: Final = 60
+_LOOPBACK: Final = "127.0.0.1"
+
+
+@dataclass(frozen=True, slots=True)
+class UpstreamCertificate:
+    certificate: Path
+    key: Path
+
+
+def self_signed_certificate(directory: Path) -> UpstreamCertificate:
+    """A one-day self-signed certificate for 127.0.0.1, for an owned upstream a provider only reaches over TLS."""
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, _LOOPBACK)])
+    issued: Final = datetime.now(UTC)
+    certificate: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(issued - timedelta(minutes=5))
+        .not_valid_after(issued + timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(IPv4Address(_LOOPBACK))]), critical=False)
+        .sign(private_key, hashes.SHA256())
+    )
+    certificate_path: Final = directory / f"owned-upstream-{uuid.uuid4().hex}.crt"
+    key_path: Final = directory / f"owned-upstream-{uuid.uuid4().hex}.key"
+    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        private_key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    )
+    return UpstreamCertificate(certificate_path, key_path)
 
 
 class UpstreamSlot:
-    """A scripted upstream a test module owns on a fixed port, so a cell can take it down and bring it back."""
+    """A scripted upstream a test module owns on a fixed port, so a cell can take it down and bring it back.
 
-    __slots__ = ("directory", "port", "process", "root")
+    It runs from the harness's own checkout, never ``INTEGRATION_PROXY_ROOT``: the double belongs to the tests,
+    the proxy root only names the litellm under test."""
 
-    def __init__(self, directory: Path, port: int, root: Path) -> None:
+    __slots__ = ("certificate", "directory", "port", "process", "root")
+
+    def __init__(self, directory: Path, port: int, root: Path, certificate: UpstreamCertificate | None = None) -> None:
         self.directory = directory
         self.port = port
         self.root = root
+        self.certificate = certificate
         self.process: subprocess.Popen[bytes] | None = None
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        scheme: Final = "http" if self.certificate is None else "https"
+        return f"{scheme}://{_LOOPBACK}:{self.port}"
+
+    def _tls_arguments(self) -> tuple[str, ...]:
+        if self.certificate is None:
+            return ()
+        return ("--ssl-certfile", str(self.certificate.certificate), "--ssl-keyfile", str(self.certificate.key))
 
     def start(self) -> None:
         assert self.process is None, "Owned upstream is already running"
@@ -370,7 +424,14 @@ class UpstreamSlot:
         log_path: Final = output / f"owned-upstream-{self.port}-{uuid.uuid4().hex}.log"
         with log_path.open("w") as log:
             process: Final = subprocess.Popen(
-                [sys.executable, "-m", "integration._support.upstream", "--port", str(self.port)],
+                [
+                    sys.executable,
+                    "-m",
+                    "integration._support.upstream",
+                    "--port",
+                    str(self.port),
+                    *self._tls_arguments(),
+                ],
                 cwd=self.root,
                 env=dict(os.environ),
                 stdout=log,
@@ -381,7 +442,10 @@ class UpstreamSlot:
         deadline: Final = time.monotonic() + _UPSTREAM_READY_SECONDS
         while process.poll() is None:
             try:
-                if httpx.get(f"{self.url}/health", timeout=2, trust_env=False).status_code == 200:
+                probe: Final = httpx.get(
+                    f"{self.url}/health", timeout=2, trust_env=False, verify=self.certificate is None
+                )
+                if probe.status_code == 200:
                     return
             except httpx.TransportError:
                 pass
@@ -396,10 +460,14 @@ class UpstreamSlot:
         _stop(process)
 
 
+def _harness_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 @contextmanager
-def owned_upstream(directory: Path) -> Generator[UpstreamSlot]:
-    root: Final = _proxy_root()
-    slot: Final = UpstreamSlot(directory, _free_port(), root)
+def owned_upstream(directory: Path, *, tls: bool = False) -> Generator[UpstreamSlot]:
+    certificate: Final = self_signed_certificate(directory) if tls else None
+    slot: Final = UpstreamSlot(directory, _free_port(), _harness_root(), certificate)
     slot.start()
     try:
         yield slot

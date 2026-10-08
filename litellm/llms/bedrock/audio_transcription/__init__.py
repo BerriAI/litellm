@@ -6,6 +6,7 @@ import httpx
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.rust_bridge.transcription.native import (
     NATIVE_ATRANSCRIPTION,
@@ -52,18 +53,18 @@ class BedrockAudioTranscriptionRustDispatch:
         timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
         def native(rust: RustTranscription) -> TranscriptionResponse:
-            return TranscriptionResponse(
-                **rust(
-                    model=model,
-                    audio=self._audio_payload(audio_file),
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=extra_headers,
-                    optional_params=optional_params,
-                    timeout_seconds=timeout_to_seconds(timeout),
-                )
-            )
+            fields: Final = {
+                "model": model,
+                "audio": self._audio_payload(audio_file),
+                "api_key": api_key,
+                "api_base": api_base,
+                "custom_llm_provider": custom_llm_provider,
+                "extra_headers": extra_headers,
+                "optional_params": optional_params,
+                "timeout_seconds": timeout_to_seconds(timeout),
+            }
+            call: Final = NativeCall(args=(), kwargs=fields, bound=fields)
+            return TranscriptionResponse(**rust(call))
 
         return runtime.run(
             RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
@@ -85,18 +86,18 @@ class BedrockAudioTranscriptionRustDispatch:
         timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
         async def native(rust: RustAtranscription) -> TranscriptionResponse:
-            return TranscriptionResponse(
-                **await rust(
-                    model=model,
-                    audio=self._audio_payload(audio_file),
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=extra_headers,
-                    optional_params=optional_params,
-                    timeout_seconds=timeout_to_seconds(timeout),
-                )
-            )
+            fields: Final = {
+                "model": model,
+                "audio": self._audio_payload(audio_file),
+                "api_key": api_key,
+                "api_base": api_base,
+                "custom_llm_provider": custom_llm_provider,
+                "extra_headers": extra_headers,
+                "optional_params": optional_params,
+                "timeout_seconds": timeout_to_seconds(timeout),
+            }
+            call: Final = NativeCall(args=(), kwargs=fields, bound=fields)
+            return TranscriptionResponse(**await rust(call))
 
         return await runtime.arun(
             RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),

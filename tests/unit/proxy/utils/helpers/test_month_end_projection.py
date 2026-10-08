@@ -4,8 +4,8 @@ import pytest
 
 from litellm.proxy.utils import (
     _get_month_end_date,
-    _get_projected_spend_over_limit,
-    _is_projected_spend_over_limit,
+    get_projected_spend_over_limit,
+    is_projected_spend_over_limit,
 )
 
 
@@ -59,9 +59,7 @@ def test_get_month_end_date_raises_on_non_date_input():
 def test_is_projected_spend_over_limit_happy_path_under_budget(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 11))
     summary = {
-        "result": _is_projected_spend_over_limit(
-            current_spend=10.0, soft_budget_limit=1_000_000.0
-        ),
+        "result": is_projected_spend_over_limit(current_spend=10.0, soft_budget_limit=1_000_000.0),
         "current_spend": 10.0,
         "soft_budget_limit": 1_000_000.0,
     }
@@ -75,9 +73,7 @@ def test_is_projected_spend_over_limit_happy_path_under_budget(monkeypatch):
 def test_is_projected_spend_over_limit_happy_path_over_budget(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 11))
     summary = {
-        "result": _is_projected_spend_over_limit(
-            current_spend=100.0, soft_budget_limit=50.0
-        ),
+        "result": is_projected_spend_over_limit(current_spend=100.0, soft_budget_limit=50.0),
         "current_spend": 100.0,
         "soft_budget_limit": 50.0,
     }
@@ -91,9 +87,7 @@ def test_is_projected_spend_over_limit_happy_path_over_budget(monkeypatch):
 def test_is_projected_spend_over_limit_first_of_month_no_division_by_zero(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 1))
     summary = {
-        "result": _is_projected_spend_over_limit(
-            current_spend=5.0, soft_budget_limit=10.0
-        ),
+        "result": is_projected_spend_over_limit(current_spend=5.0, soft_budget_limit=10.0),
         "current_spend": 5.0,
         "soft_budget_limit": 10.0,
     }
@@ -105,10 +99,7 @@ def test_is_projected_spend_over_limit_first_of_month_no_division_by_zero(monkey
 
 
 def test_is_projected_spend_over_limit_none_limit_returns_false():
-    assert (
-        _is_projected_spend_over_limit(current_spend=10_000.0, soft_budget_limit=None)
-        is False
-    )
+    assert is_projected_spend_over_limit(current_spend=10_000.0, soft_budget_limit=None) is False
 
 
 def test_is_projected_spend_over_limit_raises_when_today_missing(monkeypatch):
@@ -119,14 +110,12 @@ def test_is_projected_spend_over_limit_raises_when_today_missing(monkeypatch):
 
     monkeypatch.setattr("litellm.proxy.utils.date", _Broken)
     with pytest.raises(RuntimeError):
-        _is_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=1.0)
+        is_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=1.0)
 
 
 def test_get_projected_spend_over_limit_happy_path_over_budget(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 11))
-    result = _get_projected_spend_over_limit(
-        current_spend=100.0, soft_budget_limit=50.0
-    )
+    result = get_projected_spend_over_limit(current_spend=100.0, soft_budget_limit=50.0)
     assert result is not None
     projected, exceed_date = result
     summary = {
@@ -147,7 +136,7 @@ def test_get_projected_spend_over_limit_first_of_month_uses_current_as_daily(
     monkeypatch,
 ):
     _freeze_today(monkeypatch, date(2024, 1, 1))
-    result = _get_projected_spend_over_limit(current_spend=5.0, soft_budget_limit=10.0)
+    result = get_projected_spend_over_limit(current_spend=5.0, soft_budget_limit=10.0)
     assert result is not None
     projected, exceed_date = result
     expected_exceed = date(2024, 1, 1) + timedelta(days=1.0)
@@ -167,7 +156,7 @@ def test_get_projected_spend_over_limit_first_of_month_uses_current_as_daily(
 
 def test_get_projected_spend_over_limit_zero_daily_spend_exceed_today(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 11))
-    result = _get_projected_spend_over_limit(current_spend=0.0, soft_budget_limit=-1.0)
+    result = get_projected_spend_over_limit(current_spend=0.0, soft_budget_limit=-1.0)
     assert result is not None
     projected, exceed_date = result
     summary = {
@@ -184,17 +173,12 @@ def test_get_projected_spend_over_limit_zero_daily_spend_exceed_today(monkeypatc
 
 def test_get_projected_spend_over_limit_under_budget_returns_none(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 11))
-    assert (
-        _get_projected_spend_over_limit(
-            current_spend=1.0, soft_budget_limit=1_000_000.0
-        )
-        is None
-    )
+    assert get_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=1_000_000.0) is None
 
 
 def test_get_projected_spend_over_limit_exceed_date_uses_remaining_budget(monkeypatch):
     _freeze_today(monkeypatch, date(2024, 1, 11))
-    result = _get_projected_spend_over_limit(current_spend=20.0, soft_budget_limit=30.0)
+    result = get_projected_spend_over_limit(current_spend=20.0, soft_budget_limit=30.0)
     assert result is not None
     projected, exceed_date = result
     daily = 20.0 / 10
@@ -215,10 +199,7 @@ def test_get_projected_spend_over_limit_exceed_date_uses_remaining_budget(monkey
 
 
 def test_get_projected_spend_over_limit_none_limit_returns_none():
-    assert (
-        _get_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=None)
-        is None
-    )
+    assert get_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=None) is None
 
 
 def test_get_projected_spend_over_limit_raises_when_today_missing(monkeypatch):
@@ -229,4 +210,4 @@ def test_get_projected_spend_over_limit_raises_when_today_missing(monkeypatch):
 
     monkeypatch.setattr("litellm.proxy.utils.date", _Broken)
     with pytest.raises(RuntimeError):
-        _get_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=1.0)
+        get_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=1.0)

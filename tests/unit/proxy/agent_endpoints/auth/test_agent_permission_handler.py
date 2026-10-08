@@ -526,7 +526,7 @@ class TestAgentRequestHandler:
             AgentRequestHandler, "_get_key_object_permission", return_value=None
         ):
             with patch(
-                "litellm.proxy.auth.auth_checks._get_agent_ids_from_access_groups",
+                "litellm.proxy.auth.auth_checks.get_agent_ids_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=["agent-from-ag-1", "agent-from-ag-2"],
             ):
@@ -558,7 +558,7 @@ class TestAgentRequestHandler:
         mock_user_auth.object_permission = mock_permission
 
         with patch(
-            "litellm.proxy.auth.auth_checks._get_agent_ids_from_access_groups",
+            "litellm.proxy.auth.auth_checks.get_agent_ids_from_access_groups",
             new_callable=AsyncMock,
             return_value=["agent-from-ag"],
         ):
@@ -966,7 +966,7 @@ async def test_managed_target_rechecks_authoritative_key_after_peer_revocation(
         warm.object_permission = None
         warm.access_group_ids = ["old-group"]
         from litellm.proxy.auth import auth_checks
-        monkeypatch.setattr(auth_checks, "_get_agent_ids_from_access_groups", AsyncMock(return_value=["target"]))
+        monkeypatch.setattr(auth_checks, "get_agent_ids_from_access_groups", AsyncMock(return_value=["target"]))
     if change == "deleted":
         client.get_data.return_value = None
     if change == "outage":

@@ -37,6 +37,7 @@ const uiSettings = {
   supported_entities: [],
   supported_actions: [],
   supported_modes: ["pre_call", "post_call"],
+  providers_without_directional_logging_only_scope: [],
   pii_entity_categories: [],
 };
 
@@ -103,6 +104,67 @@ describe("AddGuardrailForm create payload characterization", () => {
 
     await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
     expect(payload()).toMatchObject({ litellm_params: { mode: ["pre_call", "post_call"] } });
+  });
+
+  it("sends the selected output logging-only scope", async () => {
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      ...uiSettings,
+      supported_modes: ["pre_call", "logging_only"],
+    });
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "my-bedrock");
+    await pickProvider(user, "Bedrock Guardrail");
+    await user.click(screen.getByLabelText("Mode"));
+    await user.click((await screen.findAllByText("logging_only")).at(-1) as HTMLElement);
+    await chooseSelectOption(user, await screen.findByLabelText("Logging only scope"), "Output only (response)");
+
+    await user.type(await screen.findByPlaceholderText("The guardrail id on Bedrock"), "gr-123");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(payload()?.litellm_params.logging_only_scope).toBe("output");
+  });
+
+  it("hides directional scope choices for providers that do not support them", async () => {
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      ...uiSettings,
+      supported_modes: ["pre_call", "logging_only"],
+      providers_without_directional_logging_only_scope: ["xecguard"],
+    });
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({
+      ...providerParams,
+      xecguard: { ui_friendly_name: "XecGuard" },
+    });
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await pickProvider(user, "XecGuard");
+    await user.click(screen.getByLabelText("Mode"));
+    await user.click((await screen.findAllByText("logging_only")).at(-1) as HTMLElement);
+    await user.click(await screen.findByLabelText("Logging only scope"));
+
+    expect(screen.queryByRole("option", { name: "Input only (request)" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Output only (response)" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Both (request and response)" })).toBeInTheDocument();
+  });
+
+  it("hides logging-only scope and omits it from a pre-call payload", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "my-bedrock");
+    await pickProvider(user, "Bedrock Guardrail");
+    expect(screen.queryByLabelText("Logging only scope")).not.toBeInTheDocument();
+
+    await user.type(await screen.findByPlaceholderText("The guardrail id on Bedrock"), "gr-123");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(payload()?.litellm_params).not.toHaveProperty("logging_only_scope");
   });
 
   it("blocks Next when the user deselects every mode", async () => {
