@@ -706,7 +706,7 @@ def _cache_prediction_auth_app(
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable, LitellmUserRoles, ProxyException
     from litellm.proxy.auth import auth_checks
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
     from litellm.proxy.management_endpoints import prompt_cache_prediction as endpoint
     from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 
@@ -729,7 +729,7 @@ def _cache_prediction_auth_app(
         )
         return token
 
-    monkeypatch.setattr(auth, "_user_api_key_auth_builder", authenticate)
+    monkeypatch.setattr(auth, "user_api_key_auth_builder", authenticate)
     monkeypatch.setattr(auth, "get_user_object", AsyncMock(return_value=user))
     team = LiteLLM_TeamTableCachedObj(team_id=team_id, models=token.team_models) if team_id else None
     monkeypatch.setattr(auth, "get_team_object", AsyncMock(return_value=team))
@@ -744,7 +744,7 @@ def _cache_prediction_auth_app(
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     logging = ProxyLogging(user_api_key_cache=DualCache())
-    logging.proxy_hook_mapping["parallel_request_limiter"] = _PROXY_MaxParallelRequestsHandler_v3(
+    logging.proxy_hook_mapping["parallel_request_limiter"] = PROXY_MaxParallelRequestsHandler_v3(
         InternalUsageCache(dual_cache=DualCache())
     )
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)

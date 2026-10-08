@@ -63,7 +63,10 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     get_cooldown_deployments,
 )
-from litellm.router_utils.fallback_event_handlers import DISABLE_FALLBACKS_METADATA_KEY
+from litellm.router_utils.fallback_event_handlers import (
+    DISABLE_FALLBACKS_METADATA_KEY,
+    MID_STREAM_FALLBACK_CONTROLS_KEY,
+)
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
 from litellm.types.llms.openai import ChatCompletionRequest
@@ -3866,6 +3869,136 @@ async def test_acompletion_mid_stream_fallback_walks_every_entry_of_the_configur
         "fb1",
         "fb2",
     ]
+
+
+class _DiesBeforeFirstChunk(CustomStreamWrapper):
+    def __init__(self, model: str):
+        super().__init__(completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock())
+
+    def _mid_stream_error(self) -> MidStreamFallbackError:
+        return MidStreamFallbackError(
+            message=f"provider 500 from {self.model}",
+            model=self.model,
+            llm_provider="openai",
+            generated_content="",
+            is_pre_first_chunk=True,
+            original_exception=litellm.InternalServerError(
+                message=f"provider 500 from {self.model}", model=self.model, llm_provider="openai"
+            ),
+        )
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        raise self._mid_stream_error()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise self._mid_stream_error()
+
+
+class _Answers(_DiesBeforeFirstChunk):
+    def __init__(self, model: str):
+        super().__init__(model)
+        self._chunks = iter(
+            [litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": f"ok-from-{model}"}}])]
+        )
+
+    def __next__(self):
+        return next(self._chunks)
+
+    async def __anext__(self):
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
+def _primary_and_backup_router(**settings: object) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "backup", "litellm_params": {"model": "openai/backup-model", "api_key": "fake-key"}},
+        ],
+        num_retries=0,
+        **settings,
+    )
+
+
+def _stream_for(**kwargs: object) -> CustomStreamWrapper:
+    model: Final = str(kwargs["model"])
+    return _Answers(model) if "backup" in model else _DiesBeforeFirstChunk(model)
+
+
+def _groups_called(provider_calls: MagicMock) -> list[str]:
+    return [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list]
+
+
+def _router_internals_reached_the_provider(provider_calls: MagicMock) -> bool:
+    leaked: Final = frozenset(
+        ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", MID_STREAM_FALLBACK_CONTROLS_KEY)
+    )
+    return any(leaked & call.kwargs.keys() for call in provider_calls.call_args_list)
+
+
+def test_completion_mid_stream_fallback_honors_the_per_request_list():
+    router: Final = _primary_and_backup_router()
+
+    with patch("litellm.completion", side_effect=_stream_for) as provider_calls:
+        response: Final = router.completion(
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            fallbacks=[{"primary": ["backup"]}],
+        )
+        content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in response if chunk is not None)
+
+    assert content == "ok-from-openai/backup-model"
+    assert _groups_called(provider_calls) == ["primary", "backup"]
+    assert not _router_internals_reached_the_provider(provider_calls)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_mid_stream_fallback_honors_the_per_request_list():
+    router: Final = _primary_and_backup_router()
+
+    async def fake_acompletion(**kwargs):
+        return _stream_for(**kwargs)
+
+    with patch("litellm.acompletion", side_effect=fake_acompletion) as provider_calls:
+        response: Final = await router.acompletion(
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            fallbacks=[{"primary": ["backup"]}],
+        )
+        content: Final = "".join(
+            [chunk.choices[0].delta.content or "" async for chunk in response if chunk is not None]
+        )
+
+    assert content == "ok-from-openai/backup-model"
+    assert _groups_called(provider_calls) == ["primary", "backup"]
+    assert not _router_internals_reached_the_provider(provider_calls)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_mid_stream_fallback_honors_a_per_request_fallbacks_none():
+    router: Final = _primary_and_backup_router(fallbacks=[{"primary": ["backup"]}])
+
+    async def fake_acompletion(**kwargs):
+        return _stream_for(**kwargs)
+
+    with patch("litellm.acompletion", side_effect=fake_acompletion) as provider_calls:
+        response: Final = await router.acompletion(
+            model="primary", messages=[{"role": "user", "content": "hi"}], stream=True, fallbacks=None
+        )
+        with pytest.raises(litellm.InternalServerError, match="provider 500 from openai/primary-model"):
+            [chunk async for chunk in response]
+
+    assert _groups_called(provider_calls) == ["primary"]
 
 
 def test_refusal_on_the_last_fallback_hop_is_returned_instead_of_raised():
@@ -24593,3 +24726,88 @@ class CompletionCustomHandler(
         except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
+
+
+_FALLBACK_WIRE_PRIMARY: Final = "http://primary.wire.test/v1"
+_FALLBACK_WIRE_BACKUP: Final = "http://backup.wire.test/v1"
+_FALLBACK_WIRE_BACKUP_REPLY: Final = {
+    "id": "chatcmpl-backup",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "pong"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _fallback_wire_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-primary",
+                    "api_base": _FALLBACK_WIRE_PRIMARY,
+                    "max_retries": 0,
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-backup",
+                    "api_base": _FALLBACK_WIRE_BACKUP,
+                    "max_retries": 0,
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+
+def _mock_fallback_wire(respx_mock: respx.MockRouter) -> tuple[respx.Route, respx.Route]:
+    primary = respx_mock.post(f"{_FALLBACK_WIRE_PRIMARY}/chat/completions").mock(
+        return_value=httpx.Response(500, json={"error": {"message": "primary overloaded", "type": "server_error"}})
+    )
+    backup = respx_mock.post(f"{_FALLBACK_WIRE_BACKUP}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_FALLBACK_WIRE_BACKUP_REPLY)
+    )
+    return primary, backup
+
+
+def _assert_fallback_errors_reached_the_caller_and_not_the_wire(
+    response: object, primary: respx.Route, backup: respx.Route
+) -> None:
+    for route in (primary, backup):
+        assert route.called
+        for call in route.calls:
+            assert "include_fallback_errors" not in json.loads(call.request.content)
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    headers = response._hidden_params["additional_headers"]
+    assert headers["x-litellm-attempted-fallbacks"] == 1
+    errors = json.loads(headers["x-litellm-fallback-errors"])
+    assert len(errors) == 1
+    assert "primary overloaded" in errors[0]["message"]
+
+
+def test_sync_completion_keeps_include_fallback_errors_off_the_wire_and_returns_the_errors():
+    with respx.mock(assert_all_called=True) as respx_mock:
+        primary, backup = _mock_fallback_wire(respx_mock)
+        response = _fallback_wire_router().completion(
+            model="primary", messages=[{"role": "user", "content": "hi"}], include_fallback_errors=True
+        )
+    _assert_fallback_errors_reached_the_caller_and_not_the_wire(response, primary, backup)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_keeps_include_fallback_errors_off_the_wire_and_returns_the_errors(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as respx_mock:
+        primary, backup = _mock_fallback_wire(respx_mock)
+        response = await _fallback_wire_router().acompletion(
+            model="primary", messages=[{"role": "user", "content": "hi"}], include_fallback_errors=True
+        )
+    _assert_fallback_errors_reached_the_caller_and_not_the_wire(response, primary, backup)

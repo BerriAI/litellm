@@ -967,6 +967,81 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
     assert result == []
 
 
+def test_get_provider_models_admits_providers_without_a_static_catalog():
+    """Providers without a static model list are no longer rejected up front.
+
+    With endpoint discovery off, get_valid_models falls back to the (empty)
+    static list, so the result is [] rather than None. Before the fix this
+    returned None and the wildcard was never expanded.
+    """
+    import litellm
+    from litellm.proxy.auth.model_checks import get_provider_models
+    from litellm.types.router import LiteLLM_Params
+
+    assert "litellm_proxy" not in litellm.models_by_provider
+    assert "hosted_vllm" not in litellm.models_by_provider
+
+    result = get_provider_models(
+        "litellm_proxy",
+        litellm_params=LiteLLM_Params(
+            model="litellm_proxy/*",
+            api_base="http://upstream:4000",
+            api_key="sk-upstream",
+        ),
+    )
+
+    assert result == []
+
+
+def test_get_complete_model_list_discovers_litellm_proxy_wildcard_models(monkeypatch):
+    """A litellm_proxy/* deployment lists the upstream proxy's models when endpoint discovery is on."""
+    import litellm
+    from litellm import Router
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    captured = {}
+
+    def fake_get_models(self, api_key=None, api_base=None):
+        captured["api_key"] = api_key
+        captured["api_base"] = api_base
+        return ["gpt-4o", "claude-sonnet"]
+
+    monkeypatch.setattr(OpenAIGPTConfig, "get_models", fake_get_models)
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "litellm_proxy/*",
+                "litellm_params": {
+                    "model": "litellm_proxy/*",
+                    "api_base": "http://upstream:4000",
+                    "api_key": "sk-upstream",
+                },
+            }
+        ]
+    )
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["litellm_proxy/*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert captured == {"api_key": "sk-upstream", "api_base": "http://upstream:4000"}
+    assert "litellm_proxy/gpt-4o" in result
+    assert "litellm_proxy/claude-sonnet" in result
+
+
+def test_get_provider_models_returns_none_for_an_unknown_provider():
+    from litellm.proxy.auth.model_checks import get_provider_models
+
+    assert get_provider_models("not-a-real-provider") is None
+
+
 def test_transcribe_is_a_known_provider_for_wildcard_expansion():
     import litellm
     from litellm.proxy.auth.model_checks import (

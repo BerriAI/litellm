@@ -11,9 +11,15 @@ from .generated.models import (
     AgentRow,
     CountRow,
     ExecutionRow,
+    FeedbackRow,
+    FeedbackSummaryRow,
+    FeedbackTargetRow,
     LensAccessParams,
     LensContentParams,
     LensEvidenceParams,
+    LensFeedbackParams,
+    LensFeedbackSummaryParams,
+    LensFeedbackTargetParams,
     LensSampleParams,
     PartRow,
     TraceAgentRow,
@@ -73,4 +79,13 @@ LENS_CONTENT: Final[ReadQuery[LensContentParams, PartRow]] = ReadQuery(
 )
 LENS_EVIDENCE: Final[ReadQuery[LensEvidenceParams, CountRow]] = ReadQuery(
     "evidence", LensEvidenceParams, TypeAdapter(QueryResponse[CountRow])
+)
+LENS_FEEDBACK_TARGET: Final[ReadQuery[LensFeedbackTargetParams, FeedbackTargetRow]] = ReadQuery(
+    "feedback_target", LensFeedbackTargetParams, TypeAdapter(QueryResponse[FeedbackTargetRow])
+)
+LENS_FEEDBACK: Final[ReadQuery[LensFeedbackParams, FeedbackRow]] = ReadQuery(
+    "feedback", LensFeedbackParams, TypeAdapter(QueryResponse[FeedbackRow])
+)
+LENS_FEEDBACK_SUMMARY: Final[ReadQuery[LensFeedbackSummaryParams, FeedbackSummaryRow]] = ReadQuery(
+    "feedback_summary", LensFeedbackSummaryParams, TypeAdapter(QueryResponse[FeedbackSummaryRow])
 )
