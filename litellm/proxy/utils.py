@@ -190,7 +190,7 @@ from litellm.proxy.db.health_check_latest import (
     fetch_latest_health_checks,
     fetch_latest_health_checks_for_models,
 )
-from litellm.proxy.db.log_db_metrics import (
+from litellm.proxy.db.log_db_metrics import (  # noqa: F401, RUF100  # legacy module exports
     _is_exception_related_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_exception_related_to_db,
     log_db_metrics,
@@ -217,19 +217,19 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
     resolve_endpoint_translation,
 )
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
-from litellm.proxy.hooks.cache_control_check import (
+from litellm.proxy.hooks.cache_control_check import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_CacheControlCheck,
     _PROXY_CacheControlCheck,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
-from litellm.proxy.hooks.parallel_request_limiter import (
+from litellm.proxy.hooks.parallel_request_limiter import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_MaxParallelRequestsHandler,
     _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_MaxParallelRequestsHandler_v3,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
-from litellm.proxy.hooks.sensitive_data_routing import (
+from litellm.proxy.hooks.sensitive_data_routing import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_SensitiveDataRoutingHandler,
     _PROXY_SensitiveDataRoutingHandler,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
