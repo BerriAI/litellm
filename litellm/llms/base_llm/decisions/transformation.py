@@ -183,6 +183,7 @@ def _ir_choice_answer(question: DecisionsIRChoiceQuestion, answer: ChoiceAnswer)
             DecisionsIRChoiceProbability(value=typed_values.get(key, key), probability=probability)
             for key, probability in answer.probabilities.items()
         ),
+        extra=MappingProxyType(answer.model_extra or {}),
     )
 
 
@@ -198,13 +199,14 @@ def _ir_score_answer(question: DecisionsIRScoreQuestion, answer: ScoreAnswer) ->
             )
             for index, level in enumerate(question.levels)
         ),
+        extra=MappingProxyType(answer.model_extra or {}),
     )
 
 
 def _ir_answer(question: DecisionsIRQuestion, answer: DecisionAnswer | None) -> DecisionsIRAnswer:
     match question, answer:
         case DecisionsIRPredicateQuestion(), NoulAnswer():
-            return DecisionsIRPredicateAnswer(probability=answer.noul)
+            return DecisionsIRPredicateAnswer(probability=answer.noul, extra=MappingProxyType(answer.model_extra or {}))
         case DecisionsIRChoiceQuestion(), ChoiceAnswer():
             return _ir_choice_answer(question, answer)
         case DecisionsIRScoreQuestion(), ScoreAnswer():
@@ -237,21 +239,29 @@ def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> De
 def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:
     match answer:
         case DecisionsIRPredicateAnswer():
-            return NoulAnswer(type="noul", noul=answer.probability)
+            return NoulAnswer.model_validate({**answer.extra, "type": "noul", "noul": answer.probability})
         case DecisionsIRChoiceAnswer():
-            return ChoiceAnswer(
-                type="choice",
-                choice=systemone_choice_key(answer.choice),
-                confidence=answer.confidence,
-                probabilities={systemone_choice_key(item.value): item.probability for item in answer.probabilities},
+            return ChoiceAnswer.model_validate(
+                {
+                    **answer.extra,
+                    "type": "choice",
+                    "choice": systemone_choice_key(answer.choice),
+                    "confidence": answer.confidence,
+                    "probabilities": {
+                        systemone_choice_key(item.value): item.probability for item in answer.probabilities
+                    },
+                }
             )
         case DecisionsIRScoreAnswer():
-            return ScoreAnswer(
-                type="score",
-                score=answer.score,
-                confidence=answer.confidence,
-                legend={str(item.value): item.label for item in answer.probabilities},
-                probabilities={str(item.value): item.probability for item in answer.probabilities},
+            return ScoreAnswer.model_validate(
+                {
+                    **answer.extra,
+                    "type": "score",
+                    "score": answer.score,
+                    "confidence": answer.confidence,
+                    "legend": {str(item.value): item.label for item in answer.probabilities},
+                    "probabilities": {str(item.value): item.probability for item in answer.probabilities},
+                }
             )
         case DecisionsIRRefusal():
             return None

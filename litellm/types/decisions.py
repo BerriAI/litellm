@@ -382,6 +382,7 @@ class DecisionsIRRequest:
 @dataclass(frozen=True, slots=True)
 class DecisionsIRPredicateAnswer:
     probability: float
+    extra: Mapping[str, object] = field(default=_NO_EXTRA)
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,6 +396,7 @@ class DecisionsIRChoiceAnswer:
     choice: str | bool
     confidence: float
     probabilities: tuple[DecisionsIRChoiceProbability, ...]
+    extra: Mapping[str, object] = field(default=_NO_EXTRA)
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,6 +411,7 @@ class DecisionsIRScoreAnswer:
     score: float
     confidence: float
     probabilities: tuple[DecisionsIRScoreProbability, ...]
+    extra: Mapping[str, object] = field(default=_NO_EXTRA)
 
 
 @dataclass(frozen=True, slots=True)
