@@ -252,6 +252,26 @@ def test_global_drop_params_drops_a_malformed_marker(global_rig: _GlobalRig, mod
     spend.landed(model, control_id, control)
 
 
+@pytest.mark.parametrize("model", (_GLOBAL_UNSET, _GLOBAL_FALSE), ids=("deployment-unset", "deployment-false"))
+def test_global_drop_params_drops_the_audio_part_and_carries_its_marker(
+    global_rig: _GlobalRig, model: str, spend: pcb.SpendLogs
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    content: Final[list[JsonValue]] = [pcb.text(pcb.prompt(marker)), pcb.marked(pcb.audio(), pcb.EXPLICIT)]
+    response: Final = global_rig.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": content}], **pcb.NO_CACHE},
+    )
+    call_id: Final = _completion(response, marker)
+    assert _user_block_on_wire(global_rig.wire, marker) == {
+        "type": "input_text",
+        "text": pcb.prompt(marker),
+        "prompt_cache_breakpoint": pcb.EXPLICIT,
+    }
+    spend.landed(model, call_id, marker)
+
+
 async def test_mixed_burst_carries_every_marker_once(gateway: Gateway, spend: pcb.SpendLogs) -> None:
     calls: Final = _calls(24, _ENDPOINTS)
     with wire_server(pcb.respond) as wire, gateway.scenario() as scenario:

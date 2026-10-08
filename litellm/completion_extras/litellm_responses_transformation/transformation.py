@@ -5,6 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
 
@@ -112,6 +113,83 @@ def _strip_prompt_cache_breakpoints_from_item(value: object) -> object:
 
 def _strip_prompt_cache_breakpoints(input_items: list[object]) -> list[object]:
     return [_strip_prompt_cache_breakpoints_from_item(item) for item in input_items]
+
+
+def _is_audio_input_part(part: object) -> bool:
+    if not isinstance(part, dict):
+        return False
+    content_part: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a content block mapping
+    return content_part.get("type") == "input_audio"
+
+
+def _breakpoint_of(part: object) -> object:
+    if not isinstance(part, dict):
+        return None
+    content_part: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a content block mapping
+    return content_part.get("prompt_cache_breakpoint")
+
+
+def _pending_audio_breakpoint(pending: object, part: object) -> object:
+    if not _is_audio_input_part(part):
+        return None
+    return pending if pending is not None else _breakpoint_of(part)
+
+
+def _carried_breakpoints(content: Sequence[object]) -> tuple[object, ...]:
+    seeded_from_the_end: Final = chain((None,), reversed(content))
+    pending_after_each: Final = tuple(accumulate(seeded_from_the_end, _pending_audio_breakpoint))
+    return tuple(reversed(pending_after_each[:-1]))
+
+
+def _with_carried_breakpoint(part: object, marker: object) -> object:
+    if marker is None or not isinstance(part, dict) or _breakpoint_of(part) is not None:
+        return part
+    kept_part: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a content block mapping
+    return {**kept_part, "prompt_cache_breakpoint": marker}
+
+
+def _without_audio_input_parts_in_content(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    content: Final = cast(list[object], value)  # cast-ok: isinstance confirms a list of content blocks
+    if not any(_is_audio_input_part(part) for part in content):
+        return value
+    return [
+        _with_carried_breakpoint(part, marker)
+        for part, marker in zip(content, _carried_breakpoints(content))
+        if not _is_audio_input_part(part)
+    ]
+
+
+def _without_audio_input_parts_in_item(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    input_item: Final = cast(dict[str, object], value)  # cast-ok: isinstance confirms a Responses input item mapping
+    return {
+        key: _without_audio_input_parts_in_content(item) if key in ("content", "output") else item
+        for key, item in input_item.items()
+    }
+
+
+def _without_audio_input_parts(input_items: list[object]) -> list[object]:
+    return [_without_audio_input_parts_in_item(item) for item in input_items]
+
+
+def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+    provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    base_model: Final = litellm_params.get("base_model")
+    return litellm.supports_audio_input(model=model, custom_llm_provider=provider) or (
+        isinstance(base_model, str)
+        and bool(base_model)
+        and litellm.supports_audio_input(model=base_model, custom_llm_provider=provider)
+    )
+
+
+def _drops_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
+    if not (litellm_params.get("drop_params") or litellm.drop_params):
+        return False
+    return not _supports_audio_input(model, litellm_params)
 
 
 def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -678,6 +756,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # of instructions, mirroring how non-string system content is already
         # handled in convert_chat_completion_messages_to_responses_api.
         is_system_only_request: Final = not converted_input_items and converted_instructions is not None
+        target_input_items: Final = (
+            _without_audio_input_parts(converted_input_items)
+            if _drops_audio_input(model, litellm_params)
+            else converted_input_items
+        )
         input_items: Final = (
             [
                 {
@@ -687,7 +770,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 }
             ]
             if is_system_only_request
-            else converted_input_items
+            else target_input_items
         )
         instructions: Final = None if is_system_only_request else converted_instructions
 
@@ -1194,6 +1277,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   image_url -> %s", converted)
+                    elif original_type == "input_audio":
+                        converted = with_prompt_cache_breakpoint(
+                            {"type": "input_audio", "input_audio": item.get("input_audio")},
+                            _prompt_cache_breakpoint_for_wire(item.get("prompt_cache_breakpoint"), drop_params),
+                        )
+                        result.append(converted)
+                        verbose_logger.debug("Chat provider:   input_audio -> %s", converted)
                     else:
                         # Try to map other types to responses API format
                         item_type = original_type or "input_text"
