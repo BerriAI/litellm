@@ -44,6 +44,14 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "cache_control",
 )
 
+OPENAI_CHAT_CONTENT_PART_TYPES: Final = frozenset({"text", "image_url", "input_audio", "file", "refusal"})
+
+
+def _openai_content_parts(content: object) -> list[dict]:
+    if not isinstance(content, list):
+        return []
+    return [part for part in content if isinstance(part, dict) and part.get("type") in OPENAI_CHAT_CONTENT_PART_TYPES]
+
 
 class AzureAIGPT5Config(OpenAIGPT5Config):
     @classmethod
@@ -235,7 +243,9 @@ class AzureAIStudioConfig(OpenAIConfig):
             2. Transforms list content to a string, except for models that take OpenAI explicit
                prompt cache breakpoints (`supports_prompt_cache_breakpoint`): Foundry accepts the
                OpenAI content-part shape for those, and only a content part can carry the
-               breakpoint (a message-level one is silently ignored).
+               breakpoint (a message-level one is silently ignored). Those models keep only the
+               part types OpenAI chat completions define, so a thinking part echoed back as
+               history is dropped the way the string conversion always dropped it.
             3. If message contains an image or audio, send as is (user-intended)
 
         Operates on a deep copy so the caller's messages keep their thinking blocks
@@ -248,7 +258,12 @@ class AzureAIStudioConfig(OpenAIConfig):
             for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
                 filter_value_from_dict(message_dict, field)
 
-            if keeps_content_parts or audio_or_image_in_message_content(message):
+            if audio_or_image_in_message_content(message):
+                continue
+
+            openai_parts = _openai_content_parts(message_dict.get("content")) if keeps_content_parts else []
+            if openai_parts:
+                message_dict["content"] = openai_parts
                 continue
 
             texts = convert_content_list_to_str(message=message)
