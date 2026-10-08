@@ -7235,7 +7235,7 @@ _should_retry = should_retry
 
 def _get_retry_after_from_exception_header(
     response_headers: httpx.Headers | None = None,
-):
+) -> float | int:
     """
     Reimplementation of openai's calculate retry after, since that one can't be imported.
     https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L631

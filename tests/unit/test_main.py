@@ -1,11 +1,13 @@
 import asyncio
 import base64
 import contextlib
+import email.utils
 import copy
 import io
 import json
 import logging
 import os
+import time
 import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -2629,7 +2631,55 @@ def test_retry_after_wait_falls_back_for_invalid_provider_hint() -> None:
     fallback_wait.assert_called_once()
 
 
-def test_completion_with_retries_retries_after_provider_error() -> None:
+def test_retry_after_wait_falls_back_without_outcome_or_for_base_exception() -> None:
+    fallback_wait = Mock(return_value=3.0)
+
+    no_outcome_wait = litellm_main._retry_after_wait(SimpleNamespace(outcome=None), fallback_wait)
+    base_exception_wait = litellm_main._retry_after_wait(_retry_state(KeyboardInterrupt()), fallback_wait)
+
+    assert no_outcome_wait == 3.0
+    assert base_exception_wait == 3.0
+    assert fallback_wait.call_count == 2
+
+
+def test_retry_after_wait_parses_http_date_header() -> None:
+    retry_after = email.utils.formatdate(time.time() + 30, usegmt=True)
+    fallback_wait = Mock(return_value=1.0)
+
+    wait = litellm_main._retry_after_wait(_retry_state(_rate_limit_error({"retry-after": retry_after})), fallback_wait)
+
+    assert 0 < wait <= 30
+    fallback_wait.assert_not_called()
+
+
+def test_retry_after_wait_falls_back_for_invalid_retry_after_header() -> None:
+    fallback_wait = Mock(return_value=3.0)
+
+    wait = litellm_main._retry_after_wait(
+        _retry_state(_rate_limit_error({"retry-after": "invalid"})), fallback_wait
+    )
+
+    assert wait == 3.0
+    fallback_wait.assert_called_once()
+
+
+def test_retry_after_wait_falls_back_without_retry_header() -> None:
+    fallback_wait = Mock(return_value=3.0)
+
+    wait = litellm_main._retry_after_wait(_retry_state(_rate_limit_error({})), fallback_wait)
+
+    assert wait == 3.0
+    fallback_wait.assert_called_once()
+
+
+def test_retry_after_parser_handles_empty_headers() -> None:
+    retry_after = litellm.utils._get_retry_after_from_exception_header(httpx.Headers())
+
+    assert retry_after == -1
+
+
+@pytest.mark.parametrize("retry_strategy", ["constant_retry", "exponential_backoff_retry"])
+def test_completion_with_retries_retries_after_provider_error(retry_strategy: str) -> None:
     calls: Final[list[int]] = []
 
     def original_function(*args: object, **kwargs: object) -> str:
@@ -2641,7 +2691,7 @@ def test_completion_with_retries_retries_after_provider_error() -> None:
     result = litellm_main.completion_with_retries(
         original_function=original_function,
         num_retries=2,
-        retry_strategy="constant_retry",
+        retry_strategy=retry_strategy,
     )
 
     assert result == "ok"
@@ -2649,7 +2699,8 @@ def test_completion_with_retries_retries_after_provider_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_acompletion_with_retries_retries_after_provider_error() -> None:
+@pytest.mark.parametrize("retry_strategy", ["constant_retry", "exponential_backoff_retry"])
+async def test_acompletion_with_retries_retries_after_provider_error(retry_strategy: str) -> None:
     calls: Final[list[int]] = []
 
     async def original_function(*args: object, **kwargs: object) -> str:
@@ -2661,7 +2712,7 @@ async def test_acompletion_with_retries_retries_after_provider_error() -> None:
     result = await litellm_main.acompletion_with_retries(
         original_function=original_function,
         num_retries=2,
-        retry_strategy="constant_retry",
+        retry_strategy=retry_strategy,
     )
 
     assert result == "ok"
