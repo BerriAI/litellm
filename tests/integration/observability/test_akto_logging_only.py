@@ -30,6 +30,7 @@ LOG_KEY: Final = "synthetic-akto-log-key"
 INPUT_KEY: Final = "synthetic-akto-input-key"
 OUTPUT_KEY: Final = "synthetic-akto-output-key"
 DOWN_KEY: Final = "synthetic-akto-down-key"
+DOWN_OPEN_KEY: Final = "synthetic-akto-down-open-key"
 MIXED_KEY: Final = "synthetic-akto-mixed-key"
 BLOCK_MARK: Final = "SYNTHETIC-AKTO-BLOCK"
 BLOCK_REASON: Final = "Synthetic Akto policy block"
@@ -202,6 +203,7 @@ def _rig_config(akto_url: str, down_url: str, root: Path) -> Path:
         _guardrail("akto-log-input", INPUT_KEY, akto_url, logging_only_scope="input"),
         _guardrail("akto-log-output", OUTPUT_KEY, akto_url, logging_only_scope="output"),
         _guardrail("akto-log-down", DOWN_KEY, down_url),
+        _guardrail("akto-log-down-open", DOWN_OPEN_KEY, down_url, unreachable_fallback="fail_open"),
         _guardrail("akto-mixed", MIXED_KEY, akto_url, mode=["pre_call", "logging_only"], default_on=False),
     ]
     path: Final = root / "akto-logging-only.yaml"
@@ -369,7 +371,18 @@ def test_unreachable_akto_under_logging_only_never_fails_the_caller(rig: Rig) ->
     entries: Final = rig.guardrail_entries(str(body["id"]), "akto-log-down")
     assert [entry["guardrail_mode"] for entry in entries] == ["logging_only"], entries
     dropped: Final = [_akto_call(request) for request in rig.akto_down.drain() if marker.encode() in request.body]
-    assert [call.flags for call in dropped] == [REQUEST_CHECK], dropped
+    assert [call.flags for call in dropped if call.authorization == DOWN_KEY] == [REQUEST_CHECK], dropped
+
+
+def test_unreachable_akto_with_fail_open_still_attempts_the_response_check(rig: Rig) -> None:
+    marker: Final = _marker()
+    body: Final = _chat(rig, "outage open " + marker)
+    assert _content(body) == _answer(marker)
+
+    entries: Final = rig.guardrail_entries(str(body["id"]), "akto-log-down-open")
+    assert [entry["guardrail_mode"] for entry in entries] == ["logging_only", "logging_only"], entries
+    dropped: Final = [_akto_call(request) for request in rig.akto_down.drain() if marker.encode() in request.body]
+    assert [call.flags for call in dropped if call.authorization == DOWN_OPEN_KEY] == [REQUEST_CHECK, RESPONSE_CHECK]
 
 
 def test_logging_only_streaming_chat_sends_the_assembled_answer(rig: Rig) -> None:
