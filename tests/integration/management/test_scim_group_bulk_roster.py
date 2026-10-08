@@ -119,12 +119,20 @@ def _membership_user_ids(team: str) -> frozenset[str]:
     return frozenset(string_value(row["user_id"]) for row in rows)
 
 
+_UTC_MICROSECONDS: Final = "YYYY-MM-DD HH24:MI:SS.US"
+
+
 def _updated_at(user_id: str) -> str:
     rows: Final = read_rows(
-        'SELECT to_char(updated_at, \'YYYY-MM-DD HH24:MI:SS.US\') AS updated_at FROM "LiteLLM_UserTable" WHERE user_id = %s',
+        f"SELECT to_char(updated_at, '{_UTC_MICROSECONDS}') AS updated_at FROM \"LiteLLM_UserTable\" WHERE user_id = %s",
         (user_id,),
     )
     return string_value(rows[0]["updated_at"])
+
+
+def _database_utc_now() -> str:
+    rows: Final = read_rows(f"SELECT to_char(NOW() AT TIME ZONE 'UTC', '{_UTC_MICROSECONDS}') AS utc_now", ())
+    return string_value(rows[0]["utc_now"])
 
 
 def _users_referencing(team: str) -> frozenset[str]:
@@ -166,7 +174,7 @@ def test_group_pushes_of_500_members_run_as_many_statements_as_pushes_of_5(
         assert _member_ids(_body(created_large.response)) == frozenset(large)
         _assert_landed(candidate, small_team, small_a)
         _assert_landed(candidate, large_team, large)
-        large_member_added_at: Final = _updated_at(large[0])
+        detach_window_open: Final = _database_utc_now()
 
         replaced_small: Final = _measured(relay, lambda: _replace_group(candidate, small_team, small_b))
         replaced_large: Final = _measured(relay, lambda: _replace_group(candidate, large_team, small_a))
@@ -175,7 +183,7 @@ def test_group_pushes_of_500_members_run_as_many_statements_as_pushes_of_5(
         assert _member_ids(_body(replaced_small.response)) == frozenset(small_b)
         _assert_landed(candidate, small_team, small_b)
         _assert_landed(candidate, large_team, small_a)
-        assert _updated_at(large[0]) > large_member_added_at
+        assert detach_window_open <= _updated_at(large[0]) <= _database_utc_now()
 
         patched_small: Final = _measured(relay, lambda: _add_to_group(candidate, small_team, small_a))
         patched_large: Final = _measured(relay, lambda: _add_to_group(candidate, large_team, large))

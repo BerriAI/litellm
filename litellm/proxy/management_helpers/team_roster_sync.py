@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 _SYNC_TX_TIMEOUT: Final = timedelta(seconds=60)
 _DETACH_TEAM_SQL: Final = (
-    'UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1), updated_at = CURRENT_TIMESTAMP'
+    "UPDATE \"LiteLLM_UserTable\" SET teams = array_remove(teams, $1), updated_at = (NOW() AT TIME ZONE 'UTC')"
     " WHERE user_id = ANY($2::text[])"
 )
 _LOCK_MEMBER_ROWS_SQL: Final = (
