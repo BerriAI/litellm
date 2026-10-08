@@ -793,6 +793,24 @@ async def test_responses_order_fallback_hop_keeps_the_encrypted_reasoning_the_sa
     ]
 
 
+def test_fallback_hop_reads_the_deployment_that_just_failed_from_the_metadata_bucket_it_writes():
+    router: Final = _two_openai_orders_on_one_encryption_boundary_router()
+    order_2: Final = router.get_deployment(model_id="openai-order-2").model_dump(exclude_none=True)
+    hop_input: Final = _responses_history_with_order_1_reasoning()
+    hop_kwargs: Final = {
+        "model": "gpt-6-astra",
+        "input": hop_input,
+        "fallback_depth": 1,
+        "metadata": {"model_info": {"id": "openai-order-1"}},
+        "litellm_metadata": {"previous_models": [{"deployment_id": None}]},
+    }
+
+    router._update_kwargs_with_deployment(deployment=order_2, kwargs=hop_kwargs)
+
+    assert hop_input == _responses_history_with_order_1_reasoning()
+    assert hop_kwargs["metadata"]["model_info"]["id"] == "openai-order-2"
+
+
 def test_check_non_standard_fallback_format():
     from litellm.router_utils.fallback_event_handlers import (
         check_non_standard_fallback_format,

@@ -313,7 +313,6 @@ from litellm.types.router import (
     ModelGroupInfo,
     OptionalPreCallChecks,
     PreRoutingStrategy,
-    RetryAttemptRecord,
     RetryPolicy,
     RouterCacheEnum,
     RouterErrors,
@@ -502,7 +501,6 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_HOP_BREADCRUMBS_ADAPTER: Final = TypeAdapter(tuple[RetryAttemptRecord, ...] | None)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 
 
@@ -513,12 +511,13 @@ def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
 
 def _deployment_that_just_failed(request_metadata: object) -> str | None:
     try:
-        breadcrumbs: Final = _HOP_BREADCRUMBS_ADAPTER.validate_python(
-            _FALLBACK_HOP_ADAPTER.validate_python(request_metadata).get("previous_models")
+        model_info: Final = _FALLBACK_HOP_ADAPTER.validate_python(
+            _FALLBACK_HOP_ADAPTER.validate_python(request_metadata).get("model_info")
         )
     except ValidationError:
         return None
-    return breadcrumbs[-1]["deployment_id"] if breadcrumbs else None
+    model_id: Final = model_info.get("id")
+    return model_id if isinstance(model_id, str) else None
 
 
 def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object] | None) -> Mapping[str, str | int]:
@@ -4181,6 +4180,9 @@ class Router:
         metadata_variable_name: Final = get_router_metadata_variable_name(
             function_name=function_name,
         )
+        deployment_that_just_failed: Final = _deployment_that_just_failed(
+            _FALLBACK_HOP_ADAPTER.validate_python(kwargs).get(metadata_variable_name)
+        )
 
         kwargs.setdefault(metadata_variable_name, {}).update(
             {
@@ -4260,7 +4262,7 @@ class Router:
                 hop_kwargs.get("input"),
                 hop_kwargs.get("messages"),
                 (_FALLBACK_HOP_ADAPTER.validate_python(deployment),),
-                unmarked_origin=_deployment_that_just_failed(hop_kwargs.get(metadata_variable_name)),
+                unmarked_origin=deployment_that_just_failed,
             )
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
@@ -5557,6 +5559,7 @@ class Router:
             model=model, original_generic_function=original_generic_function, **kwargs
         )
         carry_over_pre_routing_selection(live_kwargs=kwargs, snapshot=hop_kwargs)
+        carry_over_routed_deployment(live_kwargs=kwargs, snapshot=hop_kwargs)
         if kwargs.get("stream") and isinstance(response, BaseResponsesAPIStreamingIterator):
             return await self._aresponses_streaming_iterator(response=response, initial_kwargs=hop_kwargs)
         return response

@@ -2336,6 +2336,44 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
     ]
 
 
+def _router_without_the_origin():
+    from unittest.mock import MagicMock
+
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    return router
+
+
+@pytest.mark.parametrize("router", [None, _router_without_the_origin()], ids=["no router", "origin removed"])
+def test_hop_strip_drops_unmarked_reasoning_whose_origin_cannot_be_resolved(router):
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    request_input = [
+        {"type": "message", "role": "user", "content": "What is 17*23?"},
+        {
+            "type": "reasoning",
+            "id": "rs_unmarked",
+            "encrypted_content": "gAAAAA-minted-by-a-removed-deployment",
+            "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}],
+        },
+    ]
+    target = {
+        "model_info": {"id": "target-order-2"},
+        "litellm_params": {"api_base": "https://api.openai.com/v1", "api_key": "openai-key"},
+    }
+
+    EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+        router, request_input, None, (target,), unmarked_origin="origin-removed"
+    )
+
+    assert request_input == [
+        {"type": "message", "role": "user", "content": "What is 17*23?"},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}]},
+    ]
+
+
 def _cross_group_request_kwargs():
     wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")
     return {
