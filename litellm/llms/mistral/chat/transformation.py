@@ -537,22 +537,31 @@ class MistralConfig(OpenAIGPTConfig):
                     # Only process if content is a list
                     if isinstance(content, list):
                         thinking_content = ""
-                        text_content = ""
+                        text_segments: list[str] = []  # mutable-ok: accumulated across this choice's blocks
+                        has_reference_blocks = False
 
                         # Process each content block
                         for block in content:
-                            if block.get("type") == "thinking":
+                            block_type = block.get("type")  # pyright: ignore[reportUnknownVariableType]  # provider content blocks are untyped JSON
+                            if block_type == "thinking":
                                 thinking_blocks = block.get("thinking", [])
                                 thinking_texts = []
                                 for thinking_block in thinking_blocks:
                                     if thinking_block.get("type") == "text":
                                         thinking_texts.append(thinking_block.get("text", ""))
                                 thinking_content = "\n".join(thinking_texts)
-                            elif block.get("type") == "text":
-                                text_content = block.get("text", "")
+                            elif block_type == "text":
+                                text_segments.append(block.get("text", ""))  # pyright: ignore[reportUnknownArgumentType]  # provider content blocks are untyped JSON
+                            elif block_type == "reference":
+                                has_reference_blocks = True
 
                         # Set the extracted content
-                        choice["message"]["content"] = text_content
+                        choice["message"]["content"] = "".join(text_segments)
+                        if has_reference_blocks:
+                            # The flattened content string cannot carry Mistral
+                            # citation chunks; keep the original block list
+                            # reachable instead of dropping them silently.
+                            choice["message"]["mistral_content_blocks"] = content
                         if thinking_content:
                             choice["message"]["reasoning_content"] = thinking_content
 
@@ -659,6 +668,13 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                     else:
                         delta.pop("thinking_blocks", None)
                         delta.pop("reasoning_content", None)
+                    if any(
+                        block.get("type") == "reference"
+                        for block in content  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # provider content blocks are untyped JSON
+                    ):
+                        # citation chunks carry no text; expose them on
+                        # provider_specific_fields instead of dropping them
+                        delta["provider_specific_fields"] = {"mistral_content_blocks": content}
         except Exception:
             # Fall back to default parsing if custom handling fails
             return super().chunk_parser(chunk)
