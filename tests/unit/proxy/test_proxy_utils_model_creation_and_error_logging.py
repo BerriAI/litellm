@@ -197,6 +197,7 @@ async def test_proxy_only_error_log_keeps_tags_and_drops_caller_logging_fields(
     assert "caller" not in str(details["litellm_params"])
     assert details["litellm_params"][metadata_field]["tags"] == ["t"]
     assert details["litellm_params"]["metadata"]["user_api_key_team_id"] == "team-a"
+    assert details["litellm_params"][metadata_field]["user_api_key_team_id"] == "team-a"
 
 
 @pytest.mark.asyncio
