@@ -98,6 +98,11 @@ jobs:
   rust-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Feature combinations retain many build variants; keep runner disk usage bounded.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
     defaults:
       run:
         working-directory: litellm-rust
