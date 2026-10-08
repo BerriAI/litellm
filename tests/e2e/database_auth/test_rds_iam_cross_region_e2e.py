@@ -71,6 +71,12 @@ class TestRdsIamCrossRegionReplica:
             message: Final = response.choices[0].message if response.choices else None
             content: Final = message.content if message else None
             assert content, "chat completion returned empty content"
+            read_since: Final = replica_now(
+                os.environ["E2E_RDS_READER_HOST"],
+                gateway.reader_region,
+                os.environ["E2E_RDS_USER"],
+                os.environ["E2E_RDS_DATABASE"],
+            )
             rows: Final = gateway.proxy.poll_logs_for_request_id(response.id)
             assert rows, f"no spend row for request {response.id}"
             connections: Final = replica_connections(
@@ -79,10 +85,12 @@ class TestRdsIamCrossRegionReplica:
                 os.environ["E2E_RDS_USER"],
                 os.environ["E2E_RDS_DATABASE"],
                 replica_since,
+                read_since,
             )
             assert connections, (
-                f"no post-boot connections for {os.environ['E2E_RDS_USER']} on the replica; "
-                "reads were not served by it"
+                f"no LiteLLM_SpendLogs read after {read_since} on a post-{replica_since} "
+                f"connection for {os.environ['E2E_RDS_USER']} on the replica; "
+                "the spend read was not served by it"
             )
         finally:
             gateway.proxy.delete_key(key)

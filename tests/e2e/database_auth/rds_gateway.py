@@ -66,7 +66,12 @@ def replica_now(reader_host: str, reader_region: str, user: str, database: str) 
 
 
 def replica_connections(
-    reader_host: str, reader_region: str, user: str, database: str, since: datetime
+    reader_host: str,
+    reader_region: str,
+    user: str,
+    database: str,
+    since: datetime,
+    read_since: datetime,
 ) -> list[ReplicaConnectionRow]:
     with psycopg.Connection[ReplicaConnectionRow].connect(
         f"host={reader_host} port=5432 user={user} "
@@ -76,8 +81,9 @@ def replica_connections(
     ) as conn:
         rows: Final = conn.execute(
             "SELECT pid, state FROM pg_stat_activity "
-            "WHERE usename = %s AND pid <> pg_backend_pid() AND backend_start >= %s",
-            (user, since),
+            "WHERE usename = %s AND pid <> pg_backend_pid() AND backend_start >= %s "
+            "AND query_start >= %s AND query ILIKE '%%LiteLLM_SpendLogs%%'",
+            (user, since, read_since),
         ).fetchall()
     return list(rows)
 
