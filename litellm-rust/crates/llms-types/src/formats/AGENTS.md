@@ -29,4 +29,8 @@ SDK wire definitions:
 
 - https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions
 
-Messages references live in `messages/AGENTS.md`. `OcrBoundingBox` describes the corner coordinates providers copy into the normalized `bbox`. Normalized `tables` and `keyValuePairs` stay open because providers pass through different native shapes
+## ocr.rs
+
+- https://docs.mistral.ai/api/endpoint/ocr
+
+Messages references live in `messages/AGENTS.md`. `LiteLLMOcrResponse` follows the Mistral OCR response shape, and `OcrBoundingBox` describes the corner coordinates providers copy into the normalized `bbox`. Normalized `tables` and `keyValuePairs` stay open because providers pass through different native shapes
