@@ -1,4 +1,5 @@
 import datetime
+import math
 import time
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -5925,6 +5926,30 @@ def test_context_cache_storage_uses_the_deployment_storage_rate(_storage_cost_ma
     without_storage: Final = _chat_cost(model, _cache_storage_logging_obj(model, token_hours=0.0), **pricing)
 
     assert with_storage - without_storage == pytest.approx(500.0 * deployment_rate)
+
+
+def test_context_cache_storage_joins_the_provider_additional_costs(_storage_cost_map: None) -> None:
+    litellm.register_model(
+        {"router-storage-deployment": {"litellm_provider": "azure_ai", "mode": "chat", _STORAGE_RATE_KEY: 1e-6}}
+    )
+    logging_obj: Final = _cache_storage_logging_obj("azure_ai/model-router", token_hours=500.0)
+    usage: Final = Usage(prompt_tokens=1_000_000, completion_tokens=100, total_tokens=1_000_100)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model="azure_ai/gpt-4o-2024-08-06", usage=usage),
+        model="azure_ai/model-router",
+        custom_llm_provider="azure_ai",
+        litellm_logging_obj=logging_obj,
+        custom_pricing=True,
+        router_model_id="router-storage-deployment",
+    )
+
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    additional_costs: Final = breakdown.get("additional_costs") or {}
+    assert additional_costs["Azure Model Router Flat Cost"] > 0
+    assert math.isclose(additional_costs["cache_storage_cost"], 500.0 * 1e-6)
+    assert math.isclose(cost, sum(additional_costs.values()))
 
 
 _STORAGE_DEPLOYMENT_MODEL: Final = "gemini-2.5-flash"
