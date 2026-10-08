@@ -4165,3 +4165,71 @@ class TestSyncUiSettingsToGeneralSettings:
 
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
+
+
+class TestMoyaiUrlSetting:
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (None, None),
+            ("", None),
+            ("https://moyai.example.com", "https://moyai.example.com"),
+            ("https://moyai.example.com/", "https://moyai.example.com"),
+            ("http://localhost:8787/", "http://localhost:8787"),
+        ],
+    )
+    def test_moyai_url_validator_accepts_and_normalizes(self, value, expected):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UISettings
+
+        assert UISettings(moyai_url=value).moyai_url == expected
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "javascript:alert(1)",
+            "ftp://moyai.example.com",
+            "https://user:pass@moyai.example.com",
+            "https://user@moyai.example.com",
+            "not-a-url",
+            "https://",
+        ],
+    )
+    def test_moyai_url_validator_rejects(self, value):
+        from pydantic import ValidationError
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UISettings
+
+        with pytest.raises(ValidationError):
+            UISettings(moyai_url=value)
+
+    def test_moyai_url_is_in_allowed_ui_settings_fields(self):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import ALLOWED_UI_SETTINGS_FIELDS
+
+        assert "moyai_url" in ALLOWED_UI_SETTINGS_FIELDS
+
+    @pytest.mark.asyncio
+    async def test_moyai_url_patch_sets_and_clears(self, monkeypatch):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import update_ui_settings
+
+        prisma = MagicMock()
+        prisma.db.litellm_uisettings.find_unique = AsyncMock(
+            return_value=SimpleNamespace(ui_settings={"moyai_url": "https://old.example.com"})
+        )
+        persisted: dict = {}
+
+        async def _upsert(where, data):
+            persisted.update(json.loads(data["update"]["ui_settings"]))
+
+        prisma.db.litellm_uisettings.upsert = AsyncMock(side_effect=_upsert)
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+        actor = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        await update_ui_settings({"moyai_url": "https://new.example.com/"}, actor)
+        assert persisted["moyai_url"] == "https://new.example.com"
+
+        await update_ui_settings({"moyai_url": None}, actor)
+        assert persisted["moyai_url"] is None
