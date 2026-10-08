@@ -154,6 +154,27 @@ def _session_id_from_baggage(baggage: str) -> str | None:
     return None
 
 
+def _caller_trace_field(data: Mapping[str, object], metadata_variable_name: str, field: str) -> str | None:
+    """The caller's value for a trace-control field, counted only when it is a
+    usable id: a non-empty string. An explicitly empty/unusable value on the
+    active metadata container still shadows the promoted requester value, but
+    neither ever counts as "the caller supplied this field" on its own, so a
+    numeric session id or an empty string cannot suppress the W3C header
+    fallback or satisfy a missing-session-id policy."""
+    active: Final = data.get(metadata_variable_name)
+    if isinstance(active, Mapping) and field in active:
+        active_map: Final = cast(Mapping[str, object], active)  # cast-ok: isinstance above, free-form JSON values
+        active_value: Final = active_map[field]
+        return active_value if isinstance(active_value, str) and active_value else None
+    promoted: Final = metadata_variable_name == "litellm_metadata" and field in LITELLM_TRACE_CONTROL_METADATA_FIELDS
+    requester: Final = data.get("metadata")
+    if not promoted or not isinstance(requester, Mapping):
+        return None
+    requester_map: Final = cast(Mapping[str, object], requester)  # cast-ok: isinstance above, free-form JSON values
+    requester_value: Final = requester_map.get(field)
+    return requester_value if isinstance(requester_value, str) and requester_value else None
+
+
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     """Only proxy-validated keys are stamped, proven by the unforgeable
     via_virtual_key marker AND a known non-secret shape: the sha256 hex digest
@@ -840,11 +861,22 @@ def apply_missing_session_id_policy(
         ):
             metadata["session_id"] = body_session_id
         return
-    if data.get("litellm_session_id") or metadata.get("session_id"):
+    caller_session_id: Final = _caller_trace_field(data, _metadata_variable_name, "session_id")
+    if caller_session_id is not None:
+        # Consumers that read the root field (router fallbacks, spend logs,
+        # sandbox reuse) otherwise see no session and mint a uuid4 per request.
+        if not data.get("litellm_session_id"):
+            data["litellm_session_id"] = caller_session_id  # rebind-ok: data is an out-param
+        return
+    if data.get("litellm_session_id"):
         return
     match policy:
         case "generate":
-            session_id: Final = str(data.get("litellm_trace_id") or metadata.get("trace_id") or uuid.uuid4())
+            session_id: Final = str(
+                data.get("litellm_trace_id")
+                or _caller_trace_field(data, _metadata_variable_name, "trace_id")
+                or uuid.uuid4()
+            )
             data["litellm_session_id"] = session_id  # rebind-ok: data is an out-param
             data.setdefault("litellm_trace_id", session_id)
             metadata["session_id"] = session_id
@@ -1597,16 +1629,28 @@ class LiteLLMProxyRequestSetup:
         # Last-resort fallback: the W3C standards for trace/session propagation
         # (https://www.w3.org/TR/trace-context/, https://www.w3.org/TR/baggage/).
         # Lower priority than everything above - only fires when neither the
-        # explicit litellm headers nor the Anthropic-metadata path found
-        # anything - but lets a caller's existing traceparent/baggage headers
-        # (from real OTel instrumentation) correlate with litellm's own logs
-        # instead of generating an unrelated trace_id.
+        # explicit litellm headers, the Anthropic-metadata path, nor the
+        # caller's own request metadata set the field to a DIFFERENT usable id
+        # - but lets a caller's existing traceparent/baggage headers (from
+        # real OTel instrumentation) correlate with litellm's own logs instead
+        # of generating an unrelated trace_id.
         normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
         if "litellm_trace_id" not in data:
             traceparent: Final = normalized_headers.get("traceparent")
             if isinstance(traceparent, str):
                 trace_id_from_traceparent: Final = _trace_id_from_traceparent(traceparent)
-                if trace_id_from_traceparent:
+                # The caller's metadata wins over the header fallback unless
+                # both carry the same id: stamping the root field then claims
+                # nothing the caller did not already ask for, and keeps the
+                # W3C-correlated root trace id instead of a generated uuid4.
+                caller_trace_id: Final = _caller_trace_field(
+                    cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
+                    _metadata_variable_name,
+                    "trace_id",
+                )
+                if trace_id_from_traceparent and (
+                    caller_trace_id is None or caller_trace_id == trace_id_from_traceparent
+                ):
                     metadata_from_headers["trace_id"] = trace_id_from_traceparent
                     data["litellm_trace_id"] = trace_id_from_traceparent  # rebind-ok: data is an out-param
                     verbose_proxy_logger.debug(
@@ -1616,7 +1660,14 @@ class LiteLLMProxyRequestSetup:
             baggage: Final = normalized_headers.get("baggage")
             if isinstance(baggage, str):
                 session_id_from_baggage: Final = _session_id_from_baggage(baggage)
-                if session_id_from_baggage:
+                caller_session_id: Final = _caller_trace_field(
+                    cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
+                    _metadata_variable_name,
+                    "session_id",
+                )
+                if session_id_from_baggage and (
+                    caller_session_id is None or caller_session_id == session_id_from_baggage
+                ):
                     metadata_from_headers["session_id"] = session_id_from_baggage
                     data["litellm_session_id"] = session_id_from_baggage  # rebind-ok: data is an out-param
                     verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
