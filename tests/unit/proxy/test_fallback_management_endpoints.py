@@ -10,7 +10,9 @@ Tests:
 
 import copy
 import json
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,10 +22,13 @@ from litellm import Router
 from litellm.proxy.utils import evict_config_param, get_config_param
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     FallbackCreateRequest,
+    FallbackDeleteResponse,
+    FallbackResponse,
     create_fallback,
     delete_fallback,
     get_fallback,
 )
+from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
 
 
 class TestFallbackCreateRequest:
@@ -109,27 +114,44 @@ class TestFallbackCreateRequest:
         assert request.fallback_type == "content_policy"
 
 
-TEAM_ID = "team-a"
-PRIMARY_INTERNAL_NAME = f"model_name_{TEAM_ID}_1a6437cb-4cab-432c-8099-1d7411731a8b"
-FALLBACK_INTERNAL_NAME = f"model_name_{TEAM_ID}_83151607-5556-4bbf-ac65-c474dbc64eba"
+TEAM_ID: Final = "team-a"
+PRIMARY_INTERNAL_NAME: Final = f"model_name_{TEAM_ID}_1a6437cb-4cab-432c-8099-1d7411731a8b"
+FALLBACK_INTERNAL_NAME: Final = f"model_name_{TEAM_ID}_83151607-5556-4bbf-ac65-c474dbc64eba"
+PRIMARY_DEPLOYMENT_ID: Final = "team-primary-id"
+FALLBACK_DEPLOYMENT_ID: Final = "team-fallback-id"
+
+FallbackRules = list[dict[str, list[str]]]
+RouterSettings = dict[str, FallbackRules]
 
 
-def _team_scoped_deployment(internal_name: str, public_name: str, deployment_id: str) -> dict:
+def _litellm_params(mock_response: str | None) -> LiteLLMParamsTypedDict:
+    if mock_response is None:
+        return {"model": "openai/gpt-5.4-mini", "api_key": "fake"}
+    return {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": mock_response}
+
+
+def _team_scoped_deployment(
+    internal_name: str, public_name: str, deployment_id: str, mock_response: str | None = None
+) -> DeploymentTypedDict:
     return {
         "model_name": internal_name,
-        "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake"},
+        "litellm_params": _litellm_params(mock_response),
         "model_info": {"id": deployment_id, "team_id": TEAM_ID, "team_public_model_name": public_name},
     }
 
 
-@pytest.mark.asyncio
-def _team_router() -> Router:
+def _team_router(primary_mock_response: str | None = None, fallback_mock_response: str | None = None) -> Router:
     return Router(
         model_list=[
-            {"model_name": "gpt-5.4-mini", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake"}},
-            _team_scoped_deployment(PRIMARY_INTERNAL_NAME, "team-primary", "team-primary-id"),
-            _team_scoped_deployment(FALLBACK_INTERNAL_NAME, "team-fallback", "team-fallback-id"),
-        ]
+            {"model_name": "gpt-5.4-mini", "litellm_params": _litellm_params(None)},
+            _team_scoped_deployment(
+                PRIMARY_INTERNAL_NAME, "team-primary", PRIMARY_DEPLOYMENT_ID, primary_mock_response
+            ),
+            _team_scoped_deployment(
+                FALLBACK_INTERNAL_NAME, "team-fallback", FALLBACK_DEPLOYMENT_ID, fallback_mock_response
+            ),
+        ],
+        num_retries=0,
     )
 
 
@@ -142,19 +164,19 @@ class TestCreateFallbackForTeamScopedModels:
 
     @pytest.fixture
     def prisma_client(self) -> MagicMock:
-        client = MagicMock()
+        client: Final = MagicMock()
         client.db.litellm_config.upsert = AsyncMock()
         return client
 
     @pytest.fixture
     def proxy_config(self) -> MagicMock:
-        config = MagicMock()
+        config: Final = MagicMock()
         config.get_config = AsyncMock(return_value={"router_settings": {}})
         return config
 
     async def _create(
         self, request: FallbackCreateRequest, router: Router, prisma_client: MagicMock, proxy_config: MagicMock
-    ):
+    ) -> FallbackResponse:
         with (
             patch("litellm.proxy.proxy_server.llm_router", router),
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
@@ -163,36 +185,44 @@ class TestCreateFallbackForTeamScopedModels:
         ):
             return await create_fallback(request, MagicMock())
 
-    async def test_public_names_create_a_rule_keyed_on_the_public_name(self, router, prisma_client, proxy_config):
-        request = FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"])
+    async def test_public_names_create_a_rule_keyed_on_the_public_name(
+        self, router: Router, prisma_client: MagicMock, proxy_config: MagicMock
+    ) -> None:
+        request: Final = FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"])
 
-        response = await self._create(request, router, prisma_client, proxy_config)
+        response: Final = await self._create(request, router, prisma_client, proxy_config)
 
         assert response.model == "team-primary"
         assert response.fallback_models == ["team-fallback"]
         assert router.fallbacks == [{"team-primary": ["team-fallback"]}]
-        persisted = json.loads(prisma_client.db.litellm_config.upsert.call_args.kwargs["data"]["create"]["param_value"])
+        persisted: Final = json.loads(
+            prisma_client.db.litellm_config.upsert.call_args.kwargs["data"]["create"]["param_value"]
+        )
         assert persisted["fallbacks"] == [{"team-primary": ["team-fallback"]}]
 
-    async def test_internal_names_keep_working(self, router, prisma_client, proxy_config):
-        request = FallbackCreateRequest(model=PRIMARY_INTERNAL_NAME, fallback_models=[FALLBACK_INTERNAL_NAME])
+    async def test_internal_names_keep_working(
+        self, router: Router, prisma_client: MagicMock, proxy_config: MagicMock
+    ) -> None:
+        request: Final = FallbackCreateRequest(model=PRIMARY_INTERNAL_NAME, fallback_models=[FALLBACK_INTERNAL_NAME])
 
-        response = await self._create(request, router, prisma_client, proxy_config)
+        response: Final = await self._create(request, router, prisma_client, proxy_config)
 
         assert router.fallbacks == [{PRIMARY_INTERNAL_NAME: [FALLBACK_INTERNAL_NAME]}]
         assert response.model == PRIMARY_INTERNAL_NAME
 
-    async def test_public_fallback_target_behind_a_gateway_primary(self, router, prisma_client, proxy_config):
-        request = FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"])
+    async def test_public_fallback_target_behind_a_gateway_primary(
+        self, router: Router, prisma_client: MagicMock, proxy_config: MagicMock
+    ) -> None:
+        request: Final = FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"])
 
         await self._create(request, router, prisma_client, proxy_config)
 
         assert router.fallbacks == [{"gpt-5.4-mini": ["team-fallback"]}]
 
     async def test_unknown_name_is_rejected_and_the_error_names_the_public_names(
-        self, router, prisma_client, proxy_config
-    ):
-        request = FallbackCreateRequest(model="team-missing", fallback_models=["team-fallback"])
+        self, router: Router, prisma_client: MagicMock, proxy_config: MagicMock
+    ) -> None:
+        request: Final = FallbackCreateRequest(model="team-missing", fallback_models=["team-fallback"])
 
         with pytest.raises(HTTPException) as exc_info:
             await self._create(request, router, prisma_client, proxy_config)
@@ -200,54 +230,71 @@ class TestCreateFallbackForTeamScopedModels:
         assert exc_info.value.status_code == 404
         assert {"team-primary", "team-fallback", "gpt-5.4-mini"} <= set(exc_info.value.detail["available_models"])
 
+    async def test_a_team_request_fails_over_to_the_public_name_fallback(
+        self, prisma_client: MagicMock, proxy_config: MagicMock
+    ) -> None:
+        router: Final = _team_router(primary_mock_response="litellm.RateLimitError", fallback_mock_response="pong")
+        request: Final = FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"])
+        await self._create(request, router, prisma_client, proxy_config)
 
-def _config_row(router_settings: dict) -> SimpleNamespace:
+        response: Final = await router.acompletion(
+            model="team-primary",
+            messages=[{"role": "user", "content": "ping"}],
+            metadata={"user_api_key_team_id": TEAM_ID},
+        )
+
+        assert response.choices[0].message.content == "pong"
+        assert response._hidden_params["model_id"] == FALLBACK_DEPLOYMENT_ID
+
+
+def _config_row(router_settings: RouterSettings) -> SimpleNamespace:
     return SimpleNamespace(param_name="router_settings", param_value=router_settings)
 
 
 class _StoredRouterSettings:
     """The LiteLLM_Config router_settings row, with the proxy objects that read it through the config cache"""
 
-    def __init__(self, router_settings: dict | None) -> None:
-        self.row = None if router_settings is None else _config_row(router_settings)
-        self.prisma_client = MagicMock()
+    def __init__(self, router_settings: RouterSettings | None) -> None:
+        self.row: SimpleNamespace | None = None if router_settings is None else _config_row(router_settings)
+        self.prisma_client: Final = MagicMock()
         self.prisma_client.get_generic_data = AsyncMock(side_effect=lambda **_: self.row)
         self.prisma_client.db.litellm_config.upsert = AsyncMock(side_effect=self._upsert)
-        self.proxy_config = MagicMock()
+        self.proxy_config: Final = MagicMock()
         self.proxy_config.get_config = AsyncMock(side_effect=self._get_config)
 
-    async def _upsert(self, where: dict, data: dict) -> None:
+    async def _upsert(self, where: dict[str, str], data: dict[str, dict[str, str]]) -> None:
         self.row = _config_row(json.loads(data["update"]["param_value"]))
 
-    async def _get_config(self) -> dict:
-        row = await get_config_param(self.prisma_client, "router_settings")
+    async def _get_config(self) -> dict[str, RouterSettings]:
+        row: Final = await get_config_param(self.prisma_client, "router_settings")
         return {"router_settings": copy.deepcopy(row.param_value) if row is not None else {}}
 
-    def written_by_another_instance(self, router_settings: dict) -> None:
+    def written_by_another_instance(self, router_settings: RouterSettings) -> None:
         self.row = _config_row(router_settings)
 
-    def stored_fallbacks(self) -> list:
+    def stored_fallbacks(self) -> FallbackRules:
+        assert self.row is not None
         return self.row.param_value["fallbacks"]
 
-    async def cached_fallbacks(self) -> list:
-        row = await get_config_param(self.prisma_client, "router_settings")
+    async def cached_fallbacks(self) -> FallbackRules:
+        row: Final = await get_config_param(self.prisma_client, "router_settings")
         return row.param_value["fallbacks"]
 
 
-TEAM_RULE = {"team-primary": ["team-fallback"]}
-GATEWAY_RULE = {"gpt-5.4-mini": ["team-fallback"]}
+TEAM_RULE: Final = {"team-primary": ["team-fallback"]}
+GATEWAY_RULE: Final = {"gpt-5.4-mini": ["team-fallback"]}
 
 
 class TestFallbackWritesSeeTheLatestStoredRules:
     """A write reads the rules the database holds now and leaves no stale copy in the config cache behind"""
 
     @pytest.fixture(autouse=True)
-    async def clean_config_cache(self):
+    async def clean_config_cache(self) -> AsyncIterator[None]:
         await evict_config_param("router_settings")
         yield
         await evict_config_param("router_settings")
 
-    async def _create(self, request: FallbackCreateRequest, stored: _StoredRouterSettings):
+    async def _create(self, request: FallbackCreateRequest, stored: _StoredRouterSettings) -> FallbackResponse:
         with (
             patch("litellm.proxy.proxy_server.llm_router", _team_router()),
             patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
@@ -256,7 +303,7 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         ):
             return await create_fallback(request, MagicMock())
 
-    async def _delete(self, model: str, stored: _StoredRouterSettings):
+    async def _delete(self, model: str, stored: _StoredRouterSettings) -> FallbackDeleteResponse:
         with (
             patch("litellm.proxy.proxy_server.llm_router", _team_router()),
             patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
@@ -265,8 +312,8 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         ):
             return await delete_fallback(model, "general", MagicMock())
 
-    async def test_a_second_create_keeps_the_first_rule(self):
-        stored = _StoredRouterSettings(None)
+    async def test_a_second_create_keeps_the_first_rule(self) -> None:
+        stored: Final = _StoredRouterSettings(None)
 
         await self._create(FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"]), stored)
         await self._create(FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), stored)
@@ -274,8 +321,8 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         assert stored.stored_fallbacks() == [TEAM_RULE, GATEWAY_RULE]
         assert await stored.cached_fallbacks() == [TEAM_RULE, GATEWAY_RULE]
 
-    async def test_a_create_keeps_a_rule_another_instance_stored_since_this_one_last_read(self):
-        stored = _StoredRouterSettings({})
+    async def test_a_create_keeps_a_rule_another_instance_stored_since_this_one_last_read(self) -> None:
+        stored: Final = _StoredRouterSettings({})
         await get_config_param(stored.prisma_client, "router_settings")
         stored.written_by_another_instance({"fallbacks": [TEAM_RULE]})
 
@@ -283,8 +330,8 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         assert stored.stored_fallbacks() == [TEAM_RULE, GATEWAY_RULE]
 
-    async def test_a_delete_keeps_a_rule_another_instance_stored_since_this_one_last_read(self):
-        stored = _StoredRouterSettings({"fallbacks": [TEAM_RULE]})
+    async def test_a_delete_keeps_a_rule_another_instance_stored_since_this_one_last_read(self) -> None:
+        stored: Final = _StoredRouterSettings({"fallbacks": [TEAM_RULE]})
         await get_config_param(stored.prisma_client, "router_settings")
         stored.written_by_another_instance({"fallbacks": [TEAM_RULE, GATEWAY_RULE]})
 
