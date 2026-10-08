@@ -916,3 +916,46 @@ def test_mistral_transform_request_hoists_tool_message_image():
         {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
         {"type": "image_url", "image_url": {"url": data_uri}},
     ]
+
+
+def test_content_list_with_reference_chunks_concatenates_text():
+    """Mistral content lists with interleaved reference chunks must keep all text."""
+    from litellm.llms.mistral.chat.transformation import MistralConfig
+
+    response_data = {
+        "choices": [
+            {
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "First part. "},
+                        {"type": "reference", "reference_ids": ["ref1"]},
+                        {"type": "text", "text": "Second part."},
+                    ]
+                }
+            }
+        ]
+    }
+    out = MistralConfig._handle_content_list_to_str_conversion(response_data)
+    assert out["choices"][0]["message"]["content"] == "First part. Second part."
+
+
+def test_content_list_with_thinking_and_text():
+    """Thinking blocks map to reasoning_content; a single text block stays intact."""
+    from litellm.llms.mistral.chat.transformation import MistralConfig
+
+    response_data = {
+        "choices": [
+            {
+                "message": {
+                    "content": [
+                        {"type": "thinking", "thinking": [{"type": "text", "text": "hmm"}]},
+                        {"type": "text", "text": "Answer"},
+                    ]
+                }
+            }
+        ]
+    }
+    out = MistralConfig._handle_content_list_to_str_conversion(response_data)
+    msg = out["choices"][0]["message"]
+    assert msg["content"] == "Answer"
+    assert msg["reasoning_content"] == "hmm"
