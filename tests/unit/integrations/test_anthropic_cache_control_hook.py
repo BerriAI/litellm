@@ -3559,34 +3559,33 @@ class TestChatPathProviderStamp:
 
 
 class TestChatPathResolvesTheDeploymentProvider:
-    """The chat path reads the dialect off the provider the dispatch resolves for the deployment, so the
-    ambient AZURE_AI_API_BASE never speaks for a Foundry deployment that carries its own api_base."""
-
     MODEL = "azure_ai/gpt-6-astra"
     FOUNDRY_API_BASE = "https://foundry.services.ai.azure.com"
     AZURE_OPENAI_API_BASE = "https://other-deployment.openai.azure.com"
     POINTS = [{"location": "message", "role": "system"}]
     MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
 
-    def _pin_ambient_api_base(self, monkeypatch, pinned):
+    def _pin_ambient_api_base(self, monkeypatch: pytest.MonkeyPatch, pinned: bool) -> None:
         if pinned:
             monkeypatch.setenv("AZURE_AI_API_BASE", self.AZURE_OPENAI_API_BASE)
         else:
             monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
 
     @pytest.mark.parametrize("ambient_pinned", [True, False])
-    def test_deployment_api_base_decides_the_provider_over_the_ambient_one(self, monkeypatch, ambient_pinned):
+    def test_deployment_api_base_decides_the_provider_over_the_ambient_one(
+        self, monkeypatch: pytest.MonkeyPatch, ambient_pinned: bool
+    ) -> None:
         self._pin_ambient_api_base(monkeypatch, ambient_pinned)
         assert AnthropicCacheControlHook._resolve_provider(self.MODEL, self.FOUNDRY_API_BASE) == "azure_ai"
 
-    def test_ambient_api_base_still_decides_for_a_deployment_without_one(self, monkeypatch):
+    def test_ambient_api_base_still_decides_for_a_deployment_without_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._pin_ambient_api_base(monkeypatch, True)
         assert AnthropicCacheControlHook._resolve_provider(self.MODEL, None) == "azure"
 
-    def _chat(self, custom_llm_provider):
-        params = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+    def _chat(self, custom_llm_provider: str | None) -> tuple[list[AllMessageValues], dict]:
+        seeded: Final[dict] = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
         AnthropicCacheControlHook.maybe_seed_default_injection_points(
-            non_default_params=params,
+            non_default_params=seeded,
             messages=copy.deepcopy(self.MESSAGES),
             model=self.MODEL,
             custom_llm_provider=custom_llm_provider,
@@ -3595,14 +3594,16 @@ class TestChatPathResolvesTheDeploymentProvider:
         _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
             model=self.MODEL,
             messages=copy.deepcopy(self.MESSAGES),
-            non_default_params=params,
+            non_default_params=seeded,
             prompt_id=None,
             prompt_variables=None,
             dynamic_callback_params={},
         )
         return out, params
 
-    def test_chat_path_marks_the_foundry_deployment_the_same_whatever_the_ambient_api_base(self, monkeypatch):
+    def test_chat_path_marks_the_foundry_deployment_the_same_whatever_the_ambient_api_base(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         self._pin_ambient_api_base(monkeypatch, True)
         pinned_resolved, pinned_told = self._chat(None), self._chat("azure_ai")
         self._pin_ambient_api_base(monkeypatch, False)
