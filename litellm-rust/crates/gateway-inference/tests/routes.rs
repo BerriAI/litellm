@@ -6,7 +6,7 @@ use axum::{
     body::{Body, Bytes},
     http::Request,
 };
-use litellm_auth::{InputSource, SecretValue, Sourced};
+use litellm_auth::SecretValue;
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
 };
@@ -20,10 +20,6 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_partial_json, method},
 };
-
-fn deployment<T>(value: T) -> Option<Sourced<T>> {
-    Some(Sourced::new(value, InputSource::Deployment))
-}
 
 #[rstest]
 #[case::chat("/chat/completions", Some("public/model"))]
@@ -109,8 +105,8 @@ async fn chat_errors_come_from_core(
                 .map(|(name, value)| (name.clone(), value.clone()))
                 .collect(),
             connection: Connection {
-                api_key: deployment(SecretValue::new("test-key")),
-                api_base: deployment(base.clone()),
+                api_key: Some(SecretValue::new("test-key")),
+                api_base: Some(base.clone()),
                 ..Connection::default()
             },
         },

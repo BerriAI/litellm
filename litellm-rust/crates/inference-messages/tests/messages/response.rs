@@ -31,7 +31,7 @@ async fn calls_defer_execution_until_polled(
     let route = messages_route(secrets.clone());
     let host = RecordingCall::<Messages>::new(MessagesCall {
         connection: Connection {
-            api_base: deployment(upstream.uri()),
+            api_base: Some(upstream.uri()),
             ..call.connection
         },
         ..call
@@ -108,8 +108,8 @@ async fn the_provider_message_is_returned(call: MessagesCall, #[case] provider: 
     let message = run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk")),
+            api_base: Some(upstream.uri()),
             ..call.connection
         },
         ..call
@@ -147,8 +147,8 @@ async fn the_message_passes_through_losslessly(call: MessagesCall) {
 
     let message = run_message(MessagesCall {
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk")),
+            api_base: Some(upstream.uri()),
             ..call.connection
         },
         ..call
@@ -168,8 +168,8 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
 
     let error = run(MessagesCall {
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk")),
+            api_base: Some(upstream.uri()),
             ..call.connection
         },
         ..call
@@ -192,8 +192,8 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
 
     let error = run(MessagesCall {
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk")),
+            api_base: Some(upstream.uri()),
             ..call.connection
         },
         ..call
@@ -223,8 +223,8 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
 
     let error = run(MessagesCall {
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk")),
+            api_base: Some(upstream.uri()),
             ..call.connection
         },
         ..call
@@ -253,8 +253,8 @@ async fn an_unreadable_success_body_is_an_invalid_response(
 
     let error = run(MessagesCall {
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk")),
+            api_base: Some(upstream.uri()),
             ..call.connection
         },
         ..call
@@ -272,8 +272,8 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
 
     let error = run(MessagesCall {
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk")),
+            api_base: Some(upstream.uri()),
             timeout: Some(Duration::from_millis(100)),
             ..call.connection
         },
@@ -304,8 +304,8 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     .execute(
         MessagesCall {
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk-ant")),
-                api_base: deployment(base),
+                api_key: Some(SecretValue::new("sk-ant")),
+                api_base: Some(base),
                 ..call.connection
             },
             ..call
@@ -349,8 +349,8 @@ async fn message_route_summary_excludes_payload_diagnostics(
         .logger()
         .instrument(run_message(MessagesCall {
             connection: Connection {
-                api_key: deployment(SecretValue::new("private-key-sentinel")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("private-key-sentinel")),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call
@@ -405,7 +405,7 @@ async fn route_uses_injected_dependencies_and_optional_cache(
         let call = super::call();
         let request = MessagesCall {
             connection: Connection {
-                api_base: deployment(upstream.uri()),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call

@@ -1,4 +1,3 @@
-use litellm_auth::{InputSource, Sourced};
 use litellm_inference::Connection;
 use litellm_inference_transcription::{Error, types::AudioTranscriptionRequest};
 use rstest::{fixture, rstest};
@@ -26,10 +25,6 @@ fn aws_params(region: &str) -> Map<String, Value> {
     ])
 }
 
-fn deployment<T>(value: T) -> Option<Sourced<T>> {
-    Some(Sourced::new(value, InputSource::Deployment))
-}
-
 #[fixture]
 fn request() -> AudioTranscriptionRequest {
     AudioTranscriptionRequest {
@@ -44,7 +39,7 @@ fn request() -> AudioTranscriptionRequest {
 fn at(base: &str, request: AudioTranscriptionRequest) -> AudioTranscriptionRequest {
     AudioTranscriptionRequest {
         connection: Connection {
-            api_base: deployment(base.into()),
+            api_base: Some(base.into()),
             ..request.connection
         },
         ..request
@@ -201,8 +196,8 @@ async fn unsupported_providers_are_rejected_before_sending(
 async fn a_non_string_extra_header_is_rejected(request: AudioTranscriptionRequest) {
     let error = transcribe(AudioTranscriptionRequest {
         connection: Connection {
-            api_base: deployment(UNREACHABLE_BASE.into()),
-            extra_headers: deployment(Map::from_iter([("x-count".to_string(), json!(3))])),
+            api_base: Some(UNREACHABLE_BASE.into()),
+            extra_headers: Some(Map::from_iter([("x-count".to_string(), json!(3))])),
             ..Connection::default()
         },
         ..request

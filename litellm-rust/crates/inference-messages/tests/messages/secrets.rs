@@ -64,8 +64,8 @@ async fn call_arguments_win_over_the_secret_source(call: MessagesCall) {
         secrets,
         MessagesCall {
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk-from-call")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("sk-from-call")),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call
@@ -89,8 +89,8 @@ async fn a_secret_manager_failure_fails_the_call_before_sending(call: MessagesCa
         Arc::new(RecordingSecrets::failing()),
         MessagesCall {
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("sk")),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call
@@ -176,7 +176,7 @@ async fn the_auth_token_env_is_a_bearer_only_without_a_key(
         Arc::new(RecordingSecrets::new(values.iter().copied())),
         MessagesCall {
             connection: Connection {
-                api_base: deployment(upstream.uri()),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call

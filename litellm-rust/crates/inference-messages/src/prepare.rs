@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_auth::{SecretValue, Sourced};
+use litellm_auth::SecretValue;
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
     get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
@@ -122,7 +122,7 @@ fn prepare_provider_request(
         body: transformed,
         environment,
         timeout: connection.timeout,
-        api_key: connection.api_key.map(Sourced::into_value),
+        api_key: connection.api_key,
     })
 }
 
@@ -150,15 +150,10 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::{Map, Value, json};
 
-    use litellm_auth::InputSource;
     use litellm_inference::Connection;
 
     use super::*;
     use crate::{MessagesSettings, MessagesShaping};
-
-    fn deployment<T>(value: T) -> Option<Sourced<T>> {
-        Some(Sourced::new(value, InputSource::Deployment))
-    }
 
     #[fixture]
     fn shaping() -> MessagesShaping {
@@ -260,8 +255,8 @@ mod tests {
             provider_specific_header: None,
             shaping,
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk-test")),
-                api_base: deployment("https://anthropic.test".into()),
+                api_key: Some(SecretValue::new("sk-test")),
+                api_base: Some("https://anthropic.test".into()),
                 extra_headers: None,
                 timeout: None,
             },
@@ -369,9 +364,9 @@ mod tests {
             provider_specific_header: Some(configured),
             shaping,
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk-test")),
-                api_base: deployment("https://resource.services.ai.azure.com".into()),
-                extra_headers: deployment(Map::from_iter([("x-priority".into(), json!("extra"))])),
+                api_key: Some(SecretValue::new("sk-test")),
+                api_base: Some("https://resource.services.ai.azure.com".into()),
+                extra_headers: Some(Map::from_iter([("x-priority".into(), json!("extra"))])),
                 timeout: None,
             },
         })

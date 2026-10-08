@@ -176,8 +176,6 @@ mod tests {
     use serde_json::json;
     use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 
-    use litellm_auth::{InputSource, Sourced};
-
     use super::*;
     use crate::{
         prepare::{prepare_provider_request, resolve_request},
@@ -227,11 +225,8 @@ mod tests {
                 messages: json!([{"role": "user", "content": "hi"}]),
                 optional_params: json!({"max_tokens": 16}).as_object().unwrap().clone(),
                 connection: litellm_inference::Connection {
-                    api_key: Some(Sourced::new(
-                        litellm_auth::SecretValue::new("sk-test"),
-                        InputSource::Deployment,
-                    )),
-                    api_base: Some(Sourced::new(api_base.into(), InputSource::Deployment)),
+                    api_key: Some(litellm_auth::SecretValue::new("sk-test")),
+                    api_base: Some(api_base.into()),
                     ..Default::default()
                 },
             })

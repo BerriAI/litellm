@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use bytes::Bytes;
-use litellm_auth::{InputSource, TokenProviderHandle};
+use litellm_auth::{InputSource, Sourced, TokenProviderHandle};
 use litellm_core_utils::call_arguments::CallArguments;
 use litellm_inference::Connection;
 use litellm_llms::base_llm::ocr::{
@@ -174,16 +174,24 @@ impl LiteLLMOcrRequest {
         connection: Connection,
     ) -> Result<Self, Error> {
         let request = Self::new(model, document, custom_llm_provider, optional_params)?;
-        let (extra_headers, extra_headers_source) = match &connection.extra_headers {
-            Some(headers) => (header_pairs(headers.value())?, headers.source()),
-            None => (Vec::new(), InputSource::default()),
+        let source = |name: &str| input_sources.get(name).copied().unwrap_or_default();
+        let extra_headers = match &connection.extra_headers {
+            Some(headers) => header_pairs(headers)?,
+            None => Vec::new(),
         };
         let transport = request.transport.clone().with_overrides(
             extra_headers,
-            extra_headers_source,
+            source("extra_headers"),
             connection.timeout,
         );
-        let credentials = OcrCredentialInputs::new(connection.api_key, connection.api_base);
+        let credentials = OcrCredentialInputs::new(
+            connection
+                .api_key
+                .map(|key| Sourced::new(key, source("api_key"))),
+            connection
+                .api_base
+                .map(|base| Sourced::new(base, source("api_base"))),
+        );
         Ok(request.with_connection_inputs(credentials, transport, input_sources))
     }
 }
@@ -194,7 +202,7 @@ pub(crate) type ResolvedOcrRequest = LiteLLMOcrRequest<OcrDocument>;
 mod tests {
     use std::time::Duration;
 
-    use litellm_auth::{SecretValue, Sourced};
+    use litellm_auth::SecretValue;
     use serde_json::json;
 
     use super::*;
@@ -213,17 +221,16 @@ mod tests {
             document(),
             None,
             Default::default(),
-            [("aws_region_name".to_string(), InputSource::Request)].into(),
+            [
+                ("aws_region_name".to_string(), InputSource::Request),
+                ("api_key".to_string(), InputSource::Request),
+                ("extra_headers".to_string(), InputSource::Request),
+            ]
+            .into(),
             Connection {
-                api_key: Some(Sourced::new(
-                    SecretValue::new(" key "),
-                    InputSource::Request,
-                )),
-                api_base: Some(Sourced::new("".into(), InputSource::Deployment)),
-                extra_headers: Some(Sourced::new(
-                    json!({"x-a": "1"}).as_object().unwrap().clone(),
-                    InputSource::Request,
-                )),
+                api_key: Some(SecretValue::new(" key ")),
+                api_base: Some("".into()),
+                extra_headers: Some(json!({"x-a": "1"}).as_object().unwrap().clone()),
                 timeout: Some(Duration::from_secs(7)),
             },
         )
@@ -240,8 +247,8 @@ mod tests {
         assert_eq!(request.transport.extra_headers_source, InputSource::Request);
         assert_eq!(request.transport.timeout, Some(Duration::from_secs(7)));
         assert_eq!(
-            request.input_sources,
-            [("aws_region_name".to_string(), InputSource::Request)].into()
+            request.input_sources.get("aws_region_name"),
+            Some(&InputSource::Request)
         );
 
         let defaulted = LiteLLMOcrRequest::from_inputs(
@@ -272,10 +279,7 @@ mod tests {
             Default::default(),
             Default::default(),
             Connection {
-                extra_headers: Some(Sourced::new(
-                    json!({"x-a": 1}).as_object().unwrap().clone(),
-                    InputSource::Deployment,
-                )),
+                extra_headers: Some(json!({"x-a": 1}).as_object().unwrap().clone()),
                 ..Connection::default()
             },
         ) else {

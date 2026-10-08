@@ -1,5 +1,5 @@
 use crate::execution::{run_async, run_sync};
-use litellm_auth::{SecretValue, Sourced};
+use litellm_auth::SecretValue;
 use litellm_host_python::from_py_argument;
 use litellm_inference::Connection;
 use litellm_inference_transcription::{
@@ -12,26 +12,17 @@ use super::NativeCall;
 
 use crate::{
     errors::route_error_to_pyerr,
-    marshal::{
-        optional_field, optional_object_field, optional_timeout, request_input_sources,
-        required_field,
-    },
+    marshal::{optional_field, optional_object_field, optional_timeout, required_field},
 };
 
 fn request(bound: &Bound<'_, PyDict>) -> PyResult<AudioTranscriptionRequest> {
-    let sources =
-        request_input_sources(bound, ["api_key", "api_base", "extra_headers"].into_iter())?;
-    let source = |name: &str| sources.get(name).copied().unwrap_or_default();
     Ok(AudioTranscriptionRequest {
         audio: from_py_argument(&required_field(bound, "audio")?)?,
         model: from_py_argument(&required_field(bound, "model")?)?,
         connection: Connection {
-            api_key: optional_field::<String>(bound, "api_key")?
-                .map(|key| Sourced::new(SecretValue::new(key), source("api_key"))),
-            api_base: optional_field(bound, "api_base")?
-                .map(|base| Sourced::new(base, source("api_base"))),
-            extra_headers: optional_object_field(bound, "extra_headers")?
-                .map(|headers| Sourced::new(headers, source("extra_headers"))),
+            api_key: optional_field::<String>(bound, "api_key")?.map(SecretValue::new),
+            api_base: optional_field(bound, "api_base")?,
+            extra_headers: optional_object_field(bound, "extra_headers")?,
             timeout: optional_timeout(optional_field(bound, "timeout_seconds")?),
         },
         custom_llm_provider: optional_field(bound, "custom_llm_provider")?,

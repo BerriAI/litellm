@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_auth::{InputSource, SecretValue, Sourced};
+use litellm_auth::SecretValue;
 use litellm_inference::Connection;
 use litellm_inference_messages::MessagesShaping;
 
@@ -17,14 +17,8 @@ pub struct Deployment {
 impl Deployment {
     pub fn connection(&self) -> Connection {
         Connection {
-            api_key: self
-                .api_key
-                .clone()
-                .map(|key| Sourced::new(SecretValue::new(key), InputSource::Deployment)),
-            api_base: self
-                .api_base
-                .clone()
-                .map(|base| Sourced::new(base, InputSource::Deployment)),
+            api_key: self.api_key.clone().map(SecretValue::new),
+            api_base: self.api_base.clone(),
             extra_headers: None,
             timeout: self.timeout,
         }

@@ -1,35 +1,32 @@
 use std::time::Duration;
 
-use litellm_auth::{SecretValue, Sourced};
+use litellm_auth::SecretValue;
 use serde_json::{Map, Value};
 
 #[derive(Clone, Debug, Default)]
 pub struct Connection {
-    pub api_key: Option<Sourced<SecretValue>>,
-    pub api_base: Option<Sourced<String>>,
-    pub extra_headers: Option<Sourced<Map<String, Value>>>,
+    pub api_key: Option<SecretValue>,
+    pub api_base: Option<String>,
+    pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
 }
 
 impl Connection {
     pub fn exposed_api_key(&self) -> Option<&str> {
-        self.api_key.as_ref().map(|key| key.value().expose())
+        self.api_key.as_ref().map(SecretValue::expose)
     }
 
     pub fn api_base_value(&self) -> Option<&str> {
-        self.api_base.as_ref().map(|base| base.value().as_str())
+        self.api_base.as_deref()
     }
 
     pub fn extra_headers_value(&self) -> Option<Map<String, Value>> {
-        self.extra_headers
-            .as_ref()
-            .map(|headers| headers.value().clone())
+        self.extra_headers.clone()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use litellm_auth::InputSource;
     use rstest::rstest;
 
     use super::*;
@@ -37,10 +34,7 @@ mod tests {
     #[rstest]
     fn debug_hides_the_api_key() {
         let connection = Connection {
-            api_key: Some(Sourced::new(
-                SecretValue::new("caller-api-key"),
-                InputSource::Request,
-            )),
+            api_key: Some(SecretValue::new("caller-api-key")),
             ..Connection::default()
         };
 

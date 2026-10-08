@@ -59,8 +59,8 @@ async fn credentials_become_exactly_one_auth_header(
     run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
         connection: Connection {
-            api_key: api_key.map(SecretValue::new).and_then(deployment),
-            api_base: deployment(upstream.uri()),
+            api_key: api_key.map(SecretValue::new),
+            api_base: Some(upstream.uri()),
             extra_headers: headers(extra_headers.iter().copied()),
             ..call.connection
         },
@@ -89,7 +89,7 @@ async fn a_call_without_credentials_fails_before_sending(
     let error = run(MessagesCall {
         custom_llm_provider: Some(provider.into()),
         connection: Connection {
-            api_base: deployment(upstream.uri()),
+            api_base: Some(upstream.uri()),
             ..call.connection
         },
         ..call
@@ -185,8 +185,8 @@ async fn caller_headers_and_provider_scoped_headers_are_forwarded(call: Messages
             scoped("azure_ai, anthropic", "this-provider"),
         ])),
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk")),
+            api_base: Some(upstream.uri()),
             extra_headers: headers([("anthropic-beta", "token-efficient-tools-2025-02-19")]),
             ..call.connection
         },
@@ -228,8 +228,8 @@ async fn cache_scope_removal_is_selected_by_the_provider(
             }]
         })),
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk-azure")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk-azure")),
+            api_base: Some(upstream.uri()),
             ..call.connection
         },
         ..call
@@ -313,8 +313,8 @@ async fn feature_betas_join_the_callers_betas_in_one_sorted_header(
                 ..MessagesShaping::default()
             },
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("sk")),
+                api_base: Some(upstream.uri()),
                 extra_headers: headers([("Anthropic-Beta", "caller-beta-2025-01-01")]),
                 ..call.connection
             },
@@ -340,8 +340,8 @@ async fn an_oauth_key_sends_the_browser_access_header_and_the_oauth_beta(call: M
 
     run_message(MessagesCall {
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk-ant-oat01-token")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk-ant-oat01-token")),
+            api_base: Some(upstream.uri()),
             ..call.connection
         },
         ..call
@@ -370,8 +370,8 @@ async fn caller_protocol_headers_win_over_the_defaults(call: MessagesCall, #[cas
     run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
         connection: Connection {
-            api_key: deployment(SecretValue::new("sk")),
-            api_base: deployment(upstream.uri()),
+            api_key: Some(SecretValue::new("sk")),
+            api_base: Some(upstream.uri()),
             extra_headers: headers([
                 ("Anthropic-Version", "2024-01-01"),
                 ("Content-Type", "application/json; charset=utf-8"),
@@ -423,8 +423,8 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 custom_llm_provider: call.custom_llm_provider.clone(),
                 provider_specific_header: None,
                 connection: Connection {
-                    api_key: deployment(SecretValue::new("sk")),
-                    api_base: deployment(upstream.uri()),
+                    api_key: Some(SecretValue::new("sk")),
+                    api_base: Some(upstream.uri()),
                     extra_headers: None,
                     timeout: call.connection.timeout,
                 },
@@ -475,8 +475,8 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
                 },
             },
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("sk")),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call
@@ -537,8 +537,8 @@ async fn reasoning_is_translated_by_the_model_capabilities(
                 ..MessagesShaping::default()
             },
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("sk")),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call
@@ -588,8 +588,8 @@ async fn replayed_history_is_cleaned_before_sending(
     run_message(with_fields(
         MessagesCall {
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("sk")),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call
@@ -612,8 +612,8 @@ async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider
         MessagesCall {
             custom_llm_provider: Some(provider.into()),
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("sk")),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call
@@ -638,8 +638,8 @@ async fn an_invalid_request_fails_before_sending(call: MessagesCall, #[case] fie
     let error = run(with_fields(
         MessagesCall {
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("sk")),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call
@@ -686,8 +686,8 @@ async fn system_message_folding_is_selected_by_the_provider(
                 ..call.shaping
             },
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk-azure")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("sk-azure")),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call
@@ -748,8 +748,8 @@ async fn provider_validation_runs_before_caller_parameter_removal(
                 ..call.shaping
             },
             connection: Connection {
-                api_key: deployment(SecretValue::new("sk-test")),
-                api_base: deployment(upstream.uri()),
+                api_key: Some(SecretValue::new("sk-test")),
+                api_base: Some(upstream.uri()),
                 ..call.connection
             },
             ..call

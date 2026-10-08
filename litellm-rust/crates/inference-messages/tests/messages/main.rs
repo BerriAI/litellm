@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use litellm_auth::{InputSource, SecretValue, Sourced};
+use litellm_auth::SecretValue;
 use litellm_http::{HttpSettings, Resolution};
 use litellm_inference::Connection;
 use litellm_inference_messages::{
@@ -90,15 +90,11 @@ fn call() -> MessagesCall {
     }
 }
 
-fn deployment<T>(value: T) -> Option<Sourced<T>> {
-    Some(Sourced::new(value, InputSource::Deployment))
-}
-
 fn connected(call: MessagesCall, api_key: &str, api_base: String) -> MessagesCall {
     MessagesCall {
         connection: Connection {
-            api_key: deployment(SecretValue::new(api_key)),
-            api_base: deployment(api_base),
+            api_key: Some(SecretValue::new(api_key)),
+            api_base: Some(api_base),
             ..call.connection
         },
         ..call
@@ -115,10 +111,8 @@ fn with_timeout(call: MessagesCall, timeout: Duration) -> MessagesCall {
     }
 }
 
-fn headers<'a>(
-    pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
-) -> Option<Sourced<Map<String, Value>>> {
-    deployment(
+fn headers<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<Map<String, Value>> {
+    Some(
         pairs
             .into_iter()
             .map(|(name, value)| (name.to_string(), Value::from(value)))
