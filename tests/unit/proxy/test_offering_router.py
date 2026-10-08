@@ -2,6 +2,7 @@ from types import MappingProxyType
 from typing import Final
 
 import pytest
+from starlette.types import Message, Receive, Scope, Send
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -13,9 +14,83 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import can_customer_access_model, can_key_call_model
-from litellm.proxy.offering_router import OfferingAccessGuard, OfferingRouterView, OfferingServingSnapshot
+from litellm.proxy.offering_router import (
+    OfferingAccessGuard,
+    OfferingRouterView,
+    OfferingServingSnapshot,
+    OfferingSnapshotMiddleware,
+)
 from litellm.router import Router
+from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes
+
+
+async def test_asgi_stream_pins_authority_until_final_chunk_and_passes_lifespan_through() -> None:
+    first: Final = OfferingServingSnapshot(
+        Router(model_list=[]), frozenset({"first"}), MappingProxyType({}), frozenset()
+    )
+    second: Final = OfferingServingSnapshot(
+        Router(model_list=[]), frozenset({"second"}), MappingProxyType({}), frozenset()
+    )
+    view: Final = OfferingRouterView(first)
+    sent: Final[list[Message]] = []
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    async def stream(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "lifespan":
+            assert view.serving_snapshot() is second
+            await send({"type": "lifespan.startup.complete"})
+            return
+        assert view.serving_snapshot() is first
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"first", "more_body": True})
+        view.publish_snapshot(second)
+        assert view.serving_snapshot() is first
+        assert view.latest_snapshot() is second
+        await send({"type": "http.response.body", "body": b"last", "more_body": False})
+
+    middleware: Final = OfferingSnapshotMiddleware(stream, lambda: view)
+    await middleware({"type": "http"}, receive, send)
+    assert view.serving_snapshot() is second
+    assert tuple(message["body"] for message in sent if message["type"] == "http.response.body") == (b"first", b"last")
+    await middleware({"type": "lifespan"}, receive, send)
+    assert sent[-1] == {"type": "lifespan.startup.complete"}
+
+
+def test_native_mutations_cannot_publish_unmanaged_routes_in_external_mode() -> None:
+    native: Final = Router(model_list=[])
+    view: Final = OfferingRouterView(OfferingServingSnapshot(native, frozenset(), MappingProxyType({}), frozenset()))
+    with pytest.raises(litellm.BadRequestError, match="external offering configuration"):
+        view.add_deployment(Deployment(model_name="unmanaged", litellm_params=LiteLLM_Params(model="openai/unmanaged")))
+    assert not native.get_model_list()
+    view.num_retries = 2
+    assert native.num_retries == 2
+
+
+async def test_native_batches_cannot_bypass_offering_selection_with_uploaded_record_models() -> None:
+    view: Final = OfferingRouterView(
+        OfferingServingSnapshot(Router(model_list=[]), frozenset({"selected"}), MappingProxyType({}), frozenset())
+    )
+    guard: Final = OfferingAccessGuard(view)
+    auth: Final = UserAPIKeyAuth()
+    cache: Final = DualCache()
+    for data in ({"model": "selected"}, {"input_file_id": "file-already-uploaded"}):
+        rejected: Final = await guard.async_pre_call_hook(auth, cache, data, "acreate_batch")
+        assert isinstance(rejected, litellm.BadRequestError)
+        assert "batch records" in rejected.message
+    assert isinstance(
+        await guard.async_pre_call_hook(auth, cache, {"model": "selected", "purpose": "batch"}, "acreate_file"),
+        litellm.BadRequestError,
+    )
+    assert (
+        await guard.async_pre_call_hook(auth, cache, {"model": "selected", "purpose": "assistants"}, "acreate_file")
+        is None
+    )
 
 
 async def test_unavailable_and_unselected_offerings_cannot_forward_or_override_connection() -> None:

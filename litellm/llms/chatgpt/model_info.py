@@ -55,6 +55,8 @@ class _ChatGPTModel(GatewayModelMetadata):
             cls.validate_field_input(
                 "context_window" if info.field_name == "max_context_window" else info.field_name, normalized
             )
+        if info.field_name == "supports_parallel_tool_calls":
+            cls.validate_field_input("supports_parallel_function_calling", normalized)
         return normalized
 
     @field_validator("max_context_window", mode="before")
@@ -85,6 +87,8 @@ class _ChatGPTModel(GatewayModelMetadata):
             if native_default == "ultra" and "max" in (api_efforts or ())
             else api_efforts[-1]
             if native_default == "ultra" and api_efforts
+            else None
+            if native_default == "ultra"
             else "disabled"
             if native_default == "persistent"
             else native_default

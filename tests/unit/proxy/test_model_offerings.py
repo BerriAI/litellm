@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Final
 
@@ -85,6 +86,67 @@ async def test_authoritative_inventory_failure_recovery_and_atomic_config_reload
         assert await manager.reload()
         assert manager.router.latest_snapshot().available_models == {"manual"}
         assert manager.router.model_names == {"manual"}
+
+
+async def test_disabled_manual_offering_and_invalid_secrets_keep_authority_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.offering_router import OfferingAccessGuard
+
+    path: Final = tmp_path / "offerings.yaml"
+    monkeypatch.setenv("FIXTURE_OFFERING_KEY", "fixture-secret")
+    config: Final = {
+        "version": 1,
+        "providers": {
+            "supplier": {
+                "provider": "openai",
+                "api_base": "https://supplier.test/v1",
+                "api_key": "os.environ/FIXTURE_OFFERING_KEY",
+                "headers": {"X-Session": "os.environ/FIXTURE_OFFERING_KEY"},
+            }
+        },
+        "offerings": [
+            {"model_name": "manual", "source": "manual", "provider": "supplier", "upstream_model": "backend"}
+        ],
+    }
+    path.write_text(yaml.safe_dump(config))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"data": []}))
+    ) as client:
+        handler.client = client
+        manager: Final = ModelOfferingsManager(
+            path=path, template=Router(model_list=[]), client=handler, clock=lambda: 0.0
+        )
+        assert await manager.reload(initial=True)
+        active: Final = manager.router.latest_snapshot()
+        assert active.available_models == {"manual"}
+        assert await manager.reload()
+        assert manager.router.latest_snapshot() is active
+        monkeypatch.delenv("FIXTURE_OFFERING_KEY")
+        assert not await manager.reload()
+        assert manager.router.latest_snapshot() is active
+        assert manager.last_error == "ValueError"
+        path.write_bytes(b" " * (1024 * 1024 + 1))
+        assert not await manager.reload()
+        assert manager.router.latest_snapshot() is active
+        assert manager.last_error == "ConfigTooLarge"
+        monkeypatch.setenv("FIXTURE_OFFERING_KEY", "fixture-secret")
+        path.write_text(yaml.safe_dump({**config, "offerings": [{**config["offerings"][0], "enabled": False}]}))
+        assert await manager.reload()
+        assert not manager.router.latest_snapshot().available_models
+        assert "disabled" in manager.router.latest_snapshot().unavailable_models["manual"]
+        rejected: Final = await OfferingAccessGuard(manager.router).async_pre_call_hook(
+            UserAPIKeyAuth(), DualCache(), {"model": "manual"}, "acompletion"
+        )
+        assert isinstance(rejected, litellm.ServiceUnavailableError)
+        path.write_text(yaml.safe_dump(config))
+        assert await manager.reload()
+        assert manager.router.latest_snapshot().available_models == {"manual"}
 
 
 async def test_new_connection_cannot_reuse_another_credentials_inventory(tmp_path: Path) -> None:
@@ -442,13 +504,11 @@ async def test_private_connection_identity_is_stable_and_changes_on_credentials(
 async def test_native_account_change_changes_private_deployment_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from litellm.llms.chatgpt.authenticator import Authenticator
-
     monkeypatch.setenv("LITELLM_SALT_KEY", "fixture-server-owned-key")
     monkeypatch.setenv("CHATGPT_API_BASE", "https://native.test/backend-api/codex")
-    account: Final = {"id": "first"}
-    monkeypatch.setattr(Authenticator, "get_account_id", lambda self: account["id"])
-    monkeypatch.setattr(Authenticator, "get_access_token", lambda self, **kwargs: "fixture-oauth")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    auth_file: Final = tmp_path / "auth.json"
+    auth_file.write_text(json.dumps({"access_token": "fixture-oauth", "account_id": "first", "expires_at": 10**30}))
     path: Final = tmp_path / "offerings.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -463,15 +523,20 @@ async def test_native_account_change_changes_private_deployment_identity(
     )
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
+    responses: Final = iter((200, 401, 200))
     async with httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"models": [{"slug": "fixture"}]}))
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(next(responses), json={"models": [{"slug": "fixture"}]})
+        )
     ) as client:
         handler.client = client
         manager: Final = ModelOfferingsManager(path=path, template=Router(model_list=[]), client=handler)
         assert await manager.reload(initial=True)
         first: Final = manager.router.get_model_ids()
         assert len(first) == 1
-        account["id"] = "second"
+        auth_file.write_text(json.dumps({"access_token": "second-oauth", "account_id": "second", "expires_at": 10**30}))
+        assert await manager.reload(force_inventory=True)
+        assert not manager.router.latest_snapshot().available_models
         assert await manager.reload(force_inventory=True)
         assert manager.router.get_model_ids() != first
         assert manager.router.latest_snapshot().available_models == {"selected"}

@@ -68,4 +68,6 @@ Connection identities use HMAC with the existing private server salt/master key.
 
 Caller `extra_body.model` overrides are rejected before supplier forwarding; harmless extra body fields remain supported. Structured `reasoning_effort` objects such as `{effort: high, summary: auto}` select the same configured output budget as the corresponding effort string.
 
+Native provider batch creation and uploads with purpose `batch` are rejected in external offering mode. Native batch records can select their own supplier models, which would bypass the configured offering catalog. Existing proxy configurations without external offerings retain native batch support.
+
 The optional bundled cost-map JSON-schema extension is deferred: its trusted-base guard validates PR artifacts with the base generator. The runtime metadata/configuration contract validates separate total/input/output limits and defaults independently, and unknown optional bundled catalog properties remain forward compatible.

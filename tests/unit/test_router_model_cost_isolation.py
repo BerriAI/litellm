@@ -12,6 +12,7 @@ import copy
 import logging
 import os
 import re
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import Mock, patch
 
@@ -22,8 +23,8 @@ import litellm
 from litellm import Router
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
-from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -31,6 +32,23 @@ from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     reapply_runtime_model_cost_registrations,
 )
+
+
+@pytest.mark.parametrize(
+    ("info", "params", "expected"),
+    (
+        ({"base_model": "info-base"}, {"base_model": "params-base", "model": "backend"}, "info-base"),
+        ({}, {"base_model": "params-base", "model": "backend"}, "params-base"),
+        ({"base_model": ""}, {"model": "backend"}, "backend"),
+        ({}, {"model": ""}, None),
+        ({}, {}, None),
+        ({"base_model": 42}, {"model": "backend"}, None),
+    ),
+)
+def test_model_listing_cost_map_key_preserves_explicit_base_model_precedence(
+    info: Mapping[str, object], params: Mapping[str, object], expected: str | None
+) -> None:
+    assert Router._model_listing_cost_map_key(info, params) == expected
 
 
 def _simulate_price_data_reload(fetched_catalog):

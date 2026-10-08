@@ -30,6 +30,14 @@ from litellm.types.proxy.model_offerings import ModelOfferingsConfig
             ]
         },
         {"providers": {"supplier": {"provider": "chatgpt", "api_key": "ignored-key"}}},
+        {"providers": {"supplier": {"provider": "openai"}}},
+        {"providers": {" supplier ": {"provider": "openrouter"}}},
+        {"offerings": [{"model_name": "*", "source": "manual", "provider": "supplier", "upstream_model": "backend"}]},
+        {
+            "offerings": [
+                {"model_name": "selected", "source": "manual", "provider": "missing", "upstream_model": "backend"}
+            ]
+        },
     ),
 )
 def test_invalid_operator_edits_are_rejected(change) -> None:

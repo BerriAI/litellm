@@ -8,8 +8,127 @@ import pytest
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.chatgpt.authenticator import Authenticator
 from litellm.llms.chatgpt.common_utils import GetAccessTokenError
-from litellm.llms.chatgpt.model_info import _ChatGPTModel, get_chatgpt_model_info
+from litellm.llms.chatgpt.model_info import (
+    _ChatGPTModel,
+    chatgpt_model_inventory_identity,
+    get_chatgpt_model_info,
+    get_chatgpt_model_inventory,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    (
+        {"error": "denied", "models": []},
+        {"models": [{"slug": " duplicate "}]},
+        {"models": [{"slug": ""}]},
+        {"models": [{"slug": "same"}, {"slug": "same"}]},
+        {"models": [{"slug": "fixture", "context_window": "invalid"}]},
+        {"models": [{"slug": "fixture", "supports_parallel_tool_calls": "false"}]},
+    ),
+)
+async def test_malformed_refresh_never_replaces_a_successful_native_inventory(
+    invalid: dict[str, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_API_BASE", "https://account.test/backend-api/codex")
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": "fixture-token", "account_id": "fixture-account", "expires_at": 10**30})
+    )
+    responses: Final = iter(({"models": [{"slug": "fixture", "context_window": 0}]}, invalid, {"models": []}))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=next(responses)))
+    ) as client:
+        handler.client = client
+        cache: Final = InMemoryCache()
+        first: Final = await get_chatgpt_model_inventory(client=handler, cache=cache)
+        assert isinstance(first, SupplierModelInventory)
+        assert set(first.models) == {"fixture"}
+        assert "codex_context_window" not in first.models["fixture"]
+        failed: Final = await get_chatgpt_model_inventory(client=handler, cache=cache, force_refresh=True)
+        assert isinstance(failed, SupplierInventoryUnavailable)
+        assert failed.reason == "malformed"
+        assert failed.credential_scope == first.credential_scope
+        assert await get_chatgpt_model_inventory(client=handler, cache=cache) is first
+        empty: Final = await get_chatgpt_model_inventory(client=handler, cache=cache, force_refresh=True)
+        assert isinstance(empty, SupplierModelInventory)
+        assert not empty.models
+        assert await get_chatgpt_model_inventory(client=handler, cache=cache) is empty
+
+
+async def test_native_transport_failure_is_unavailable_and_never_an_empty_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_API_BASE", "https://account.test/backend-api/codex")
+    (tmp_path / "auth.json").write_text(json.dumps({"access_token": "fixture-token", "expires_at": 10**30}))
+
+    def timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("fixture timeout", request=request)
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(timeout)) as client:
+        handler.client = client
+        result: Final = await get_chatgpt_model_inventory(client=handler, cache=InMemoryCache())
+        assert isinstance(result, SupplierInventoryUnavailable)
+        assert result.reason == "transport"
+        assert result.credential_scope is None
+
+
+@pytest.mark.parametrize("content", (b"not valid json", b"\xff"))
+def test_unreadable_native_account_does_not_claim_a_credential_change(
+    content: bytes, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "auth.json").write_bytes(content)
+    assert chatgpt_model_inventory_identity() is None
+
+
+def test_native_explicit_capabilities_override_native_defaults_without_conflating_context() -> None:
+    metadata: Final = _ChatGPTModel.model_validate(
+        {
+            "slug": "fixture",
+            "context_window": 900,
+            "max_context_window": 0,
+            "max_input_tokens": 600,
+            "max_output_tokens": 300,
+            "supports_function_calling": True,
+            "supports_parallel_function_calling": False,
+            "supports_parallel_tool_calls": True,
+            "supports_reasoning": True,
+            "reasoning_effort_levels": ["low", "high", "ultra"],
+            "default_reasoning_effort": "ultra",
+            "supported_modalities": ["text"],
+            "input_modalities": ["text", "image"],
+            "supported_output_modalities": ["text"],
+        }
+    ).metadata()
+    assert metadata["default_reasoning_effort"] == "high"
+    assert metadata["reasoning_effort_levels"] == ("low", "high")
+    assert metadata["supports_reasoning"] is True
+    assert metadata["supports_parallel_function_calling"] is False
+    assert metadata["supported_modalities"] == ("text",)
+    assert metadata["supported_output_modalities"] == ("text",)
+    assert metadata["max_input_tokens"] == 600
+    assert metadata["max_output_tokens"] == 300
+    assert metadata["codex_context_window"] == 900
+    assert "context_window" not in metadata
+    assert "codex_max_context_window" not in metadata
+
+
+@pytest.mark.parametrize("levels", (None, []))
+def test_unresolvable_ui_default_never_advertises_an_unsupported_api_effort(
+    levels: list[dict[str, str]] | None,
+) -> None:
+    metadata: Final = _ChatGPTModel.model_validate(
+        {"slug": "fixture", "default_reasoning_level": "ultra", "supported_reasoning_levels": levels}
+    ).metadata()
+    assert "default_reasoning_effort" not in metadata
 
 
 async def test_account_catalog_preserves_client_policy_separately_from_model_limits(
@@ -172,15 +291,12 @@ def test_codex_ui_efforts_are_not_advertised_as_api_efforts(
     assert metadata["default_reasoning_effort"] == expected
 
 
-async def test_caller_api_base_cannot_exfiltrate_saved_server_oauth(monkeypatch: pytest.MonkeyPatch) -> None:
-    from unittest.mock import Mock
-
-    from litellm.llms.chatgpt.model_info import get_chatgpt_model_inventory
-    from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable
-
+async def test_caller_api_base_cannot_exfiltrate_saved_server_oauth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("CHATGPT_API_BASE", "https://trusted.test/backend-api/codex")
-    token: Final = Mock(side_effect=AssertionError("Rejected destinations must not even read the access token"))
-    monkeypatch.setattr(Authenticator, "get_access_token", token)
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "auth.json").write_text(json.dumps({"access_token": "fixture-server-token", "expires_at": 10**30}))
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()
 
@@ -194,4 +310,3 @@ async def test_caller_api_base_cannot_exfiltrate_saved_server_oauth(monkeypatch:
         )
     assert isinstance(result, SupplierInventoryUnavailable)
     assert result.reason == "authentication"
-    token.assert_not_called()

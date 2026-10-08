@@ -170,6 +170,14 @@ class OfferingAccessGuard(CustomLogger):
         data: Mapping[str, object],
         call_type: CallTypesLiteral,
     ) -> Exception | None:
+        if call_type in ("acreate_batch", "create_batch") or (
+            call_type in ("acreate_file", "create_file") and data.get("purpose") == "batch"
+        ):
+            return litellm.BadRequestError(
+                message="Native provider batches are unavailable in external offering mode because batch records cannot enforce offering selection",
+                model="",
+                llm_provider="",
+            )
         extra_body: Final = data.get("extra_body")
         if isinstance(extra_body, Mapping) and "model" in extra_body:
             return litellm.BadRequestError(
