@@ -29,7 +29,6 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    LegacyEncryptionUnavailableError,
     decrypt_value_helper,
     encrypt_value_helper,
 )
@@ -3748,9 +3747,7 @@ def test_ProxyConfig__encrypt_env_variables_for_db_idempotent(monkeypatch):
     assert out == {"A": "ENC[1]", "B": "ENC[2]", "C": "ENC[3]"}
 
 
-def test_ProxyConfig__encrypt_env_variables_for_db_refuses_without_pynacl_instead_of_dropping_legacy_values(
-    monkeypatch,
-):
+def test_ProxyConfig__encrypt_env_variables_for_db_without_pynacl_encrypts_new_plaintext_and_keeps_v3(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-config-save")
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     v3 = encrypt_value_helper("already-migrated")
@@ -3758,10 +3755,12 @@ def test_ProxyConfig__encrypt_env_variables_for_db_refuses_without_pynacl_instea
     monkeypatch.setitem(sys.modules, "nacl.secret", None)
     pc = ProxyConfig()
 
-    saved = pc._encrypt_env_variables_for_db({"A": v3})
-    assert decrypt_value_helper(saved["A"], key="A") == "already-migrated"
-    with pytest.raises(LegacyEncryptionUnavailableError, match=r"config save.*legacy-encryption"):
-        pc._encrypt_env_variables_for_db({"A": v3, "B": "plain-or-legacy"})
+    saved = pc._encrypt_env_variables_for_db({"A": v3, "B": "first-write-plaintext"})
+    assert saved["B"].startswith("v3:gcm:") and saved["B"] != "first-write-plaintext"
+    assert {k: decrypt_value_helper(v, key=k) for k, v in saved.items()} == {
+        "A": "already-migrated",
+        "B": "first-write-plaintext",
+    }
 
 
 def test_ProxyConfig__encrypt_env_variables_for_db_invalid_raises():
@@ -4748,7 +4747,9 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ui_settings_already_synced", [False, True])
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(
+    monkeypatch, ui_settings_already_synced
+):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
