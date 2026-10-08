@@ -191,7 +191,8 @@ class InMemoryCache(BaseCache):
             return False
         expires_at: Final = now + float(ttl)
         self.ttl_dict[key] = expires_at
-        heapq.heappush(self.expiration_heap, (expires_at, key))
+        self.expiration_heap = [(item_expires_at, item_key) for item_key, item_expires_at in self.ttl_dict.items()]
+        heapq.heapify(self.expiration_heap)
         return True
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):

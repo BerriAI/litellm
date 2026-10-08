@@ -304,6 +304,25 @@ def test_in_memory_cache_repeated_refresh_ttl_keeps_the_heap_bounded() -> None:
     assert cache.get_cache("pin") == "v"
 
 
+def test_in_memory_cache_refresh_ttl_keeps_the_heap_bounded_when_a_neighbour_is_the_root() -> None:
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock: Final = Clock()
+    cache: Final = InMemoryCache(max_size_in_memory=10, clock=clock)
+    cache.set_cache("neighbour", "kept", ttl=10_000)
+    cache.set_cache("pin", "v", ttl=10_000)
+    for tick in range(1, 1_001):
+        clock.now = float(tick)
+        assert cache.refresh_ttl("pin", 10_000) is True
+    assert len(cache.expiration_heap) == len(cache.ttl_dict)
+    assert cache.get_cache("neighbour") == "kept"
+    assert cache.get_cache("pin") == "v"
+
+
 def test_in_memory_cache_refresh_ttl_never_evicts_a_neighbour_from_a_full_cache() -> None:
     clock = MagicMock(return_value=0.0)
     cache = InMemoryCache(max_size_in_memory=2, clock=clock)
