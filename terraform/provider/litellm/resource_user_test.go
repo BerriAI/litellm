@@ -279,12 +279,13 @@ func TestResourceUserUpdate_NeverSendsBlocked(t *testing.T) {
 	}
 }
 
-func TestResourceUserCreate_SendsBlockedOnlyWhenSet(t *testing.T) {
+func TestResourceUserCreate_AlwaysSendsBlocked(t *testing.T) {
 	for name, tc := range map[string]struct {
 		config      map[string]interface{}
 		wantBlocked interface{}
 	}{
-		"unset": {config: map[string]interface{}{}, wantBlocked: nil},
+		"unset": {config: map[string]interface{}{}, wantBlocked: false},
+		"false": {config: map[string]interface{}{"blocked": false}, wantBlocked: false},
 		"true":  {config: map[string]interface{}{"blocked": true}, wantBlocked: true},
 	} {
 		t.Run(name, func(t *testing.T) {
