@@ -256,7 +256,10 @@ class OpenAIRefusalAnswer(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(frozen=True)
 
 
-OpenAIDecisionAnswer: TypeAlias = OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIRefusalAnswer
+OpenAIDecisionAnswer: TypeAlias = Annotated[
+    OpenAIPredicateAnswer | OpenAIChoiceAnswer | OpenAIScoreAnswer | OpenAIRefusalAnswer,
+    Field(discriminator="type"),
+]
 
 
 class OpenAIDecisionInputTokensDetails(LiteLLMPydanticObjectBase):
