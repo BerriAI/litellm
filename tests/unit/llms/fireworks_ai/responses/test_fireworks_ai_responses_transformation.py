@@ -642,6 +642,20 @@ def test_streaming_responses_call_hits_native_endpoint_and_yields_every_firework
             None,
             id="not-opted-in-sends-no-user",
         ),
+        pytest.param(
+            {
+                "fireworks_forward_user_id": True,
+                "litellm_metadata": {"user_api_key_user_id": "dev-alice"},
+                "extra_body": {"user": "dev-bob"},
+            },
+            "dev-alice",
+            id="litellm-user-id-replaces-extra-body-user",
+        ),
+        pytest.param(
+            {"litellm_metadata": {"user_api_key_user_id": "dev-alice"}, "extra_body": {"user": "dev-bob"}},
+            "dev-bob",
+            id="not-opted-in-keeps-extra-body-user",
+        ),
     ],
 )
 def test_responses_call_forwards_litellm_user_id_as_user(

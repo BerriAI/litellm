@@ -70,6 +70,12 @@ def get_fireworks_forwarded_user_id(litellm_params: Mapping[str, object]) -> str
     )
 
 
+def without_caller_user(extra_body: Mapping[str, object], forwarded_user_id: str | None) -> Mapping[str, object]:
+    if forwarded_user_id is None:
+        return extra_body
+    return MappingProxyType({key: value for key, value in extra_body.items() if key != "user"})
+
+
 def resolve_fireworks_api_key(api_key: str | None) -> str | None:
     return api_key or (
         get_secret_str("FIREWORKS_API_KEY")

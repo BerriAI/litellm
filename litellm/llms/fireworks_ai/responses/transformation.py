@@ -12,6 +12,7 @@ from litellm.llms.fireworks_ai.common_utils import (
     resolve_fireworks_api_key,
     resolve_fireworks_resource_name,
     with_fireworks_session_affinity,
+    without_caller_user,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -184,6 +185,15 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
         forwarded_user_id: Final = get_fireworks_forwarded_user_id(_forwarded_user_params(litellm_params))
         return request if forwarded_user_id is None else {**request, "user": forwarded_user_id}
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return without_caller_user(extra_body, get_fireworks_forwarded_user_id(_forwarded_user_params(litellm_params)))
 
     def transform_delete_response_api_response(
         self,

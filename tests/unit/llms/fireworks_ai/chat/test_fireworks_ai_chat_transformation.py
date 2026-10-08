@@ -2086,9 +2086,23 @@ def _fireworks_chat_client() -> MagicMock:
             None,
             id="non-bool-flag-is-off",
         ),
+        pytest.param(
+            {
+                "fireworks_forward_user_id": True,
+                "metadata": {"user_api_key_user_id": "dev-alice"},
+                "extra_body": {"user": "dev-bob", "prompt_cache_max_len": 1},
+            },
+            "dev-alice",
+            id="litellm-user-id-replaces-extra-body-user",
+        ),
+        pytest.param(
+            {"metadata": {"user_api_key_user_id": "dev-alice"}, "extra_body": {"user": "dev-bob"}},
+            "dev-bob",
+            id="not-opted-in-keeps-extra-body-user",
+        ),
     ],
 )
-def test_completion_forwards_litellm_user_id_as_user(call_kwargs, expected_user):
+def test_completion_forwards_litellm_user_id_as_user(call_kwargs: dict[str, object], expected_user: str | None) -> None:
     client: Final = _fireworks_chat_client()
     litellm.completion(
         model="fireworks_ai/accounts/fireworks/models/kimi-k3",
@@ -2102,7 +2116,7 @@ def test_completion_forwards_litellm_user_id_as_user(call_kwargs, expected_user)
     assert "fireworks_forward_user_id" not in request_body
 
 
-def test_completion_forwards_litellm_user_id_when_streaming():
+def test_completion_forwards_litellm_user_id_when_streaming() -> None:
     client: Final = _fireworks_chat_client()
     client.post.return_value.iter_lines = lambda: iter(())
     litellm.completion(

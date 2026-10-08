@@ -45,6 +45,7 @@ from ..common_utils import (
     FireworksAIMixin,
     get_fireworks_forwarded_user_id,
     resolve_fireworks_resource_name,
+    without_caller_user,
 )
 
 if TYPE_CHECKING:
@@ -684,6 +685,15 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         )
         forwarded_user_id: Final = get_fireworks_forwarded_user_id(litellm_params)
         return request if forwarded_user_id is None else {**request, "user": forwarded_user_id}
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return without_caller_user(extra_body, get_fireworks_forwarded_user_id(litellm_params))
 
     def _handle_message_content_with_tool_calls(
         self,

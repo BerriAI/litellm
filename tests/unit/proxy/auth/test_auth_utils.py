@@ -4,6 +4,7 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 
 import base64
 import logging
+from collections.abc import Callable
 from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
@@ -2888,7 +2889,9 @@ class TestIsRequestBodySafeBlocksFireworksForwardUserId:
             pytest.param(lambda value: {"metadata": {"fireworks_forward_user_id": value}}, id="metadata"),
         ],
     )
-    def test_fireworks_forward_user_id_in_request_body_is_rejected(self, body_for, value):
+    def test_fireworks_forward_user_id_in_request_body_is_rejected(
+        self, body_for: Callable[[bool], dict[str, object]], value: bool
+    ) -> None:
         with pytest.raises(ValueError, match="fireworks_forward_user_id"):
             is_request_body_safe(
                 request_body={"model": "fireworks-model", "user": "someone-else", **body_for(value)},
@@ -2897,7 +2900,7 @@ class TestIsRequestBodySafeBlocksFireworksForwardUserId:
                 model="fireworks-model",
             )
 
-    def test_admin_opt_in_proxy_wide_allows_fireworks_forward_user_id(self):
+    def test_admin_opt_in_proxy_wide_allows_fireworks_forward_user_id(self) -> None:
         assert (
             is_request_body_safe(
                 request_body={"model": "fireworks-model", "fireworks_forward_user_id": False},
