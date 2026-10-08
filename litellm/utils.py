@@ -8293,14 +8293,10 @@ def convert_to_dict(message: BaseModel | Mapping[str, object]) -> dict[str, obje
 def convert_list_message_to_dict(
     messages: Sequence[BaseModel | Mapping[str, object]],
 ) -> list[dict[str, object]]:
-    return [
-        dict(
-            cleanup_none_field_in_message(
-                message=cast(AllMessageValues, convert_to_dict(message))
-            )  # cast-ok: message dicts satisfy the TypedDict shape
-        )
-        for message in messages
-    ]
+    def _as_message_value(message: BaseModel | Mapping[str, object]) -> AllMessageValues:
+        return cast(AllMessageValues, convert_to_dict(message))  # cast-ok: message dicts satisfy the TypedDict shape
+
+    return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
 
 def validate_and_fix_openai_messages(messages: list):
