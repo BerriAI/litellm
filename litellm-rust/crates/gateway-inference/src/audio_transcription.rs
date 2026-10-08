@@ -29,6 +29,7 @@ async fn handle(
 ) -> Result<Value, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
+    request::reject_caller_controls(&body)?;
     let audio = match upload {
         Some(upload) => {
             let format = upload

@@ -437,6 +437,18 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
+    # Azure Entra and Vertex inputs that choose where the deployment's secret is
+    # posted, which host identity it unlocks, or what the minted token is good for.
+    "azure_authority_host",
+    "azure_scope",
+    "azure_credential",
+    "azure_federated_token_file",
+    "tenant_id",
+    "client_id",
+    "vertex_location",
+    "vertex_ai_location",
+    "vertex_project",
+    "vertex_ai_project",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration

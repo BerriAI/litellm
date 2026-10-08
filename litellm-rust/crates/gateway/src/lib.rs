@@ -27,6 +27,9 @@ use litellm_tracing::ByteChunk;
 use uuid::Uuid;
 
 pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
+    if config.general_settings.allow_client_side_credentials == Some(true) {
+        return Err(Error::UnsupportedSetting("allow_client_side_credentials"));
+    }
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let environment = secrets::environment_values(&config.environment_variables)?;
     let lookup = |name: &str| {

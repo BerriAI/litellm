@@ -303,3 +303,80 @@ async fn deployment_path_errors_take_precedence_over_invalid_json(
         .unwrap();
     assert_eq!(response.status(), status);
 }
+
+#[rstest]
+#[case::caller_endpoint("api_base")]
+#[case::caller_endpoint_alias("base_url")]
+#[case::token_authority("azure_authority_host")]
+#[case::host_tenant("tenant_id")]
+#[case::token_audience("azure_scope")]
+#[case::vertex_host("vertex_location")]
+#[case::aws_profile("aws_profile_name")]
+#[tokio::test]
+async fn body_fields_that_steer_the_deployment_credentials_are_rejected(
+    #[case] field: &str,
+    #[values(
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages",
+        "/v1/audio/transcriptions",
+        "/v1/ocr"
+    )]
+    path: &str,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&upstream)
+        .await;
+    let body = json!({
+        "model": "public/model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "input": "hi",
+        "audio": {"data": "", "format": "wav"},
+        "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+        "max_tokens": 16,
+        field: "https://attacker.example",
+    });
+    let response = support::post(
+        support::app("anthropic/test-model", &upstream.uri()),
+        path,
+        body,
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    let message = support::json(response).await["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(message.starts_with(field), "{message}");
+}
+
+#[rstest]
+#[tokio::test]
+async fn body_fields_that_cannot_redirect_credentials_reach_the_provider() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({"model": "test-model"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_test", "model": "test-model", "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}
+        })))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let body = json!({
+        "model": "public/model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16,
+        "temperature": 0.1,
+    });
+    let response = support::post(
+        support::app("anthropic/test-model", &upstream.uri()),
+        "/v1/chat/completions",
+        body,
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+}

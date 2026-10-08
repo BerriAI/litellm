@@ -11,6 +11,7 @@ axum = { workspace = true, features = ["json", "multipart", "original-uri"] }
 base64.workspace = true
 bytes.workspace = true
 litellm-auth.workspace = true
+litellm-core-utils.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-inference.workspace = true
 litellm-inference-transcription.workspace = true

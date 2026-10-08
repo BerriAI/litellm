@@ -4274,3 +4274,34 @@ def test_get_model_from_request_vertex_ai_passthrough(
 
     model = get_model_from_request(request_data, route)
     assert model == expected_model
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "azure_authority_host",
+        "azure_scope",
+        "azure_credential",
+        "azure_federated_token_file",
+        "tenant_id",
+        "client_id",
+        "vertex_location",
+        "vertex_ai_location",
+        "vertex_project",
+        "vertex_ai_project",
+    ],
+)
+def test_body_fields_that_steer_a_deployment_secret_are_rejected_without_opt_in(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        is_request_body_safe(
+            request_body={field: "https://attacker.example"},
+            general_settings={},
+            llm_router=None,
+            model="azure/gpt",
+        )
+    assert is_request_body_safe(
+        request_body={field: "https://attacker.example"},
+        general_settings={"allow_client_side_credentials": True},
+        llm_router=None,
+        model="azure/gpt",
+    )

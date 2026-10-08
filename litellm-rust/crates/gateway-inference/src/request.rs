@@ -4,6 +4,7 @@ use axum::{
     http::request::Parts,
     response::IntoResponse,
 };
+use litellm_core_utils::params::{ControlClass, control_class};
 use serde_json::{Map, Value};
 
 use crate::{Deployment, Error, Gateway};
@@ -108,6 +109,16 @@ pub(crate) async fn authorize_model(
         .await?
         .consume(identity.caller(), &access)?;
     Ok(())
+}
+
+pub(crate) fn reject_caller_controls(body: &Map<String, Value>) -> Result<(), Error> {
+    match body
+        .keys()
+        .find(|name| control_class(name).is_some_and(ControlClass::steers_exchange))
+    {
+        Some(field) => Err(Error::CallerControl(field.clone())),
+        None => Ok(()),
+    }
 }
 
 pub(crate) fn resolve_deployment<'a>(

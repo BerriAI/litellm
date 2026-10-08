@@ -15,6 +15,10 @@ pub enum Error {
     #[error("invalid request body: {0}")]
     InvalidBody(String),
     #[error(
+        "{0} is not allowed in the request body because it would redirect the deployment's credentials. Set it on the deployment in config.yaml instead"
+    )]
+    CallerControl(String),
+    #[error(
         "/v1/messages: Invalid model name passed in model={0}. Call `/v1/models` to view available models for your key."
     )]
     UnknownModel(String),
@@ -63,7 +67,9 @@ impl Error {
                 .http_status_code()
                 .and_then(|status| StatusCode::from_u16(status).ok())
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
+            Self::InvalidBody(_) | Self::UnknownModel(_) | Self::CallerControl(_) => {
+                StatusCode::BAD_REQUEST
+            }
             Self::Route(RouteError::Transport(TransportError::Http { status, .. })) => {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
             }
@@ -226,6 +232,7 @@ mod tests {
     #[rstest]
     #[case::upstream_status(upstream(429, ""), StatusCode::TOO_MANY_REQUESTS)]
     #[case::rejected_request(Error::Route(RouteError::InvalidRequest("top_k".into())), StatusCode::BAD_REQUEST)]
+    #[case::caller_control(Error::CallerControl("api_base".into()), StatusCode::BAD_REQUEST)]
     #[case::missing_key(
         Error::Route(RouteError::Auth(litellm_auth::Error::MissingApiKey {
             provider: "Anthropic",

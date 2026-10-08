@@ -9,6 +9,7 @@ mod http;
 mod lifecycle;
 mod logger;
 mod marshal;
+mod params;
 mod preflight;
 mod python_settings;
 mod routes;
@@ -30,6 +31,8 @@ mod _native {
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
+    #[pymodule_export]
+    use crate::params::control_params;
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]

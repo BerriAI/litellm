@@ -6,6 +6,8 @@ pub enum Error {
     Environment,
     #[error("MCP host does not yet support configured setting {0}")]
     McpSetting(String),
+    #[error("the Rust gateway does not yet support general_settings.{0}")]
+    UnsupportedSetting(&'static str),
     #[error(transparent)]
     Mcp(#[from] litellm_gateway_mcp::ConnectError),
     #[error("MCP requires a configured master key")]
