@@ -7,7 +7,6 @@ export interface ProviderAuthType {
   readonly fieldKeys: readonly string[];
   readonly requiredFieldKeys: readonly string[];
   readonly fixedValues?: Readonly<Record<string, string>>;
-  /** The mode's fields are server-owned, so Add Model saves it as an LLM credential and attaches it. */
   readonly credentialOnly?: boolean;
 }
 

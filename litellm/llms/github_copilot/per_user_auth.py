@@ -653,6 +653,41 @@ def is_github_copilot_per_user_request(kwargs: Mapping[str, object]) -> bool:
     return isinstance(kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY), GithubCopilotUserSession)
 
 
+def _without_authorization(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return {k: v for k, v in headers.items() if k.lower() != "authorization"}
+
+
+def _strip_caller_authorization(
+    kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
+) -> None:
+    """Once a per-user session is attached, its token owns Authorization on the
+    wire. Caller-supplied bearer headers would be re-merged by the HTTP handler
+    after the transformations run, so they are rebuilt here without any
+    Authorization key; the caller's mappings are left untouched."""
+    for key in ("extra_headers", "headers"):
+        value: Final = kwargs.get(key)
+        if isinstance(value, Mapping):
+            stripped: Final = _without_authorization(value)
+            if len(stripped) != len(value):
+                kwargs[key] = stripped  # rebind-ok: kwargs is the request mutation channel
+    optional_params: Final = kwargs.get("optional_params")
+    if isinstance(optional_params, dict):
+        eh: Final = optional_params.get("extra_headers")
+        if isinstance(eh, Mapping):
+            kwargs["optional_params"] = {  # rebind-ok: kwargs is the request mutation channel
+                **optional_params,
+                "extra_headers": _without_authorization(eh),
+            }
+    litellm_params: Final = kwargs.get("litellm_params")
+    if isinstance(litellm_params, dict):
+        eh2: Final = litellm_params.get("extra_headers")
+        if isinstance(eh2, Mapping):
+            kwargs["litellm_params"] = {  # rebind-ok: kwargs is the request mutation channel
+                **litellm_params,
+                "extra_headers": _without_authorization(eh2),
+            }
+
+
 def attach_github_copilot_user_session(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
 ) -> None:
@@ -670,6 +705,7 @@ def attach_github_copilot_user_session(
         credential_name=credential_name,
     )
     kwargs[GITHUB_COPILOT_USER_SESSION_KWARG_KEY] = session  # rebind-ok: kwargs is the request mutation channel
+    _strip_caller_authorization(kwargs)
 
 
 async def aattach_github_copilot_user_session(
@@ -689,3 +725,4 @@ async def aattach_github_copilot_user_session(
         credential_name=credential_name,
     )
     kwargs[GITHUB_COPILOT_USER_SESSION_KWARG_KEY] = session  # rebind-ok: kwargs is the request mutation channel
+    _strip_caller_authorization(kwargs)

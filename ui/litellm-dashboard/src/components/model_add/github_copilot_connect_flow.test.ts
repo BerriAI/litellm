@@ -5,7 +5,13 @@ import { connectFlowReducer, type ConnectFlowState, initialConnectFlowState } fr
 const started = (verificationUri = "https://github.com/login/device"): ConnectFlowState =>
   connectFlowReducer(initialConnectFlowState, {
     type: "started",
-    response: { user_code: "ABCD-1234", verification_uri: verificationUri, expires_in: 900, interval: 5 },
+    response: {
+      user_code: "ABCD-1234",
+      verification_uri: verificationUri,
+      expires_in: 900,
+      interval: 5,
+      flow_handle: "fh-1",
+    },
     now: 1_000,
   });
 
@@ -19,6 +25,7 @@ describe("connectFlowReducer", () => {
       verificationUri: "https://github.com/login/device",
       expiresAt: 901_000,
       intervalSeconds: 5,
+      flowHandle: "fh-1",
     };
     expect(started()).toEqual(expected);
   });

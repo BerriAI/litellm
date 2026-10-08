@@ -9151,6 +9151,85 @@ class TestResolveUserProviderCredentials:
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
 
     @pytest.mark.asyncio
+    async def test_request_fallback_chain_loads_transitive_per_user_tokens(self, monkeypatch):
+        """A -> B -> C through request-level fallback dicts: the transitive target's
+        per-user credential must be discovered too."""
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        table = self._env(monkeypatch)
+        router = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+
+        def _get_model_list(model_name=None, team_id=None):
+            if model_name != "copilot-chat":
+                return []
+            return [
+                {
+                    "model_name": "copilot-chat",
+                    "litellm_params": {
+                        "model": "github_copilot/gpt-4o",
+                        "litellm_credential_name": "copilot-cred",
+                    },
+                }
+            ]
+
+        router.get_model_list = MagicMock(side_effect=_get_model_list)
+        router.get_deployment = MagicMock(return_value=None)
+        data = {
+            "model": "gpt-4o",
+            "fallbacks": [{"gpt-4o": ["backup-chat"]}, {"backup-chat": ["copilot-chat"]}],
+            "secret_fields": {},
+        }
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        table.find_many.assert_awaited()
+        assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
+
+    @pytest.mark.asyncio
+    async def test_key_router_settings_fallback_loads_per_user_tokens(self, monkeypatch):
+        """The proxy prefers key/team router_settings.fallbacks over router-level
+        fallbacks (_configured_fallbacks), so discovery must read them too."""
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        table = self._env(monkeypatch)
+        router = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(
+            side_effect=lambda model_name=None, team_id=None: (
+                [
+                    {
+                        "model_name": "copilot-chat",
+                        "litellm_params": {
+                            "model": "github_copilot/gpt-4o",
+                            "litellm_credential_name": "copilot-cred",
+                        },
+                    }
+                ]
+                if model_name == "copilot-chat"
+                else []
+            )
+        )
+        router.get_deployment = MagicMock(return_value=None)
+        data = {"model": "gpt-4o", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+            router_settings={"fallbacks": [{"gpt-4o": [{"model": "copilot-chat"}]}]},
+        )
+        table.find_many.assert_awaited()
+        assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
+
+    @pytest.mark.asyncio
     async def test_team_public_model_name_resolves_per_user_deployments(self, monkeypatch):
         """A caller hitting a team's public model name must get the same per-user
         credentials routing resolves: get_model_list needs the caller's team_id."""

@@ -2060,3 +2060,23 @@ def test_user_connection_poll_valid_handle_works_with_a_fresh_cache(monkeypatch)
     assert poll.status_code == 200, poll.text
     assert poll.json()["status"] == "connected"
     table.upsert.assert_awaited_once()
+
+
+def test_delete_user_connection_fails_closed_when_the_tombstone_write_fails(monkeypatch):
+    """Redis attached but its set() raises: the disconnect must not delete the row,
+    or the cached token would keep working until TTL with nothing left to revoke."""
+    table = _patch_user_connection_env(monkeypatch, [_per_user_credential()], rows=[_connection_row()])
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+
+    failing_redis = SimpleNamespace(
+        async_set_cache=AsyncMock(side_effect=ConnectionError("redis down")),
+        async_get_cache=AsyncMock(return_value=None),
+        async_delete_cache=AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=failing_redis))
+
+    response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
+    assert response.status_code == 503, response.text
+    table.delete_many.assert_not_awaited()
