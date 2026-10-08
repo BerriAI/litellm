@@ -770,7 +770,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         api_base: object,
         prompt_cache_options: object,
     ) -> Sequence[Mapping[str, object]]:
-        if not supports_openai_prompt_cache_breakpoint(model):
+        if not AnthropicCacheControlHook._may_target_openai_prompt_cache_breakpoint(model, custom_llm_provider):
             return points
         return AnthropicCacheControlHook._stamped(
             points,
@@ -778,6 +778,20 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
                 model, custom_llm_provider, api_base, prompt_cache_options
             ),
+        )
+
+    @staticmethod
+    def _may_target_openai_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None) -> bool:
+        """Cheap gate before the dialect is resolved: the model's own row or version, or, when the
+        serving provider is already known, a row keyed for that provider (``openai.gpt-5.6-sol``
+        served by ``bedrock_mantle``), which costs no provider lookup."""
+        if supports_openai_prompt_cache_breakpoint(model):
+            return True
+        if custom_llm_provider is None:
+            return False
+        return (
+            _hosted_openai_dialect_flag(model, custom_llm_provider, AnthropicCacheControlHook._resolve_provider)
+            is not None
         )
 
     @staticmethod

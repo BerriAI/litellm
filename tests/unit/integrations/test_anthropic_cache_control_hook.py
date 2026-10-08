@@ -3994,6 +3994,61 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
         assert messages[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
         assert params["prompt_cache_options"] == {"mode": "implicit"}
 
+    BARE_MODEL = "openai.gpt-5.6-sol"
+    POINTS = [{"location": "message", "role": "system"}]
+    MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+    MARKED_SYSTEM = [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+
+    def test_a_bare_deployment_name_with_its_provider_is_stamped_on_the_openai_dialect(self):
+        """A deployment written as ``model: openai.gpt-5.6-sol`` plus ``custom_llm_provider: bedrock_mantle``
+        has no row of its own and no openai row of the same name, so only the provider-keyed row can
+        answer; the stamp must read it the way the dialect resolution does."""
+        stamped = AnthropicCacheControlHook._stamped_with_dialect(
+            copy.deepcopy(self.POINTS), self.BARE_MODEL, "bedrock_mantle", None, None
+        )
+        assert stamped[0]["_litellm_openai_dialect"] is True
+
+    def test_a_bare_deployment_name_without_its_provider_keeps_its_points_and_costs_no_lookup(self):
+        points = copy.deepcopy(self.POINTS)
+        with patch.object(AnthropicCacheControlHook, "_resolve_provider") as resolve:
+            assert AnthropicCacheControlHook._stamped_with_dialect(points, self.BARE_MODEL, None, None, None) is points
+        resolve.assert_not_called()
+
+    def test_the_chat_seed_carries_the_resolved_provider_for_a_bare_deployment_name(self):
+        params: dict = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model=self.BARE_MODEL,
+            custom_llm_provider="bedrock_mantle",
+        )
+        _, messages, out = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.BARE_MODEL,
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == self.MARKED_SYSTEM
+        assert out["prompt_cache_options"] == {"mode": "implicit"}
+
+    def test_the_responses_stamp_carries_the_resolved_provider_for_a_bare_deployment_name(self):
+        from litellm.responses.main import _stamp_injection_points_with_dialect
+
+        kwargs: dict = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        _stamp_injection_points_with_dialect(kwargs, self.BARE_MODEL, "bedrock_mantle")
+        _, messages, out = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.BARE_MODEL,
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=kwargs,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == self.MARKED_SYSTEM
+        assert out["prompt_cache_options"] == {"mode": "implicit"}
+
 
 class TestRecordGatewayInjection:
     """The injection marker spend accounting gates prompt-caching savings on."""
