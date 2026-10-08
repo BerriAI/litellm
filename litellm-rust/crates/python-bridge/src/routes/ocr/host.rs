@@ -27,12 +27,12 @@ enum OcrHostData {
 /// document as it goes), acquires Azure AD tokens, and builds the public response and
 /// exception.
 pub(super) struct OcrPythonHost {
-    request: Py<PyAny>,
+    request: Py<PyDict>,
     data: OcrHostData,
 }
 
 impl OcrPythonHost {
-    pub(super) fn new(request: Py<PyAny>) -> Self {
+    pub(super) fn new(request: Py<PyDict>) -> Self {
         Self {
             request,
             data: OcrHostData::Unprojected,
@@ -209,7 +209,7 @@ del provider
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let mut host = OcrPythonHost::new(py.None());
+            let mut host = OcrPythonHost::new(PyDict::new(py).unbind());
             assert!(host.decode_request(py, &kwargs).unwrap().caller_token);
             locals.del_item("kwargs").unwrap();
             drop(kwargs);
