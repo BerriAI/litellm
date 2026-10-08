@@ -8,6 +8,7 @@ logging-only scans finish, before it reads what Akto received.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Iterator
@@ -32,6 +33,10 @@ DOWN_KEY: Final = "synthetic-akto-down-key"
 MIXED_KEY: Final = "synthetic-akto-mixed-key"
 BLOCK_MARK: Final = "SYNTHETIC-AKTO-BLOCK"
 BLOCK_REASON: Final = "Synthetic Akto policy block"
+AKTO_DROP_MARK: Final = "SYNTHETIC-AKTO-DROP"
+AKTO_ERROR_MARK: Final = "SYNTHETIC-AKTO-500"
+AKTO_GARBAGE_MARK: Final = "SYNTHETIC-AKTO-GARBAGE"
+PROVIDER_FAIL_MARK: Final = "SYNTHETIC-PROVIDER-FAIL"
 REQUEST_CHECK: Final = {"akto_connector": "litellm", "guardrails": "true", "ingest_data": "true"}
 RESPONSE_CHECK: Final = {"akto_connector": "litellm", "response_guardrails": "true", "ingest_data": "true"}
 FILE_CHECK: Final = {"akto_connector": "litellm", "file_guardrails": "true"}
@@ -62,6 +67,12 @@ def _akto_call(request: Request) -> AktoCall:
 
 
 def _akto_verdict(request: Request) -> Reply:
+    if AKTO_DROP_MARK.encode() in request.body:
+        return Reply(drop_connection=True)
+    if AKTO_ERROR_MARK.encode() in request.body:
+        return Reply(status=500, body=b'{"error": "synthetic akto failure"}')
+    if AKTO_GARBAGE_MARK.encode() in request.body:
+        return Reply(body=b"synthetic akto garbage", content_type="text/plain")
     verdict: Final = (
         {"Allowed": False, "Behaviour": "block", "Reason": BLOCK_REASON}
         if BLOCK_MARK.encode() in request.body
@@ -158,6 +169,8 @@ def _responses_reply(marker: str) -> Reply:
 
 
 def _provider(request: Request) -> Reply:
+    if PROVIDER_FAIL_MARK.encode() in request.body:
+        return Reply(status=500, body=b'{"error": {"message": "synthetic provider failure", "type": "server_error"}}')
     marker: Final = _marker_in(request.body)
     if request.target.endswith("/v1/messages"):
         return _messages_reply(marker)
@@ -216,11 +229,8 @@ class Rig:
         return tuple(request for request in self.provider.drain() if marker.encode() in request.body)
 
     def guardrail_entries(self, response_id: str, name: str) -> tuple[dict[str, object], ...]:
-        rows: Final = eventually(
-            lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (response_id,)),
-            lambda values: len(values) == 1,
-            seconds=70,
-        )
+        rows: Final = spend_rows(response_id)
+        assert len(rows) == 1, rows
         entries: Final = object_value(rows[0]["metadata"]).get("guardrail_information")
         assert isinstance(entries, list), rows[0]
         return tuple(entry for entry in (object_value(item) for item in entries) if entry.get("guardrail_name") == name)
@@ -229,6 +239,18 @@ class Rig:
         self.guardrail_entries(response_id, "akto-log")
         calls: Final = tuple(_akto_call(request) for request in self.akto.drain() if marker.encode() in request.body)
         return tuple(call for call in calls if call.authorization == key)
+
+
+def spend_rows(request_id: str) -> tuple[dict[str, object], ...]:
+    return tuple(
+        eventually(
+            lambda: read_rows(
+                'SELECT request_id, status, metadata FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,)
+            ),
+            lambda values: len(values) >= 1,
+            seconds=70,
+        )
+    )
 
 
 @pytest.fixture(scope="module")
@@ -431,3 +453,82 @@ def test_dashboard_offers_logging_only_for_akto(rig: Rig) -> None:
     settings: Final = response.json()
     assert "logging_only" in settings["supported_modes_by_provider"]["akto"], settings["supported_modes_by_provider"]
     assert "akto" not in settings["providers_without_directional_logging_only_scope"]
+
+
+@pytest.mark.parametrize("failure", [AKTO_ERROR_MARK, AKTO_GARBAGE_MARK, AKTO_DROP_MARK])
+def test_failing_akto_under_logging_only_never_fails_the_caller(rig: Rig, failure: str) -> None:
+    marker: Final = _marker()
+    body: Final = _chat(rig, f"{failure} {marker}")
+    assert _content(body) == _answer(marker)
+
+    calls: Final = rig.settled_akto_calls(str(body["id"]), marker, LOG_KEY)
+    assert [call.flags for call in calls] == [REQUEST_CHECK], calls
+    entries: Final = rig.guardrail_entries(str(body["id"]), "akto-log")
+    assert [entry["guardrail_mode"] for entry in entries] == ["logging_only"], entries
+
+
+def test_provider_failure_under_logging_only_reaches_the_caller_and_checks_nothing(rig: Rig) -> None:
+    marker: Final = _marker()
+    response: Final = rig.proxy.client.post(
+        "/v1/chat/completions",
+        json={"model": rig.chat_model, "messages": [{"role": "user", "content": f"{PROVIDER_FAIL_MARK} {marker}"}]},
+        headers=rig.auth(),
+    )
+    assert response.status_code == 500, response.text
+    assert "synthetic provider failure" in response.text
+
+    rows: Final = spend_rows(response.headers["x-litellm-call-id"])
+    assert [row["status"] for row in rows] == ["failure"], rows
+    assert [request for request in rig.akto.drain() if marker.encode() in request.body] == []
+
+
+async def _burst_call(rig: Rig, kind: str, content: str) -> tuple[str, str]:
+    if kind == "messages":
+        claude: Final = anthropic.AsyncAnthropic(base_url=rig.base(), api_key=rig.proxy.key, max_retries=0)
+        message: Final = await claude.messages.create(
+            model=rig.claude_model, max_tokens=64, messages=[{"role": "user", "content": content}]
+        )
+        assert message.content[0].type == "text"
+        return message.id, message.content[0].text
+    client: Final = openai.AsyncOpenAI(base_url=rig.base() + "/v1", api_key=rig.proxy.key, max_retries=0)
+    if kind == "responses":
+        result: Final = await client.responses.create(model=rig.responses_model, input=content)
+        return result.id, result.output_text
+    if kind == "stream":
+        stream: Final = await client.chat.completions.create(
+            model=rig.chat_model, messages=[{"role": "user", "content": content}], stream=True
+        )
+        chunks: Final = [chunk async for chunk in stream]
+        return chunks[0].id, "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+    completion: Final = await client.chat.completions.create(
+        model=rig.chat_model, messages=[{"role": "user", "content": content}]
+    )
+    return completion.id, completion.choices[0].message.content or ""
+
+
+@pytest.mark.asyncio
+async def test_burst_with_akto_failing_for_half_the_calls_answers_and_logs_every_call_once(rig: Rig) -> None:
+    kinds: Final = ("chat", "stream", "messages", "responses") * 6
+    markers: Final = tuple(_marker() for _ in kinds)
+    failing: Final = frozenset(markers[::2])
+    results: Final = await asyncio.gather(
+        *(
+            _burst_call(rig, kind, (AKTO_DROP_MARK + " " if marker in failing else "") + "burst " + marker)
+            for kind, marker in zip(kinds, markers, strict=True)
+        )
+    )
+    assert [answer for _, answer in results] == [_answer(marker) for marker in markers]
+
+    for response_id, _ in results:
+        assert [row["status"] for row in spend_rows(response_id)] == ["success"], response_id
+    calls: Final = tuple(
+        call for call in (_akto_call(request) for request in rig.akto.drain()) if call.authorization == LOG_KEY
+    )
+    observed: Final = {
+        marker: [call.flags for call in calls if marker in json.dumps(call.payload)] for marker in markers
+    }
+    expected: Final = {
+        marker: [REQUEST_CHECK] if marker in failing else [REQUEST_CHECK, RESPONSE_CHECK] for marker in markers
+    }
+    assert observed == expected
+    assert rig.proxy.client.get("/health/liveliness").status_code == 200
