@@ -1,7 +1,7 @@
 pub(crate) mod audio_transcription;
 pub(crate) mod chat_completions;
+mod codec;
 pub(crate) mod embeddings;
-mod inference;
 pub(crate) mod messages;
 pub(crate) mod ocr;
 mod parameters;

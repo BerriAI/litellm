@@ -8,7 +8,7 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use super::inference::InferenceHost;
+use super::codec::RouteCodec;
 
 fn run_chat_completions(
     py: Python<'_>,
@@ -17,7 +17,7 @@ fn run_chat_completions(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let host = InferenceHost::new(
+    let host = RouteCodec::new(
         request.clone(),
         "litellm.rust_bridge.chat_completions.route_host",
     );
