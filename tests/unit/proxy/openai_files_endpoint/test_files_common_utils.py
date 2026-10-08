@@ -3,7 +3,9 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
+from litellm.caching.caching import DualCache
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
     get_credentials_for_model,
@@ -11,7 +13,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     map_raw_file_ids_to_unified,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
 from litellm.types.utils import LiteLLMBatch
 
 _RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
@@ -514,3 +516,139 @@ class TestCompletedBatchSafeToRetire:
 )
 def test_is_litellm_executed_batch_reads_the_llm_batch_id_prefix(decoded_unified_batch_id: str, executed: bool):
     assert is_litellm_executed_batch(decoded_unified_batch_id) is executed
+
+
+def _managed_files_hook(prisma_client: MagicMock) -> _PROXY_LiteLLMManagedFiles:
+    return _PROXY_LiteLLMManagedFiles(internal_usage_cache=InternalUsageCache(DualCache()), prisma_client=prisma_client)
+
+
+def _managed_object_prisma(db_batch_object: MagicMock | None) -> MagicMock:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=db_batch_object)
+    prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+    return prisma_client
+
+
+@pytest.mark.asyncio
+async def test_batch_status_sync_from_provider_to_database(caplog: pytest.LogCaptureFixture):
+    import json
+    import logging
+
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_batch_from_database,
+        update_batch_in_database,
+    )
+
+    batch_id: Final = "batch_test123"
+    unified_batch_id: Final = "litellm_proxy:test_unified_batch"
+    stored_row: Final = MagicMock(
+        unified_object_id=batch_id,
+        status="validating",
+        file_object=json.dumps(
+            {
+                "id": batch_id,
+                "object": "batch",
+                "status": "validating",
+                "endpoint": "/v1/chat/completions",
+                "input_file_id": "file-test123",
+                "completion_window": "24h",
+                "created_at": 1234567890,
+            }
+        ),
+    )
+    prisma_client: Final = _managed_object_prisma(stored_row)
+    managed_files: Final = _managed_files_hook(prisma_client)
+    logger: Final = logging.getLogger("test_batch_status_sync")
+
+    db_batch_object, response_batch = await get_batch_from_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        managed_files_obj=managed_files,
+        prisma_client=prisma_client,
+        verbose_proxy_logger=logger,
+    )
+
+    prisma_client.db.litellm_managedobjecttable.find_first.assert_awaited_once_with(
+        where={"unified_object_id": batch_id}
+    )
+    assert db_batch_object is stored_row
+    assert isinstance(response_batch, LiteLLMBatch)
+    assert response_batch.id == batch_id
+    assert response_batch.status == "validating"
+    assert response_batch.input_file_id == "file-test123"
+
+    completed: Final = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="completed",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+        output_file_id="file-output123",
+    )
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await update_batch_in_database(
+            batch_id=batch_id,
+            unified_batch_id=unified_batch_id,
+            response=completed,
+            managed_files_obj=managed_files,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=logger,
+            db_batch_object=db_batch_object,
+            operation="retrieve",
+            poller_owns_accounting=False,
+        )
+
+    update: Final = prisma_client.db.litellm_managedobjecttable.update
+    update.assert_awaited_once()
+    assert update.await_args.kwargs["where"] == {"unified_object_id": batch_id}
+    written: Final = update.await_args.kwargs["data"]
+    assert written["status"] == "complete"
+    assert written["batch_processed"] is True
+    assert written["updated_at"] is not None
+    assert json.loads(written["file_object"])["status"] == "completed"
+    assert json.loads(written["file_object"])["output_file_id"] == "file-output123"
+    assert f"Updating batch {batch_id} status from validating to completed" in caplog.messages
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_updates_database(caplog: pytest.LogCaptureFixture):
+    import json
+    import logging
+
+    from litellm.proxy.openai_files_endpoints.common_utils import update_batch_in_database
+
+    batch_id: Final = "batch_cancel_test"
+    cancelled: Final = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="cancelled",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+        cancelled_at=1234567999,
+    )
+    prisma_client: Final = _managed_object_prisma(None)
+    logger: Final = logging.getLogger("test_batch_cancel_updates_database")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await update_batch_in_database(
+            batch_id=batch_id,
+            unified_batch_id="litellm_proxy:cancel_test",
+            response=cancelled,
+            managed_files_obj=_managed_files_hook(prisma_client),
+            prisma_client=prisma_client,
+            verbose_proxy_logger=logger,
+            operation="cancel",
+        )
+
+    update: Final = prisma_client.db.litellm_managedobjecttable.update
+    update.assert_awaited_once()
+    assert update.await_args.kwargs["where"] == {"unified_object_id": batch_id}
+    written: Final = update.await_args.kwargs["data"]
+    assert written["status"] == "cancelled"
+    assert "batch_processed" not in written
+    assert json.loads(written["file_object"])["cancelled_at"] == 1234567999
+    assert f"Updating batch {batch_id} status to cancelled after cancel" in caplog.messages

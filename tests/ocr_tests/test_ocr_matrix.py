@@ -24,7 +24,6 @@ from typing import Final, Literal
 import pytest
 
 import litellm
-from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
@@ -301,17 +300,3 @@ async def test_ocr(case: Case, monkeypatch: pytest.MonkeyPatch, logger: Recordin
     _assert_logged(await logger.wait_for_call(), response, case.provider.model, response.model, case.call)
 
 
-async def test_router_aocr(monkeypatch: pytest.MonkeyPatch, logger: RecordingLogger) -> None:
-    case: Final = Case(MISTRAL, MISTRAL_KEY, "explicit", PDF_BY_URL, "async")
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "ocr-alias",
-                "litellm_params": {"model": MISTRAL.model, **case.bind_credentials(monkeypatch)},
-            }
-        ]
-    )
-    response: Final = await router.aocr(model="ocr-alias", document=PDF_BY_URL.build())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # Router.aocr is untyped
-    assert isinstance(response, OCRResponse)
-    _assert_ocr_response(response, MISTRAL.model, PDF_TEXT)
-    _assert_logged(await logger.wait_for_call(), response, MISTRAL.model, MISTRAL.model, case.call)
