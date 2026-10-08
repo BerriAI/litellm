@@ -3267,7 +3267,7 @@ class MCPServerManager:
             or "rfc8693",
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
-            rpm=getattr(mcp_server, "rpm", None),
+            rpm=mcp_server.rpm,
         )
         _warn_legacy_delegate_auth_if_applicable(new_server, source="database")
         if register_oauth_discovery:
