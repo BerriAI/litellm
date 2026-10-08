@@ -7251,7 +7251,7 @@ _should_retry = should_retry
 
 def _get_retry_after_from_exception_header(
     response_headers: httpx.Headers | None = None,
-):
+) -> float:
     """
     Reimplementation of openai's calculate retry after, since that one can't be imported.
     https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L631
@@ -7264,16 +7264,24 @@ def _get_retry_after_from_exception_header(
         # <http-date>". See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After#syntax for
         # details.
         if response_headers is not None:
-            retry_header: Final[str] = response_headers.get("retry-after")
+            retry_ms_header: Final = response_headers.get("retry-after-ms")
             try:
-                retry_after = int(retry_header)
+                return float(retry_ms_header) / 1000
+            except (TypeError, ValueError):
+                pass
+
+            retry_header: Final[str | None] = response_headers.get("retry-after")
+            if retry_header is None:
+                return -1.0
+            try:
+                retry_after = float(retry_header)
             except Exception:
                 retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)
                 if retry_date_tuple is None:
                     retry_after = -1
                 else:
                     retry_date: Final = email.utils.mktime_tz(retry_date_tuple)
-                    retry_after = int(retry_date - time.time())
+                    retry_after = float(retry_date - time.time())
         else:
             retry_after = -1
 

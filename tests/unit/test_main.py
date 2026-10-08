@@ -2575,6 +2575,54 @@ def throw_retryable_error(*_, **__):
     raise RuntimeError("BOOM")
 
 
+@pytest.mark.parametrize(
+    ("headers", "retry_strategy", "expected_wait"),
+    [
+        ({"retry-after": "20"}, "constant_retry", 20),
+        ({"retry-after-ms": "1500"}, "exponential_backoff_retry", 1.5),
+        ({"retry-after-ms": "1500", "retry-after": "20"}, "constant_retry", 1.5),
+        ({"retry-after-ms": "invalid", "retry-after": "2.5"}, "constant_retry", 2.5),
+        ({"retry-after": "60"}, "constant_retry", 60),
+        ({"retry-after": "61"}, "exponential_backoff_retry", 1),
+        ({"retry-after": "invalid"}, "constant_retry", 0),
+        ({}, "constant_retry", 0),
+    ],
+)
+def test_completion_retries_respect_provider_wait(
+    headers: dict[str, str], retry_strategy: str, expected_wait: float
+) -> None:
+    response = httpx.Response(
+        status_code=429,
+        headers=headers,
+        request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    error = litellm.RateLimitError(
+        message="rate limited",
+        llm_provider="openai",
+        model="test-model",
+        response=response,
+        headers={"x-request-id": "request-1"},
+    )
+    calls: list[dict[str, object]] = []
+
+    def completion_stub(**kwargs: object) -> str:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise error
+        return "recovered"
+
+    with patch("tenacity.nap.time.sleep") as sleep:
+        result = litellm_main.completion_with_retries(
+            num_retries=2,
+            retry_strategy=retry_strategy,
+            original_function=completion_stub,
+        )
+
+    assert result == "recovered"
+    assert len(calls) == 2
+    sleep.assert_called_once_with(expected_wait)
+
+
 @pytest.mark.asyncio
 async def test_retrying() -> None:
     litellm.num_retries = 10
