@@ -8,7 +8,7 @@ import pytest
 from litellm import Router, token_counter
 from litellm.caching.dual_cache import DualCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
-from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
+from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict, RouterRateLimitError
 
 MODEL_GROUP: Final = "lowest-tpm-router"
 HIGH_USAGE_DEPLOYMENT_ID: Final = "highest-usage"
@@ -148,3 +148,35 @@ async def test_usage_based_routing_v1_serves_async_calls_within_rpm_and_tpm() ->
         *(router.acompletion(model=MODEL_GROUP, messages=messages) for messages in conversations[:2])
     )
     assert [response.choices[0].message.content for response in responses] == [f"from {LOW_USAGE_DEPLOYMENT_ID}"] * 2
+
+
+RPM_LIMIT: Final = 3
+
+
+def _router_with_recorded_rpm(recorded: int) -> Router:
+    router: Final = Router(
+        model_list=[{**_deployment(LOW_USAGE_DEPLOYMENT_ID), "rpm": RPM_LIMIT}],
+        routing_strategy="usage-based-routing",
+        enable_pre_call_checks=True,
+        num_retries=0,
+    )
+    now: Final = datetime.now()
+    for offset in range(-1, 2):
+        router.cache.set_cache(
+            key=f"{MODEL_GROUP}:rpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}",
+            value={LOW_USAGE_DEPLOYMENT_ID: recorded},
+            ttl=float("inf"),
+        )
+    return router
+
+
+def test_usage_based_routing_v1_serves_a_deployment_below_its_recorded_rpm_limit() -> None:
+    router: Final = _router_with_recorded_rpm(recorded=1)
+    response: Final = router.completion(model=MODEL_GROUP, messages=[{"role": "user", "content": "hello"}])
+    assert response.choices[0].message.content == f"from {LOW_USAGE_DEPLOYMENT_ID}"
+
+
+def test_usage_based_routing_v1_rejects_a_deployment_that_reached_its_recorded_rpm_limit() -> None:
+    router: Final = _router_with_recorded_rpm(recorded=RPM_LIMIT)
+    with pytest.raises(RouterRateLimitError):
+        router.completion(model=MODEL_GROUP, messages=[{"role": "user", "content": "hello"}])

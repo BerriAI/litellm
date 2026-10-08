@@ -1011,10 +1011,6 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["arguments"] == {}
 
 
-if __name__ == "__main__":
-    pytest.main([__file__])
-
-
 LANGFUSE_ENV_ONLY: Final = {
     key: value
     for key, value in os.environ.items()
