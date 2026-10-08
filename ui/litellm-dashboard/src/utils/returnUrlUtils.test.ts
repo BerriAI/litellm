@@ -108,9 +108,7 @@ describe("returnUrlUtils", () => {
     it("keeps a nested root in same-origin SSO return URLs", () => {
       setServerRootPath("/services/llm/");
       expect(getLoginUrl()).toBe("/services/llm/ui/login/");
-      expect(getLoginUrl("https://platform.example.com")).toBe(
-        "https://platform.example.com/services/llm/ui/login/",
-      );
+      expect(getLoginUrl("https://platform.example.com")).toBe("https://platform.example.com/services/llm/ui/login/");
       expect(getLoginUrl("https://platform.example.com/services/llm/")).toBe(
         "https://platform.example.com/services/llm/ui/login/",
       );
