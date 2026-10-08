@@ -26,7 +26,9 @@ const MAX_BUDGET_LABEL = "Max Budget (USD)";
 const RAISE_MAX_BUDGET_LABEL = "Raise the team's max budget";
 const RAISE_MAX_BUDGET_HELP_LABEL = "About raising the team's max budget";
 const RAISE_MAX_BUDGET_TOOLTIP =
-  "With Max Budget alone, team admins can keep or lower the team budget. This also lets them raise it, up to the organization's budget when the team belongs to one. Teams outside an organization, or in an organization without a budget, have no ceiling. Only proxy admins can remove a team's budget.";
+  "Lets team admins raise the budget too, capped by the organization's budget when the team has one. Only proxy admins can remove it.";
+const RAISE_MAX_BUDGET_DOCS_URL =
+  "https://docs.litellm.ai/docs/proxy/access_control#choosing-what-team-admins-can-edit";
 
 const mockSettings = (supported: readonly string[], enabled: readonly string[]) =>
   mockUseUISettings.mockReturnValue({
@@ -241,7 +243,7 @@ describe("TeamAdminEditableFieldsSettings", () => {
       expect(mutate).toHaveBeenCalledWith({ team_admin_editable_team_fields: ["tpm_limit"] }, expect.anything());
     });
 
-    it("explains what Raise allows in a tooltip on its help icon", async () => {
+    it("explains what Raise allows in a tooltip on its help icon, with a link to the docs", async () => {
       const user = userEvent.setup();
       mockSettings(supported, []);
       mockSave({});
@@ -253,6 +255,7 @@ describe("TeamAdminEditableFieldsSettings", () => {
       await user.hover(screen.getByRole("button", { name: RAISE_MAX_BUDGET_HELP_LABEL }));
 
       expect(await screen.findByText(RAISE_MAX_BUDGET_TOOLTIP)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Learn more" })).toHaveAttribute("href", RAISE_MAX_BUDGET_DOCS_URL);
     });
 
     it("renders nothing nested when the proxy does not support Raise", () => {
