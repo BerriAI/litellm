@@ -112,7 +112,7 @@ async def _v1_model_info_names(user_api_key_dict: UserAPIKeyAuth, **kwargs) -> l
 
 async def _model_groups(user_api_key_dict: UserAPIKeyAuth) -> list[str]:
     response = await proxy_server.model_group_info(user_api_key_dict=user_api_key_dict)
-    return [group.model_group for group in response["data"]]
+    return [group.model_group for group in response.data]
 
 
 @pytest.mark.asyncio
