@@ -82,41 +82,6 @@ def get_tracked_spend() -> float:
     return sum(float(row.get("spend") or 0.0) for row in rows)
 
 
-VERTEX_PROJECT = "litellm-ci-cd"
-VERTEX_MODEL = "gemini-3.1-flash-lite"
-VERTEX_GENERATE_CONTENT_URL = (
-    f"{LITE_LLM_ENDPOINT}/vertex_ai/v1/projects/{VERTEX_PROJECT}"
-    f"/locations/global/publishers/google/models/{VERTEX_MODEL}:generateContent"
-)
-
-
-def _vertex_access_token() -> str:
-    import google.auth
-    import google.auth.transport.requests
-
-    credentials, _ = google.auth.default(
-        scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
-    credentials.refresh(google.auth.transport.requests.Request())
-    return credentials.token
-
-
-def _spend_log_for_request(call_id: str) -> dict | None:
-    response = requests.get(
-        f"{LITE_LLM_ENDPOINT}/spend/logs?request_id={call_id}",
-        headers={"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"},
-        timeout=30,
-    )
-    if response.status_code != 200:
-        return None
-    rows = response.json()
-    return rows[0] if rows else None
-
-
-def _is_vertex_quota_error(response: requests.Response) -> bool:
-    return response.status_code == 429 or "RESOURCE_EXHAUSTED" in response.text
-
-
 @pytest.mark.asyncio()
 @pytest.mark.skip(reason="skip flaky test - vertex pass through streaming is flaky")
 async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():

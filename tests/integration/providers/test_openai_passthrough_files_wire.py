@@ -1,69 +1,49 @@
 import uuid
+from pathlib import Path
 from typing import Final
 
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
-_PROXY_CONFIG: Final = (
-    "model_list: []\n"
-    "general_settings:\n"
-    "  master_key: os.environ/LITELLM_MASTER_KEY\n"
-    "  database_url: os.environ/DATABASE_URL\n"
-    "  store_model_in_db: true\n"
-    "  disable_spend_logs: false\n"
-    "  proxy_batch_write_at: 1\n"
-)
+_UPSTREAM_KEY: Final = "synthetic-openai-key"
 
 
-def test_openai_passthrough_file_upload_and_delete(gateway: Gateway, tmp_path) -> None:
+def test_openai_passthrough_file_upload_and_delete(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "openai-file-" + uuid.uuid4().hex
-    seen: Final = []
+    file_id: Final = f"file-{marker}"
 
     def respond(request: Request) -> Reply:
-        seen.append((request.method, request.target))
-        if request.method == "POST" and request.target.endswith("/files"):
-            content_type: Final = request.headers.get("content-type", "")
-            assert "multipart/form-data" in content_type, request.headers
-            body: Final = request.body
-            assert b'name="purpose"' in body and b"assistants" in body, body[:400]
-            assert b'name="file"' in body and marker.encode() in body, body[:400]
+        assert request.headers["authorization"] == f"Bearer {_UPSTREAM_KEY}", request.headers
+        if request.method == "POST" and request.target == "/files":
+            assert request.headers["content-type"].startswith("multipart/form-data"), request.headers
+            assert b'name="purpose"\r\n\r\nassistants\r\n' in request.body, request.body[:400]
+            assert b'filename="notes.txt"' in request.body and marker.encode() in request.body, request.body[:400]
             return Reply(
                 body=(
-                    b'{"id": "file-' + marker.encode() + b'", "object": "file", "bytes": 12, '
+                    b'{"id": "' + file_id.encode() + b'", "object": "file", "bytes": 12, '
                     b'"created_at": 1700000000, "purpose": "assistants", "filename": "notes.txt"}'
                 ),
             )
-        if request.method == "DELETE" and request.target.endswith(f"/files/file-{marker}"):
-            return Reply(body=b'{"id": "file-' + marker.encode() + b'", "object": "file", "deleted": true}')
+        if request.method == "DELETE" and request.target == f"/files/{file_id}":
+            return Reply(body=b'{"id": "' + file_id.encode() + b'", "object": "file", "deleted": true}')
         return Reply(status=404)
 
     with wire_server(respond) as wire:
-        config: Final = tmp_path / "proxy_config.yaml"
-        config.write_text(
-            _PROXY_CONFIG
-            + "files_settings:\n"
-            + "  - custom_llm_provider: openai\n"
-            + f"    api_base: {wire.url}\n"
-            + "    api_key: synthetic-openai-key\n"
-        )
         with owned_proxy(
             gateway,
             tmp_path,
-            {"OPENAI_API_BASE": wire.url, "OPENAI_API_KEY": "synthetic-openai-key"},
-            config=config,
+            {"OPENAI_API_BASE": wire.url, "OPENAI_API_KEY": _UPSTREAM_KEY},
         ) as candidate:
             upload: Final = candidate.request_multipart(
-                "/openai/v1/files",
+                "/openai/files",
                 {"purpose": "assistants"},
                 {"file": ("notes.txt", f"contents {marker}".encode(), "text/plain")},
             )
             assert upload.status_code == 200, upload.text
-            assert upload.json()["id"] == f"file-{marker}"
-            delete: Final = candidate.client.delete(
-                f"{candidate.client.base_url}/openai/v1/files/file-{marker}",
-                headers={"Authorization": f"Bearer {candidate.key}"},
-            )
+            assert upload.json()["id"] == file_id
+            delete: Final = candidate.request("DELETE", f"/openai/files/{file_id}")
             assert delete.status_code == 200, delete.text
             assert delete.json()["deleted"] is True
-        assert seen == [("POST", "/files"), ("DELETE", f"/files/file-{marker}")], seen
+        forwarded: Final = tuple((request.method, request.target) for request in wire.drain())
+        assert forwarded == (("POST", "/files"), ("DELETE", f"/files/{file_id}")), forwarded

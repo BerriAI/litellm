@@ -1,18 +1,28 @@
-from collections.abc import Sequence
+import asyncio
+import json
+import time
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final, cast
+from unittest.mock import MagicMock, patch
 
+import httpx
 import litellm
 import pytest
+import respx
+from fastapi import Request, Response
+from starlette.types import Message
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
     VertexAILivePassthroughLoggingHandler,
 )
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import vertex_proxy_route
 from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
-from litellm.types.utils import CostBreakdown, LlmProviders, Usage
+from litellm.types.utils import CostBreakdown, LlmProviders, StandardLoggingPayload, Usage
 
 
 class _LiveTurn(TypedDict):
@@ -890,76 +900,87 @@ class TestVertexAILivePassthroughErrorHandling:
         assert "kwargs" in result
 
 
-@pytest.mark.asyncio
-async def test_vertex_ai_generate_content_spendlog(respx_mock, httpx_transport) -> None:
-    import asyncio
-    import json
-    from unittest.mock import MagicMock
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads: Final[list[StandardLoggingPayload]] = []
 
-    import httpx
-    from fastapi import Request, Response
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.payloads.append(cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
 
-    import litellm
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import vertex_proxy_route
-    from litellm.integrations.custom_logger import CustomLogger
 
-    recorded: list[dict] = []
+_GENERATE_CONTENT_ENDPOINT: Final = (
+    "v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"
+)
 
-    class _Recorder(CustomLogger):
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-            recorded.append((kwargs, response_obj))
 
-        def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-            recorded.append((kwargs, response_obj))
-
-    litellm._async_success_callback = [*litellm._async_success_callback, _Recorder()]
-
-    request: Final = MagicMock(spec=Request)
-    request.method = "POST"
-    request.url = httpx.URL(
-        "http://proxy/vertex_ai/v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"
-    )
-    request.headers = {"content-type": "application/json", "authorization": "Bearer fake-google-token"}
-    request.scope = {
-        "path": "/vertex_ai/v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent",
+def _vertex_request(body: bytes) -> Request:
+    path: Final = f"/vertex_ai/{_GENERATE_CONTENT_ENDPOINT}"
+    scope: Final = {
         "type": "http",
+        "http_version": "1.1",
         "method": "POST",
-        "headers": [],
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json"), (b"authorization", b"Bearer client-google-token")],
+        "client": ("127.0.0.1", 51234),
+        "server": ("proxy.local", 4000),
+        "state": {},
     }
-    request.query_params = {}
-    body: Final = json.dumps({"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}).encode()
-    request.body = AsyncMock(return_value=body)
-    request.json = AsyncMock(return_value=json.loads(body))
 
-    canned: Final = {
-        "candidates": [{"content": {"role": "model", "parts": [{"text": "hello vertex"}]}, "finishReason": "STOP"}],
-        "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 6, "totalTokenCount": 15},
-    }
-    route: Final = respx_mock.post(
-        url__regex=r"https://us-central1-aiplatform\.googleapis\.com/.*generateContent.*"
-    ).mock(return_value=httpx.Response(200, json=canned))
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
 
-    GLOBAL_LOGGING_WORKER.start()
-    response: Final = await vertex_proxy_route(
-        endpoint="v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent",
-        request=request,
-        fastapi_response=MagicMock(spec=Response),
-        user_api_key_dict=MagicMock(client_ip="127.0.0.1"),
+    return Request(scope, receive)
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_generate_content_spendlog(
+    respx_mock: respx.MockRouter, httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder: Final = _SuccessRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    contents: Final = [{"role": "user", "parts": [{"text": "hi"}]}]
+    route: Final = respx_mock.post(f"https://us-central1-aiplatform.googleapis.com/{_GENERATE_CONTENT_ENDPOINT}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": "hello vertex"}]}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 6, "totalTokenCount": 15},
+            },
+        )
     )
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
 
+    response: Final = await vertex_proxy_route(
+        endpoint=_GENERATE_CONTENT_ENDPOINT,
+        request=_vertex_request(json.dumps({"contents": contents}).encode()),
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    assert isinstance(response, Response)
+    assert response.status_code == 200
+    call_id: Final = response.headers.get("x-litellm-call-id")
+    assert call_id
+    deadline: Final = time.monotonic() + 10
+    while not any(payload["id"] == call_id for payload in recorder.payloads) and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
     assert route.call_count == 1
     outbound: Final = route.calls[0].request
-    assert outbound.headers["authorization"] == "Bearer fake-google-token"
-    assert json.loads(outbound.content)["contents"] == [{"role": "user", "parts": [{"text": "hi"}]}]
-    assert json.loads(response.body)["candidates"][0]["content"]["parts"][0]["text"] == "hello vertex"
-    assert recorded, "success handler never invoked"
-    kwargs, response_obj = recorded[0]
-    payload: Final = kwargs.get("standard_logging_object") or {}
-    assert float(kwargs.get("response_cost") or 0) > 0, kwargs
-    usage: Final = payload.get("usage") or getattr(response_obj, "usage", None) or {}
-    prompt: Final = usage.get("prompt_tokens") if isinstance(usage, dict) else getattr(usage, "prompt_tokens", None)
-    completion: Final = usage.get("completion_tokens") if isinstance(usage, dict) else getattr(usage, "completion_tokens", None)
-    assert prompt == 9, (kwargs, usage)
-    assert completion == 6, (kwargs, usage)
+    assert outbound.headers["authorization"] == "Bearer client-google-token"
+    assert json.loads(outbound.content)["contents"] == contents
+    matching: Final = tuple(payload for payload in recorder.payloads if payload["id"] == call_id)
+    assert len(matching) == 1, recorder.payloads
+    logged: Final = matching[0]
+    assert logged["response_cost"] > 0
+    assert "gemini" in logged["model"]
+    assert logged["custom_llm_provider"] == "vertex_ai"
+    assert logged["prompt_tokens"] == 9
+    assert logged["completion_tokens"] == 6
