@@ -4373,7 +4373,9 @@ class ComplexityRouter(CustomLogger):
         )
 
         if cache_key is not None and pin_replay_allowed:
-            pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache_redis_first(key=cache_key)
+            pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache_redis_first(
+                key=cache_key, ttl=self.config.session_affinity_ttl_seconds
+            )
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
                 user_message: Final = _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None

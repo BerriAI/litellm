@@ -299,11 +299,11 @@ class DualCache(BaseCache):
                 verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_get_cache", e, with_traceback=True
             )
 
-    async def async_get_cache_redis_first(self, key: str) -> object:
+    async def async_get_cache_redis_first(self, key: str, ttl: int | None = None) -> object:
         if self.redis_cache is None:
             return await self.in_memory_cache.async_get_cache(key)
         try:
-            return await self.redis_cache.async_get_cache_or_raise(key)
+            redis_result: Final = await self.redis_cache.async_get_cache_or_raise(key)
         except Exception as e:
             log_redis_failure(
                 verbose_logger,
@@ -313,6 +313,10 @@ class DualCache(BaseCache):
                 with_traceback=True,
             )
             return await self.in_memory_cache.async_get_cache(key)
+        if redis_result is not None:
+            local_ttl: Final[dict[str, object]] = {} if ttl is None else {"ttl": ttl}
+            await self.in_memory_cache.async_set_cache(key, redis_result, **self._backfill_kwargs(local_ttl))
+        return redis_result
 
     def _reserve_redis_batch_keys(
         self,
