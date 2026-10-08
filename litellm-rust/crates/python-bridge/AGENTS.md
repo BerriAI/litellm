@@ -91,14 +91,16 @@ GIL handling to `litellm-host-python`.
   decides whether to raise or fall back. For a rust-only provider/route (no
   Python reference), the Python side is a thin dispatch that calls Rust and
   raises when the bridge is unavailable, with no fallback.
-  - Declare it by passing `python=NO_PYTHON` (`litellm.rust_bridge.runtime`)
-    to `PublicDispatch.run`/`arun` or `runtime.run`/`arun`, never a stand-in
-    callable that raises, and have `catalog.decide` return
-    `Rust(required=True)` for every context of it
-  - Any other decision, an unbindable call, or Python's internal async hop raises
-    `NoPythonImplementationError` before native runs, so a misdeclared route
-    fails in tests instead of reaching deleted code. When deleting a route's
-    Python implementation, switch its dispatch to `NO_PYTHON` in the same change
+  - Declare it with `NativeDispatch` (`litellm.rust_bridge.dispatch`) or
+    `runtime.run_native`/`arun_native`, never a stand-in Python callable that
+    raises, and have `catalog.decide` return `Rust(required=True)` for every
+    context of it. `NativeDispatch` has no Python-only path at all: no field
+    guard, no internal async hop, and its binder raises the public `TypeError`
+    instead of returning `None`, so native validation sees every bound call
+  - A decision other than required Rust raises `NoPythonImplementationError`
+    before native runs, so a misdeclared route fails in tests instead of
+    reaching deleted code. When deleting a route's Python implementation,
+    switch its dispatch from `PublicDispatch` to `NativeDispatch` in the same change
 - Keep the Python interface minimal (well under 100 lines per route): it only
   marshals inputs and calls Rust. Do not add per-route feature flags, and do
   not put provider dispatch in `litellm/main.py`; it lives in a thin dispatch

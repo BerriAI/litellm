@@ -61,11 +61,10 @@ async def invoke(
                 **arguments,
             },
         )
-        return await runtime.arun(
+        return await runtime.arun_native(
             RouteContext(Route.RESPONSES),
             binding=NATIVE_ARESPONSES,
             native=lambda hook: hook(request),
-            python=runtime.NO_PYTHON,
             policy=Rust(required=True),
         )
     server.default_response = (
@@ -78,11 +77,10 @@ async def invoke(
         if not native:
             return await litellm.acompletion(**parameters)
         chat: Final = NativeCall(args=(), kwargs=parameters, bound=parameters)
-        return await runtime.arun(
+        return await runtime.arun_native(
             RouteContext(Route.CHAT_COMPLETIONS),
             binding=NATIVE_ACOMPLETION,
             native=lambda hook: hook(chat),
-            python=runtime.NO_PYTHON,
             policy=Rust(required=True),
         )
     if not native:
@@ -101,11 +99,10 @@ async def invoke(
             **parameters,
         },
     )
-    return await runtime.arun(
+    return await runtime.arun_native(
         RouteContext(Route.MESSAGES),
         binding=NATIVE_AMESSAGES,
         native=lambda hook: hook(messages),
-        python=runtime.NO_PYTHON,
         policy=Rust(required=True),
     )
 

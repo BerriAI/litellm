@@ -67,7 +67,6 @@ def test_native_receives_normalized_positional_request_and_original_call_shape()
     result: Final = _DISPATCH.run(
         args,
         kwargs,
-        python=runtime.NO_PYTHON,
         binding=ocr_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
         policy=REQUIRED,
@@ -114,7 +113,6 @@ def test_native_preserves_keyword_model_and_document_in_original_call_shape() ->
     result: Final = _DISPATCH.run(
         args,
         kwargs,
-        python=runtime.NO_PYTHON,
         binding=ocr_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
         policy=REQUIRED,
@@ -131,27 +129,6 @@ def test_native_preserves_keyword_model_and_document_in_original_call_shape() ->
     assert call_kwargs["document"] is document
 
 
-def test_aocr_marker_cannot_be_served_without_python() -> None:
-    document: Final[Mapping[str, object]] = {"type": "file", "file": b"pdf"}
-    args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", document)
-    kwargs: Final[Mapping[str, object]] = {"aocr": True}
-
-    def native(
-        request: NativeCall,
-    ) -> OCRResponse:
-        pytest.fail("the aocr bypass marker must not reach native")
-
-    with pytest.raises(runtime.NoPythonImplementationError, match="must project to a native request"):
-        _DISPATCH.run(
-            args,
-            kwargs,
-            python=runtime.NO_PYTHON,
-            binding=ocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
-            policy=REQUIRED,
-        )
-
-
 def test_missing_native_binding_is_a_required_rust_error() -> None:
     args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", {"type": "file", "file": b"pdf"})
 
@@ -159,7 +136,6 @@ def test_missing_native_binding_is_a_required_rust_error() -> None:
         _DISPATCH.run(
             args,
             {},
-            python=runtime.NO_PYTHON,
             binding=ocr_binding(None),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
             policy=REQUIRED,
@@ -178,7 +154,6 @@ def test_non_required_decision_cannot_be_served_without_python() -> None:
         _DISPATCH.run(
             args,
             {},
-            python=runtime.NO_PYTHON,
             binding=ocr_binding(native),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
             policy=Python("test keeps the call on Python"),
@@ -196,7 +171,6 @@ def test_non_string_model_reaches_native_validation(model: object) -> None:
     _DISPATCH.run(
         (model, {"type": "file", "file": b"pdf"}),
         {},
-        python=runtime.NO_PYTHON,
         binding=ocr_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
         policy=REQUIRED,
@@ -230,7 +204,6 @@ def test_ocr_parser_errors_before_native(args: tuple[object, ...], kwargs: Mappi
         _DISPATCH.run(
             args,
             kwargs,
-            python=runtime.NO_PYTHON,
             binding=ocr_binding(native),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
             policy=REQUIRED,
@@ -265,7 +238,6 @@ async def test_aocr_parser_errors_before_native(
         await _ADISPATCH.arun(
             args,
             kwargs,
-            python=runtime.NO_PYTHON,
             binding=aocr_binding(native),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
             policy=REQUIRED,

@@ -412,12 +412,12 @@ async def run_without_python(
 ) -> str:
     bound: Final = binding(None if native_missing else calls.rust)
     if not asynchronous:
-        return runtime.run(context, binding=bound, native=lambda fn: fn(), python=runtime.NO_PYTHON, policy=policy)
+        return runtime.run_native(context, binding=bound, native=lambda fn: fn(), policy=policy)
 
     async def native(fn: NativeFn) -> str:
         return fn()
 
-    return await runtime.arun(context, binding=bound, native=native, python=runtime.NO_PYTHON, policy=policy)
+    return await runtime.arun_native(context, binding=bound, native=native, policy=policy)
 
 
 @pytest.mark.parametrize("asynchronous", (False, True))

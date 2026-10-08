@@ -66,11 +66,10 @@ class BedrockAudioTranscriptionRustDispatch:
             call: Final = NativeCall(args=(), kwargs=fields, bound=fields)
             return TranscriptionResponse(**rust(call))
 
-        return runtime.run(
+        return runtime.run_native(
             RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
             binding=NATIVE_TRANSCRIPTION,
             native=native,
-            python=runtime.NO_PYTHON,
         )
 
     async def async_audio_transcriptions(
@@ -99,9 +98,8 @@ class BedrockAudioTranscriptionRustDispatch:
             call: Final = NativeCall(args=(), kwargs=fields, bound=fields)
             return TranscriptionResponse(**await rust(call))
 
-        return await runtime.arun(
+        return await runtime.arun_native(
             RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
             binding=NATIVE_ATRANSCRIPTION,
             native=native,
-            python=runtime.NO_PYTHON,
         )

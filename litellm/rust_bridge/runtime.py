@@ -41,14 +41,6 @@ class BridgeErrorContext:
     model: str
 
 
-@dataclass(frozen=True, slots=True)
-class NoPythonImplementation:
-    pass
-
-
-NO_PYTHON: Final = NoPythonImplementation()
-
-
 class NoPythonImplementationError(RuntimeError):
     pass
 
@@ -58,13 +50,10 @@ def run(
     *,
     binding: NativeBinding[NativeT],
     native: Callable[[NativeT], ResultT],
-    python: Callable[[], ResultT] | NoPythonImplementation,
+    python: Callable[[], ResultT],
     policy: Policy | Decision | None = None,
 ) -> ResultT:
     selected: Final = _select(context, policy)
-    if isinstance(python, NoPythonImplementation):
-        _require_rust(context, selected)
-        return _required(_attempt_native(context, binding, native), context)
     match selected:
         case Python():
             return python()
@@ -82,13 +71,10 @@ async def arun(
     *,
     binding: NativeBinding[NativeT],
     native: Callable[[NativeT], Awaitable[ResultT]],
-    python: Callable[[], Awaitable[ResultT]] | NoPythonImplementation,
+    python: Callable[[], Awaitable[ResultT]],
     policy: Policy | Decision | None = None,
 ) -> ResultT:
     selected: Final = _select(context, policy)
-    if isinstance(python, NoPythonImplementation):
-        _require_rust(context, selected)
-        return _required(await _aattempt_native(context, binding, native), context)
     match selected:
         case Python():
             return await python()
@@ -99,6 +85,29 @@ async def arun(
             return await python()
         case _:
             assert_never(selected)
+
+
+def run_native(
+    context: RouteContext,
+    *,
+    binding: NativeBinding[NativeT],
+    native: Callable[[NativeT], ResultT],
+    policy: Policy | Decision | None = None,
+) -> ResultT:
+    """A route with no Python implementation: the catalog must require Rust, and every failure is raised."""
+    _require_rust(context, _select(context, policy))
+    return _required(_attempt_native(context, binding, native), context)
+
+
+async def arun_native(
+    context: RouteContext,
+    *,
+    binding: NativeBinding[NativeT],
+    native: Callable[[NativeT], Awaitable[ResultT]],
+    policy: Policy | Decision | None = None,
+) -> ResultT:
+    _require_rust(context, _select(context, policy))
+    return _required(await _aattempt_native(context, binding, native), context)
 
 
 def _select(context: RouteContext, policy: Policy | Decision | None) -> Decision:
