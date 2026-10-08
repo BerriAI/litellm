@@ -35,12 +35,15 @@ import pytest
 import litellm
 import litellm.batches.main as bm
 import asyncio
+import datetime
 import json
+from collections.abc import Mapping
 from typing import Final
 import httpx
 import respx
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.utils import StandardLoggingPayload
 
 
 # --------------------------------------------------------------------------- #
@@ -1021,24 +1024,38 @@ _OPENAI_BATCH_JSON: Final = MappingProxyType(
 )
 
 
+class _KeyAliasMetadata(TypedDict):
+    user_api_key_alias: ReadOnly[str | None]
+    user_api_key_team_alias: ReadOnly[str | None]
+
+
+class _LoggedCall(TypedDict):
+    call_type: ReadOnly[str]
+    metadata: ReadOnly[_KeyAliasMetadata]
+
+
+_LOGGED_CALL: Final = TypeAdapter(_LoggedCall)
+
+
 class _SuccessPayloadRecorder(CustomLogger):
-    def __init__(self) -> None:
+    def __init__(self, call_type: str) -> None:
         super().__init__()
-        self.payloads: tuple[StandardLoggingPayload, ...] = ()
+        self._call_type: Final = call_type
+        self.logged: Final = asyncio.Event()
+        self.payload: _LoggedCall | None = None
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.payloads = (*self.payloads, kwargs["standard_logging_object"])
-
-
-async def _logged_payload(recorder: _SuccessPayloadRecorder, call_type: str) -> StandardLoggingPayload:
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
-    for _ in range(200):
-        await GLOBAL_LOGGING_WORKER.flush()
-        if matching := next((p for p in recorder.payloads if p["call_type"] == call_type), None):
-            return matching
-        await asyncio.sleep(0)
-    raise AssertionError(f"{call_type} never reached the success callback")
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        payload: Final = _LOGGED_CALL.validate_python(kwargs["standard_logging_object"])
+        if payload["call_type"] != self._call_type:
+            return
+        self.payload = payload
+        self.logged.set()
 
 
 @pytest.mark.asyncio
@@ -1047,7 +1064,7 @@ async def test_acreate_batch_full_crud_and_logging_metadata(
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.logging_callback_manager._reset_all_callbacks()
-    recorder: Final = _SuccessPayloadRecorder()
+    recorder: Final = _SuccessPayloadRecorder("acreate_batch")
     monkeypatch.setattr(litellm, "callbacks", [recorder])
 
     upload_route: Final = respx_mock.post("https://api.openai.com/v1/files").mock(
@@ -1116,7 +1133,9 @@ async def test_acreate_batch_full_crud_and_logging_metadata(
     assert create_batch_response.endpoint == "/v1/chat/completions"
     assert create_batch_response.input_file_id == file_obj.id
 
-    standard_logging_object: Final = await _logged_payload(recorder, "acreate_batch")
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+    assert recorder.payload is not None
+    standard_logging_object: Final = recorder.payload
     assert standard_logging_object["metadata"]["user_api_key_alias"] == extra_metadata_field["user_api_key_alias"]
     assert (
         standard_logging_object["metadata"]["user_api_key_team_alias"]

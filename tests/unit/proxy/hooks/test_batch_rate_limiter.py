@@ -8,14 +8,15 @@ are charged against a 24h token window instead of their minute counters.
 
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
 import respx
 from fastapi import HTTPException
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import DualCache
@@ -26,6 +27,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
+from litellm.types.llms.openai import ChatCompletionUserMessage, LiteLLMBatchCreateRequest
 
 
 class _Clock:
@@ -308,6 +310,18 @@ _MANAGED_FILE_ID: Final = (
 )
 
 
+class _BatchBody(TypedDict):
+    model: ReadOnly[str]
+    messages: ReadOnly[Sequence[ChatCompletionUserMessage]]
+
+
+class _BatchLine(TypedDict):
+    custom_id: ReadOnly[str]
+    method: ReadOnly[Literal["POST"]]
+    url: ReadOnly[Literal["/v1/chat/completions"]]
+    body: ReadOnly[_BatchBody]
+
+
 @pytest.fixture
 def openai_files(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.MockRouter:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
@@ -315,77 +329,74 @@ def openai_files(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) 
     return respx_mock
 
 
-def _serve_file(router: respx.MockRouter, file_id: str, jsonl: str) -> respx.Route:
+def _batch_rows(messages: Sequence[str]) -> tuple[_BatchLine, ...]:
+    return tuple(
+        _BatchLine(
+            custom_id=f"request-{i}",
+            method="POST",
+            url="/v1/chat/completions",
+            body=_BatchBody(model=_BATCH_MODEL, messages=(ChatCompletionUserMessage(role="user", content=message),)),
+        )
+        for i, message in enumerate(messages, start=1)
+    )
+
+
+def _serve_file(router: respx.MockRouter, file_id: str, rows: Sequence[_BatchLine]) -> respx.Route:
+    jsonl: Final = "\n".join(json.dumps(row) for row in rows)
     return router.get(f"https://api.openai.com/v1/files/{file_id}/content").mock(
         return_value=httpx.Response(200, content=jsonl.encode())
     )
 
 
-def _batch_line(i: int, message: str) -> str:
-    return json.dumps(
-        {
-            "custom_id": f"request-{i}",
-            "method": "POST",
-            "url": "/v1/chat/completions",
-            "body": {"model": _BATCH_MODEL, "messages": [{"role": "user", "content": message}]},
-        }
-    )
+def _token_counter_total(rows: Sequence[_BatchLine]) -> int:
+    return sum(litellm.token_counter(model=row["body"]["model"], messages=row["body"]["messages"]) for row in rows)
 
 
-def _batch_file(messages: tuple[str, ...]) -> str:
-    return "\n".join(_batch_line(i, message) for i, message in enumerate(messages, start=1))
-
-
-def _token_counter_total(jsonl: str) -> int:
-    return sum(
-        litellm.token_counter(model=row["body"]["model"], messages=row["body"]["messages"])
-        for row in (json.loads(line) for line in jsonl.splitlines())
-    )
-
-
-def _create_batch_data(input_file_id: str) -> dict[str, str]:
-    return {"model": _BATCH_MODEL, "input_file_id": input_file_id, "custom_llm_provider": "openai"}
+def _create_batch_data(input_file_id: str) -> LiteLLMBatchCreateRequest:
+    return LiteLLMBatchCreateRequest(model=_BATCH_MODEL, input_file_id=input_file_id)
 
 
 @pytest.mark.asyncio
 async def test_count_input_file_usage_matches_token_counter(openai_files: respx.MockRouter):
     _, _, batch_limiter = _make_limiters()
-    jsonl: Final = _batch_file(("Hello", "Hi there", "Hey"))
-    content_route: Final = _serve_file(openai_files, "file-abc123", jsonl)
+    rows: Final = _batch_rows(("Hello", "Hi there", "Hey"))
+    content_route: Final = _serve_file(openai_files, "file-abc123", rows)
 
     usage: Final = await batch_limiter.count_input_file_usage(file_id="file-abc123", custom_llm_provider="openai")
 
     assert content_route.call_count == 1
     assert usage.request_count == 3
-    assert usage.total_tokens == _token_counter_total(jsonl)
+    assert usage.total_tokens == _token_counter_total(rows)
 
 
 @pytest.mark.asyncio
 async def test_batch_rate_limit_single_file_under_and_over_tpm(openai_files: respx.MockRouter):
-    small_jsonl: Final = _batch_file(("Hello", "Hi", "Hey"))
-    big_jsonl: Final = _batch_file(
+    small_rows: Final = _batch_rows(("Hello", "Hi", "Hey"))
+    big_rows: Final = _batch_rows(
         ("This is a longer message that will consume more tokens from the rate limit. " * 100,) * 3
     )
-    _serve_file(openai_files, "file-small", small_jsonl)
-    _serve_file(openai_files, "file-big", big_jsonl)
+    _serve_file(openai_files, "file-small", small_rows)
+    _serve_file(openai_files, "file-big", big_rows)
     user_api_key_dict: Final = UserAPIKeyAuth(api_key="test-key-123", tpm_limit=200, rpm_limit=10)
     _, _, small_limiter = _make_limiters()
-    data_under: Final = _create_batch_data("file-small")
 
     result: Final = await small_limiter.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data_under, call_type="acreate_batch"
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data=dict(_create_batch_data("file-small")),
+        call_type="acreate_batch",
     )
 
-    assert result is data_under
-    assert data_under["_batch_token_count"] == _token_counter_total(small_jsonl)
-    assert data_under["_batch_request_count"] == 3
+    assert isinstance(result, dict)
+    assert result["_batch_token_count"] == _token_counter_total(small_rows)
+    assert result["_batch_request_count"] == 3
 
     _, _, big_limiter = _make_limiters()
     with pytest.raises(HTTPException) as exc_info:
         await big_limiter.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=DualCache(),
-            data=_create_batch_data("file-big"),
+            data=dict(_create_batch_data("file-big")),
             call_type="acreate_batch",
         )
     assert exc_info.value.status_code == 429
@@ -396,26 +407,29 @@ async def test_batch_rate_limit_single_file_under_and_over_tpm(openai_files: res
 async def test_batch_rate_limit_cumulative_tpm_rejects_second_request(openai_files: respx.MockRouter):
     _, _, batch_limiter = _make_limiters()
     user_api_key_dict: Final = UserAPIKeyAuth(api_key="test-key-456", tpm_limit=200, rpm_limit=10)
-    first_jsonl: Final = _batch_file(("This message has some content to reach about 100 tokens total. " * 4,) * 2)
-    second_jsonl: Final = _batch_file(
+    first_rows: Final = _batch_rows(("This message has some content to reach about 100 tokens total. " * 4,) * 2)
+    second_rows: Final = _batch_rows(
         ("This is another message with more content to exceed the remaining limit. " * 11,) * 2
     )
-    _serve_file(openai_files, "file-1", first_jsonl)
-    _serve_file(openai_files, "file-2", second_jsonl)
-    first_tokens: Final = _token_counter_total(first_jsonl)
-    assert first_tokens <= 200 < first_tokens + _token_counter_total(second_jsonl)
-    data_1: Final = _create_batch_data("file-1")
+    _serve_file(openai_files, "file-1", first_rows)
+    _serve_file(openai_files, "file-2", second_rows)
+    first_tokens: Final = _token_counter_total(first_rows)
+    assert first_tokens <= 200 < first_tokens + _token_counter_total(second_rows)
 
-    await batch_limiter.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data_1, call_type="acreate_batch"
+    first_result: Final = await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data=dict(_create_batch_data("file-1")),
+        call_type="acreate_batch",
     )
-    assert data_1["_batch_token_count"] == first_tokens
+    assert isinstance(first_result, dict)
+    assert first_result["_batch_token_count"] == first_tokens
 
     with pytest.raises(HTTPException) as exc_info:
         await batch_limiter.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=DualCache(),
-            data=_create_batch_data("file-2"),
+            data=dict(_create_batch_data("file-2")),
             call_type="acreate_batch",
         )
     assert exc_info.value.status_code == 429
@@ -428,24 +442,27 @@ async def test_batch_rate_limiter_reads_a_provider_file_with_user_context(openai
     user_api_key_dict: Final = UserAPIKeyAuth(
         api_key="test-key-managed-files", user_id="test-user-abc123", tpm_limit=500, rpm_limit=10
     )
-    jsonl: Final = _batch_file(("This is a test message for batch rate limiting with managed files. " * 5,) * 3)
-    content_route: Final = _serve_file(openai_files, "file-abc123", jsonl)
-    data: Final = _create_batch_data("file-abc123")
+    rows: Final = _batch_rows(("This is a test message for batch rate limiting with managed files. " * 5,) * 3)
+    content_route: Final = _serve_file(openai_files, "file-abc123", rows)
 
-    await batch_limiter.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type="acreate_batch"
+    result: Final = await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data=dict(_create_batch_data("file-abc123")),
+        call_type="acreate_batch",
     )
 
     assert content_route.call_count == 1
-    assert data["_batch_token_count"] == _token_counter_total(jsonl)
-    assert data["_batch_request_count"] == 3
+    assert isinstance(result, dict)
+    assert result["_batch_token_count"] == _token_counter_total(rows)
+    assert result["_batch_request_count"] == 3
 
 
 @pytest.mark.asyncio
 async def test_batch_rate_limiter_without_user_context(openai_files: respx.MockRouter):
     _, _, batch_limiter = _make_limiters()
-    jsonl: Final = _batch_file(("Hello",))
-    content_route: Final = _serve_file(openai_files, "file-abc123", jsonl)
+    rows: Final = _batch_rows(("Hello",))
+    content_route: Final = _serve_file(openai_files, "file-abc123", rows)
 
     usage_without_context: Final = await batch_limiter.count_input_file_usage(
         file_id="file-abc123", custom_llm_provider="openai", user_api_key_dict=None
@@ -458,7 +475,7 @@ async def test_batch_rate_limiter_without_user_context(openai_files: respx.MockR
 
     assert content_route.call_count == 2
     assert usage_without_context.request_count == usage_with_context.request_count == 1
-    assert usage_without_context.total_tokens == usage_with_context.total_tokens == _token_counter_total(jsonl)
+    assert usage_without_context.total_tokens == usage_with_context.total_tokens == _token_counter_total(rows)
 
 
 @pytest.mark.asyncio
@@ -474,10 +491,10 @@ async def test_managed_file_is_read_through_the_managed_files_hook_with_user_con
     from litellm.proxy.utils import ProxyLogging
 
     assert is_base64_encoded_unified_file_id(_MANAGED_FILE_ID)
-    jsonl: Final = _batch_file(("Test message for regression",))
-    provider_route: Final = _serve_file(openai_files, "file-provider-1", jsonl)
-    standard_route: Final = _serve_file(openai_files, "file-abc123", jsonl)
-    unrouted_managed_read: Final = _serve_file(openai_files, _MANAGED_FILE_ID, jsonl)
+    rows: Final = _batch_rows(("Test message for regression",))
+    provider_route: Final = _serve_file(openai_files, "file-provider-1", rows)
+    standard_route: Final = _serve_file(openai_files, "file-abc123", rows)
+    unrouted_managed_read: Final = _serve_file(openai_files, _MANAGED_FILE_ID, rows)
     file_cache: Final = InternalUsageCache(dual_cache=DualCache())
     await file_cache.async_set_cache(
         key=_MANAGED_FILE_ID,
@@ -520,4 +537,4 @@ async def test_managed_file_is_read_through_the_managed_files_hook_with_user_con
     assert standard_route.call_count == 1
     assert not unrouted_managed_read.called
     assert managed_usage.request_count == standard_usage.request_count == 1
-    assert managed_usage.total_tokens == standard_usage.total_tokens == _token_counter_total(jsonl)
+    assert managed_usage.total_tokens == standard_usage.total_tokens == _token_counter_total(rows)
