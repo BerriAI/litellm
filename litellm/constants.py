@@ -1,5 +1,6 @@
 import os
 import sys
+from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -19,6 +20,14 @@ GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
 GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
 USER_PROVIDER_CREDENTIAL_CACHE_PREFIX: Final = "user_provider_credential"
 USER_PROVIDER_CREDENTIAL_NOT_CONNECTED: Final = "__not_connected__"
+SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
+
+
+class ServerStreamingClassification(str, Enum):
+    MARKER = "litellm-server-streaming"
+
+
+SERVER_STREAMING_CLASSIFICATION_MARKER: Final = ServerStreamingClassification.MARKER
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))

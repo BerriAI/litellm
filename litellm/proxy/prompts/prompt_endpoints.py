@@ -1105,12 +1105,14 @@ async def test_prompt(
             "messages": messages,
         }
         data.update(optional_params)
+        model_value: Final = data.get("model", "")
+        model: Final = model_value if isinstance(model_value, str) else ""
 
         is_request_body_safe(
             request_body=data,
             general_settings=general_settings,
             llm_router=llm_router,
-            model=data.get("model", ""),
+            model=model,
         )
 
         # Use ProxyBaseLLMRequestProcessing to go through all proxy logic
