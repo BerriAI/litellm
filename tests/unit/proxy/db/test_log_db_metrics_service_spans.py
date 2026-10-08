@@ -1,6 +1,7 @@
 import asyncio
+import importlib
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final, NotRequired, TypedDict
 
@@ -108,15 +109,36 @@ def _ns(moment: datetime) -> int:
     return int(moment.timestamp() * 1e9)
 
 
+_DB_CALL_START: Final = datetime(2026, 1, 1, 12, 0, 0)
+_DB_CALL_DURATION: Final = timedelta(milliseconds=250)
+
+
+class _ScriptedClock:
+    def __init__(self, *moments: datetime) -> None:
+        self._moments: Final = iter(moments)
+
+    def now(self) -> datetime:
+        return next(self._moments)
+
+
+@pytest.fixture
+def scripted_db_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        importlib.import_module("litellm.proxy.db.log_db_metrics"),
+        "datetime",
+        _ScriptedClock(_DB_CALL_START, _DB_CALL_START + _DB_CALL_DURATION),
+    )
+
+
 @pytest.mark.asyncio
-async def test_a_db_success_is_reported_on_the_parent_span_with_its_duration_and_times(rig: _Rig) -> None:
+async def test_a_db_success_is_reported_on_the_parent_span_with_its_duration_and_times(
+    rig: _Rig, scripted_db_clock: None
+) -> None:
     parent: Final = rig.provider.get_tracer("db-test").start_span("request")
-    before: Final = datetime.now()
     latency_before: Final = _logged_db_latency()
 
     result: Final = await read_spend_rows(parent_otel_span=parent)
     await asyncio.wait_for(rig.exporter.service_span_exported.wait(), timeout=10)
-    after: Final = datetime.now()
 
     assert result == "success"
     spans: Final = rig.service_spans()
@@ -128,11 +150,11 @@ async def test_a_db_success_is_reported_on_the_parent_span_with_its_duration_and
     assert span.attributes["service"] == ServiceTypes.DB.value
     assert span.attributes["call_type"] == "read_spend_rows"
     assert span.status.status_code == StatusCode.OK
-    assert span.start_time is not None and span.end_time is not None
-    assert _ns(before) - 1000 <= span.start_time <= span.end_time <= _ns(after) + 1000
+    assert span.start_time == _ns(_DB_CALL_START)
+    assert span.end_time == _ns(_DB_CALL_START + _DB_CALL_DURATION)
     latency_after: Final = _logged_db_latency()
     assert latency_after[1] - latency_before[1] == 1
-    assert 0 < latency_after[0] - latency_before[0] <= (after - before).total_seconds()
+    assert latency_after[0] - latency_before[0] == pytest.approx(_DB_CALL_DURATION.total_seconds())
     assert rig.events() == ()
 
 
@@ -156,13 +178,13 @@ async def test_db_event_metadata_names_only_the_table_and_never_the_raw_kwargs(r
 
 
 @pytest.mark.asyncio
-async def test_the_logged_db_duration_is_the_span_wall_clock_of_the_wrapped_call(rig: _Rig) -> None:
+async def test_the_logged_db_duration_is_the_span_wall_clock_of_the_wrapped_call(
+    rig: _Rig, scripted_db_clock: None
+) -> None:
     parent: Final = rig.provider.get_tracer("db-test").start_span("request")
     latency_before: Final = _logged_db_latency()
-    before: Final = datetime.now()
 
     await read_spend_rows(parent_otel_span=parent)
-    after: Final = datetime.now()
     await asyncio.wait_for(rig.exporter.service_span_exported.wait(), timeout=10)
 
     span: Final = rig.service_spans()[0]
@@ -171,7 +193,7 @@ async def test_the_logged_db_duration_is_the_span_wall_clock_of_the_wrapped_call
     logged_duration: Final = latency_after[0] - latency_before[0]
     assert latency_after[1] - latency_before[1] == 1
     assert logged_duration == pytest.approx((span.end_time - span.start_time) / 1e9, rel=1e-3, abs=2e-6)
-    assert 0 < logged_duration <= (after - before).total_seconds()
+    assert logged_duration == pytest.approx(_DB_CALL_DURATION.total_seconds())
 
 
 @log_db_metrics

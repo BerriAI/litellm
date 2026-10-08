@@ -67,6 +67,8 @@ _AUTH_ERROR: Final = httpx.Response(
     },
 )
 
+_OUR_MODEL_GROUPS: Final = frozenset({"hooks-group", "primary-group", "fallback-group"})
+
 _State = Literal[
     "sync_pre_api_call",
     "post_api_call",
@@ -130,6 +132,12 @@ def _call_detail_problems(kwargs: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(name for name, ok in checks.items() if not ok)
 
 
+def _is_from_this_test(kwargs: Mapping[str, object]) -> bool:
+    litellm_params: Final = kwargs.get("litellm_params")
+    metadata: Final = litellm_params.get("metadata") if isinstance(litellm_params, dict) else None
+    return isinstance(metadata, dict) and metadata.get("model_group") in _OUR_MODEL_GROUPS
+
+
 class _HookRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -145,6 +153,8 @@ class _HookRecorder(CustomLogger):
     def _record(
         self, state: _State, model: object, kwargs: Mapping[str, object], response: object, problems: Sequence[str]
     ) -> None:
+        if not _is_from_this_test(kwargs):
+            return
         self.errors.extend(f"{state}: {problem}" for problem in problems)
         self.events.append(_HookEvent(state, model, kwargs, response))
         if self.loop is not None:

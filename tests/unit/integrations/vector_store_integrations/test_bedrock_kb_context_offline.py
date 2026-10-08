@@ -1,3 +1,4 @@
+import itertools
 import json
 from typing import Final, TypedDict
 
@@ -120,10 +121,10 @@ async def test_streaming_completion_carries_the_search_results_on_a_chunk_delta(
         stream=True,
     )
     chunks: Final = tuple([chunk async for chunk in response])
+    choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
     annotated: Final = tuple(
         choice.delta.provider_specific_fields["search_results"]
-        for chunk in chunks
-        for choice in chunk.choices
+        for choice in choices
         if choice.delta.provider_specific_fields and "search_results" in choice.delta.provider_specific_fields
     )
 
