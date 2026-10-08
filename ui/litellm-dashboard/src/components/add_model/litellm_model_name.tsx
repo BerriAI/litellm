@@ -131,7 +131,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                 }
               }}
             />
-          ) : providerModels.length > 0 ? (
+          ) : providerModels.length > 0 && typeof control.value !== "string" ? (
             <MultiSelect
               id={control.id}
               placeholder="Select models"
