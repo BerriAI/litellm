@@ -8,7 +8,7 @@ path used for OpenAI and Azure models.
 import json
 from collections.abc import Iterable, Mapping
 from itertools import groupby
-from typing import Any, Final, cast
+from typing import Any, Final, TypeVar, cast
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -52,6 +52,9 @@ from litellm.types.llms.openai import (
 
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+
+
+_PartT: Final = TypeVar("_PartT", bound=Mapping[str, object])
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -138,6 +141,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return output_text
         text_parts: Final = [{"type": "input_text", "text": output_text}] if output_text else []
         return [*text_parts, *file_parts]
+
+    @staticmethod
+    def _user_part_with_marker(part: _PartT, block: Mapping[str, object], drop_params: bool) -> _PartT:
+        marker: Final = prompt_cache_breakpoint_for_wire(block.get("prompt_cache_breakpoint"), drop_params)
+        return with_prompt_cache_breakpoint(part, marker)
 
     @staticmethod
     def _translate_midturn_system_content_to_responses(
@@ -272,25 +280,24 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         if not isinstance(block, dict):
                             continue
                         btype = block.get("type")
-                        marker: Final = prompt_cache_breakpoint_for_wire(
-                            block.get("prompt_cache_breakpoint"), drop_params
-                        )
                         if btype == "text":
                             user_parts.append(
-                                with_prompt_cache_breakpoint(
-                                    {"type": "input_text", "text": block.get("text", "")}, marker
+                                self._user_part_with_marker(
+                                    {"type": "input_text", "text": block.get("text", "")}, block, drop_params
                                 )
                             )
                         elif btype == "image":
                             url = self._translate_anthropic_image_source_to_url(cast(dict, block.get("source", {})))
                             if url:
                                 user_parts.append(
-                                    with_prompt_cache_breakpoint({"type": "input_image", "image_url": url}, marker)
+                                    self._user_part_with_marker(
+                                        {"type": "input_image", "image_url": url}, block, drop_params
+                                    )
                                 )
                         elif btype == "document":
                             file_part = self._translate_anthropic_document_block_to_file_part(block)
                             if file_part:
-                                user_parts.append(with_prompt_cache_breakpoint(file_part, marker))
+                                user_parts.append(self._user_part_with_marker(file_part, block, drop_params))
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
