@@ -47,6 +47,9 @@ _SYNC_TX_TIMEOUT: Final = timedelta(seconds=60)
 _DETACH_TEAM_SQL: Final = (
     'UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE user_id = ANY($2::text[])'
 )
+_LOCK_MEMBER_ROWS_SQL: Final = (
+    'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($1::text[]) ORDER BY user_id FOR UPDATE'
+)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
@@ -126,6 +129,24 @@ def _budget_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_BudgetTab
 
 def _token_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
     return tx.litellm_verificationtoken  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
+
+def _changes_nothing(plan: RosterPlan) -> bool:
+    match plan:
+        case RosterDelta(add=add, remove=remove):
+            return not add and not remove
+        case RosterTarget():
+            return False
+        case _:
+            assert_never(plan)
+
+
+async def _unchanged_roster(prisma_client: PrismaClient, team_id: str) -> RosterSync | TeamGone:
+    team_row: Final = await prisma_client.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    if team_row is None:
+        return TeamGone(team_id=team_id)
+    team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
+    return RosterSync(team=team, added=frozenset(), removed=frozenset())
 
 
 def _planned_changes(plan: RosterPlan, roster_ids: frozenset[str]) -> tuple[frozenset[str], frozenset[str]]:
@@ -277,8 +298,13 @@ async def sync_team_roster(
     members' team keys change together or not at all, so a failure leaves nothing
     half-applied for the caller's retry to trip over. ``TeamGone`` means the team row
     went away before the lock was taken; ``MembersMissing`` means a user the plan adds
-    has no row, and nothing was written.
+    has no row, and nothing was written. A delta naming nobody changes nothing, so it
+    reads the team without the lock or a transaction. Every user row the plan touches is
+    locked in id order before the first write, so two groups trading members never wait on
+    each other in opposite orders.
     """
+    if _changes_nothing(plan):
+        return await _unchanged_roster(prisma_client, team_id)
     async with prisma_client.tx(timeout=_SYNC_TX_TIMEOUT) as tx:
         await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
         team_row: Final = await _team_tx_db(tx).find_unique(where={"team_id": team_id})
@@ -288,6 +314,8 @@ async def sync_team_roster(
         roster: Final = tuple(team.members_with_roles)
         roster_ids: Final = frozenset(member.user_id for member in roster if member.user_id is not None)
         to_add, to_remove = _planned_changes(plan, roster_ids)
+        if to_add or to_remove:
+            await tx.query_raw(_LOCK_MEMBER_ROWS_SQL, sorted(to_add | to_remove))
         added: Final = await _add_members(tx, team, sorted(to_add), user_api_key_dict, litellm_proxy_admin_name)
         if isinstance(added, MembersMissing):
             return added

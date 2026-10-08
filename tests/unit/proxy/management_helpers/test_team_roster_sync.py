@@ -47,6 +47,7 @@ class _Ledger:
 
     def __init__(self) -> None:
         self.statements: list[str] = []
+        self.locked_users: list[list[str]] = []
 
     def __deepcopy__(self, memo: dict[int, object]) -> "_Ledger":
         return self
@@ -176,8 +177,13 @@ class _Tx:
 
     async def query_raw(self, sql: str, *args: object) -> list[dict[str, object]]:
         self.ledger.statements.append("query_raw")
-        assert "pg_advisory_xact_lock" in sql and args == (TEAM,)
-        return [{"locked": False}]
+        if "pg_advisory_xact_lock" in sql:
+            assert args == (TEAM,)
+            return [{"locked": False}]
+        assert "ORDER BY user_id FOR UPDATE" in sql
+        user_ids = _STRINGS.validate_python(args[0])
+        self.ledger.locked_users.append(user_ids)
+        return [{"user_id": user_id} for user_id in user_ids if user_id in self.litellm_usertable.rows]
 
     async def execute_raw(self, sql: str, *args: object) -> int:
         self.ledger.statements.append("execute_raw")
@@ -201,9 +207,11 @@ class _FakePrisma:
         self.ledger = _Ledger()
         self.db = _Db(self.ledger, users, teams, memberships, tokens, budgets, jwt_mappings)
         self._fail_commit = fail_commit
+        self.transactions = 0
 
     @asynccontextmanager
     async def tx(self, *, timeout: object = None):
+        self.transactions += 1
         snapshot = copy.deepcopy(self.db)
         try:
             yield _Tx(self.db, self.ledger)
@@ -335,6 +343,40 @@ async def test_a_plan_matching_the_roster_only_takes_the_lock_and_reads_the_team
     assert isinstance(outcome, RosterSync)
     assert (outcome.added, outcome.removed) == (frozenset(), frozenset())
     assert prisma.ledger.statements == ["query_raw", "teamtable.find_unique"]
+
+
+@pytest.mark.asyncio
+async def test_a_delta_naming_nobody_reads_the_team_without_the_lock_or_a_transaction():
+    prisma = _FakePrisma(
+        users=[_user("alice", TEAM), _user("bob", TEAM)],
+        teams=[_team(_member("alice"), _member("bob"))],
+        memberships=[(TEAM, "alice"), (TEAM, "bob")],
+    )
+
+    outcome = await _sync(prisma, RosterDelta(add=frozenset(), remove=frozenset()))
+
+    assert isinstance(outcome, RosterSync)
+    assert [m.user_id for m in outcome.team.members_with_roles] == ["alice", "bob"]
+    assert (outcome.added, outcome.removed) == (frozenset(), frozenset())
+    assert prisma.ledger.statements == ["teamtable.find_unique"]
+    assert prisma.transactions == 0
+
+
+@pytest.mark.asyncio
+async def test_every_member_row_the_plan_touches_is_locked_in_id_order_before_the_first_write():
+    prisma = _FakePrisma(
+        users=[_user("carol", TEAM), _user("alice"), _user("bob")],
+        teams=[_team(_member("carol"))],
+        memberships=[(TEAM, "carol")],
+    )
+
+    outcome = await _sync(prisma, RosterTarget(member_ids=frozenset({"bob", "alice"})))
+
+    assert isinstance(outcome, RosterSync)
+    assert (outcome.added, outcome.removed) == (frozenset({"alice", "bob"}), frozenset({"carol"}))
+    assert prisma.ledger.locked_users == [["alice", "bob", "carol"]]
+    first_write = next(index for index, statement in enumerate(prisma.ledger.statements) if statement not in READS)
+    assert prisma.ledger.statements.index("query_raw", 1) < first_write
 
 
 @pytest.mark.asyncio
