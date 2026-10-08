@@ -11,13 +11,13 @@ import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+import litellm.utils as litellm_utils
 from litellm.constants import MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE
 from litellm.litellm_core_utils.oauth_token_exchange import redact_sensitive_values
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.microsoft_365_copilot.common_utils import Microsoft365CopilotError
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
-from litellm.utils import token_counter
 
 
 class _TokenCounter(Protocol):
@@ -32,7 +32,7 @@ class _TokenCounter(Protocol):
 
 
 _TOKEN_COUNTER: Final = cast(  # cast-ok: only the typed token-counter arguments used here are narrowed locally
-    _TokenCounter, token_counter
+    _TokenCounter, litellm_utils.token_counter
 )
 
 if TYPE_CHECKING:
