@@ -7248,16 +7248,20 @@ def _get_retry_after_from_exception_header(
         # <http-date>". See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After#syntax for
         # details.
         if response_headers is not None:
-            retry_header: Final[str] = response_headers.get("retry-after")
-            try:
-                retry_after = int(retry_header)
-            except Exception:
-                retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)
-                if retry_date_tuple is None:
-                    retry_after = -1
-                else:
-                    retry_date: Final = email.utils.mktime_tz(retry_date_tuple)
-                    retry_after = int(retry_date - time.time())
+            retry_header: Final[str | None] = response_headers.get("retry-after")
+            retry_after_ms_header: Final[str | None] = response_headers.get("retry-after-ms")
+            if retry_header is None and retry_after_ms_header is not None:
+                retry_after = float(retry_after_ms_header) / 1000
+            else:
+                try:
+                    retry_after = int(retry_header)
+                except Exception:
+                    retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)
+                    if retry_date_tuple is None:
+                        retry_after = -1
+                    else:
+                        retry_date: Final = email.utils.mktime_tz(retry_date_tuple)
+                        retry_after = int(retry_date - time.time())
         else:
             retry_after = -1
 
