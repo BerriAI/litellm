@@ -106,18 +106,10 @@ def _drops_params(kwargs: Mapping[str, object]) -> bool:
     return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
 
 
-def _refuse_unknown_params(*, kwargs: Mapping[str, object], model: str, provider: str) -> None:
-    unknown: Final = [name for name in kwargs if not _is_gateway_kwarg(name)]
-    if not unknown or _drops_params(kwargs):
-        return
-    raise litellm.UnsupportedParamsError(
-        message=(
-            f"{provider} Decisions API does not support parameters: {unknown}, for model={model}. "
-            "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
-        ),
-        model=model,
-        llm_provider=provider,
-    )
+def _unknown_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    if _drops_params(kwargs):
+        return ()
+    return tuple(name for name in kwargs if not _is_gateway_kwarg(name))
 
 
 def _ir_request(request: DecisionsRequestFormat) -> DecisionsIRRequest:
@@ -174,7 +166,16 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         ) from error
-    _refuse_unknown_params(kwargs=kwargs, model=model, provider=provider)
+    unknown_params: Final = _unknown_params(kwargs)
+    if unknown_params:
+        raise litellm.UnsupportedParamsError(
+            message=(
+                f"{provider} Decisions API does not support parameters: {list(unknown_params)}, for model={model}. "
+                "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            model=model,
+            llm_provider=provider,
+        )
 
     resolved_api_base: Final = provider_config.resolve_api_base(dynamic_api_base or api_base)
     if resolved_api_base is None:
