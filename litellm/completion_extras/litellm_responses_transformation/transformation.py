@@ -114,7 +114,10 @@ def _strip_prompt_cache_breakpoints(input_items: list[object]) -> list[object]:
 
 
 def _is_audio_input_part(part: object) -> bool:
-    return isinstance(part, dict) and part.get("type") == "input_audio"
+    if not isinstance(part, dict):
+        return False
+    content_part: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a content block mapping
+    return content_part.get("type") == "input_audio"
 
 
 def _without_audio_input_parts_in_content(value: object) -> object:
@@ -138,14 +141,21 @@ def _without_audio_input_parts(input_items: list[object]) -> list[object]:
     return [_without_audio_input_parts_in_item(item) for item in input_items]
 
 
+def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
+    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+    provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    base_model: Final = litellm_params.get("base_model")
+    return litellm.supports_audio_input(model=model, custom_llm_provider=provider) or (
+        isinstance(base_model, str)
+        and bool(base_model)
+        and litellm.supports_audio_input(model=base_model, custom_llm_provider=provider)
+    )
+
+
 def _drops_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
     if not (litellm_params.get("drop_params") or litellm.drop_params):
         return False
-    custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-    return not litellm.supports_audio_input(
-        model=model,
-        custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-    )
+    return not _supports_audio_input(model, litellm_params)
 
 
 def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:

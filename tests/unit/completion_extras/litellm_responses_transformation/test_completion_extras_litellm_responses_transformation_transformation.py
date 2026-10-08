@@ -4938,12 +4938,17 @@ def registered_audio_models():
             litellm.model_cost.pop(key, None)
 
 
-def _bridge_input(model: str, drop_params: bool) -> list:
+def _bridge_input(
+    model: str,
+    drop_params: bool | None,
+    messages: list | None = None,
+    **extra_litellm_params: object,
+) -> list:
     request = LiteLLMResponsesTransformationHandler().transform_request(
         model=model,
-        messages=[{"role": "user", "content": [_TEXT_PART, _AUDIO_PART]}],
+        messages=messages or [{"role": "user", "content": [_TEXT_PART, _AUDIO_PART]}],
         optional_params={},
-        litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params},
+        litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params, **extra_litellm_params},
         headers={},
         litellm_logging_obj=Mock(),
     )
@@ -4978,3 +4983,42 @@ def test_transform_request_keeps_input_audio_under_drop_params_when_model_suppor
         {"type": "input_text", "text": "Transcribe this"},
         _AUDIO_PART,
     ]
+
+
+def test_transform_request_keeps_input_audio_under_drop_params_when_base_model_supports_audio_input(
+    monkeypatch, registered_audio_models
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("my-audio-deployment", drop_params=True, base_model="unit-audio-capable")[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        _AUDIO_PART,
+    ]
+
+
+def test_transform_request_drops_input_audio_under_global_drop_params(monkeypatch, registered_audio_models):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    assert _bridge_input("unit-text-only", drop_params=None)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"}
+    ]
+
+
+def test_transform_request_drops_input_audio_from_tool_output_under_drop_params(monkeypatch, registered_audio_models):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages = [
+        {"role": "user", "content": "Describe the recording"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "record", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": [_TEXT_PART, _AUDIO_PART]},
+    ]
+
+    forwarded = _bridge_input("unit-text-only", drop_params=False, messages=messages)
+    dropped = _bridge_input("unit-text-only", drop_params=True, messages=messages)
+
+    assert forwarded[-1]["type"] == "function_call_output"
+    assert forwarded[-1]["output"] == [{"type": "input_text", "text": "Transcribe this"}, _AUDIO_PART]
+    assert dropped[-1]["output"] == [{"type": "input_text", "text": "Transcribe this"}]
