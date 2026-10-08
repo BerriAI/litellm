@@ -173,6 +173,9 @@ def _mantle_environment(port: int) -> Mapping[str, str]:
     return {"BEDROCK_MANTLE_API_BASE": f"http://127.0.0.1:{port}"}
 
 
+_INHERITED_BEARER: Final = ("AWS_BEARER_TOKEN_BEDROCK",)
+
+
 def _reserved_port() -> int:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
@@ -193,7 +196,11 @@ def counting_proxy(tmp_path_factory: pytest.TempPathFactory, mantle_port: int) -
     with (
         gateway_from_environment() as gateway,
         owned_proxy_process(
-            gateway, tmp_path_factory.mktemp("mantle-count"), _mantle_environment(mantle_port), workers=1
+            gateway,
+            tmp_path_factory.mktemp("mantle-count"),
+            _mantle_environment(mantle_port),
+            workers=1,
+            remove_environment=_INHERITED_BEARER,
         ) as owned,
     ):
         yield owned
@@ -317,6 +324,14 @@ def _counted_or_dropped(client: httpx.Client, key: str, body: Mapping[str, JsonV
         return _counted_on(client, key, body)
     except httpx.TransportError:
         return None
+
+
+def _probed_then_counted_or_dropped(
+    client: httpx.Client, key: str, body: Mapping[str, JsonValue], probed: SimpleQueue[int]
+) -> tuple[int, tuple[int, JsonValue] | None]:
+    port: Final = _local_port(client)
+    probed.put(port)
+    return port, _counted_or_dropped(client, key, body)
 
 
 def _local_port(client: httpx.Client) -> int:
@@ -821,7 +836,14 @@ def test_disabled_token_counter_surfaces_the_mantle_error_instead_of_counting_lo
             tmp_path / "disabled-token-counter.yaml", runtime.url, {"disable_token_counter": True}
         )
         owned: Final = stack.enter_context(
-            owned_proxy_process(gateway, tmp_path, _mantle_environment(mantle_port), config=config, workers=2)
+            owned_proxy_process(
+                gateway,
+                tmp_path,
+                _mantle_environment(mantle_port),
+                config=config,
+                workers=2,
+                remove_environment=_INHERITED_BEARER,
+            )
         )
         with wire_server(_mantle(_rejecting(403)), port=mantle_port) as refusing:
             refused: Final = _count(owned.gateway, _full(_OWNED_OPUS))
@@ -879,9 +901,9 @@ def test_slow_mantle_holds_concurrent_counts_without_stalling_the_proxy(
         clients: Final = _clients(stack, str(gateway.client.base_url), 6)
         runtime: Final = stack.enter_context(wire_server(_runtime))
         mantle: Final = stack.enter_context(wire_server(_mantle(_holding(held, release, 20)), port=mantle_port))
-        stack.callback(release.set)
         scenario: Final = stack.enter_context(gateway.scenario())
         pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=len(clients)))
+        stack.callback(release.set)
         model: Final = _deployment(scenario, runtime.url)
         futures: Final = tuple(
             pool.submit(_generated_then_counted, client, gateway.key, model, _full(model)) for client in clients
@@ -904,10 +926,16 @@ def test_worker_sigkill_mid_burst_leaves_the_sibling_counting(
     with ExitStack() as stack:
         runtime: Final = stack.enter_context(wire_server(_runtime))
         mantle: Final = stack.enter_context(wire_server(_mantle(_holding(held, release, 60)), port=mantle_port))
-        stack.callback(release.set)
         config: Final = _owned_config(tmp_path / "worker-kill.yaml", runtime.url, {})
         owned: Final = stack.enter_context(
-            owned_proxy_process(gateway, tmp_path, _mantle_environment(mantle_port), config=config, workers=2)
+            owned_proxy_process(
+                gateway,
+                tmp_path,
+                _mantle_environment(mantle_port),
+                config=config,
+                workers=2,
+                remove_environment=_INHERITED_BEARER,
+            )
         )
         body: Final = _full(_OWNED_OPUS)
         proxy_url: Final = owned.gateway.client.base_url
@@ -918,18 +946,19 @@ def test_worker_sigkill_mid_burst_leaves_the_sibling_counting(
         )
         clients: Final = _clients(stack, str(proxy_url), 12)
         pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=len(clients)))
-        ports: Final = tuple(_local_port(client) for client in clients)
-        futures: Final[tuple[Future[tuple[int, JsonValue] | None], ...]] = tuple(
-            pool.submit(_counted_or_dropped, client, owned.gateway.key, body) for client in clients
+        stack.callback(release.set)
+        probed: Final[SimpleQueue[int]] = SimpleQueue()
+        futures: Final[tuple[Future[tuple[int, tuple[int, JsonValue] | None]], ...]] = tuple(
+            pool.submit(_probed_then_counted_or_dropped, client, owned.gateway.key, body, probed) for client in clients
         )
         eventually(held.qsize, lambda size: size == len(clients), seconds=30)
-        shares: Final = {pid: _accepted_client_ports(pid, proxy_url.port or 0) & frozenset(ports) for pid in workers}
+        ports: Final = frozenset(probed.get_nowait() for _ in clients)
+        shares: Final = {pid: _accepted_client_ports(pid, proxy_url.port or 0) & ports for pid in workers}
         assert sum(map(len, shares.values())) == len(clients), shares
         victim: Final = min((pid for pid in workers if shares[pid]), key=lambda pid: len(shares[pid]))
         psutil.Process(victim).send_signal(signal.SIGKILL)
         release.set()
-        results: Final = tuple(future.result(timeout=60) for future in futures)
-        for port, result in zip(ports, results, strict=True):
+        for port, result in (future.result(timeout=60) for future in futures):
             assert result == (None if port in shares[victim] else (200, _MANTLE_COUNT)), (port, result, shares)
         second_wave: Final = _clients(stack, str(proxy_url), 6)
         assert tuple(_counted_on(client, owned.gateway.key, body) for client in second_wave) == (
