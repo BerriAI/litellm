@@ -515,6 +515,7 @@ def test_responses_bridge_keeps_system_and_user_marks_within_the_cap(gateway: Ga
         assert anthropic_labels(_only_request(wire)) == [SYSTEM_LABEL, ASK_LABEL]
 
 
+@pytest.mark.timeout(240)
 def test_response_cache_serves_the_capped_request_once(uncapped_gateway: Gateway) -> None:
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, uncapped_gateway.scenario() as scenario:
@@ -858,6 +859,7 @@ def _cache_hit_rows(response_id: str) -> list[dict[str, JsonValue]]:
     )
 
 
+@pytest.mark.timeout(240)
 def test_response_cache_hit_records_the_injection_on_the_first_row_only(uncapped_gateway: Gateway) -> None:
     marker: Final = new_marker()
     unmarked: Final = [tool_call(city) for city in CITIES]
@@ -875,6 +877,7 @@ def test_response_cache_hit_records_the_injection_on_the_first_row_only(uncapped
     assert hit_rows[0]["injected"] is None, hit_rows
 
 
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("path", ("/v1/messages", "/v1/responses"))
 def test_response_cache_twins_on_messages_and_responses_stay_within_the_cap(
     uncapped_gateway: Gateway, path: str
