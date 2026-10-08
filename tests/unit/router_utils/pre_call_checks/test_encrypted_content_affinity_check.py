@@ -2354,7 +2354,10 @@ def _router_without_the_origin():
 
 
 @pytest.mark.parametrize("router", [None, _router_without_the_origin()], ids=["no router", "origin removed"])
-def test_hop_strip_drops_unmarked_reasoning_whose_origin_cannot_be_resolved(router):
+@pytest.mark.parametrize(
+    "unmarked_origin", ["origin-removed", None], ids=["failed deployment named", "failed deployment unknown"]
+)
+def test_hop_strip_drops_unmarked_reasoning_whose_origin_cannot_be_resolved(router, unmarked_origin):
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -2374,7 +2377,7 @@ def test_hop_strip_drops_unmarked_reasoning_whose_origin_cannot_be_resolved(rout
     }
 
     EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
-        router, request_input, None, (target,), unmarked_origin="origin-removed"
+        router, request_input, None, (target,), unmarked_origin=unmarked_origin
     )
 
     assert request_input == [
