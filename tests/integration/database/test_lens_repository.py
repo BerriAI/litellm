@@ -37,7 +37,7 @@ from litellm.proxy.lens.models import (
     TraceIdentity,
     Worker,
 )
-from litellm.proxy.lens.repository import Database, LensRepository, WriterDatabase
+from litellm.proxy.lens.repository import Database, LensRepository, Row, WriterDatabase
 from litellm.proxy.lens.state import cancel_job, claim_job, current_job, due_at, end_job, queue_job, replace_job
 
 
@@ -773,17 +773,26 @@ async def test_delayed_progress_cannot_replace_a_newer_checkpoint(lens_db: Prism
 
 
 class ProgressInterleavingDatabase:
-    def __init__(self, database: WriterDatabase, lens_id: str, job: Job) -> None:
+    def __init__(
+        self,
+        database: Database,
+        read: asyncio.Future[int],
+        resume: asyncio.Event,
+        committed: asyncio.Event,
+    ) -> None:
         self.database: Final = database
-        self.lens_id: Final = lens_id
-        self.job: Final = job
-        self.committed: Final = asyncio.Event()
+        self.read: Final = read
+        self.resume: Final = resume
+        self.committed: Final = committed
 
     async def query_raw(self, query: LiteralString, *args: object) -> object:
         rows: Final = await self.database.query_raw(query, *args)
-        if query.startswith('SELECT data FROM "LiteLLM_Lens" WHERE id='):
-            updated: Final = await LensRepository(self.database).progress(self.lens_id, self.job, Progress())
-            assert updated is not None
+        if query == 'SELECT data FROM "LiteLLM_Lens" WHERE id=$1' and not self.read.done():
+            backend: Final = TypeAdapter(tuple[Row, ...]).validate_python(
+                await self.database.query_raw("SELECT to_jsonb(pg_backend_pid()) AS data")
+            )
+            self.read.set_result(TypeAdapter(int).validate_python(backend[0].data))
+            await self.resume.wait()
         return rows
 
     async def execute_raw(self, query: LiteralString, *args: object) -> int:
@@ -792,7 +801,7 @@ class ProgressInterleavingDatabase:
     @asynccontextmanager
     async def transaction(self) -> AsyncGenerator[Database]:
         async with self.database.transaction() as database:
-            yield database
+            yield ProgressInterleavingDatabase(database, self.read, self.resume, self.committed)
         self.committed.set()
 
 
@@ -818,7 +827,10 @@ async def test_budget_reservation_survives_competing_progress(lens_db: Prisma, r
     )
     database: Final = WriterDatabase(PrismaWrapper(lens_db))
     repo: Final = LensRepository(database)
-    competing: Final = ProgressInterleavingDatabase(database, claimed.id, job)
+    read: Final[asyncio.Future[int]] = asyncio.get_running_loop().create_future()
+    resume: Final = asyncio.Event()
+    committed: Final = asyncio.Event()
+    competing: Final = ProgressInterleavingDatabase(database, read, resume, committed)
     await repo.create(claimed.model_copy(update={"reservations": (hold,) if renewing else ()}))
     admitted: Final = asyncio.Event()
     admitted.set()
@@ -832,24 +844,44 @@ async def test_budget_reservation_survives_competing_progress(lens_db: Prisma, r
             lambda current: reserve_attempt(current, job, worker().id, hold, now),
         )
     )
-    committed: Final = asyncio.create_task(competing.committed.wait())
+
+    async def write_progress() -> Lens | None:
+        await read
+        return await repo.progress(claimed.id, job, Progress(stage="Reviewing traces concurrently"))
+
+    progress: Final = asyncio.create_task(write_progress())
     try:
         async with asyncio.timeout(45):
-            await asyncio.wait((operation, committed), return_when=asyncio.FIRST_COMPLETED)
-            if operation.done():
+            blocker: Final = await read
+            async with asyncio.timeout(5):
+                while not await lens_db.query_raw(
+                    "SELECT pid FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))", blocker
+                ):
+                    assert not progress.done(), "Progress committed before the reservation released its lock"
+                    await asyncio.sleep(0.01)
+            assert not progress.done()
+            assert not committed.is_set()
+            resume.set()
+            await committed.wait()
+            updated: Final = await progress
+            assert updated is not None
+            assert updated.jobs[0].stage == "Reviewing traces concurrently"
+            assert tuple(reservation.id for reservation in updated.reservations) == (hold.id,)
+            if not renewing:
                 await operation
         stored: Final = await repo.get(claimed.id)
         assert stored is not None
         assert tuple(reservation.id for reservation in stored.reservations) == (hold.id,)
         assert stored.spent == claimed.spent
         assert stored.jobs[0].cost == 0
+        assert stored.jobs[0].stage == "Reviewing traces concurrently"
         if renewing:
             assert stored.reservations[0].expires_at is not None
             assert stored.reservations[0].expires_at > now + BUDGET_LEASE
     finally:
         operation.cancel()
-        committed.cancel()
-        await asyncio.gather(operation, committed, return_exceptions=True)
+        progress.cancel()
+        await asyncio.gather(operation, progress, return_exceptions=True)
         await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', claimed.id)
 
 
