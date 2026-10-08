@@ -31,21 +31,18 @@ fn max_insert_bytes() -> Result<usize, Error> {
 pub type InsertRow = BTreeMap<String, Shared<Value>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
+#[strum(parse_err_ty = Error, parse_err_fn = invalid_table)]
 pub enum InsertTable {
+    #[strum(serialize = "otel_traces")]
     OtelTraces,
+    #[strum(serialize = "spend_logs")]
     SpendLogs,
+    #[strum(serialize = "lens_feedback")]
     LensFeedback,
 }
 
-impl InsertTable {
-    pub fn parse(value: &str) -> Result<Self, Error> {
-        value.parse().map_err(|_| Error::InvalidTable)
-    }
-
-    fn name(self) -> &'static str {
-        self.into()
-    }
+fn invalid_table(_name: &str) -> Error {
+    Error::InvalidTable
 }
 
 pub async fn insert_rows(
@@ -74,7 +71,7 @@ pub async fn insert_shared_rows(
         client,
         connection,
         database,
-        table.name(),
+        <&'static str>::from(table),
         &token,
         body,
     )
@@ -242,14 +239,17 @@ mod tests {
     #[case::spend_logs("spend_logs", InsertTable::SpendLogs)]
     #[case::lens_feedback("lens_feedback", InsertTable::LensFeedback)]
     fn insert_table_parses_each_table_name(#[case] name: &str, #[case] expected: InsertTable) {
-        assert_eq!(InsertTable::parse(name).unwrap(), expected);
+        assert_eq!(name.parse::<InsertTable>().unwrap(), expected);
     }
 
     #[rstest]
     #[case::unknown("events")]
     #[case::case_sensitive("OTEL_TRACES")]
     fn insert_table_rejects_unknown_names(#[case] name: &str) {
-        assert!(matches!(InsertTable::parse(name), Err(Error::InvalidTable)));
+        assert!(matches!(
+            name.parse::<InsertTable>(),
+            Err(Error::InvalidTable)
+        ));
     }
 
     #[rstest]

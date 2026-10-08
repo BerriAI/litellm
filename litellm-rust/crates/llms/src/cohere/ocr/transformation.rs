@@ -27,10 +27,11 @@ const COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iV
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, strum::IntoStaticStr)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 pub enum OutputFormat {
     #[default]
+    #[strum(serialize = "markdown")]
     Markdown,
+    #[strum(serialize = "blocks")]
     Blocks,
 }
 

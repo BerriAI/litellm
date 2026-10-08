@@ -65,10 +65,12 @@ pub fn invoke_anthropic_event_stream(bytes: ByteStream) -> EventStream {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString)]
-#[strum(serialize_all = "snake_case")]
 enum InvokeProvider {
+    #[strum(serialize = "anthropic")]
     Anthropic,
+    #[strum(serialize = "deepseek_r1")]
     DeepseekR1,
+    #[strum(serialize = "moonshot")]
     Moonshot,
     #[strum(disabled)]
     Unsupported,

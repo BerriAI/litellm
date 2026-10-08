@@ -16,14 +16,20 @@ use crate::{
 pub(crate) struct ClaudeCode;
 
 #[derive(Debug, PartialEq, Eq, strum::EnumString)]
-#[strum(serialize_all = "snake_case")]
 enum SpanType {
+    #[strum(serialize = "assistant_response")]
     AssistantResponse,
+    #[strum(serialize = "tool_result")]
     ToolResult,
+    #[strum(serialize = "api_request_body")]
     ApiRequestBody,
+    #[strum(serialize = "compaction")]
     Compaction,
+    #[strum(serialize = "interaction")]
     Interaction,
+    #[strum(serialize = "llm_request")]
     LlmRequest,
+    #[strum(serialize = "tool")]
     Tool,
     #[strum(disabled)]
     Other,

@@ -6,6 +6,8 @@ For string-valued enums and their Serde conversions, follow [.agents/skills/rust
 
 For fieldless enums, derive `strum::VariantArray` and use `VARIANTS` instead of a hand-listed `ALL` array; derive Strum string conversions instead of hand-written variant-to-string matches
 
+Use the derived conversions directly (`<&'static str>::from(x)` / `.into()`, `str::parse`) with no `as_str`/`parse` wrapper that only delegates, and spell each variant with explicit `#[strum(serialize = "...")]` instead of `serialize_all`
+
 ## Test placement
 
 - Never create a `tests.rs` (or `test.rs`) file under `src/`, and never `#[path = "tests.rs"] mod tests;`

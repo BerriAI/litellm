@@ -23,14 +23,20 @@ use strum::VariantArray;
     strum::EnumString,
     strum::VariantArray,
 )]
-#[strum(serialize_all = "snake_case")]
 pub enum BetaProvider {
+    #[strum(serialize = "anthropic")]
     Anthropic,
+    #[strum(serialize = "azure_ai")]
     AzureAi,
+    #[strum(serialize = "bedrock_converse")]
     BedrockConverse,
+    #[strum(serialize = "bedrock")]
     Bedrock,
+    #[strum(serialize = "bedrock_mantle")]
     BedrockMantle,
+    #[strum(serialize = "vertex_ai")]
     VertexAi,
+    #[strum(serialize = "databricks")]
     Databricks,
 }
 

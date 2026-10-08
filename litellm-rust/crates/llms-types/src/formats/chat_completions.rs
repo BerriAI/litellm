@@ -11,25 +11,21 @@ pub use content::{
 #[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq, IntoStaticStr, strum::EnumString, strum::VariantArray)]
 #[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
 pub enum ReasoningEffort {
+    #[strum(serialize = "none")]
     None,
+    #[strum(serialize = "minimal")]
     Minimal,
+    #[strum(serialize = "low")]
     Low,
+    #[strum(serialize = "medium")]
     Medium,
+    #[strum(serialize = "high")]
     High,
+    #[strum(serialize = "xhigh")]
     Xhigh,
+    #[strum(serialize = "max")]
     Max,
-}
-
-impl ReasoningEffort {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        value.parse().ok()
-    }
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -202,9 +198,9 @@ mod tests {
     ) {
         assert_eq!(
             serde_json::to_value(effort).unwrap(),
-            Value::String(effort.as_str().to_string())
+            Value::String(<&'static str>::from(effort).to_string())
         );
-        assert_eq!(ReasoningEffort::parse(effort.as_str()), Some(effort));
+        assert_eq!(<&'static str>::from(effort).parse(), Ok(effort));
         assert!(ReasoningEffort::VARIANTS.contains(&effort));
     }
 
@@ -213,6 +209,6 @@ mod tests {
     #[case::uppercase("HIGH")]
     #[case::empty("")]
     fn reasoning_effort_parse_rejects(#[case] value: &str) {
-        assert_eq!(ReasoningEffort::parse(value), None);
+        assert!(value.parse::<ReasoningEffort>().is_err());
     }
 }

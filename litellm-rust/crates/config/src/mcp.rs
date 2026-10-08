@@ -43,40 +43,41 @@ impl fmt::Debug for McpServer {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, strum::IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
 pub enum McpTransport {
     #[default]
+    #[strum(serialize = "http")]
     Http,
+    #[strum(serialize = "sse")]
     Sse,
+    #[strum(serialize = "stdio")]
     Stdio,
-}
-
-impl McpTransport {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, strum::IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
 pub enum McpAuth {
+    #[strum(serialize = "none")]
     None,
+    #[strum(serialize = "api_key")]
     ApiKey,
+    #[strum(serialize = "bearer_token")]
     BearerToken,
+    #[strum(serialize = "basic")]
     Basic,
+    #[strum(serialize = "authorization")]
     Authorization,
+    #[strum(serialize = "token")]
     Token,
+    #[strum(serialize = "oauth2")]
     Oauth2,
+    #[strum(serialize = "aws_sigv4")]
     AwsSigv4,
+    #[strum(serialize = "oauth2_token_exchange")]
     Oauth2TokenExchange,
+    #[strum(serialize = "oauth2_id_jag")]
     Oauth2IdJag,
+    #[strum(serialize = "true_passthrough")]
     TruePassthrough,
+    #[strum(serialize = "oauth_delegate")]
     OauthDelegate,
-}
-
-impl McpAuth {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
 }

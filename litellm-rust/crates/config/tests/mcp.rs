@@ -10,7 +10,7 @@ fn mcp_transport_as_str_matches_the_serde_spelling(
     #[case] transport: McpTransport,
     #[case] name: &str,
 ) {
-    assert_eq!(transport.as_str(), name);
+    assert_eq!(<&'static str>::from(transport), name);
     assert_eq!(
         serde_json::from_value::<McpTransport>(json!(name)).unwrap(),
         transport
@@ -31,7 +31,7 @@ fn mcp_transport_as_str_matches_the_serde_spelling(
 #[case::true_passthrough(McpAuth::TruePassthrough, "true_passthrough")]
 #[case::oauth_delegate(McpAuth::OauthDelegate, "oauth_delegate")]
 fn mcp_auth_as_str_matches_the_serde_spelling(#[case] auth: McpAuth, #[case] name: &str) {
-    assert_eq!(auth.as_str(), name);
+    assert_eq!(<&'static str>::from(auth), name);
     assert_eq!(
         serde_json::from_value::<McpAuth>(json!(name)).unwrap(),
         auth

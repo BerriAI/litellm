@@ -57,7 +57,7 @@ fn unmapped_effort(effort: &Value) -> Error {
         actual: repr(&from_json(effort.clone())),
         choices: ReasoningEffort::VARIANTS
             .iter()
-            .map(|effort| effort.as_str())
+            .map(|effort| <&'static str>::from(*effort))
             .collect(),
     })
 }
@@ -65,7 +65,7 @@ fn unmapped_effort(effort: &Value) -> Error {
 fn unsupported_effort(level: EffortLevel, model: &str) -> Error {
     Error::InvalidRequest(crate::ErrorDetail::UnsupportedValue {
         field: "effort",
-        value: level.as_str(),
+        value: <&'static str>::from(level),
         model: model.into(),
     })
 }
@@ -138,7 +138,7 @@ fn legacy_reasoning_effort(
         Some(Recognized::Known(level)) => Ok((*level).into()),
         Some(Recognized::Unrecognized(value)) if truthy(&from_json(value.clone())) => value
             .as_str()
-            .and_then(ReasoningEffort::parse)
+            .and_then(|text| text.parse().ok())
             .ok_or_else(|| unmapped_effort(value)),
         None | Some(Recognized::Unrecognized(_)) => Ok(ReasoningEffort::Medium),
     }
