@@ -482,8 +482,10 @@ jobs:
               tests/unit/anthropic_interface
               tests/unit/compression
               tests/unit/enterprise/enterprise_callbacks/test_callback_controls.py
+              tests/unit/enterprise/enterprise_callbacks/test_llama_guard.py
               tests/unit/enterprise/enterprise_callbacks/test_llm_guard.py
               tests/unit/enterprise/enterprise_callbacks/test_secret_detection.py
+              tests/unit/enterprise/enterprise_hooks
               tests/unit/integration_support
               tests/unit/models
               tests/unit/ocr
