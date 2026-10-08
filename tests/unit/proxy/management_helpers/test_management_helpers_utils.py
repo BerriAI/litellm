@@ -1,7 +1,7 @@
-import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final
+from types import SimpleNamespace
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_helpers.utils import add_new_member
+from litellm.proxy.utils import PrismaClient
 
 
 @pytest.mark.asyncio
@@ -47,7 +48,7 @@ async def test_management_otel_span_redacts_mcp_global_env_var_secrets(monkeypat
         ):
             captured["response"] = logging_payload.response
 
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "open_telemetry_logger", _FakeOtelLogger())
     monkeypatch.setattr(mgmt_utils, "is_otel_v2_enabled", lambda: False)
@@ -122,7 +123,7 @@ async def test_management_otel_span_redacts_nested_submission_env_var_secrets(
         ):
             captured["response"] = logging_payload.response
 
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "open_telemetry_logger", _FakeOtelLogger())
     monkeypatch.setattr(mgmt_utils, "is_otel_v2_enabled", lambda: False)
@@ -245,6 +246,66 @@ async def test_add_new_member_links_default_team_budget_id():
     )
     create_data = team_membership_call_args.kwargs["data"]["create"]
     assert create_data["budget_id"] == test_default_budget_id
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "cleared_budget_fields", "should_update", "expected_max_budget"),
+    cast(
+        Sequence[tuple[Mapping[str, object], frozenset[str], bool, float | None]],
+        (
+            ({"max_budget": None}, frozenset({"max_budget"}), True, None),
+            ({}, frozenset(), False, None),
+            ({"max_budget": 0}, frozenset(), True, 0.0),
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_handle_budget_for_entity_updates_only_cleared_or_supplied_fields(
+    request_fields: Mapping[str, object],
+    cleared_budget_fields: frozenset[str],
+    should_update: bool,
+    expected_max_budget: float | None,
+) -> None:
+    from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+    from litellm.types.tag_management import TagUpdateRequest
+
+    request_data: Final = {"name": "budget-tag", **request_fields}
+    tag: Final = TagUpdateRequest.model_validate(request_data)
+    budget_update: Final = AsyncMock()
+    prisma_client: Final = cast(
+        PrismaClient,
+        SimpleNamespace(db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update))),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        await handle_budget_for_entity(
+            data=tag,
+            existing_budget_id="budget-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            prisma_client=prisma_client,
+            litellm_proxy_admin_name="admin",
+            cleared_budget_fields=cleared_budget_fields,
+        )
+
+    if not should_update:
+        budget_update.assert_not_awaited()
+        return
+
+    update_args: Final = budget_update.await_args
+    assert update_args is not None
+    budget_data: Final = cast(Mapping[str, object], update_args.kwargs["data"])
+    assert budget_data["max_budget"] == expected_max_budget
+    assert not budget_data.keys() & {
+        "soft_budget",
+        "max_parallel_requests",
+        "tpm_limit",
+        "rpm_limit",
+        "model_max_budget",
+        "budget_duration",
+    }
 
 
 @pytest.mark.asyncio
@@ -838,7 +899,7 @@ class _FakeDb:
 async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.auth.auth_checks import _check_team_member_budget
-    from litellm.proxy.management_endpoints.common_utils import _upsert_budget_and_membership
+    from litellm.proxy.management_endpoints.common_utils import upsert_budget_and_membership
     from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
     from litellm.proxy.utils import ProxyLogging
 
@@ -861,7 +922,7 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
             default_team_budget_id=default_budget.budget_id,
         )
 
-    await _upsert_budget_and_membership(
+    await upsert_budget_and_membership(
         db,
         team_id=team_id,
         user_id="overridden",

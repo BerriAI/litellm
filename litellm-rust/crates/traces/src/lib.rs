@@ -1,25 +1,49 @@
-mod config;
+macro_rules_attribute::attribute_alias! {
+    #[apply(wire_type)] =
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+    #[apply(response_type)] =
+        #[derive(serde::Serialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+    #[apply(request_type)] =
+        #[derive(serde::Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+}
+
 mod error;
-mod insert;
 mod normalize;
 mod otlp;
-mod query;
+pub mod query;
 mod query_access;
-mod schema;
+pub mod request;
+mod resolve;
+pub mod response;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod shared;
-mod sql;
+mod tenant;
+mod truncate;
+mod ui;
+mod view;
+pub mod wire;
 
-pub use config::Config;
-pub use error::{DecodeError, QueryAccessError};
-pub use insert::{InsertRow, InsertTable, encode_rows, insert_rows, insert_shared_rows};
-pub use litellm_storage_clickhouse::{Connection, Error, Parameter, execute_read};
+pub use error::{Error, InvalidCallKey, InvalidQuery, InvalidScope};
 pub use normalize::{
-    NORMALIZED_FIELD_DEFINITIONS, NormalizedFieldDefinition, NormalizedSpan, ObservationType,
+    AgentMetadata, AgentType, CallEvidence, CallEvidenceKind, CallKey, Integration, NormalizedSpan,
+    ObservationType,
 };
-pub use otlp::{DecodedSpan, decode_otlp};
-pub use query_access::{QueryReaders, QueryScope};
-pub use schema::{ensure_schema, schema_statements};
+pub use otlp::{
+    DecodeLimits, DecodedEvent, DecodedSpan, decode_otlp, decode_otlp_logs,
+    decode_otlp_logs_with_limits, decode_otlp_with_limits,
+};
+pub use query::ReadQuery;
+pub use query_access::QueryScope;
+pub use resolve::{SpendLookup, iso_time, listed_summary, resolve_trace};
 pub use shared::{Shared, SharedIdentity};
-pub use sql::{LensQuery, ReadQuery, execute_named_read};
-
-pub use query::{query_help, query_sql};
+pub use tenant::Tenant;
+pub use truncate::{truncate_messages, truncate_value};
+pub use ui::{ChatRole, UiContent, UiField, UiMessage, UiToolCall, to_ui_content};
+pub use view::{
+    AgentNode, RunSource, RunSourceType, Span, SpanDetail, SpanErrorPage, SpanStatus, SpendMatch,
+    Trace, TracePage, TraceSummary,
+};

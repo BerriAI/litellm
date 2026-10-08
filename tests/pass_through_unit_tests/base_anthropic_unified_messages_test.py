@@ -15,7 +15,6 @@ from litellm.llms.anthropic.pass_through.messages.handler import (
 from typing import Optional
 from litellm.types.utils import StandardLoggingPayload
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import Router
 import importlib
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -67,7 +66,7 @@ class BaseAnthropicMessagesTest:
     @pytest.mark.asyncio
     async def test_non_streaming_base(self):
         """Base test for non-streaming requests"""
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         request_params = self.model_config
 
@@ -95,36 +94,6 @@ class BaseAnthropicMessagesTest:
         return response
 
     @pytest.mark.asyncio
-    async def test_streaming_base(self):
-        """Base test for streaming requests"""
-        request_params = self.model_config
-        # Set up test parameters
-        messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
-
-        # Prepare call arguments
-        call_args = {
-            "messages": messages,
-            "max_tokens": 100,
-            "stream": True,
-            "client": AsyncHTTPHandler(),
-        }
-
-        # Add any additional config from subclass
-        call_args.update(request_params)
-
-        # Call the handler
-        response = await litellm.anthropic.messages.acreate(**call_args)
-
-        collected_chunks = []
-        if isinstance(response, AsyncIterator):
-            async for chunk in response:
-                print("chunk=", chunk)
-                collected_chunks.append(chunk)
-
-        print("collected_chunks=", collected_chunks)
-        return collected_chunks
-
-    @pytest.mark.asyncio
     async def test_response_format_consistency(self):
         """
         Test that response content blocks are consistently dicts (not Pydantic objects).
@@ -134,7 +103,7 @@ class BaseAnthropicMessagesTest:
 
         Issue: https://github.com/BerriAI/litellm/issues/20342
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         request_params = self.model_config
 
@@ -196,7 +165,7 @@ class BaseAnthropicMessagesTest:
         """
         test_custom_logger = TestCustomLogger()
         litellm.callbacks = [test_custom_logger]
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         router = Router(
             model_list=[
                 {

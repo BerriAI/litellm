@@ -1116,11 +1116,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/usage/_components/components/EntityUsage/EntityUsage.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/usage/_components/components/UsageAIChatPanel.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -1130,17 +1125,11 @@
     }
   },
   "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    },
-    "max-lines": {
-      "count": 1
-    },
     "react-hooks/purity": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/users/_components/BulkEditUsers.tsx": {
@@ -1706,6 +1695,37 @@
       "count": 1
     }
   },
+  "src/components/logs/detail/LogDetailsDrawer.tsx": {
+    "no-nested-ternary": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 2
+    }
+  },
+  "src/components/logs/detail/sections/EvalViewer/EvalViewer.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    }
+  },
+  "src/components/logs/detail/sections/GuardrailViewer/CompliancePanel.tsx": {
+    "no-nested-ternary": {
+      "count": 2
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/components/logs/detail/sections/GuardrailViewer/ContentFilterDetails.tsx": {
+    "no-nested-ternary": {
+      "count": 1
+    }
+  },
+  "src/components/logs/detail/sections/GuardrailViewer/GuardrailViewer.tsx": {
+    "no-nested-ternary": {
+      "count": 3
+    }
+  },
   "src/components/mcp_server_management/MCPToolPermissions.tsx": {
     "local/no-complex-jsx-arrow": {
       "count": 1
@@ -1779,10 +1799,10 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 146
+      "count": 140
     },
     "prefer-const": {
-      "count": 31
+      "count": 29
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -2262,62 +2282,6 @@
     }
   },
   "src/components/vector_store_providers.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/EvalViewer/EvalViewer.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/GuardrailViewer/CompliancePanel.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/GuardrailViewer/ContentFilterDetails.tsx": {
-    "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/GuardrailViewer/GuardrailViewer.tsx": {
-    "no-nested-ternary": {
-      "count": 3
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/LogDetailsDrawer.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/components/view_logs/LogDetailsDrawer/useKeyboardNavigation.ts": {
-    "react-hooks/immutability": {
-      "count": 2
-    }
-  },
-  "src/components/view_logs/columns.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/index.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/log_filter_logic.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/view_logs/logs_utils.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }

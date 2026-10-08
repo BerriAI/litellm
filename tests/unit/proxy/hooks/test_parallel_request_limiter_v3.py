@@ -13,6 +13,7 @@ from typing import Any, Dict, Final, List, Optional
 
 import pytest
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
@@ -21,9 +22,11 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
+    PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
     RateLimitedModel,
     RateLimitResponse,
@@ -34,11 +37,13 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     get_request_stash,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
+    PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.mcp import MCPPreCallRequestObject, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import (
     EmbeddingResponse,
     ModelResponse,
@@ -95,7 +100,7 @@ def test_api_key_descriptor_applies_budget_throttle(
         budget_throttle_pct=throttle_pct,
     )
 
-    descriptors = handler._create_rate_limit_descriptors(
+    descriptors = handler.create_rate_limit_descriptors(
         user_api_key_dict=user_api_key_dict,
         data={},
         rpm_limit_type=None,
@@ -108,6 +113,159 @@ def test_api_key_descriptor_applies_budget_throttle(
     assert api_key_descriptor["rate_limit"]["tokens_per_unit"] == expected_tpm
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "description", [None, "Gateway metadata, not caller input. " * 100], ids=["unlisted", "listed"]
+)
+@pytest.mark.parametrize("arguments_rewritten", [False, True])
+async def test_mcp_description_does_not_change_admission_or_reserved_tokens(
+    description: str | None, arguments_rewritten: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    schema: Final = {"type": "object", "properties": {"q": {"type": "string", "description": "Schema text " * 100}}}
+    request: Final = MCPPreCallRequestObject(
+        tool_name="echo", arguments={"q": "hello"}, tool_description=description, tool_input_schema=schema
+    )
+    data: Final = TypeAdapter(dict[str, object]).validate_python(logger._convert_mcp_to_llm_format(request, {}))
+    messages: Final = data["messages"]
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-mcp-description-reservation"), tpm_limit=64)
+
+    if arguments_rewritten:
+        data["mcp_arguments"] = {"q": "Transformed arguments " * 100}
+    monkeypatch.setattr(litellm, "callbacks", [handler])
+    await logger.pre_call_hook(user_api_key_dict=caller, data=data, call_type="call_mcp_tool")
+
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_tokens == 25
+    assert (
+        await cache.async_get_cache(
+            key=handler.create_rate_limit_keys("api_key", caller.api_key, "tokens"), local_only=True
+        )
+        == 25
+    )
+    assert data["messages"] is messages
+    assert data.get("mcp_tool_description") == description
+    assert data["mcp_input_schema"] == schema
+    assert messages == [
+        {
+            "role": "user",
+            "content": "Tool: echo\nArguments: {'q': 'hello'}",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "description", [None, "Gateway metadata, not caller input. " * 100], ids=["unlisted", "listed"]
+)
+@pytest.mark.parametrize("itpm_limit,otpm_limit", [(64, 4096), (4096, 64), (4096, 4096)])
+@pytest.mark.parametrize("arguments_rewritten", [False, True])
+async def test_mcp_description_preserves_project_input_and_output_reservations(
+    description: str | None, itpm_limit: int, otpm_limit: int,
+    arguments_rewritten: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    schema: Final = {"type": "object", "properties": {"q": {"type": "string", "description": "Schema text " * 100}}}
+    request: Final = MCPPreCallRequestObject(
+        tool_name="echo", arguments={"q": "hello"}, tool_description=description, tool_input_schema=schema
+    )
+    data: Final = TypeAdapter(dict[str, object]).validate_python(logger._convert_mcp_to_llm_format(request, {}))
+    messages: Final = data["messages"]
+    base_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "Tool: echo\nArguments: {'q': 'hello'}"}]
+    }
+    expected_input: Final = handler._estimate_precise_input_tokens(base_data, "mcp-tool-call", "call_mcp_tool")
+    expected_output: Final = handler.no_max_tokens_output_floor(otpm_limit)
+    expected_combined: Final = handler._estimate_tokens_for_request(
+        base_data, min_configured_tpm_limit=4096, call_type="call_mcp_tool"
+    )
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-project-reservation"),
+        tpm_limit=4096,
+        project_id="mcp-project-reservation",
+        project_metadata={
+            "model_itpm_limit": {"mcp-tool-call": itpm_limit},
+            "model_otpm_limit": {"mcp-tool-call": otpm_limit},
+        },
+    )
+
+    if arguments_rewritten:
+        data["mcp_arguments"] = {"q": "Transformed arguments " * 100}
+    monkeypatch.setattr(litellm, "callbacks", [handler])
+    await logger.pre_call_hook(user_api_key_dict=caller, data=data, call_type="call_mcp_tool")
+
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert (stash.reserved_tokens, stash.itpm_reserved_tokens, stash.otpm_reserved_tokens) == (
+        expected_combined,
+        expected_input,
+        expected_output,
+    )
+    assert (
+        await cache.async_get_cache(
+            key=handler.create_rate_limit_keys(
+                "model_per_project_itpm", f"{caller.project_id}:mcp-tool-call", "tokens"
+            ),
+            local_only=True,
+        )
+        == expected_input
+    )
+    assert (
+        await cache.async_get_cache(
+            key=handler.create_rate_limit_keys(
+                "model_per_project_otpm", f"{caller.project_id}:mcp-tool-call", "tokens"
+            ),
+            local_only=True,
+        )
+        == expected_output
+    )
+    assert data["messages"] is messages
+    assert data.get("mcp_tool_description") == description
+    assert data["mcp_input_schema"] == schema
+    assert messages == [
+        {
+            "role": "user",
+            "content": "Tool: echo\nArguments: {'q': 'hello'}",
+        }
+    ]
+
+
+def test_llm_tpm_estimation_still_counts_messages_with_mcp_metadata() -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "x" * 400}],
+        "max_tokens": 1,
+        "mcp_tool_name": "echo",
+        "mcp_arguments": {},
+    }
+    assert handler._estimate_tokens_for_request(data, call_type="acompletion") == 101
+
+
+@pytest.mark.asyncio
+async def test_unconverted_mcp_request_keeps_its_reservation() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-raw-mcp-request"), tpm_limit=64)
+    data: Final[dict[str, object]] = {"name": "echo", "arguments": {"q": "hello"}, "server_id": "fixture"}
+
+    await handler.async_pre_call_hook(user_api_key_dict=caller, cache=cache, data=data, call_type="call_mcp_tool")
+
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_tokens == 16
+    assert (
+        await cache.async_get_cache(
+            key=handler.create_rate_limit_keys("api_key", caller.api_key, "tokens"), local_only=True
+        )
+        == 16
+    )
+
+
 @pytest.mark.flaky(reruns=3)
 @pytest.mark.asyncio
 async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
@@ -115,7 +273,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
     Test the sliding window rate limiting functionality
     """
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "2")
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=3)
     local_cache = DualCache()
@@ -208,7 +366,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller
     Test that the rate limiter script returns both counter and window values correctly
     """
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "2")
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, rpm_limit=3)
     local_cache = DualCache()
@@ -349,7 +507,7 @@ async def test_normal_router_call_tpm_v3(
         num_retries=3,
     )  # type: ignore
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     if rate_limit_object == "api_key":
         user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10)
@@ -526,7 +684,7 @@ async def test_token_rate_limit_type_respected_v3(monkeypatch, token_rate_limit_
     # Set up environment and mock general_settings
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=100)
     local_cache = DualCache()
@@ -636,7 +794,7 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(
     """
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
 
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache())
     )
@@ -683,7 +841,7 @@ async def test_async_log_failure_event_v3():
     no-ops that can never free another request's slot (releasing more than
     was acquired is what previously let concurrency exceed the limit).
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -736,7 +894,7 @@ async def test_failure_event_without_acquired_slot_does_not_release_v3():
     above the configured limit. Without the acquired-slot marker the gauge
     must stay untouched.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -778,7 +936,7 @@ async def test_max_parallel_requests_not_reset_by_window_roll_v3():
         internal_usage_cache=InternalUsageCache(local_cache),
         time_provider=controller.now,
     )
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
 
     for _ in range(2):
@@ -814,7 +972,7 @@ async def test_rejected_request_does_not_consume_parallel_slot_v3():
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
 
     admitted_data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
@@ -869,7 +1027,7 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=5)
     counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
 
@@ -939,7 +1097,7 @@ async def test_should_rate_limit_only_called_when_limits_exist_v3():
     Test that should_rate_limit is only called when actual rate limits are configured.
     This verifies the optimization that avoids unnecessary rate limit checks.
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -1081,7 +1239,7 @@ async def test_model_specific_rate_limits_only_called_when_configured_v3():
         get_key_model_tpm_limit,
     )
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -1142,7 +1300,7 @@ async def test_model_specific_rate_limits_only_called_when_configured_v3():
 @pytest.mark.asyncio
 async def test_tpm_api_key_rate_limits_v3():
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key_hash = hash_token(_api_key)
     model = "gpt-3.5-turbo"
     rpm_limit = 2
@@ -1237,7 +1395,7 @@ async def test_tpm_api_key_rate_limits_v3():
 @pytest.mark.asyncio
 async def test_rpm_api_key_rate_limits_v3():
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key_hash = hash_token(_api_key)
     model = "gpt-3.5-turbo"
     rpm_limit = 2
@@ -1334,7 +1492,7 @@ async def test_team_member_rate_limits_v3():
     """
     Test that team member RPM/TPM rate limits are properly applied for team member combinations.
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _team_id = "team_123"
     _user_id = "user_456"
@@ -1403,7 +1561,7 @@ async def test_team_member_rate_limits_v3_raises_429_when_over_limit():
     pre-call hook raises HTTP 429 with rate_limit headers — same contract as
     test_rpm_api_key_rate_limits_v3 / test_tpm_api_key_rate_limits_v3.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     _team_id = "team_123"
     _user_id = "user_456"
 
@@ -1482,7 +1640,7 @@ async def test_dynamic_rate_limiting_v3():
     - If model has no failures, rate limits should NOT be enforced (allow exceeding)
     - If model has failures above threshold, rate limits SHOULD be enforced
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key_hash = hash_token(_api_key)
     model = "gpt-3.5-turbo"
 
@@ -1734,7 +1892,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             Exception(
                 "EVALSHA - all keys must map to the same key slot"
             ),  # First group fails
-            [1234, 1, 1234, 2],  # Second group succeeds
+            [1234, 2],  # Second group succeeds
         ]
         handler.batch_rate_limiter_script = mock_script
 
@@ -1754,8 +1912,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             keys_to_fetch=test_keys, now_int=1234
         )
 
-        # Verify results: 2 from fallback + 4 from successful script = 6 total
-        assert len(results) == 6, f"Expected 6 results, got {len(results)}"
+        assert results == [1234, 1, 1234, 2]
 
         # Verify script was called twice (once per slot group)
         assert mock_script.call_count == 2
@@ -1793,7 +1950,7 @@ async def test_multiple_rate_limits_per_descriptor():
     3. The old floor(i / 2) mapping would fail with IndexError
     4. The new descriptor_key-based lookup works correctly
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key_hash = hash_token(_api_key)
 
     # Create a user with multiple rate limit types to trigger multiple statuses per descriptor
@@ -1876,7 +2033,7 @@ async def test_missing_descriptor_fallback():
     This tests an edge case where somehow the descriptor_key in status doesn't match
     any descriptor key (shouldn't happen in normal operation but good for robustness).
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key_hash = hash_token(_api_key)
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -1997,7 +2154,7 @@ async def test_async_log_success_event_with_dict_usage(
     """
     from unittest.mock import MagicMock
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -2087,7 +2244,7 @@ async def test_async_log_success_event_with_dict_usage_missing_fields(monkeypatc
     """
     from unittest.mock import MagicMock
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     local_cache = DualCache()
     parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
@@ -2233,7 +2390,7 @@ async def test_agent_level_rate_limit_descriptors():
 
     from litellm.types.agents import AgentResponse
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_abc123"
 
@@ -2299,7 +2456,7 @@ async def test_agent_session_rate_limit_descriptors():
 
     from litellm.types.agents import AgentResponse
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_abc123"
     _session_id = "sess_xyz789"
@@ -2369,7 +2526,7 @@ async def test_agent_session_rate_limit_skipped_without_session_id():
 
     from litellm.types.agents import AgentResponse
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_abc123"
 
@@ -2429,7 +2586,7 @@ async def test_agent_rate_limit_from_metadata_agent_id():
 
     from litellm.types.agents import AgentResponse
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_from_header"
 
@@ -2498,7 +2655,7 @@ async def test_agent_both_agent_and_session_rate_limits():
 
     from litellm.types.agents import AgentResponse
 
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_dual"
     _session_id = "sess_dual"
@@ -2572,7 +2729,7 @@ async def test_agent_rate_limit_tpm_increment_on_success(monkeypatch):
     Test that async_log_success_event increments agent and session
     TPM counters when agent_id and session_id are in metadata.
     """
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_tpm_test"
     _session_id = "sess_tpm_test"
@@ -2658,7 +2815,7 @@ async def test_agent_rate_limit_429_on_over_limit(monkeypatch, time_controller):
     from litellm.types.agents import AgentResponse
 
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "2")
-    _api_key = "sk-12345"
+    _api_key = "sk-98765"
     _api_key = hash_token(_api_key)
     _agent_id = "agent_429_test"
 
@@ -2758,7 +2915,7 @@ class TestGetTotalTokensFromUsageCacheExclusion:
     def handler(self):
         """Create a handler instance for testing."""
         local_cache = DualCache()
-        return _PROXY_MaxParallelRequestsHandler(
+        return PROXY_MaxParallelRequestsHandler_v3(
             internal_usage_cache=InternalUsageCache(local_cache),
         )
 
@@ -3630,200 +3787,200 @@ async def test_failure_event_settles_project_itpm_otpm_at_recovered_partial_usag
 # ----------------------- Per-MCP-server rate limiting (v3) -----------------------
 
 
-def _make_mcp_handler():
-    local_cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(
+def _make_mcp_handler() -> tuple[PROXY_MaxParallelRequestsHandler_v3, DualCache]:
+    local_cache: Final = DualCache()
+    handler: Final = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
     return handler, local_cache
 
 
-def _find_descriptor(descriptors, key):
-    return next((d for d in descriptors if d["key"] == key), None)
-
-
-def _build_mcp_descriptors(handler, user_api_key_dict, data, call_type="call_mcp_tool"):
-    return handler._create_rate_limit_descriptors(
-        user_api_key_dict=user_api_key_dict,
-        data=data,
-        rpm_limit_type=None,
-        tpm_limit_type=None,
-        model_has_failures=False,
-        call_type=call_type,
-    )
-
-
-def test_mcp_per_key_descriptor_created_for_matching_server_v3():
-    handler, _ = _make_mcp_handler()
-    api_key = hash_token("sk-mcp-key")
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=api_key,
-        metadata={"mcp_rpm_limit": {"github": 5}},
-    )
-
-    descriptors = _build_mcp_descriptors(
-        handler, user_api_key_dict, {"mcp_server_name": "github"}
-    )
-
-    descriptor = _find_descriptor(descriptors, "mcp_per_key")
-    assert descriptor is not None
-    assert descriptor["value"] == f"{api_key}:github"
-    assert descriptor["rate_limit"]["requests_per_unit"] == 5
-    # MCP tool calls have no token usage; tokens_per_unit must stay None so the
-    # TPM reservation path is never engaged (otherwise budget would leak).
-    assert descriptor["rate_limit"]["tokens_per_unit"] is None
-
-
-def test_mcp_per_key_descriptor_skipped_for_non_matching_server_v3():
-    handler, _ = _make_mcp_handler()
-    user_api_key_dict = UserAPIKeyAuth(
+@pytest.mark.asyncio
+async def test_mcp_per_key_rate_limit_uses_trusted_server_alias_v3() -> None:
+    handler, local_cache = _make_mcp_handler()
+    user_api_key_dict: Final = UserAPIKeyAuth(
         api_key=hash_token("sk-mcp-key"),
-        metadata={"mcp_rpm_limit": {"github": 5}},
+        metadata={"mcp_rpm_limit": {"github-alias": 1}},
+    )
+    server: Final = MCPServer(
+        server_id="server-1",
+        name="github",
+        alias="github-alias",
+        server_name="github",
+        transport=MCPTransport.http,
     )
 
-    descriptors = _build_mcp_descriptors(
-        handler, user_api_key_dict, {"mcp_server_name": "slack"}
+    await handler.enforce_mcp_server_rate_limits(user_api_key_dict, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_key"):
+        await handler.enforce_mcp_server_rate_limits(user_api_key_dict, server)
+
+    assert all(
+        value == 0
+        for key, value in local_cache.in_memory_cache.cache_dict.items()
+        if key.endswith(":tokens")
     )
-
-    assert _find_descriptor(descriptors, "mcp_per_key") is None
-
-
-def test_mcp_descriptor_skipped_for_non_mcp_request_v3():
-    """A non-MCP request must not create an MCP descriptor even if the caller
-    injects mcp_server_name in the body; otherwise an LLM call could consume a
-    target server's MCP quota and 429 legitimate tool calls."""
-    handler, _ = _make_mcp_handler()
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=hash_token("sk-mcp-key"),
-        metadata={"mcp_rpm_limit": {"github": 5}},
-    )
-
-    descriptors = _build_mcp_descriptors(
-        handler,
-        user_api_key_dict,
-        {"model": "gpt-4", "mcp_server_name": "github"},
-        call_type="completion",
-    )
-
-    assert _find_descriptor(descriptors, "mcp_per_key") is None
-
-
-def test_mcp_descriptor_skipped_for_raw_rest_body_v3():
-    handler, _ = _make_mcp_handler()
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=hash_token("sk-mcp-key"),
-        team_id="team-1",
-        metadata={"mcp_rpm_limit": {"github": 5}},
-        team_metadata={"mcp_rpm_limit": {"github": 3}},
-    )
-
-    descriptors = _build_mcp_descriptors(
-        handler,
-        user_api_key_dict,
-        {
-            "server_id": "slack",
-            "name": "demo-tool",
-            "arguments": {},
-            "mcp_server_name": "github",
-        },
-    )
-
-    assert _find_descriptor(descriptors, "mcp_per_key") is None
-    assert _find_descriptor(descriptors, "mcp_per_team") is None
-
-
-def test_mcp_per_team_descriptor_created_from_team_metadata_v3():
-    handler, _ = _make_mcp_handler()
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=hash_token("sk-mcp-key"),
-        team_id="team-1",
-        team_metadata={"mcp_rpm_limit": {"github": 3}},
-    )
-
-    descriptors = _build_mcp_descriptors(
-        handler, user_api_key_dict, {"mcp_server_name": "github"}
-    )
-
-    descriptor = _find_descriptor(descriptors, "mcp_per_team")
-    assert descriptor is not None
-    assert descriptor["value"] == "team-1:github"
-    assert descriptor["rate_limit"]["requests_per_unit"] == 3
-    assert descriptor["rate_limit"]["tokens_per_unit"] is None
 
 
 @pytest.mark.asyncio
-async def test_mcp_per_key_rpm_enforced_v3(monkeypatch):
-    """
-    A key configured with mcp_rpm_limit={"github": 2} must allow 2 calls to the
-    github MCP server within the window and reject the 3rd with a 429, while
-    calls to a different MCP server are unaffected.
-    """
-    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
-    api_key = hash_token("sk-mcp-enforce")
-    local_cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(local_cache)
+async def test_mcp_per_key_rejection_does_not_consume_shared_server_rpm_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-shared",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+        rpm=2,
+    )
+    first_key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-limited"),
+        metadata={"mcp_rpm_limit": {"github": 1}},
+    )
+    second_key: Final = UserAPIKeyAuth(api_key=hash_token("sk-mcp-unlimited"))
+
+    await handler.enforce_mcp_server_rate_limits(first_key, server)
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_key") as key_rejected:
+        await handler.enforce_mcp_server_rate_limits(first_key, server)
+
+    assert key_rejected.value.headers is not None
+    assert key_rejected.value.headers["retry-after"] == str(handler.window_size)
+    assert key_rejected.value.headers["rate_limit_type"] == "requests"
+    assert key_rejected.value.headers["reset_at"]
+    await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_server") as server_rejected:
+        await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+    assert server_rejected.value.headers is not None
+    assert server_rejected.value.headers["retry-after"] == str(handler.window_size)
+    assert server_rejected.value.headers["rate_limit_type"] == "requests"
+    assert server_rejected.value.headers["reset_at"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_per_key_rate_limit_is_scoped_to_server_identity_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        metadata={"mcp_rpm_limit": {"github": 1}},
+    )
+    github: Final = MCPServer(
+        server_id="server-github",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+    slack: Final = MCPServer(
+        server_id="server-slack",
+        name="slack",
+        server_name="slack",
+        transport=MCPTransport.http,
     )
 
-    window_starts: Dict[str, int] = {}
-    request_counts: Dict[str, int] = {}
+    await handler.enforce_mcp_server_rate_limits(user_api_key_dict, github)
+    await handler.enforce_mcp_server_rate_limits(user_api_key_dict, slack)
 
-    async def mock_batch_rate_limiter(*args, **kwargs):
-        keys = kwargs.get("keys") if kwargs else args[0]
-        args_list = kwargs.get("args") if kwargs else args[1]
-        now = args_list[0]
-        window_size = args_list[1]
-        results = []
-        for i in range(0, len(keys), 2):
-            window_key = keys[i]
-            counter_key = keys[i + 1]
-            prev_window = window_starts.get(window_key)
-            prev_counter = request_counts.get(counter_key, 0)
-            if prev_window is None or (now - prev_window) >= window_size:
-                window_starts[window_key] = now
-                new_counter = 1
-            else:
-                new_counter = prev_counter + 1
-            request_counts[counter_key] = new_counter
-            results.append(now)
-            results.append(new_counter)
-        return results
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_key"):
+        await handler.enforce_mcp_server_rate_limits(user_api_key_dict, github)
 
-    handler.batch_rate_limiter_script = mock_batch_rate_limiter
 
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=api_key,
-        metadata={"mcp_rpm_limit": {"github": 2}},
+@pytest.mark.asyncio
+async def test_raw_mcp_server_name_does_not_create_mcp_descriptor_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        metadata={"mcp_rpm_limit": {"github": 5}},
     )
 
-    for _ in range(2):
-        await handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={"mcp_server_name": "github"},
-            call_type="call_mcp_tool",
-        )
+    local_cache: Final = DualCache()
+    await handler.async_pre_call_hook(
+        user_api_key_dict,
+        local_cache,
+        {"model": "gpt-4o-mini", "mcp_server_name": "github"},
+        "call_mcp_tool",
+    )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={"mcp_server_name": "github"},
-            call_type="call_mcp_tool",
-        )
-    assert exc_info.value.status_code == 429
+    assert not any("mcp_per_" in key for key in local_cache.in_memory_cache.cache_dict)
 
-    # A different server has no configured limit -> not rate limited.
-    for _ in range(5):
-        await handler.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            cache=local_cache,
-            data={"mcp_server_name": "slack"},
-            call_type="call_mcp_tool",
-        )
 
-    # The TPM counter must never be created for an MCP descriptor.
-    assert not any(":tokens" in key and "github" in key for key in request_counts)
+@pytest.mark.asyncio
+async def test_mcp_per_team_rate_limit_is_enforced_from_team_metadata_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-1",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+    first_key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-first"),
+        team_id="team-1",
+        team_metadata={"mcp_rpm_limit": {"github": 1}},
+    )
+    second_key: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-second"),
+        team_id="team-1",
+        team_metadata={"mcp_rpm_limit": {"github": 1}},
+    )
+
+    await handler.enforce_mcp_server_rate_limits(first_key, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_per_team"):
+        await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_rpm_is_shared_across_keys_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-1",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+        rpm=2,
+    )
+    first_key: Final = UserAPIKeyAuth(api_key=hash_token("sk-mcp-first"))
+    second_key: Final = UserAPIKeyAuth(api_key=hash_token("sk-mcp-second"))
+
+    await handler.enforce_mcp_server_rate_limits(first_key, server)
+    await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_server"):
+        await handler.enforce_mcp_server_rate_limits(second_key, server)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_rpm_zero_rejects_first_request_v3() -> None:
+    handler, _ = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-zero",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+        rpm=0,
+    )
+
+    with pytest.raises(ProxyRateLimitError, match="mcp_server"):
+        await handler.enforce_mcp_server_rate_limits(None, server)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_without_any_rate_limits_skips_cache_v3() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    handler, local_cache = _make_mcp_handler()
+    server: Final = MCPServer(
+        server_id="server-unlimited",
+        name="github",
+        server_name="github",
+        transport=MCPTransport.http,
+    )
+
+    with patch.object(handler, "should_rate_limit", new_callable=AsyncMock) as should_rate_limit:
+        await handler.enforce_mcp_server_rate_limits(None, server)
+
+    should_rate_limit.assert_not_awaited()
+    assert local_cache.in_memory_cache.cache_dict == {}
 
 
 def test_get_key_mcp_rpm_limit_precedence():
@@ -4025,7 +4182,7 @@ async def test_release_max_parallel_requests_on_disconnect_v3():
     by one per cancelled request until the key wedges at its limit. The release
     must decrement the api-key max_parallel_requests counter by exactly one.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4058,7 +4215,7 @@ async def test_release_on_disconnect_works_when_key_config_changed_v3():
     cleared on the key while a request is in flight, the acquired slot still
     has to be released or it lingers until TTL pruning.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4089,7 +4246,7 @@ async def test_post_call_failure_hook_releases_parallel_slot_v3():
     rejection rates wedge the key at its limit. The release must also be
     idempotent with a later failure callback in the same flow.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4144,7 +4301,7 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
     acquired, freeing capacity for the next request; without it every
     completed request would keep occupying the gauge until TTL pruning.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4194,7 +4351,7 @@ async def test_read_only_gauge_check_counts_without_acquiring_v3():
     a count-script failure must degrade to the local mirror instead of
     raising.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4251,7 +4408,7 @@ async def test_redis_release_script_updates_local_mirror_v3():
     request's slot id per gauge key, and the returned in-flight counts are
     mirrored into the local cache so the local first-pass check stays fresh.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4291,7 +4448,7 @@ async def test_tpm_over_limit_rejection_releases_parallel_slot_v3(monkeypatch):
     slot until TTL pruning.
     """
     monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4340,7 +4497,7 @@ async def test_in_memory_fallback_respects_mirrored_redis_count_v3():
     registry, which would double the admitted concurrency during a Redis
     outage.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4392,7 +4549,7 @@ async def test_release_max_parallel_requests_on_disconnect_noop_v3():
     (no api_key, or max_parallel_requests unset). Otherwise a cancelled
     no-limit request would drive an unrelated counter negative.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(local_cache)
@@ -4722,7 +4879,7 @@ async def test_per_tag_rate_limit_independent_counters_v3(monkeypatch):
 @pytest.mark.asyncio
 async def test_per_tag_descriptor_creation_v3():
     """
-    _create_rate_limit_descriptors emits a tag_per_key descriptor carrying the
+    create_rate_limit_descriptors emits a tag_per_key descriptor carrying the
     configured RPM limit only for request tags present in the configured map.
     """
     _api_key = hash_token("sk-per-tag-desc")
@@ -4734,7 +4891,7 @@ async def test_per_tag_descriptor_creation_v3():
         internal_usage_cache=InternalUsageCache(DualCache())
     )
 
-    descriptors = handler._create_rate_limit_descriptors(
+    descriptors = handler.create_rate_limit_descriptors(
         user_api_key_dict=user_api_key_dict,
         data={"model": "gpt-3.5-turbo", "metadata": {"tags": ["cell-1", "cell-2"]}},
         rpm_limit_type=None,
@@ -4760,7 +4917,7 @@ async def test_per_tag_descriptor_absent_without_config_v3():
         internal_usage_cache=InternalUsageCache(DualCache())
     )
 
-    descriptors = handler._create_rate_limit_descriptors(
+    descriptors = handler.create_rate_limit_descriptors(
         user_api_key_dict=user_api_key_dict,
         data={"model": "gpt-3.5-turbo", "metadata": {"tags": ["cell-1"]}},
         rpm_limit_type=None,
@@ -6269,7 +6426,7 @@ async def test_conflicting_token_limits_cannot_bypass_tpm_reservation():
 
 
 def _enqueued_test_handler() -> _PROXY_MaxParallelRequestsHandler:
-    return _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache(default_in_memory_ttl=60)))
+    return PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache(default_in_memory_ttl=60)))
 
 
 def _batch_response(batch_id: str, status: str):
@@ -6582,14 +6739,109 @@ class _ScriptedRedis:
         return run
 
 
-def _handler_with_redis(redis, fail_closed: bool | None = None):
+def _handler_with_redis(
+    redis,
+    fail_closed: bool | None = None,
+    force_hash_tag_grouping: bool | None = None,
+):
     internal_usage_cache = InternalUsageCache(DualCache(redis_cache=redis))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    if fail_closed is None and force_hash_tag_grouping is None:
+        return PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
     if fail_closed is None:
-        return _PROXY_MaxParallelRequestsHandler(internal_usage_cache=internal_usage_cache)
-    return _PROXY_MaxParallelRequestsHandler(
+        return PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=internal_usage_cache,
+            force_hash_tag_grouping_resolver=lambda: force_hash_tag_grouping,
+        )
+    if force_hash_tag_grouping is None:
+        return PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=internal_usage_cache,
+            fail_closed_resolver=lambda: fail_closed,
+        )
+    return PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache,
         fail_closed_resolver=lambda: fail_closed,
+        force_hash_tag_grouping_resolver=lambda: force_hash_tag_grouping,
     )
+
+
+@pytest.mark.parametrize("force_hash_tag_grouping", [True, False], ids=["forced", "default"])
+@pytest.mark.asyncio
+async def test_redis_batch_rate_limiter_respects_hash_tag_grouping_opt_in(force_hash_tag_grouping: bool):
+    redis: Final = _ScriptedRedis()
+    handler: Final = _handler_with_redis(redis, force_hash_tag_grouping=force_hash_tag_grouping)
+    keys: Final = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+
+    await handler._execute_redis_batch_rate_limiter_script(keys_to_fetch=keys, now_int=1234)
+
+    expected_calls: Final = (
+        [
+            [
+                "{api_key:sk-abc}:window",
+                "{api_key:sk-abc}:requests",
+                "{end_user:u28551}:window",
+                "{end_user:u28551}:requests",
+            ],
+            ["{team:t1}:window", "{team:t1}:requests"],
+        ]
+        if force_hash_tag_grouping
+        else [keys]
+    )
+    assert redis.batch_call_keys == expected_calls
+
+
+@pytest.mark.asyncio
+async def test_redis_batch_rate_limiter_returns_values_in_caller_order():
+    redis: Final = _ScriptedRedis()
+    handler: Final = _handler_with_redis(redis, force_hash_tag_grouping=True)
+    now: Final = 1234
+    keys_to_fetch: Final = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+
+    results: Final = await handler._execute_redis_batch_rate_limiter_script(
+        keys_to_fetch=keys_to_fetch, now_int=now
+    )
+
+    assert results == [now, 1, now, 2, now, 1]
+
+
+def test_default_hash_tag_grouping_resolver_uses_litellm_setting(monkeypatch: pytest.MonkeyPatch):
+    redis: Final = _ScriptedRedis()
+    handler: Final = _handler_with_redis(redis)
+    keys: Final = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", True)
+    assert list(handler._group_keys_by_hash_tag(keys).values()) == [
+        [
+            "{api_key:sk-abc}:window",
+            "{api_key:sk-abc}:requests",
+            "{end_user:u28551}:window",
+            "{end_user:u28551}:requests",
+        ],
+        ["{team:t1}:window", "{team:t1}:requests"],
+    ]
+
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", False)
+    assert handler._group_keys_by_hash_tag(keys) == {"all_keys": keys}
 
 
 async def _admit(handler, auth, data=None):
@@ -6602,7 +6854,7 @@ async def _admit(handler, auth, data=None):
 
 
 async def _read_only_check(handler, auth):
-    descriptors = handler._create_rate_limit_descriptors(
+    descriptors = handler.create_rate_limit_descriptors(
         user_api_key_dict=auth,
         data={"model": "test-model"},
         rpm_limit_type=None,
@@ -7424,7 +7676,7 @@ async def test_managed_invocations_enforce_actor_and_target_rate_policies(
     cache: Final = DualCache()
     handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
     monkeypatch.setattr(handler, "_get_agent_from_registry", lambda _: None)
-    descriptors: Final = handler._create_rate_limit_descriptors(
+    descriptors: Final = handler.create_rate_limit_descriptors(
         user_api_key_dict=auth,
         data={"model": "a2a/target", "litellm_session_id": "session"},
         rpm_limit_type=None,

@@ -13,16 +13,17 @@ from math import isfinite
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from litellm.llms.anthropic.prompt_cache_prediction import CountedBreakpoint, CountedPromptCachePlan
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import CacheCreationTokenDetails, PromptTokensDetailsWrapper, Usage
 
 MAX_CACHE_TTL: Final = 3600
 MAX_CACHE_ENTRIES: Final = 1024
 
 
-class BaselineObservation(BaseModel):
+class BaselineObservation(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     version: Literal[3] = 3
@@ -70,12 +71,12 @@ def _complete_usage(usage: Usage | None) -> bool:
     if usage is None or usage.prompt_tokens < 0 or usage.completion_tokens < 0:
         return False
     details: Final = usage.prompt_tokens_details
-    if details is None:
+    if details is None or not hasattr(details, "cache_creation_tokens"):
         return False
     values: Final = (details.text_tokens, details.cached_tokens, details.cache_creation_tokens)
     if any(value is None or value < 0 for value in values):
         return False
-    split: Final = details.cache_creation_token_details
+    split: Final = details.cache_creation_token_details if hasattr(details, "cache_creation_token_details") else None
     writes: Final = details.cache_creation_tokens or 0
     return (
         usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
@@ -132,10 +133,13 @@ def _matches(entry: CacheEntry, markers: tuple[CountedBreakpoint, ...], started:
 
 
 def _ambiguous(entry: CacheEntry, markers: tuple[CountedBreakpoint, ...], started: float) -> bool:
-    return entry.available_at <= started < entry.expires_at and any(
-        entry.content_fingerprint in marker.lookback_content_fingerprints
-        and (entry.uncertain or entry.ttl_seconds != marker.ttl_seconds)
-        for marker in markers
+    matching: Final = tuple(
+        marker for marker in markers if entry.content_fingerprint in marker.lookback_content_fingerprints
+    )
+    return (
+        entry.available_at <= started < entry.expires_at
+        and bool(matching)
+        and (entry.uncertain or all(entry.ttl_seconds != marker.ttl_seconds for marker in matching))
     )
 
 
@@ -260,7 +264,7 @@ def _writes(history: BaselineHistory, observation: BaselineObservation) -> tuple
                 observation.started_at + hit.ttl_seconds,
             ),
         )
-        if hit is not None and all(marker.fingerprint != hit.fingerprint for marker in markers)
+        if hit is not None
         else ()
     )
     return (
@@ -276,6 +280,7 @@ def _writes(history: BaselineHistory, observation: BaselineObservation) -> tuple
                 uncertain=bool(ambiguous),
             )
             for marker in markers
+            if hit is None or marker.prefix_tokens > hit.tokens
         ),
     )
 

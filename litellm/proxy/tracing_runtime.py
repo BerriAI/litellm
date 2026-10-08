@@ -2,19 +2,21 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Final
 
+import httpx
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
-from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
 from litellm.tracing import TraceReceiver
+from litellm.tracing.exporter import LensExporter
+from litellm.tracing.remote import LensConnection, RemoteTraceStore
 
 _RECEIVER_ADAPTER: Final[TypeAdapter[TraceReceiver | None]] = TypeAdapter(
     TraceReceiver | None, config=ConfigDict(arbitrary_types_allowed=True)
 )
-_UNAVAILABLE_DETAIL: Final = "Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL."
+_UNAVAILABLE_DETAIL: Final = "Agent tracing is not enabled. Configure the Lens service and LITELLM_LENS_URL."
 
 
 def require_receiver(tracing: TraceReceiver | None) -> TraceReceiver:
@@ -29,17 +31,7 @@ async def provide_receiver(request: Request) -> TraceReceiver | None:
 
 async def provide_storage(request: Request) -> ClickHouseStorage | None:
     tracing: Final = await provide_receiver(request)
-    return tracing.store.storage if tracing is not None else None
-
-
-async def _start_receiver(factory: Callable[[], TraceReceiver]) -> TraceReceiver | None:
-    try:
-        tracing: Final = factory()
-        await tracing.start()
-        return tracing
-    except (KeyError, OSError, RuntimeError, ValueError) as error:
-        verbose_proxy_logger.warning("Agent tracing unavailable: %s", error)
-        return None
+    return tracing.storage if tracing is not None else None
 
 
 @asynccontextmanager
@@ -47,23 +39,41 @@ async def manage_tracing(
     enabled: bool,
     receiver_factory: Callable[[], TraceReceiver] | None = None,
     settings: Mapping[str, object] | None = None,
+    client_factory: Callable[[LensConnection], httpx.AsyncClient] = LensConnection.lifespan_client,
 ) -> AsyncGenerator[TraceReceiver | None, None]:
-    factory: Final = receiver_factory or (lambda: TraceReceiver.from_settings(settings or {}))
-    tracing: Final = await _start_receiver(factory) if enabled else None
-    if tracing is None:
-        yield tracing
+    if not enabled:
+        yield None
         return
+    try:
+        connection: Final = LensConnection.from_env()
+    except ValueError:
+        verbose_proxy_logger.warning(
+            "Agent tracing unavailable: configure LITELLM_LENS_URL and LITELLM_LENS_SERVICE_TOKEN"
+        )
+        yield None
+        return
+    async with client_factory(connection) as client:
+        tracing: Final = (
+            receiver_factory()
+            if receiver_factory
+            else TraceReceiver(storage=ClickHouseStorage(RemoteTraceStore(client)))
+        )
+        async with _export_requests(LensExporter(client)):
+            yield tracing
 
-    spend_logger: Final = ClickHouseSpendLogger(storage=tracing.store.storage)
+
+@asynccontextmanager
+async def _export_requests(spend_logger: LensExporter) -> AsyncGenerator[None, None]:
+    spend_logger.start()
     manager: Final = litellm.logging_callback_manager
     manager.add_litellm_callback(spend_logger)
     manager.add_litellm_success_callback(spend_logger)
     manager.add_litellm_failure_callback(spend_logger)
     manager.add_litellm_async_success_callback(spend_logger)
     manager.add_litellm_async_failure_callback(spend_logger)
-    verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
+    verbose_proxy_logger.info("Agent tracing enabled (store=lens)")
     try:
-        yield tracing
+        yield None
     finally:
         manager.remove_callback_from_all_lists(spend_logger)
         await spend_logger.aclose()

@@ -28,6 +28,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.routing import BaseRoute, Route
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
 from websockets.exceptions import (
@@ -57,7 +58,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+from litellm.litellm_core_utils.litellm_logging import get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -65,8 +66,9 @@ from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.laya.common_utils import validate_laya_request
+from litellm.llms.oss_decision import validate_oss_request
 from litellm.passthrough import BasePassthroughUtils
+from litellm.proxy._lazy_features import lazy_owned_routes
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -89,9 +91,11 @@ from litellm.proxy.common_request_processing import (
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
-from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
-    _safe_get_request_headers,
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+    safe_get_request_headers,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
@@ -103,11 +107,12 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
-from litellm.proxy.litellm_pre_call_utils import (
+from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
     LiteLLMProxyRequestSetup,
-    _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
+    get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
@@ -387,7 +392,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     @staticmethod
     def get_endpoint_type(url: str, custom_llm_provider: str | None = None) -> EndpointType:
         parsed_url: Final = urlparse(url)
-        if custom_llm_provider == "typesafe" and parsed_url.path.removesuffix("/").endswith("/v1/systemone"):
+        if custom_llm_provider in ("typesafe", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
+            "/v1/systemone"
+        ):
             return EndpointType.DECISIONS
         if (
             ("generateContent") in url
@@ -582,7 +589,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
 
     @staticmethod
-    def _init_kwargs_for_pass_through_endpoint(
+    def init_kwargs_for_pass_through_endpoint(
         request: Request,
         user_api_key_dict: UserAPIKeyAuth,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
@@ -619,11 +626,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         litellm_metadata: Final = litellm_keys_in_body.get("litellm_metadata")
         metadata: Final = litellm_keys_in_body.get("metadata")
-        if litellm_metadata:
-            _metadata.update(litellm_metadata)
-        if metadata:
-            _metadata.update(metadata)
+        for client_metadata in (litellm_metadata, metadata):
+            if isinstance(client_metadata, dict):
+                _metadata.update({k: v for k, v in client_metadata.items() if not k.startswith("user_api_key_")})
 
+        _metadata = _apply_key_team_project_controls(user_api_key_dict=user_api_key_dict, metadata=_metadata)
         _metadata = _update_metadata_with_tags_in_header(
             request=request,
             metadata=_metadata,
@@ -693,6 +700,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         return kwargs
 
+    _init_kwargs_for_pass_through_endpoint = init_kwargs_for_pass_through_endpoint
+
     @staticmethod
     def construct_target_url_with_subpath(base_target: str, subpath: str, include_subpath: bool | None) -> str:
         """
@@ -712,23 +721,29 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if not subpath:
             return base_target
 
-        # Ensure base_target ends with / and subpath doesn't start with /
-        if not base_target.endswith("/"):
-            base_target = base_target + "/"
-        subpath = subpath.removeprefix("/")
+        target_root: Final = base_target if base_target.endswith("/") else base_target + "/"
+        return target_root + HttpPassThroughEndpointHelpers.resolve_subpath(subpath)
 
-        # Resolve any '..' segments in the subpath so it cannot climb above
-        # the base_target prefix that the operator configured. Preserve a
-        # trailing slash on the original subpath since some upstreams treat
-        # `/foo` and `/foo/` as different resources.
-        trailing_slash: Final = subpath.endswith("/")
-        safe_subpath = posixpath.normpath("/" + subpath).lstrip("/")
-        if safe_subpath == ".":
-            safe_subpath = ""
-        if trailing_slash and safe_subpath and not safe_subpath.endswith("/"):
-            safe_subpath += "/"
+    @staticmethod
+    def resolve_subpath(subpath: str) -> str:
+        """
+        ``subpath`` with ``.``, ``..`` and empty segments resolved, so it cannot climb above the target the
+        operator configured. A trailing slash is kept since some upstreams treat `/foo` and `/foo/` differently.
+        """
+        resolved: Final = posixpath.normpath("/" + subpath.removeprefix("/")).lstrip("/")
+        return resolved + "/" if resolved and subpath.endswith("/") else resolved
 
-        return base_target + safe_subpath
+    @staticmethod
+    def forwarded_route(endpoint_path: str, subpath: str) -> str:
+        """
+        The proxy route as the upstream sees it: the subpath resolved like the forwarder resolves it, then
+        parsed by ``httpx`` like the forwarded URL is, so a decoded ``?`` or ``#`` ends the path there too.
+        """
+        route: Final = f"{endpoint_path.rstrip('/')}/{HttpPassThroughEndpointHelpers.resolve_subpath(subpath)}"
+        try:
+            return httpx.URL(route).path
+        except httpx.InvalidURL:
+            return route
 
     @staticmethod
     def join_base_and_endpoint_path(base_url: httpx.URL, endpoint_path: str) -> str:
@@ -758,7 +773,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         return combined
 
     @staticmethod
-    def _update_stream_param_based_on_request_body(
+    def update_stream_param_based_on_request_body(
         parsed_body: dict,
         stream: bool | None = None,
     ) -> bool | None:
@@ -769,6 +784,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if "stream" in parsed_body:
             return parsed_body.get("stream", stream)
         return stream
+
+    _update_stream_param_based_on_request_body = update_stream_param_based_on_request_body
 
 
 def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | None) -> None:
@@ -853,7 +870,7 @@ def _resolve_team_callback_wiring(
     otherwise reject the vars mid-request.
     """
     try:
-        callback_settings_obj: Final = _get_dynamic_logging_metadata(
+        callback_settings_obj: Final = get_dynamic_logging_metadata(
             user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
         )
         if callback_settings_obj and callback_settings_obj.callback_vars:
@@ -1115,7 +1132,7 @@ async def pass_through_request(
         url = httpx.URL(target)
         headers = custom_headers
         headers = HttpPassThroughEndpointHelpers.forward_headers_from_request(
-            request_headers=_safe_get_request_headers(request).copy(),
+            request_headers=safe_get_request_headers(request).copy(),
             headers=headers,
             forward_headers=forward_headers,
         )
@@ -1151,11 +1168,11 @@ async def pass_through_request(
             # Don't parse multipart body here - it will be handled by make_multipart_http_request
             _parsed_body = {}
         else:
-            _parsed_body = await _read_request_body(request)
+            _parsed_body = await read_request_body(request)  # rebind-ok: pre-existing rebinding on a rename-only line
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
-            _get_masked_values(upstream_headers),
+            get_masked_values(upstream_headers),
             _parsed_body,
         )
 
@@ -1163,10 +1180,10 @@ async def pass_through_request(
             pricing_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
             _strip_client_pricing_overrides(pricing_body)
             _parsed_body = pricing_body
-        if custom_llm_provider == "laya":
-            laya_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
-            checkpoint: Final = validate_laya_request(laya_request)
-            _parsed_body["model"] = f"laya/{checkpoint}"
+        if custom_llm_provider in ("laya", "bespoke"):
+            decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
+            checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
+            _parsed_body["model"] = f"{custom_llm_provider}/{checkpoint}"
 
         ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
         # Passthrough endpoints are opt-in only for guardrails
@@ -1223,17 +1240,19 @@ async def pass_through_request(
             call_type="pass_through_endpoint",
             endpoint_type=endpoint_type,
         )
-        if custom_llm_provider == "laya":
+        if custom_llm_provider in ("laya", "bespoke"):
             hook_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
             hook_model: Final = hook_body.get("model")
-            laya_body: Final = MappingProxyType(
+            decision_body: Final = MappingProxyType(
                 {
                     **hook_body,
-                    "model": hook_model.removeprefix("laya/") if isinstance(hook_model, str) else hook_model,
+                    "model": hook_model.removeprefix(f"{custom_llm_provider}/")
+                    if isinstance(hook_model, str)
+                    else hook_model,
                 }
             )
-            _ = validate_laya_request(laya_body)
-            _parsed_body = TypeAdapter(dict[str, object]).validate_python(laya_body)
+            _ = validate_oss_request(custom_llm_provider, decision_body)
+            _parsed_body = TypeAdapter(dict[str, object]).validate_python(decision_body)
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
         async_client_obj: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,
@@ -1246,7 +1265,7 @@ async def pass_through_request(
             request_method=getattr(request, "method", None),
             cost_per_request=cost_per_request,
         )
-        kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(  # rebind-ok: pre-existing rebinding on a rename-only line
             user_api_key_dict=user_api_key_dict,
             _parsed_body=_parsed_body,
             passthrough_logging_payload=passthrough_logging_payload,
@@ -1420,7 +1439,7 @@ async def pass_through_request(
                 "headers": upstream_headers,
             },
         )
-        stream = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+        stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
             parsed_body=_parsed_body or {},
             stream=stream,
         )
@@ -1934,6 +1953,20 @@ async def pass_through_request(
             )
 
 
+def _apply_key_team_project_controls(
+    user_api_key_dict: UserAPIKeyAuth, metadata: dict[str, object]
+) -> dict[str, object]:
+    data: Final = LiteLLMProxyRequestSetup.add_key_level_controls(
+        key_metadata=user_api_key_dict.metadata,
+        data={"metadata": metadata},
+        _metadata_variable_name="metadata",
+    )
+    return LiteLLMProxyRequestSetup.add_team_and_project_level_controls(
+        user_api_key_dict=user_api_key_dict,
+        metadata=data["metadata"],
+    )
+
+
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
     """
     If tags are in the request headers, add them to the metadata
@@ -1954,9 +1987,10 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
 
     # Only add tags key if there are tags to add
     if tags_to_add:
-        if "tags" not in metadata:
-            metadata["tags"] = []
-        metadata["tags"].extend(tags_to_add)
+        metadata["tags"] = LiteLLMProxyRequestSetup.merge_tags(
+            request_tags=metadata.get("tags"),
+            tags_to_add=tags_to_add,
+        )
 
     return metadata
 
@@ -2453,7 +2487,7 @@ async def websocket_passthrough_request(
     )
 
     # Initialize kwargs for logging using the same pattern as HTTP passthrough
-    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+    kwargs: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
         user_api_key_dict=user_api_key_dict,
         _parsed_body={},  # WebSocket doesn't have a traditional request body
         passthrough_logging_payload=passthrough_logging_payload,
@@ -2923,35 +2957,34 @@ def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) ->
     return None
 
 
+def _placed_ahead(routes: Sequence[BaseRoute], moving: BaseRoute, before: BaseRoute) -> tuple[BaseRoute, ...]:
+    kept: Final = tuple(route for route in routes if route is not moving)
+    at: Final = next(index for index, route in enumerate(kept) if route is before)
+    return (*kept[:at], moving, *kept[at:])
+
+
 class SafeRouteAdder:
     """
     Wrapper class for adding routes to FastAPI app.
-    Only adds routes if they don't already exist on the app.
+    Only adds routes if they don't already exist on the app. A route a lazy feature registered
+    does not count: a route added at its path goes ahead of it, the precedence a config
+    pass-through at /v1/decisions gets in lazy mode, where the feature has not loaded yet.
     """
 
     @staticmethod
+    def _colliding_routes(app: FastAPI, path: str, methods: Sequence[str]) -> tuple[Route, ...]:
+        wanted: Final = frozenset(methods)
+        return tuple(
+            route
+            for route in app.routes
+            if isinstance(route, Route) and route.path == path and not wanted.isdisjoint(route.methods or ())
+        )
+
+    @staticmethod
     def _is_path_registered(app: FastAPI, path: str, methods: list[str]) -> bool:
-        """
-        Check if a path with any of the specified methods is already registered on the app.
-
-        Args:
-            app: The FastAPI application instance
-            path: The path to check (e.g., "/v1/chat/completions")
-            methods: List of HTTP methods to check (e.g., ["GET", "POST"])
-
-        Returns:
-            True if the path is already registered with any of the methods, False otherwise
-        """
-        for route in app.routes:
-            # Use getattr to safely access route attributes
-            route_path = getattr(route, "path", None)
-            route_methods = getattr(route, "methods", None)
-
-            if route_path == path and route_methods is not None:
-                # Check if any of the methods overlap
-                if any(method in route_methods for method in methods):
-                    return True
-        return False
+        """True when a route the app itself defines already serves the path with one of the methods."""
+        lazy_owned: Final = lazy_owned_routes(app)
+        return any(id(route) not in lazy_owned for route in SafeRouteAdder._colliding_routes(app, path, methods))
 
     @staticmethod
     def add_api_route_if_not_exists(
@@ -2982,12 +3015,17 @@ class SafeRouteAdder:
             )
             return False
 
+        shadowed: Final = SafeRouteAdder._colliding_routes(app, path, methods)
         app.add_api_route(
             path=path,
             endpoint=endpoint,
             methods=methods,
             dependencies=dependencies,
         )
+        if shadowed:
+            app.router.routes[:] = _placed_ahead(  # rebind-ok: the app owns its route table
+                app.router.routes, app.router.routes[-1], shadowed[0]
+            )
         verbose_proxy_logger.debug(
             "Successfully added route: %s with methods %s",
             path,
@@ -3246,6 +3284,31 @@ class InitPassThroughEndpointHelpers:
                         return True
 
         return False
+
+    @staticmethod
+    def forwarded_routes(route: str) -> tuple[str, ...]:
+        """
+        ``route`` as each registered endpoint it falls under would forward it. An exact endpoint, or no
+        endpoint at all, sees ``route`` itself.
+        """
+        comparison_route: Final = InitPassThroughEndpointHelpers._route_for_registry_lookup(route)
+        registered: Final = tuple(
+            (parts[1], parts[2])
+            for parts in (key.split(":", 3) for key in _registered_pass_through_routes)
+            if len(parts) >= 3
+        )
+        subpath_endpoint_paths: Final = tuple(
+            path
+            for route_type, path in registered
+            if route_type == "subpath" and (comparison_route == path or comparison_route.startswith(path + "/"))
+        )
+        forwarded: Final = tuple(
+            HttpPassThroughEndpointHelpers.forwarded_route(endpoint_path=path, subpath=comparison_route[len(path) :])
+            for path in subpath_endpoint_paths
+        )
+        if subpath_endpoint_paths and ("exact", comparison_route) not in registered:
+            return forwarded
+        return (comparison_route, *forwarded)
 
     @staticmethod
     def get_registered_pass_through_route(route: str, method: str | None = None) -> dict[str, Any] | None:
@@ -3551,7 +3614,8 @@ async def _filter_endpoints_by_team_allowed_routes(
     prisma_client,
 ) -> list[PassThroughGenericEndpoint]:
     """
-    Filter pass-through endpoints based on team's allowed_passthrough_routes metadata.
+    Filter pass-through endpoints based on team's allowed_passthrough_routes and
+    denied_passthrough_routes metadata.
 
     Args:
         team_id: The team ID to check permissions for
@@ -3578,18 +3642,23 @@ async def _filter_endpoints_by_team_allowed_routes(
     team_metadata: Final = cast(  # cast-ok: prisma types the Json column as str; reads hand back the decoded value
         "Mapping[str, object] | None", team.metadata
     )
-    if team_metadata is not None and team_metadata.get("allowed_passthrough_routes") is not None:
-        ## FILTER pass_through_endpoints by allowed_passthrough_routes
-        pass_through_endpoints = [
-            endpoint
-            for endpoint in pass_through_endpoints
-            if endpoint.path
-            in cast(  # cast-ok: guarded above; team metadata stores this key as a list of route paths
-                Sequence[str], team_metadata.get("allowed_passthrough_routes")
-            )
-        ]
+    if team_metadata is None:
+        return pass_through_endpoints
 
-    return pass_through_endpoints
+    from litellm.proxy.auth.route_checks import RouteChecks
+
+    allowed_routes: Final = cast(  # cast-ok: team metadata stores this key as a list of route paths
+        "Sequence[str] | None", team_metadata.get("allowed_passthrough_routes")
+    )
+    return [
+        endpoint
+        for endpoint in pass_through_endpoints
+        if (allowed_routes is None or endpoint.path in allowed_routes)
+        and not (
+            endpoint.auth
+            and RouteChecks.matching_denied_passthrough_route(route=endpoint.path, metadata_sources=(team_metadata,))
+        )
+    ]
 
 
 @router.get(
