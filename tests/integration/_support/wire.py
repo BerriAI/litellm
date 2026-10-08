@@ -20,21 +20,35 @@ class Request:
     body: bytes
 
 
+class AbortedBody(Exception):
+    """The client closed the connection before the body it announced was complete."""
+
+
+def exactly(stream: BinaryIO, size: int) -> bytes:
+    data: Final = stream.read(size)
+    if len(data) < size:
+        raise AbortedBody
+    return data
+
+
 def chunked_body(stream: BinaryIO) -> Iterator[bytes]:
     while True:
-        size: Final = int(stream.readline().split(b";")[0].strip() or b"0", 16)
+        size_line: Final = stream.readline()
+        if not size_line:
+            raise AbortedBody
+        size: Final = int(size_line.split(b";")[0].strip(), 16)
         if size == 0:
             while stream.readline().strip():
                 pass
             return
-        yield stream.read(size)
+        yield exactly(stream, size)
         stream.readline()
 
 
 def read_body(headers: Mapping[str, str], stream: BinaryIO) -> bytes:
     if headers.get("transfer-encoding", "").lower() == "chunked":
         return b"".join(chunked_body(stream))
-    return stream.read(int(headers.get("content-length", "0")))
+    return exactly(stream, int(headers.get("content-length", "0")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +110,13 @@ def wire_server(
 
         def respond(self) -> None:
             headers: Final = {name.lower(): value for name, value in self.headers.items()}
-            request: Final = Request(self.command, self.path, headers, read_body(headers, self.rfile))
+            try:
+                body: Final = read_body(headers, self.rfile)
+            except AbortedBody:
+                self.close_connection = True
+                disconnected.put(self.path)
+                return
+            request: Final = Request(self.command, self.path, headers, body)
             received.put(request)
             try:
                 reply = respond(request)
