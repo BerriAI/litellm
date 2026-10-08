@@ -25,7 +25,7 @@ _BEDROCK_MIJ_STATUS_TO_OPENAI: Final[
 ] = {
     "Submitted": "validating",
     "Validating": "validating",
-    "Scheduled": "validating",
+    "Scheduled": "in_progress",
     "InProgress": "in_progress",
     "Stopping": "cancelling",
     "Stopped": "cancelled",
