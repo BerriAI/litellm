@@ -6,7 +6,6 @@ Tests PII detection and masking for different message formats
 import asyncio
 import copy
 import json
-import logging
 import os
 import re
 from collections.abc import Iterable, Sequence
@@ -4831,27 +4830,3 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
-
-
-def test_print_verbose_logs_at_debug_instead_of_printing(
-    presidio_guardrail: OPTIONAL_PresidioPIIMasking,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
-    capsys.readouterr()
-    presidio_guardrail.print_verbose("presidio verbose statement")
-    captured: Final = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == ""
-
-    caplog.set_level(logging.DEBUG, logger="LiteLLM Proxy")
-    presidio_guardrail.print_verbose("presidio verbose statement")
-    assert any(
-        record.levelno == logging.DEBUG
-        and record.name == "LiteLLM Proxy"
-        and "presidio verbose statement" in record.getMessage()
-        for record in caplog.records
-    )

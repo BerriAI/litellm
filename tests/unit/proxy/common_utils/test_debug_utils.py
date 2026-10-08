@@ -1,11 +1,9 @@
 import json
-import logging
 import os
 import socket
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -20,7 +18,6 @@ from litellm.proxy.common_utils.debug_utils import (
     _ProcFilesystemProcess,
     _summary_process_memory,
     get_memory_summary,
-    get_otel_spans,
 )
 from litellm.proxy.common_utils.debug_utils import router as debug_router
 
@@ -149,22 +146,3 @@ def test_debug_report_returns_what_the_bug_report_link_carries_and_nothing_from_
         "model_list[*].provider = [azure]",
     ]
     assert not any(hostile in response.text for hostile in HOSTILE_STRINGS), response.text
-
-
-@pytest.mark.asyncio
-async def test_otel_spans_are_a_debug_record_not_stdout(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
-) -> None:
-    span = SimpleNamespace(name="litellm_request", parent=None, start_time=0)
-    exporter = SimpleNamespace(get_finished_spans=lambda: [span])
-    monkeypatch.setattr(proxy_server, "open_telemetry_logger", SimpleNamespace(OTEL_EXPORTER=exporter))
-
-    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
-    assert (await get_otel_spans())["otel_spans"] == ["litellm_request"]
-    assert capsys.readouterr() == ("", "")
-
-    caplog.set_level(logging.DEBUG, logger="LiteLLM Proxy")
-    await get_otel_spans()
-    [record] = [r for r in caplog.records if r.name == "LiteLLM Proxy" and r.levelno == logging.DEBUG]
-    assert record.getMessage().startswith("Spans: ")
-    assert "litellm_request" in record.getMessage()

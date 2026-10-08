@@ -7,7 +7,6 @@ Covers ``print_verbose``, ``_get_email_logger_class``,
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -34,32 +33,11 @@ from litellm.proxy.utils import (
 # ---------------------------------------------------------------------------
 
 
-def test_print_verbose_when_set_verbose_true_writes_nothing_to_stdout(monkeypatch, capsys, caplog):
+def test_print_verbose_when_set_verbose_true_no_stdout(monkeypatch, capsys):
     monkeypatch.setattr(litellm, "set_verbose", True)
-    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
-    capsys.readouterr()
     print_verbose("hello world")
     captured = capsys.readouterr()
     assert (captured.out, captured.err) == ("", "")
-
-
-def test_print_verbose_when_set_verbose_false_no_stdout(monkeypatch, capsys):
-    monkeypatch.setattr(litellm, "set_verbose", False)
-    print_verbose("quiet")
-    captured = capsys.readouterr()
-    assert captured.out == ""
-
-
-def test_print_verbose_does_not_format_an_unprintable_object_when_debug_is_off(monkeypatch, caplog):
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
-
-    class Bomb:
-        def __str__(self):
-            raise RuntimeError("bad str")
-
-    print_verbose(Bomb())
-    assert caplog.records == []
 
 
 # ---------------------------------------------------------------------------

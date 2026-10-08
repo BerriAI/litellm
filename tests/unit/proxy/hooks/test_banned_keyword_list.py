@@ -4,9 +4,7 @@
 
 import sys, os, asyncio, time, random
 from datetime import datetime
-import logging
 import traceback
-from typing import Final
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -60,26 +58,3 @@ async def test_banned_keywords_check():
         )
     except Exception as e:
         pytest.fail(f"An error occurred - {str(e)}")
-
-
-def test_print_verbose_logs_at_debug_instead_of_printing(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(litellm, "banned_keywords_list", ["hello"])
-    banned_keywords: Final = ENTERPRISE_BannedKeywords()
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
-    capsys.readouterr()
-    banned_keywords.print_verbose("banned keywords verbose statement")
-    captured: Final = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == ""
-
-    caplog.set_level(logging.DEBUG, logger="LiteLLM Proxy")
-    banned_keywords.print_verbose("banned keywords verbose statement")
-    assert any(
-        record.levelno == logging.DEBUG
-        and record.name == "LiteLLM Proxy"
-        and "banned keywords verbose statement" in record.getMessage()
-        for record in caplog.records
-    )

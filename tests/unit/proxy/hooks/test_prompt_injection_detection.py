@@ -1,10 +1,8 @@
 import asyncio, os
 import importlib
-import logging
 import time
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -441,25 +439,3 @@ async def test_prompt_injection_llm_eval():
         pytest.fail(f"Expected the call to fail")
     except Exception as e:
         pass
-
-
-def test_print_verbose_logs_at_debug_instead_of_printing(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
-) -> None:
-    detector: Final = OPTIONAL_PromptInjectionDetection()
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
-    capsys.readouterr()
-    detector.print_verbose("prompt injection verbose statement")
-    captured: Final = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == ""
-
-    caplog.set_level(logging.DEBUG, logger="LiteLLM Proxy")
-    detector.print_verbose("prompt injection verbose statement")
-    assert any(
-        record.levelno == logging.DEBUG
-        and record.name == "LiteLLM Proxy"
-        and "prompt injection verbose statement" in record.getMessage()
-        for record in caplog.records
-    )

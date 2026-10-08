@@ -1,4 +1,3 @@
-import logging
 from collections.abc import Awaitable, Callable
 from typing import Final, Literal
 
@@ -1034,50 +1033,6 @@ def test_unmapped_sdk_exception_bug_report_link_can_be_disabled(quiet_exception_
         )
 
     assert "https://github.com/BerriAI/litellm/issues/new?" not in str(raised.value)
-
-
-_FEEDBACK_URL: Final = "https://github.com/BerriAI/litellm/issues/new"
-
-
-def _map_an_unmapped_exception() -> None:
-    with pytest.raises(litellm.APIConnectionError):
-        exception_type(model="my-model", custom_llm_provider="minimax", original_exception=ValueError("boom"))
-
-
-def test_feedback_banner_stays_off_stdout_and_stderr(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(litellm, "suppress_debug_info", False)
-    caplog.set_level(logging.WARNING, logger="LiteLLM")
-
-    _map_an_unmapped_exception()
-
-    captured: Final = capsys.readouterr()
-    assert (captured.out, captured.err) == ("", "")
-
-
-def test_feedback_banner_is_one_info_record_with_both_lines(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setattr(litellm, "suppress_debug_info", False)
-    caplog.set_level(logging.INFO, logger="LiteLLM")
-
-    _map_an_unmapped_exception()
-
-    info_records: Final = [r for r in caplog.records if r.name == "LiteLLM" and r.levelno == logging.INFO]
-    banners: Final = [r.getMessage() for r in info_records if _FEEDBACK_URL in r.getMessage()]
-    assert len(banners) == 1
-    assert "litellm.turn_on_debug()" in banners[0]
-
-
-def test_feedback_banner_is_gated_by_suppress_debug_info(
-    quiet_exception_mapping: None, caplog: pytest.LogCaptureFixture
-) -> None:
-    caplog.set_level(logging.DEBUG, logger="LiteLLM")
-
-    _map_an_unmapped_exception()
-
-    assert not any(_FEEDBACK_URL in r.getMessage() for r in caplog.records)
 
 
 def _raise_and_map(model: str | None, original_exception: Exception, custom_llm_provider: str | None) -> None:

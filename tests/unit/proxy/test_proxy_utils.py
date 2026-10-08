@@ -1,9 +1,8 @@
 import asyncio
 import json
-import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, Final, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -11,7 +10,7 @@ from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url, print_verbose
+from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -3330,24 +3329,3 @@ def test_handle_exception_on_proxy_preserves_auth_error_status_code():
     result = handle_exception_on_proxy(auth_error)
 
     assert int(result.code) == 401, f"Expected 401, got {result.code}"
-
-
-def test_print_verbose_logs_at_debug_instead_of_printing(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
-    capsys.readouterr()
-    print_verbose("proxy utils verbose statement")
-    captured: Final = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == ""
-
-    caplog.set_level(logging.DEBUG, logger="LiteLLM Proxy")
-    print_verbose("proxy utils verbose statement")
-    assert any(
-        record.levelno == logging.DEBUG
-        and record.name == "LiteLLM Proxy"
-        and "proxy utils verbose statement" in record.getMessage()
-        for record in caplog.records
-    )

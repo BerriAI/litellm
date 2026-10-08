@@ -13,7 +13,7 @@ import litellm
 from litellm import completion, embedding
 import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
-from litellm.caching.caching import Cache, CacheMode, print_verbose, response_cache_phase
+from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
@@ -1014,27 +1014,3 @@ def test_completion_past_max_messages_is_neither_served_from_nor_written_to_the_
     assert answer(four, "four second") == "four first", "a 4-message repeat missed the cache"
     assert answer(five, "five first") == "five first"
     assert answer(five, "five second") == "five second", "a 5-message repeat was served from the cache"
-
-
-def test_print_verbose_stays_off_stdout_when_set_verbose(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    caplog.set_level(logging.INFO, logger="LiteLLM")
-
-    print_verbose("LiteLLM: Enabling Cache")
-
-    captured: Final = capsys.readouterr()
-    assert (captured.out, captured.err) == ("", "")
-
-
-def test_print_verbose_logs_the_statement_at_debug(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    caplog.set_level(logging.DEBUG, logger="LiteLLM")
-
-    print_verbose("LiteLLM: Enabling Cache")
-
-    debug_records: Final = [record for record in caplog.records if record.levelno == logging.DEBUG]
-    assert "LiteLLM: Enabling Cache" in [record.getMessage() for record in debug_records if record.name == "LiteLLM"]

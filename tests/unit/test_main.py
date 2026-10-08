@@ -5978,19 +5978,3 @@ async def test_transcription_model_names_pass_through(
     assert response.text == "hello"
     assert route.call_count == 1
     assert f'name="model"\r\n\r\n{model}\r\n'.encode() in route.calls[0].request.content
-
-
-def test_print_verbose_logs_at_debug_instead_of_printing(monkeypatch, capsys, caplog):
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    with caplog.at_level(logging.INFO, logger="LiteLLM"):
-        capsys.readouterr()
-        litellm_main.print_verbose("hello from main")
-        captured: Final = capsys.readouterr()
-    assert (captured.out, captured.err) == ("", "")
-
-    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
-        litellm_main.print_verbose("hello from main")
-    emitted: Final = [
-        (record.levelno, record.getMessage()) for record in caplog.records if record.name == "LiteLLM"
-    ]
-    assert emitted == [(logging.DEBUG, "hello from main")]

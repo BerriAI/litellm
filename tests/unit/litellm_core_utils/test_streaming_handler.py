@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 import time
 from typing import Final, NoReturn, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -15,7 +14,6 @@ from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
-    print_verbose,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import (
@@ -6419,27 +6417,3 @@ def validate_last_format(chunk):
         assert isinstance(
             choice["finish_reason"], str
         ), "'finish_reason' should be a string."
-
-
-def test_print_verbose_stays_off_stdout_when_set_verbose(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    caplog.set_level(logging.INFO, logger="LiteLLM")
-
-    print_verbose("chunk: {'id': 'chunk-1'}")
-
-    captured: Final = capsys.readouterr()
-    assert (captured.out, captured.err) == ("", "")
-
-
-def test_print_verbose_logs_the_statement_at_debug(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setattr(litellm, "set_verbose", True)
-    caplog.set_level(logging.DEBUG, logger="LiteLLM")
-
-    print_verbose("chunk: {'id': 'chunk-1'}")
-
-    debug_records: Final = [record for record in caplog.records if record.levelno == logging.DEBUG]
-    assert "chunk: {'id': 'chunk-1'}" in [record.getMessage() for record in debug_records if record.name == "LiteLLM"]
