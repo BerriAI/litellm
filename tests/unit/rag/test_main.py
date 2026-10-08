@@ -11,10 +11,12 @@ aquery carries the completion response with real usage and cost.
 """
 
 import asyncio
+import datetime
 import json
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 from unittest.mock import patch
 
 import httpx
@@ -48,13 +50,25 @@ async def _drain_logging_worker() -> None:
 class RecordingLogger(CustomLogger):
     def __init__(self):
         super().__init__()
-        self.success_events = []
-        self.sync_success_events = []
+        self.success_events: Final[list[dict[str, object]]] = []
+        self.sync_success_events: Final[list[dict[str, object]]] = []
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         self.success_events.append({"kwargs": kwargs, "response_obj": response_obj})
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         self.sync_success_events.append({"kwargs": kwargs, "response_obj": response_obj})
 
 
@@ -116,13 +130,20 @@ async def test_aquery_single_billing_event_carries_completion_usage_and_cost(use
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_router", [False, True])
-async def test_aquery_vector_store_search_sub_call_logs_no_sync_success_event_on_the_parent(use_router, monkeypatch):
+async def test_aquery_vector_store_search_sub_call_logs_no_sync_success_event_on_the_parent(
+    use_router: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     await _drain_logging_worker()
-    recording_logger = RecordingLogger()
+    recording_logger: Final = RecordingLogger()
 
     class InlineExecutor:
-        def submit(self, fn, *args, **kwargs):
-            future = Future()
+        def submit(
+            self,
+            fn: Callable[..., object],
+            *args: object,
+            **kwargs: object,
+        ) -> Future[object]:
+            future: Final = Future[object]()
             future.set_result(fn(*args, **kwargs))
             return future
 
@@ -130,18 +151,22 @@ async def test_aquery_vector_store_search_sub_call_logs_no_sync_success_event_on
     monkeypatch.setattr(litellm_logging, "executor", InlineExecutor())
     monkeypatch.setattr(litellm, "callbacks", [recording_logger])
 
-    router_kwargs = {}
-    if use_router:
-        router_kwargs["router"] = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o-mini",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
-                }
-            ]
-        )
+    router_kwargs: Final = (
+        {
+            "router": litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "gpt-4o-mini",
+                        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                    }
+                ]
+            )
+        }
+        if use_router
+        else {}
+    )
 
-    response = await litellm.aquery(
+    response: Final = await litellm.aquery(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "What is the secret project codename?"}],
         retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
@@ -153,18 +178,25 @@ async def test_aquery_vector_store_search_sub_call_logs_no_sync_success_event_on
     await _drain_logging_worker()
 
     assert len(recording_logger.success_events) == 1, "aquery should run one async success callback"
-    event = recording_logger.success_events[0]
-    response_obj = event["response_obj"]
+    event: Final = recording_logger.success_events[0]
+    response_obj: Final = event["response_obj"]
     assert isinstance(response_obj, ModelResponse), "the async callback should receive the completion response"
     assert response_obj.usage.total_tokens > 0, "the async callback response should include completion usage"
 
-    standard_logging_object = event["kwargs"]["standard_logging_object"]
-    assert standard_logging_object["call_type"] == "aquery", "the async event should be for aquery"
-    assert standard_logging_object["total_tokens"] > 0, "the async event should include total completion tokens"
-    assert standard_logging_object["prompt_tokens"] > 0, "the async event should include prompt tokens"
-    assert standard_logging_object["completion_tokens"] > 0, "the async event should include completion tokens"
-    assert standard_logging_object["response_cost"] > 0, "the async event should include completion cost"
-    sync_response_types = [type(event["response_obj"]).__name__ for event in recording_logger.sync_success_events]
+    event_kwargs: Final = cast(Mapping[str, object], event["kwargs"])
+    standard_logging_object: Final = cast(Mapping[str, object], event_kwargs["standard_logging_object"])
+    assert cast(str, standard_logging_object["call_type"]) == "aquery", "the async event should be for aquery"
+    assert cast(int, standard_logging_object["total_tokens"]) > 0, (
+        "the async event should include total completion tokens"
+    )
+    assert cast(int, standard_logging_object["prompt_tokens"]) > 0, "the async event should include prompt tokens"
+    assert cast(int, standard_logging_object["completion_tokens"]) > 0, (
+        "the async event should include completion tokens"
+    )
+    assert cast(float, standard_logging_object["response_cost"]) > 0, "the async event should include completion cost"
+    sync_response_types: Final = [
+        type(event["response_obj"]).__name__ for event in recording_logger.sync_success_events
+    ]
     assert recording_logger.sync_success_events == [], (
         "an internal sub-call must not log on the parent's logging object; "
         f"sync success event response types: {sync_response_types}"
@@ -432,11 +464,11 @@ async def test_aquery_forwards_provider_retrieval_config_and_router_to_search():
     )
 
     fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(
-            object="vector_store.search_results.page", search_query="q", data=[]
-        )
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
     )
-    with patch("litellm.vector_stores.asearch", new=fake_search):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
+    with patch(
+        "litellm.vector_stores.asearch", new=fake_search
+    ):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
         response = await litellm.aquery(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -478,11 +510,11 @@ async def test_aquery_minimal_retrieval_config_forwards_no_extras():
     from litellm.types.vector_stores import VectorStoreSearchResponse
 
     fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(
-            object="vector_store.search_results.page", search_query="q", data=[]
-        )
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
     )
-    with patch("litellm.vector_stores.asearch", new=fake_search):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
+    with patch(
+        "litellm.vector_stores.asearch", new=fake_search
+    ):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
         await litellm.aquery(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -512,11 +544,11 @@ async def test_aquery_does_not_forward_connection_override_keys_to_search():
     from litellm.types.vector_stores import VectorStoreSearchResponse
 
     fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(
-            object="vector_store.search_results.page", search_query="q", data=[]
-        )
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
     )
-    with patch("litellm.vector_stores.asearch", new=fake_search):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
+    with patch(
+        "litellm.vector_stores.asearch", new=fake_search
+    ):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
         await litellm.aquery(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -553,9 +585,7 @@ async def test_aquery_forwards_vector_store_params_to_search_but_not_completion(
     from litellm.types.vector_stores import VectorStoreSearchResponse
 
     fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(
-            object="vector_store.search_results.page", search_query="q", data=[]
-        )
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
     )
     fake_completion = AsyncMock(
         return_value=ModelResponse(
