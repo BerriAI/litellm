@@ -11,15 +11,19 @@ DELETE /fallback/{model} - Delete fallbacks for a specific model
 # pyright: reportMissingImports=false
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.model_checks import get_all_fallbacks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.utils import PrismaClient, evict_config_param, invalidate_config_param
 
 if TYPE_CHECKING:
     from fastapi import APIRouter, Depends, HTTPException, status
+
+    from litellm.proxy.proxy_server import ProxyConfig
 else:
     try:
         from fastapi import APIRouter, Depends, HTTPException, status
@@ -36,6 +40,26 @@ from litellm.types.management_endpoints.router_settings_endpoints import (
 )
 
 router: Final = APIRouter()
+
+ROUTER_SETTINGS_PARAM: Final = "router_settings"
+
+
+async def _router_settings_fresh_from_db(proxy_config: "ProxyConfig") -> dict:
+    await evict_config_param(ROUTER_SETTINGS_PARAM)
+    config: Final = await proxy_config.get_config()
+    return config.get(ROUTER_SETTINGS_PARAM, {})
+
+
+async def _persist_router_settings(prisma_client: PrismaClient, router_settings: Mapping[str, object]) -> None:
+    router_settings_json: Final = json.dumps(router_settings)
+    await ConfigRepository(prisma_client).table.upsert(
+        where={"param_name": ROUTER_SETTINGS_PARAM},
+        data={
+            "create": {"param_name": ROUTER_SETTINGS_PARAM, "param_value": router_settings_json},
+            "update": {"param_value": router_settings_json},
+        },
+    )
+    await invalidate_config_param(ROUTER_SETTINGS_PARAM)
 
 
 @router.post(
@@ -122,9 +146,7 @@ async def create_fallback(
                 },
             )
 
-        # Load existing config
-        config: Final = await proxy_config.get_config()
-        router_settings: Final = config.get("router_settings", {})
+        router_settings: Final = await _router_settings_fresh_from_db(proxy_config)
 
         # Get the appropriate fallback list based on type
         fallback_key = "fallbacks"
@@ -152,18 +174,7 @@ async def create_fallback(
         # Update router settings
         router_settings[fallback_key] = existing_fallbacks
 
-        # Save to database - convert router_settings to JSON string
-        router_settings_json: Final = json.dumps(router_settings)
-        await ConfigRepository(prisma_client).table.upsert(
-            where={"param_name": "router_settings"},
-            data={
-                "create": {
-                    "param_name": "router_settings",
-                    "param_value": router_settings_json,
-                },
-                "update": {"param_value": router_settings_json},
-            },
-        )
+        await _persist_router_settings(prisma_client, router_settings)
 
         # Update the in-memory router configuration
         setattr(llm_router, fallback_key, existing_fallbacks)
@@ -291,9 +302,7 @@ async def delete_fallback(
                 },
             )
 
-        # Load existing config
-        config: Final = await proxy_config.get_config()
-        router_settings: Final = config.get("router_settings", {})
+        router_settings: Final = await _router_settings_fresh_from_db(proxy_config)
 
         # Get the appropriate fallback list based on type
         fallback_key = "fallbacks"
@@ -323,18 +332,7 @@ async def delete_fallback(
         # Update router settings
         router_settings[fallback_key] = updated_fallbacks
 
-        # Save to database - convert router_settings to JSON string
-        router_settings_json: Final = json.dumps(router_settings)
-        await ConfigRepository(prisma_client).table.upsert(
-            where={"param_name": "router_settings"},
-            data={
-                "create": {
-                    "param_name": "router_settings",
-                    "param_value": router_settings_json,
-                },
-                "update": {"param_value": router_settings_json},
-            },
-        )
+        await _persist_router_settings(prisma_client, router_settings)
 
         # Update the in-memory router configuration
         setattr(llm_router, fallback_key, updated_fallbacks)
