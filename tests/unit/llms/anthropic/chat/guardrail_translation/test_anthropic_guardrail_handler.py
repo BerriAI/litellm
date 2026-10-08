@@ -17,6 +17,7 @@ from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
+from litellm.types.llms.anthropic import AnthropicResponseContentBlockToolUse
 from litellm.types.utils import AnthropicMessagesResponse, GenericGuardrailAPIInputs
 
 
@@ -2160,10 +2161,16 @@ class TestAnthropicMessagesScanOnlyToolResults:
 class ToolCallArgumentsMaskingGuardrail(InputsRecordingGuardrail):
     """Masks the canary inside tool-call arguments, in place or through a fresh list of plain dicts."""
 
-    def __init__(self, return_copies: bool = False, replacement_arguments: Optional[str] = None):
+    def __init__(
+        self,
+        return_copies: bool = False,
+        replacement_arguments: str | None = None,
+        replacement_name: str | None = None,
+    ):
         super().__init__()
         self.return_copies = return_copies
         self.replacement_arguments = replacement_arguments
+        self.replacement_name = replacement_name
         self.seen_tool_calls: list[dict[str, object]] = []
 
     async def apply_guardrail(
@@ -2181,6 +2188,9 @@ class ToolCallArgumentsMaskingGuardrail(InputsRecordingGuardrail):
                 **tool_call,
                 "function": {
                     **tool_call["function"],
+                    "name": self.replacement_name
+                    if self.replacement_name is not None
+                    else tool_call["function"]["name"],
                     "arguments": self.replacement_arguments
                     if self.replacement_arguments is not None
                     else tool_call["function"]["arguments"].replace("POISON", "[BLOCKED]"),
@@ -2199,7 +2209,7 @@ class ToolCallArgumentsMaskingGuardrail(InputsRecordingGuardrail):
 @pytest.mark.asyncio
 async def test_non_streaming_output_writes_masked_tool_call_into_tool_use() -> None:
     handler: Final = AnthropicMessagesHandler()
-    guardrail: Final = ToolCallArgumentsMaskingGuardrail(return_copies=True)
+    guardrail: Final = ToolCallArgumentsMaskingGuardrail(return_copies=True, replacement_name="Shell")
     response: Final = cast(
         AnthropicMessagesResponse,
         {
@@ -2233,9 +2243,27 @@ async def test_non_streaming_output_writes_masked_tool_call_into_tool_use() -> N
     assert tool_use == {
         "type": "tool_use",
         "id": "toolu_01",
-        "name": "Bash",
+        "name": "Shell",
         "input": {"cmd": "AWS_ACCESS_KEY_ID=[BLOCKED] aws sts get-caller-identity"},
     }
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_output_writes_rewritten_tool_call_into_model_tool_use() -> None:
+    handler: Final = AnthropicMessagesHandler()
+    guardrail: Final = ToolCallArgumentsMaskingGuardrail(return_copies=True, replacement_name="Shell")
+    tool_use: Final = AnthropicResponseContentBlockToolUse(
+        type="tool_use",
+        id="toolu_01",
+        name="Bash",
+        input={"cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"},
+    )
+    response: Final = cast(AnthropicMessagesResponse, {"content": [tool_use]})
+
+    await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+
+    assert tool_use.name == "Shell"
+    assert tool_use.input == {"cmd": "AWS_ACCESS_KEY_ID=[BLOCKED] aws sts get-caller-identity"}
 
 
 class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:
