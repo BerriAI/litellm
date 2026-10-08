@@ -1,6 +1,7 @@
 """Real RDS IAM cross-region proof: writer and replica each signed in its own region."""
 
 import os
+import time
 from collections.abc import Iterator
 from contextlib import ExitStack
 from datetime import datetime
@@ -10,11 +11,12 @@ from typing import Final
 import pytest
 from e2e_config import unique_marker
 from e2e_http import unwrap
-from models import ChatBody, ChatMessage, ChatResponse, KeyGenerateBody
+from models import ChatBody, ChatMessage, ChatResponse, KeyGenerateBody, SpendLogsParams
 
 from rds_gateway import (
     NOVA_MICRO_MODEL,
     RdsGateway,
+    ReplicaConnectionRow,
     hostname_region,
     owned_rds_gateway,
     replica_connections,
@@ -35,6 +37,33 @@ def _chat_once(gateway: RdsGateway, key: str) -> ChatResponse:
             ),
         )
     )
+
+
+def _replica_spend_read_witnesses(
+    gateway: RdsGateway, replica_since: datetime, request_id: str, *, attempts: int = 5
+) -> tuple[list[ReplicaConnectionRow], int]:
+    """pg_stat_activity only keeps each connection's latest query, so retry the read+inspect pair."""
+    for attempt in range(1, attempts + 1):
+        read_since = replica_now(
+            os.environ["E2E_RDS_READER_HOST"],
+            gateway.reader_region,
+            os.environ["E2E_RDS_USER"],
+            os.environ["E2E_RDS_DATABASE"],
+        )
+        gateway.proxy.spend_logs(SpendLogsParams(request_id=request_id))
+        connections = replica_connections(
+            os.environ["E2E_RDS_READER_HOST"],
+            gateway.reader_region,
+            os.environ["E2E_RDS_USER"],
+            os.environ["E2E_RDS_DATABASE"],
+            replica_since,
+            read_since,
+        )
+        if connections:
+            return connections, attempt
+        if attempt < attempts:
+            time.sleep(2)
+    return [], attempts
 
 
 class TestRdsIamCrossRegionReplica:
@@ -71,25 +100,12 @@ class TestRdsIamCrossRegionReplica:
             message: Final = response.choices[0].message if response.choices else None
             content: Final = message.content if message else None
             assert content, "chat completion returned empty content"
-            read_since: Final = replica_now(
-                os.environ["E2E_RDS_READER_HOST"],
-                gateway.reader_region,
-                os.environ["E2E_RDS_USER"],
-                os.environ["E2E_RDS_DATABASE"],
-            )
             rows: Final = gateway.proxy.poll_logs_for_request_id(response.id)
             assert rows, f"no spend row for request {response.id}"
-            connections: Final = replica_connections(
-                os.environ["E2E_RDS_READER_HOST"],
-                gateway.reader_region,
-                os.environ["E2E_RDS_USER"],
-                os.environ["E2E_RDS_DATABASE"],
-                replica_since,
-                read_since,
-            )
+            connections, attempts_made = _replica_spend_read_witnesses(gateway, replica_since, response.id)
             assert connections, (
-                f"no LiteLLM_SpendLogs read after {read_since} on a post-{replica_since} "
-                f"connection for {os.environ['E2E_RDS_USER']} on the replica; "
+                f"no LiteLLM_SpendLogs read on a post-{replica_since} connection for "
+                f"{os.environ['E2E_RDS_USER']} on the replica after {attempts_made} attempt(s); "
                 "the spend read was not served by it"
             )
         finally:
