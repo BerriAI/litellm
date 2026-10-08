@@ -6,7 +6,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import cast, TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
 import httpx
 

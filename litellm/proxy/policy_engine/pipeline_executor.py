@@ -9,7 +9,7 @@ import copy
 import time
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import cast, TYPE_CHECKING, Final, Literal, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast
 
 from pydantic import BaseModel
 
