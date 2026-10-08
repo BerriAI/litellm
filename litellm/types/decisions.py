@@ -121,6 +121,13 @@ class DecisionsUsage(LiteLLMPydanticObjectBase):
 class _HiddenParamsResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    def set_hidden_params(self, params: Mapping[str, object]) -> None:
+        self._hidden_params.update(params)
+
 
 class DecisionsResponse(_HiddenParamsResponse):
     model: str | None = None

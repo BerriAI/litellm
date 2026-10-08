@@ -1,12 +1,14 @@
 import json
+from abc import ABC
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final
 
-from pydantic import TypeAdapter
+import httpx
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     ChoiceAnswer,
@@ -46,7 +48,9 @@ from litellm.types.decisions import (
     systemone_choice_key,
 )
 
+_PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
+_RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-type"})
 _TEXT_ONLY: Final = UnsupportedDecisionsRequest(
     reason="input_image content parts are not supported because System One providers accept text input only"
 )
@@ -292,22 +296,27 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
-@dataclass(frozen=True, slots=True)
-class JevCompatibleDecisionsEndpoint:
-    default_api_base_value: str | None
-    path: str
-    api_key_env: tuple[str, ...]
-    api_base_env: str
+class BaseDecisionsConfig(ABC):
+    path: str = "/v1/systemone"
+    api_key_env: tuple[str, ...] = ()
+    api_base_env: tuple[str, ...] = ()
     api_key_required: bool = True
 
-    def configured_api_key(self) -> str | None:
-        return next((key for key in (get_secret_str(name) for name in self.api_key_env) if key), None)
+    def get_default_api_base(self) -> str | None:
+        return None
 
-    def configured_api_base(self) -> str | None:
-        return get_secret_str(self.api_base_env) or self.default_api_base_value
+    def missing_api_base_message(self, custom_llm_provider: str) -> str:
+        return f"api_base is required for Decisions provider '{custom_llm_provider}'"
 
-    def missing_api_base_message(self, provider: str) -> str:
-        return f"api_base is required for Decisions provider '{provider}'"
+    def resolve_api_base(self, api_base: str | None) -> str | None:
+        return api_base or self._first_secret(self.api_base_env) or self.get_default_api_base()
+
+    def resolve_api_key(self, api_key: str | None) -> str | None:
+        return api_key or self._first_secret(self.api_key_env)
+
+    @staticmethod
+    def _first_secret(names: tuple[str, ...]) -> str | None:
+        return next((value for value in (get_secret_str(name) for name in names) if value), None)
 
     def canonical_model(self, model: str) -> str:
         return model
@@ -315,36 +324,50 @@ class JevCompatibleDecisionsEndpoint:
     def request_model(self, model: str) -> str:
         return model
 
-    def endpoint_url(self, api_base: str, model: str) -> str:
+    def validate_environment(self, headers: Mapping[str, str], model: str, api_key: str | None) -> dict[str, str]:
+        return {
+            **{name: value for name, value in headers.items() if name.lower() not in _RESERVED_HEADERS},
+            **({"Authorization": f"Bearer {api_key}"} if api_key is not None else {}),
+            "Content-Type": "application/json",
+        }
+
+    def get_complete_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"
 
-    def request_body(
-        self, model: str, request: DecisionsIRRequest
+    def transform_decisions_request(
+        self,
+        model: str,
+        request: DecisionsIRRequest,
+        custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-        return ir_to_systemone_request(model, request)
+        return ir_to_systemone_request(self.request_model(model), request)
+
+    def unwrap_response(self, payload: object) -> object:
+        return payload
 
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
-        return parse_systemone_response(payload, request)
+        return parse_systemone_response(self.unwrap_response(payload), request)
 
+    def transform_decisions_response(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        raw_response: httpx.Response,
+        request: DecisionsIRRequest,
+    ) -> DecisionsIRResponse:
+        payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
+        try:
+            return self.parse_response(payload, request)
+        except ValidationError as error:
+            raise BaseLLMException(
+                status_code=500,
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: {error}",
+            ) from error
 
-class DecisionsProviderConfig(Protocol):
-    @property
-    def api_key_required(self) -> bool: ...
-
-    def configured_api_key(self) -> str | None: ...
-
-    def configured_api_base(self) -> str | None: ...
-
-    def missing_api_base_message(self, provider: str) -> str: ...
-
-    def canonical_model(self, model: str) -> str: ...
-
-    def request_model(self, model: str) -> str: ...
-
-    def endpoint_url(self, api_base: str, model: str) -> str: ...
-
-    def request_body(
-        self, model: str, request: DecisionsIRRequest
-    ) -> Mapping[str, object] | UnsupportedDecisionsRequest: ...
-
-    def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse: ...
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, str] | httpx.Headers,
+    ) -> BaseLLMException:
+        return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
