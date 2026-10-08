@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
@@ -44,6 +44,13 @@ class ToolUsageTransaction:
     total_tokens: int
 
 
+MAX_TOOL_NAME_BYTES: Final = 2048
+
+
+def _is_safe_tool_name(tool_name: str) -> bool:
+    return bool(tool_name) and len(tool_name.encode("utf-8")) <= MAX_TOOL_NAME_BYTES
+
+
 def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
     """Tool names invoked in a completion response, in call order, for any response
     surface get_tool_calls_from_response understands (chat completions, Responses
@@ -58,7 +65,9 @@ def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
     return tuple(
         stripped
         for tool_call in get_tool_calls_from_response(completion_response, include_all_choices=True)
-        if isinstance(name := tool_call.get("name"), str) and (stripped := name.strip())
+        if isinstance(name := tool_call.get("name"), str)
+        and (stripped := name.strip())
+        and _is_safe_tool_name(stripped)
     )
 
 
@@ -78,7 +87,9 @@ def build_tool_usage_transaction(
     daily spend writer's ``startTime.split("T")[0]`` so rollup rows land in the
     same UTC day bucket as LiteLLM_DailyUserSpend."""
     mcp_names: Final = (
-        (mcp_namespaced_tool_name.strip(),) if mcp_namespaced_tool_name and mcp_namespaced_tool_name.strip() else ()
+        (stripped,)
+        if mcp_namespaced_tool_name and (stripped := mcp_namespaced_tool_name.strip()) and _is_safe_tool_name(stripped)
+        else ()
     )
     realtime_names: Final = (
         response_tool_call_names({"choices": [{"message": {"tool_calls": realtime_tool_calls}}]})
@@ -123,6 +134,15 @@ def _tool_rollup_batch(prisma_client: PrismaClient) -> _ToolRollupBatchManager:
     return batch
 
 
+def _iter_safe_transaction_tools(
+    transactions: Sequence[ToolUsageTransaction],
+) -> Iterator[tuple[ToolUsageTransaction, str]]:
+    for txn in transactions:
+        for tool_name in txn.tool_names:
+            if _is_safe_tool_name(tool_name):
+                yield txn, tool_name
+
+
 async def flush_tool_usage_transactions(
     prisma_client: PrismaClient,
     transactions: Sequence[ToolUsageTransaction],
@@ -144,13 +164,16 @@ async def flush_tool_usage_transactions(
     if not transactions:
         return
 
+    safe_pairs: Final = tuple(_iter_safe_transaction_tools(transactions))
+    if not safe_pairs:
+        return
+
     index_rows: Final = [
         {"request_id": txn.request_id, "tool_name": tool_name, "start_time": txn.start_time}
-        for txn in transactions
-        for tool_name in txn.tool_names
+        for txn, tool_name in safe_pairs
     ]
     per_tool_day: Final = sorted(
-        ((txn.date, tool_name, txn.spend, txn.total_tokens) for txn in transactions for tool_name in txn.tool_names),
+        ((txn.date, tool_name, txn.spend, txn.total_tokens) for txn, tool_name in safe_pairs),
         key=lambda entry: (entry[0], entry[1]),
     )
 
