@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import { formatGuardrailMode } from "./guardrail_info_helpers";
+import { GuardrailModeRows } from "./GuardrailModeDisplay";
 import { GuardrailStreamScopeDetail } from "./StreamScopeFields";
 import ToolPermissionRulesEditor, { type ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 
@@ -7,7 +7,7 @@ export const GuardrailReadOnlyDetails = ({
   guardrailId,
   guardrailName,
   displayName,
-  mode,
+  litellmParams,
   streamScope,
   defaultOn,
   piiEntityCount,
@@ -19,7 +19,7 @@ export const GuardrailReadOnlyDetails = ({
   guardrailId: string;
   guardrailName: string;
   displayName: string;
-  mode: unknown;
+  litellmParams: { mode?: unknown; logging_only_scope?: string | null };
   streamScope: unknown;
   defaultOn: boolean | undefined;
   piiEntityCount: number;
@@ -41,10 +41,7 @@ export const GuardrailReadOnlyDetails = ({
       <p className="font-medium">Provider</p>
       <div>{displayName}</div>
     </div>
-    <div>
-      <p className="font-medium">Mode</p>
-      <div>{formatGuardrailMode(mode) || "-"}</div>
-    </div>
+    <GuardrailModeRows litellmParams={litellmParams} />
     <GuardrailStreamScopeDetail raw={streamScope} />
     <div>
       <p className="font-medium">Default On</p>
