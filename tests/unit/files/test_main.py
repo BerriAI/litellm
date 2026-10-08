@@ -124,85 +124,63 @@ async def test_afile_retrieve_rejects_a_provider_file_without_its_size():
 
 
 _FILE_BODY: Final = b'{"prompt": "Hello", "completion": "Hi"}'
+_FINE_TUNE_FILE_JSON: Final = {
+    "id": "file-abc123",
+    "object": "file",
+    "bytes": len(_FILE_BODY),
+    "created_at": 1699000000,
+    "filename": "mydata.jsonl",
+    "purpose": "fine-tune",
+}
 
 
 @pytest.mark.asyncio
-async def test_openai_file_operations_roundtrip(respx_mock):
-    files_route: Final = respx_mock.post(url__regex=r".*api\.openai\.com/v1/files$").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "file-abc123",
-                "object": "file",
-                "bytes": len(_FILE_BODY),
-                "created_at": 1699000000,
-                "filename": "mydata.jsonl",
-                "purpose": "fine-tune",
-            },
-        )
+async def test_openai_file_operations_roundtrip(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    files_route: Final = respx_mock.post("https://api.openai.com/v1/files").mock(
+        return_value=httpx.Response(200, json=_FINE_TUNE_FILE_JSON)
     )
-    list_route: Final = respx_mock.get(url__regex=r".*api\.openai\.com/v1/files$").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "object": "list",
-                "data": [
-                    {
-                        "id": "file-abc123",
-                        "object": "file",
-                        "bytes": len(_FILE_BODY),
-                        "created_at": 1699000000,
-                        "filename": "mydata.jsonl",
-                        "purpose": "fine-tune",
-                    }
-                ],
-            },
-        )
+    list_route: Final = respx_mock.get("https://api.openai.com/v1/files").mock(
+        return_value=httpx.Response(200, json={"object": "list", "data": [_FINE_TUNE_FILE_JSON]})
     )
-    retrieve_route: Final = respx_mock.get(url__regex=r".*api\.openai\.com/v1/files/file-abc123$").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "file-abc123",
-                "object": "file",
-                "bytes": len(_FILE_BODY),
-                "created_at": 1699000000,
-                "filename": "mydata.jsonl",
-                "purpose": "fine-tune",
-            },
-        )
+    retrieve_route: Final = respx_mock.get("https://api.openai.com/v1/files/file-abc123").mock(
+        return_value=httpx.Response(200, json=_FINE_TUNE_FILE_JSON)
     )
-    content_route: Final = respx_mock.get(url__regex=r".*api\.openai\.com/v1/files/file-abc123/content.*").mock(
+    content_route: Final = respx_mock.get("https://api.openai.com/v1/files/file-abc123/content").mock(
         return_value=httpx.Response(200, content=_FILE_BODY)
     )
-    delete_route: Final = respx_mock.delete(url__regex=r".*api\.openai\.com/v1/files/file-abc123.*").mock(
+    delete_route: Final = respx_mock.delete("https://api.openai.com/v1/files/file-abc123").mock(
         return_value=httpx.Response(200, json={"id": "file-abc123", "object": "file", "deleted": True})
     )
 
     uploaded: Final = await litellm.acreate_file(
-        file=_FILE_BODY, purpose="fine-tune", custom_llm_provider="openai", api_key="fake-key"
+        file=("mydata.jsonl", _FILE_BODY), purpose="fine-tune", custom_llm_provider="openai", api_key="fake-key"
     )
-    assert files_route.called
+    assert files_route.call_count == 1
+    upload_body: Final = files_route.calls.last.request.content
+    assert b'name="purpose"\r\n\r\nfine-tune' in upload_body
+    assert b'filename="mydata.jsonl"' in upload_body
+    assert _FILE_BODY in upload_body
     assert uploaded.id == "file-abc123"
 
     listed: Final = await litellm.afile_list(custom_llm_provider="openai", api_key="fake-key")
-    assert list_route.called
+    assert list_route.call_count == 1
     assert [file.id for file in listed.data] == ["file-abc123"]
 
     retrieved: Final = await litellm.afile_retrieve(
         file_id="file-abc123", custom_llm_provider="openai", api_key="fake-key"
     )
-    assert retrieve_route.called
+    assert retrieve_route.call_count == 1
     assert retrieved.filename == "mydata.jsonl"
+    assert retrieved.purpose == "fine-tune"
 
     content: Final = await litellm.afile_content(
         file_id="file-abc123", custom_llm_provider="openai", api_key="fake-key"
     )
-    assert content_route.called
+    assert content_route.call_count == 1
     assert content.content == _FILE_BODY
 
-    deleted: Final = await litellm.afile_delete(
-        file_id="file-abc123", custom_llm_provider="openai", api_key="fake-key"
-    )
-    assert delete_route.called
+    deleted: Final = await litellm.afile_delete(file_id="file-abc123", custom_llm_provider="openai", api_key="fake-key")
+    assert delete_route.call_count == 1
+    assert deleted.id == "file-abc123"
     assert deleted.deleted is True

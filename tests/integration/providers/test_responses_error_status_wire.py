@@ -23,6 +23,7 @@ def test_unknown_model_provider_404_surfaces_to_client_as_404(gateway: Gateway) 
         )
         response: Final = gateway.request("POST", "/v1/responses", {"model": model, "input": "say hi"})
         assert response.status_code == 404, response.text
+        assert len(wire.drain()) == 1
 
 
 def test_provider_400_for_bad_temperature_surfaces_to_client_as_400(gateway: Gateway) -> None:
@@ -46,6 +47,7 @@ def test_provider_400_for_bad_temperature_surfaces_to_client_as_400(gateway: Gat
             "POST", "/v1/responses", {"model": model, "input": "say hi", "temperature": 2000}
         )
         assert response.status_code == 400, response.text
+        assert len(wire.drain()) == 1
 
 
 def test_cancel_invalid_response_id_surfaces_error_status(gateway: Gateway) -> None:
@@ -66,3 +68,4 @@ def test_cancel_invalid_response_id_surfaces_error_status(gateway: Gateway) -> N
         )
         response: Final = gateway.request("POST", f"/v1/responses/{response_id}/cancel", {"model": model})
         assert response.status_code == 404, response.text
+        assert len(wire.drain()) == 1

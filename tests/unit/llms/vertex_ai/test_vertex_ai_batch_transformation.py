@@ -1,9 +1,10 @@
+import json
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
-
 import pytest
+import respx
 
 import litellm
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
@@ -256,96 +257,76 @@ _MOCK_VERTEX_BATCH_RESPONSE = {
 
 
 @pytest.mark.asyncio
-async def test_vertex_file_upload_create_and_retrieve_batch(monkeypatch, tmp_path):
+async def test_vertex_file_upload_create_and_retrieve_batch(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
     monkeypatch.setenv("GCS_BUCKET_NAME", "litellm-local")
     monkeypatch.setenv("VERTEXAI_PROJECT", "mock-project")
     monkeypatch.setenv("VERTEXAI_LOCATION", "us-central1")
-
-    mock_creds: Final = MagicMock()
-    mock_creds.token = "mock-token"
-    mock_creds.valid = True
-    mock_creds.expiry = None
-    monkeypatch.setattr(
-        "google.auth.default",
-        lambda *args, **kwargs: (mock_creds, "mock-project"),
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    mock_creds: Final = MagicMock(token="mock-token", valid=True, expiry=None)
+    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (mock_creds, "mock-project"))
+    jobs_url: Final = (
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/mock-project/locations/us-central1"
+        "/batchPredictionJobs"
+    )
+    upload_route: Final = respx_mock.post(
+        url__startswith="https://storage.googleapis.com/upload/storage/v1/b/litellm-local/o"
+    ).mock(return_value=httpx.Response(200, json=_MOCK_GCS_FILE_RESPONSE))
+    create_route: Final = respx_mock.post(jobs_url).mock(
+        return_value=httpx.Response(200, json=_MOCK_VERTEX_BATCH_RESPONSE)
+    )
+    retrieve_route: Final = respx_mock.get(f"{jobs_url}/test-batch-id-456").mock(
+        return_value=httpx.Response(200, json=_MOCK_VERTEX_BATCH_RESPONSE)
+    )
+    gcs_object_uri: Final = (
+        "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/"
+        "5f7b99ad-9203-4430-98bf-3b45451af4cb"
     )
 
-    mock_response: Final = MagicMock()
-    mock_response.raise_for_status.return_value = None
-
-    async def _route_post(*args, **kwargs):
-        url: Final = kwargs.get("url", "")
-        if "files" in url:
-            mock_response.json.return_value = _MOCK_GCS_FILE_RESPONSE
-        elif "batch" in url:
-            mock_response.json.return_value = _MOCK_VERTEX_BATCH_RESPONSE
-            mock_response.status_code = 200
-        return mock_response
-
-    jsonl_path: Final = tmp_path / "vertex_batch.jsonl"
-    jsonl_path.write_text(
-        '{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", '
-        '"body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "user", "content": "hi"}]}}\n'
-    )
-
-    with (
-        patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            side_effect=_route_post,
+    file_obj: Final = await litellm.acreate_file(
+        file=(
+            "vertex_batch.jsonl",
+            b'{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", '
+            b'"body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "user", "content": "hi"}]}}\n',
+            "application/jsonl",
         ),
-        patch.object(
-            httpx.AsyncClient,
-            "post",
-            new_callable=AsyncMock,
-            return_value=httpx.Response(
-                200,
-                json=_MOCK_GCS_FILE_RESPONSE,
-                request=httpx.Request("POST", "https://storage.googleapis.com/upload"),
-            ),
-        ) as mock_gcs_upload,
-    ):
-        file_obj: Final = await litellm.acreate_file(
-            file=open(jsonl_path, "rb"),
-            purpose="batch",
-            custom_llm_provider="vertex_ai",
-        )
+        purpose="batch",
+        custom_llm_provider="vertex_ai",
+    )
 
-        assert (
-            file_obj.id
-            == "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
-        )
-        mock_gcs_upload.assert_awaited_once()
-        upload_url: Final = str(mock_gcs_upload.call_args.args[0])
-        assert "uploadType=media" in upload_url
-        assert "/b/litellm-local/o" in upload_url
-        assert (
-            mock_gcs_upload.call_args.kwargs["headers"]["Content-Type"]
-            == "application/json"
-        )
+    assert file_obj.id == gcs_object_uri
+    assert upload_route.call_count == 1
+    upload_request: Final = upload_route.calls.last.request
+    assert upload_request.url.params["uploadType"] == "media"
+    assert upload_request.url.params["name"].startswith(
+        "litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/"
+    )
+    assert upload_request.headers["Content-Type"] == "application/json"
+    uploaded_row: Final = json.loads(upload_request.content)
+    assert uploaded_row["request"]["contents"] == [{"role": "user", "parts": [{"text": "hi"}]}]
+    assert uploaded_row["request"]["labels"]["litellm_custom_id"] == "request-1"
 
-        create_batch_response: Final = await litellm.acreate_batch(
-            completion_window="24h",
-            endpoint="/v1/chat/completions",
-            input_file_id=file_obj.id,
-            custom_llm_provider="vertex_ai",
-            metadata={"key1": "value1", "key2": "value2"},
-        )
+    create_batch_response: Final = await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=file_obj.id,
+        custom_llm_provider="vertex_ai",
+        metadata={"key1": "value1", "key2": "value2"},
+    )
 
-        assert create_batch_response.id == "test-batch-id-456"
-        assert create_batch_response.input_file_id == file_obj.id
+    create_body: Final = json.loads(create_route.calls.last.request.content)
+    assert create_body["inputConfig"] == {"gcsSource": {"uris": [gcs_object_uri]}, "instancesFormat": "jsonl"}
+    assert create_body["model"] == "publishers/google/models/gemini-1.5-flash-001"
+    assert create_body["outputConfig"]["predictionsFormat"] == "jsonl"
+    assert create_body["outputConfig"]["gcsDestination"]["outputUriPrefix"].startswith("gs://litellm-local/")
+    assert create_batch_response.id == "test-batch-id-456"
+    assert create_batch_response.input_file_id == gcs_object_uri
 
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
-        ) as mock_get:
-            mock_get_response: Final = MagicMock()
-            mock_get_response.json.return_value = _MOCK_VERTEX_BATCH_RESPONSE
-            mock_get_response.status_code = 200
-            mock_get_response.is_redirect = False
-            mock_get_response.raise_for_status.return_value = None
-            mock_get.return_value = mock_get_response
+    retrieved_batch: Final = await litellm.aretrieve_batch(
+        batch_id=create_batch_response.id, custom_llm_provider="vertex_ai"
+    )
 
-            retrieved_batch: Final = await litellm.aretrieve_batch(
-                batch_id=create_batch_response.id,
-                custom_llm_provider="vertex_ai",
-            )
-            assert retrieved_batch.id == "test-batch-id-456"
+    assert retrieve_route.call_count == 1
+    assert retrieved_batch.id == "test-batch-id-456"
+    assert retrieved_batch.input_file_id == gcs_object_uri
