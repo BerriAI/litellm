@@ -402,9 +402,6 @@ typed_general_settings: Final = _typed_request_body
 
 
 _TRACE_ID_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_TRACE_ID_OPTIONAL_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
-    Mapping[str, object] | None
-)
 
 
 def _metadata_mapping_has_trace_id(metadata: Mapping[str, object]) -> bool:
@@ -417,6 +414,18 @@ def _metadata_has_trace_id(metadata: object) -> bool:
         return False
     metadata_dict: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(metadata)
     return _metadata_mapping_has_trace_id(metadata_dict)
+
+
+def _team_metadata_requires_trace_id(team_object: LiteLLM_TeamTable) -> bool:
+    if not isinstance(
+        team_object.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # narrow the untyped field
+        dict,
+    ):
+        return False
+    return (
+        team_object.metadata.get("require_trace_id")  # pyright: ignore[reportUnknownMemberType]  # narrowed to dict
+        is True
+    )
 
 
 def _request_has_trace_id(request_body: Mapping[str, object], request: Request, *, headers_only: bool = False) -> bool:
@@ -1189,23 +1198,26 @@ async def common_checks(
         )
         or pass_through_route
     )
-    team_metadata: Final[Mapping[str, object] | None] = (
-        _TRACE_ID_OPTIONAL_METADATA_ADAPTER.validate_python(
-            team_object.metadata  # pyright: ignore[reportUnknownMemberType]  # validate the untyped model field
-        )
-        if team_object is not None
-        else None
-    )
-    if (
+    team_trace_id_gate_applies: Final = (
         team_object is not None
-        and team_metadata is not None
-        and team_metadata.get("require_trace_id") is True
         and request.method not in ("GET", "HEAD", "OPTIONS")
         and (RouteChecks.is_llm_api_route(route=route) or pass_through_route)
         and not RouteChecks.check_route_access(
             route=route,
             allowed_routes=LiteLLMRoutes.trace_telemetry_routes.value,
         )
+    )
+    team_metadata: Final[Mapping[str, object] | None] = (
+        _TRACE_ID_METADATA_ADAPTER.validate_python(
+            team_object.metadata  # pyright: ignore[reportUnknownMemberType]  # validate the narrowed untyped field
+        )
+        if team_trace_id_gate_applies and team_object is not None and _team_metadata_requires_trace_id(team_object)
+        else None
+    )
+    if (
+        team_trace_id_gate_applies
+        and team_object is not None
+        and team_metadata is not None
         and not _request_has_trace_id(
             request_body=_typed_request_body(request_body),
             request=request,

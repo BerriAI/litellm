@@ -53,6 +53,7 @@ async def _run_team_trace_id_check(
     request_body: dict[str, object] | None = None,
     headers: Mapping[str, str] | None = None,
     team_metadata: Mapping[str, object] | None = None,
+    team_object: LiteLLM_TeamTable | None = None,
     registered_pass_through_endpoint: bool = False,
 ) -> bool:
     request_payload: Final[dict[str, object]] = {} if request_body is None else request_body
@@ -73,9 +74,13 @@ async def _run_team_trace_id_check(
         endpoint: Final = SimpleNamespace()
         setattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
         request.scope["endpoint"] = endpoint
-    team: Final = LiteLLM_TeamTable(
-        team_id="trace-id-team",
-        metadata=None if team_metadata is None else dict(team_metadata),
+    team: Final = (
+        team_object
+        if team_object is not None
+        else LiteLLM_TeamTable(
+            team_id="trace-id-team",
+            metadata=None if team_metadata is None else dict(team_metadata),
+        )
     )
     valid_token: Final = UserAPIKeyAuth(token="test-token", team_id=team.team_id)
     user: Final = LiteLLM_UserTable(user_id="trace-id-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -427,6 +432,15 @@ async def test_team_require_trace_id_exempts_methods_routes_and_disabled_teams(
     assert await _run_team_trace_id_check(route=route, method=method, team_metadata=team_metadata) is True
 
 
+@pytest.mark.asyncio
+async def test_team_require_trace_id_skips_non_dict_team_metadata() -> None:
+    team: Final[LiteLLM_TeamTable] = LiteLLM_TeamTable.model_construct(
+        team_id="trace-id-team",
+        metadata="not a mapping",
+    )
+    assert await _run_team_trace_id_check(route="/v1/chat/completions", team_object=team) is True
+
+
 @pytest.mark.parametrize("customer_spend, customer_budget", [(0, 10), (10, 0)])
 @pytest.mark.asyncio
 async def test_get_end_user_object(customer_spend, customer_budget):
@@ -434,7 +448,7 @@ async def test_get_end_user_object(customer_spend, customer_budget):
     Scenario 1: normal - get_end_user_object returns the cached user
     Scenario 2: user over budget - NOTE: budget enforcement now happens in 
                 common_checks() via _check_end_user_budget(), not in get_end_user_object()
-    
+
     This test verifies that get_end_user_object correctly retrieves the end user
     from cache. Budget enforcement is tested separately in test_check_end_user_budget().
     """
@@ -474,12 +488,12 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
     Test _check_end_user_budget enforcement:
     - Scenario 1: customer_spend=0, customer_budget=10 - should pass (under budget)
     - Scenario 2: customer_spend=10, customer_budget=0 - should fail (over budget)
-    
-    Note: Budget enforcement for end users happens in common_checks() via 
+
+    Note: Budget enforcement for end users happens in common_checks() via
     _check_end_user_budget(), not in get_end_user_object().
     """
     from litellm.proxy.auth.auth_checks import check_end_user_budget
-    
+
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
     end_user_obj = LiteLLM_EndUserTable(
         user_id="my-test-customer",
@@ -487,9 +501,9 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
         litellm_budget_table=_budget,
         blocked=False,
     )
-    
+
     should_exceed = customer_spend > customer_budget
-    
+
     if not should_exceed:
         await check_end_user_budget(
             end_user_obj=end_user_obj,
