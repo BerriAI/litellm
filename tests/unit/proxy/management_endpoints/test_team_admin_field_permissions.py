@@ -210,7 +210,7 @@ class TestTeamAdminMayRaiseMaxBudget:
         assert team_admin_may_raise_max_budget(configured) is True
 
     @pytest.mark.parametrize("raw", ["raise_max_budget", 7, [1, 2], {"max_budget": True}])
-    def test_malformed_setting_denies(self, raw):
+    def test_malformed_setting_denies(self, raw: object):
         assert team_admin_may_raise_max_budget({"team_admin_editable_team_fields": raw}) is False
 
 

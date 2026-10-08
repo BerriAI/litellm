@@ -3940,7 +3940,7 @@ class TestTeamAdminEditableTeamFieldsSetting:
         assert stored["team_admin_editable_team_fields"] == enabled
         assert general_settings["team_admin_editable_team_fields"] == enabled
 
-    def test_patch_rejects_raise_max_budget_without_max_budget(self, monkeypatch):
+    def test_patch_rejects_raise_max_budget_without_max_budget(self, monkeypatch: pytest.MonkeyPatch):
         mock_prisma = self._as_proxy_admin(monkeypatch)
 
         try:
@@ -3956,7 +3956,9 @@ class TestTeamAdminEditableTeamFieldsSetting:
         assert "'max_budget'" in detail
         assert not mock_prisma.db.litellm_uisettings.upsert.called
 
-    def test_patch_accepts_raise_max_budget_with_max_budget_and_update_team_sees_it(self, monkeypatch):
+    def test_patch_accepts_raise_max_budget_with_max_budget_and_update_team_sees_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         from litellm.proxy.management_endpoints.team_admin_field_permissions import (
             team_admin_may_raise_max_budget,
         )
