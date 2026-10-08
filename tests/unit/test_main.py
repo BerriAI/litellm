@@ -7,7 +7,6 @@ import io
 import json
 import logging
 import os
-import time
 import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -2643,12 +2642,15 @@ def test_retry_after_wait_falls_back_without_outcome_or_for_base_exception() -> 
 
 
 def test_retry_after_wait_parses_http_date_header() -> None:
-    retry_after = email.utils.formatdate(time.time() + 30, usegmt=True)
+    retry_after = email.utils.formatdate(1_000_030, usegmt=True)
     fallback_wait = Mock(return_value=1.0)
 
-    wait = litellm_main._retry_after_wait(_retry_state(_rate_limit_error({"retry-after": retry_after})), fallback_wait)
+    with patch.object(litellm.utils.time, "time", return_value=1_000_000):
+        wait = litellm_main._retry_after_wait(
+            _retry_state(_rate_limit_error({"retry-after": retry_after})), fallback_wait
+        )
 
-    assert 0 < wait <= 30
+    assert wait == 30
     fallback_wait.assert_not_called()
 
 
