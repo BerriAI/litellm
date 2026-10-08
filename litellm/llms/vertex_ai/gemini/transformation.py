@@ -58,6 +58,7 @@ from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
     check_text_in_content,
+    gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
 )
@@ -197,13 +198,7 @@ def _apply_gemini_metadata(
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
-        gemini_video_metadata: Final = {}
-        if "fps" in video_metadata:
-            gemini_video_metadata["fps"] = video_metadata["fps"]
-        if "start_offset" in video_metadata:
-            gemini_video_metadata["startOffset"] = video_metadata["start_offset"]
-        if "end_offset" in video_metadata:
-            gemini_video_metadata["endOffset"] = video_metadata["end_offset"]
+        gemini_video_metadata: Final = gemini_video_metadata_from_openai(video_metadata)
         if gemini_video_metadata:
             part_dict["video_metadata"] = gemini_video_metadata
 

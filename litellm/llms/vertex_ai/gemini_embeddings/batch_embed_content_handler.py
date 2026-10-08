@@ -22,6 +22,7 @@ from litellm.types.utils import EmbeddingResponse
 
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
+    flatten_media_sources,
     is_file_reference,
     process_embed_content_response,
     process_response,
@@ -38,11 +39,8 @@ class GoogleBatchEmbeddings(VertexLLM):
     def _flatten_and_detect_file_refs(
         input: GeminiEmbeddingInput,
     ) -> tuple[list[str], bool]:
-        """Flatten nested input lists and detect file references."""
-        input_list: Final = [input] if isinstance(input, str) else input
-        flat_elements: Final = [
-            e for item in input_list for e in (item if isinstance(item, list) else [item]) if isinstance(e, str)
-        ]
+        """Flatten nested input lists and file content blocks into their sources and detect file references."""
+        flat_elements: Final = list(flatten_media_sources(input))
         has_file_refs: Final = any(is_file_reference(e) for e in flat_elements)
         return flat_elements, has_file_refs
 
@@ -211,10 +209,13 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         ### TRANSFORMATION (sync path) ###
         request_data: VertexAIBatchEmbeddingsRequestBody | dict[str, object]
+        flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
         if use_embed_content:
             resolved_files = {}
             if api_key:
-                resolved_files = self._resolve_file_references(input=input, api_key=api_key, sync_handler=sync_handler)
+                resolved_files = self._resolve_file_references(
+                    input=flat_elements, api_key=api_key, sync_handler=sync_handler
+                )
             request_data = transform_openai_input_gemini_embed_content(
                 input=input,
                 model=model,
@@ -222,7 +223,6 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
             if has_file_refs and not api_key:
                 raise ValueError(
                     "An API key is required to resolve Gemini file references (files/...). "
@@ -312,11 +312,12 @@ class GoogleBatchEmbeddings(VertexLLM):
             async_handler = client
 
         ### TRANSFORMATION (async path) ###
+        flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
         if use_embed_content:
             resolved_files = {}
             if api_key:
                 resolved_files = await self._async_resolve_file_references(
-                    input=input, api_key=api_key, async_handler=async_handler
+                    input=flat_elements, api_key=api_key, async_handler=async_handler
                 )
             data = transform_openai_input_gemini_embed_content(
                 input=input,
@@ -325,7 +326,6 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
-            flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
             if has_file_refs and not api_key:
                 raise ValueError(
                     "An API key is required to resolve Gemini file references (files/...). "
