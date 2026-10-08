@@ -47,14 +47,14 @@ def _sse(event: str, payload: dict[str, object]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
 
 
-def _stream_chunks() -> tuple[bytes, ...]:
+def _stream_chunks(message_id: str = _MESSAGE_ID) -> tuple[bytes, ...]:
     return (
         _sse(
             "message_start",
             {
                 "type": "message_start",
                 "message": {
-                    "id": _MESSAGE_ID,
+                    "id": message_id,
                     "type": "message",
                     "role": "assistant",
                     "model": _MODEL,
@@ -169,14 +169,10 @@ def test_passthrough_streaming_spend_row_v1_messages(gateway: Gateway) -> None:
 
 
 def test_passthrough_streaming_spend_row_written_v1_messages(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: a successful streamed /v1/messages call returns complete chunks but writes no LiteLLM_SpendLogs "
-        "row (non-streamed calls write one); the streamed usage, tags and end_user are never recorded"
-    )
     marker: Final = "pt-stream-spend-" + uuid.uuid4().hex
 
     def respond(request: Request) -> Reply:
-        return Reply(content_type="text/event-stream", chunks=_stream_chunks())
+        return Reply(content_type="text/event-stream", chunks=_stream_chunks(f"msg_{marker}"))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_KEY)

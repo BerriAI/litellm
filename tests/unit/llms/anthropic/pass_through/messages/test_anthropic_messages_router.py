@@ -249,7 +249,7 @@ async def _collect_stream(response: object) -> str:
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_non_streaming_logs_usage_model_and_cost(respx_mock, monkeypatch):
-    pytest.skip("BUG: _finalize_anthropic_messages_response returns without invoking any success handler, so non-streaming /v1/messages never produces a StandardLoggingPayload (litellm/llms/custom_httpx/llm_http_handler.py:2288); control test_control_recorder_fires_for_acompletion proves the recorder setup fires")
+    pytest.skip("BUG: SDK surface does not dispatch success callbacks for non-streaming anthropic_messages: _finalize_anthropic_messages_response returns via _maybe_wrap_in_fake_stream (litellm/llms/custom_httpx/llm_http_handler.py:2312) without calling logging_obj.dispatch_success_handlers; the proxy SpendLogs row comes from the route layer's dispatch_success_handlers in litellm/proxy/common_request_processing.py:470 (and :2902), which never runs in-process; control test_control_recorder_fires_for_acompletion fires for acompletion")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     recorder: Final = _RecordingLogger()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
