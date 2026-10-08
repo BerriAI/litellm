@@ -136,12 +136,13 @@ def test_a_systemone_response_reaches_the_caller_unchanged_with_provider_extras(
     payload: Final = {
         "model": "jev-latest",
         "answers": {
-            "damaged": {"type": "noul", "noul": 0.95},
+            "damaged": {"type": "noul", "noul": 0.95, "rationale": "crack visible"},
             "action": {
                 "type": "choice",
                 "choice": "refund",
                 "confidence": 0.8,
                 "probabilities": {"refund": 0.9, "escalate": 0.1},
+                "calibrated": True,
             },
             "severity": {
                 "type": "score",
@@ -149,6 +150,7 @@ def test_a_systemone_response_reaches_the_caller_unchanged_with_provider_extras(
                 "confidence": 0.6,
                 "legend": {"0": "minor", "1": {"label": "major"}},
                 "probabilities": {"0": 0.6, "1": 0.4},
+                "raw_logits": [0.1, 0.2],
             },
         },
         "usage": {"input_tokens": 383, "output_tokens": 2, "cost": 0.25},
