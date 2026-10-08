@@ -2032,20 +2032,20 @@ def test_post_delay_exceeds_per_request_timeout_raises():
         server.server_close()
 
 
-def test_realtime_ssl_for_url_sends_no_tls_argument_for_a_plain_ws_endpoint():
+def test_realtime_ssl_for_url_sends_no_tls_argument_for_a_plain_ws_endpoint() -> None:
     assert (
         realtime_ssl_for_url("ws://127.0.0.1:8080/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent")
         is None
     )
 
 
-def test_realtime_ssl_for_url_keeps_the_shared_context_for_wss_endpoints():
+def test_realtime_ssl_for_url_keeps_the_shared_context_for_wss_endpoints() -> None:
     shared: Final = get_shared_realtime_ssl_context()
     assert isinstance(shared, ssl.SSLContext)
     assert realtime_ssl_for_url("wss://aiplatform.us.rep.googleapis.com/ws") is shared
 
 
-def test_realtime_ssl_for_url_turns_ssl_verify_false_into_an_unverified_tls_context(monkeypatch):
+def test_realtime_ssl_for_url_turns_ssl_verify_false_into_an_unverified_tls_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._shared_realtime_ssl_context", False)
     selected: Final = realtime_ssl_for_url("wss://aiplatform.us.rep.googleapis.com/ws")
     assert isinstance(selected, ssl.SSLContext)
