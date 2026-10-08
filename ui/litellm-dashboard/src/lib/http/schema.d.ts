@@ -30366,6 +30366,12 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Responses Websocket Session Limit Seconds
+             * @description Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.
+             * @default 3600
+             */
+            responses_websocket_session_limit_seconds: number;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
             /**
@@ -45620,8 +45626,18 @@ export interface components {
         };
         /** ServiceConnection */
         ServiceConnection: {
+            /**
+             * Configured
+             * @default false
+             */
+            configured: boolean;
             /** Connected */
             connected: boolean;
+            /**
+             * Release
+             * @default
+             */
+            release: string;
             status: components["schemas"]["ServiceStatus"];
             /** Url */
             url: string;
