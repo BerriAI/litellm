@@ -11,6 +11,7 @@ import {
   useAutoRouters,
   useInfiniteModelInfo,
   useModelHub,
+  useModelAccessGroupNames,
   useModelsInfo,
   usePlainChatModelGroups,
   useSelectedTeamModels,
@@ -562,6 +563,49 @@ describe("useUserModels", () => {
 
     expect(result.current.isFetched).toBe(false);
     expect(modelAvailableCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("useModelAccessGroupNames", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("fetches and returns the caller's model access group names", async () => {
+    (modelAvailableCall as any).mockResolvedValue({
+      data: [{ id: "repro-access-group" }, { id: "another-access-group" }],
+    });
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current).toEqual(new Set(["repro-access-group", "another-access-group"]));
+    });
+
+    expect(modelAvailableCall).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", false, null, true, true);
   });
 });
 

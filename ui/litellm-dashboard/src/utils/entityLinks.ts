@@ -29,3 +29,11 @@ export function modelGroupHref(modelGroup: string): string | undefined {
   if (MODEL_GRANT_SENTINELS.has(modelGroup)) return undefined;
   return `${uiHref("models-and-endpoints")}?model_group=${encodeURIComponent(modelGroup)}`;
 }
+
+export function accessGroupHref(accessGroup: string): string {
+  return `${uiHref("models-and-endpoints")}?access_group=${encodeURIComponent(accessGroup)}`;
+}
+
+export function modelOrAccessGroupHref(name: string, accessGroupNames: ReadonlySet<string>): string | undefined {
+  return accessGroupNames.has(name) ? accessGroupHref(name) : modelGroupHref(name);
+}

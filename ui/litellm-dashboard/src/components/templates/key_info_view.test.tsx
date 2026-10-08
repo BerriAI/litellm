@@ -1,13 +1,19 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders } from "../../../tests/test-utils";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { keyDeleteCall, keyUpdateCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
 import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
+
+vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+  useModelAccessGroupNames: vi.fn(() => new Set<string>()),
+}));
+
+import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 
 const editViewMocks = vi.hoisted(() => ({
   onSubmit: undefined as ((v: Record<string, any>) => Promise<void>) | undefined,
@@ -700,6 +706,26 @@ describe("KeyInfoView", () => {
       expect(screen.getByRole("link", { name: "anthropic/*" })).toHaveAttribute(
         "href",
         expect.stringContaining("/models-and-endpoints?model_group=anthropic%2F*"),
+      );
+    });
+
+    it("links access-group model chips to the access-group filter", async () => {
+      vi.mocked(useModelAccessGroupNames).mockReturnValue(new Set(["repro-access-group"]));
+      const keyData = { ...MOCK_KEY_DATA, models: ["repro-access-group"] };
+      renderWithProviders(
+        <KeyInfoView keyData={keyData} onClose={() => {}} keyId="test-key-id" onKeyDataUpdate={() => {}} teams={[]} />,
+      );
+
+      expect(await screen.findByRole("link", { name: "repro-access-group" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?access_group=repro-access-group$/),
+      );
+
+      await userEvent.setup({ delay: null }).click(screen.getByRole("tab", { name: "Settings" }));
+      const settings = await screen.findByRole("tabpanel", { name: "Settings" });
+      expect(within(settings).getByRole("link", { name: "repro-access-group" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?access_group=repro-access-group$/),
       );
     });
 
