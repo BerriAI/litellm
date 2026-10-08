@@ -98,6 +98,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     PUBLISH_BACKLOG_SLICE,
     await_publish_backlog,
     evict_local,
+    evict_shared,
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
@@ -3241,14 +3242,16 @@ async def delete_cache_key_objects(
     Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
     cache backend must not abort the caller partway through its own cascade.
 
-    Every token is dropped from this worker's memory first, so a deleted key stops authenticating
-    here the instant its rows are gone. The broadcasts then go out in slices of
+    Every token is dropped from this worker's memory first, then from the cache's Redis layer in
+    one round trip, so a deleted key stops authenticating here the instant its rows are gone
+    instead of refilling from Redis on the next miss. The broadcasts then go out in slices of
     ``PUBLISH_BACKLOG_SLICE``, each slice waiting for the previous one to reach Redis: the
     publisher drops a broadcast once too many are already pending, and a single burst of more than
     that many evictions would leave the dropped keys authenticating on every other worker until
     their TTL.
     """
     evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
     for start in range(0, len(hashed_tokens), PUBLISH_BACKLOG_SLICE):
         await await_publish_backlog()
         await _delete_cache_key_slice(

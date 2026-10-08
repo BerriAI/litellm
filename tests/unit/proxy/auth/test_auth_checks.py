@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1713,3 +1713,64 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis
 
     assert seeded == hashed_tokens
     assert still_cached == ()
+
+
+class _AuthRedisCache:
+    namespace = None
+
+    def __init__(self, entries: dict[str, object]) -> None:
+        self.entries = dict(entries)
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object | None:
+        return self.entries.get(key)
+
+    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.entries[key] = value
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.entries[key] = value
+
+    def delete_cache(self, key: str) -> None:
+        self.entries.pop(key, None)
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.entries.pop(key, None)
+
+    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            self.entries.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_bulk_eviction_clears_the_redis_copies_before_pacing_broadcasts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_PUBLISH_BACKLOG_WAIT_SECONDS", 0.5)
+    client = _WedgedPublishRedisClient()
+    hashed_tokens: Final = tuple(
+        hashlib.sha256(f"token-{index}".encode()).hexdigest()
+        for index in range(pubsub_module.PUBLISH_BACKLOG_SLICE * 2 + 88)
+    )
+    redis = _AuthRedisCache({token: {"token": token} for token in hashed_tokens})
+    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
+    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    for hashed_token in hashed_tokens:
+        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),  # pyright: ignore[reportArgumentType]  # the wedged fake only publishes
+    ):
+        eviction: Final = asyncio.create_task(
+            delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
+        )
+        await asyncio.sleep(0.05)
+        refilled: Final = [token for token in hashed_tokens if await cache.async_get_cache(key=token) is not None]
+        client.release.set()
+        await eviction
+        await pubsub_module.await_publish_backlog()
+
+    assert refilled == []
+    assert redis.entries == {}

@@ -622,6 +622,83 @@ async def test_removing_members_clears_this_worker_before_waiting_on_a_wedged_re
     assert still_cached == []
 
 
+class _AuthRedisCache:
+    namespace = None
+
+    def __init__(self, entries: dict[str, object]) -> None:
+        self.entries = dict(entries)
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object | None:
+        return self.entries.get(key)
+
+    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.entries[key] = value
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.entries[key] = value
+
+    def delete_cache(self, key: str) -> None:
+        self.entries.pop(key, None)
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.entries.pop(key, None)
+
+    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            self.entries.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_removing_members_clears_the_redis_copies_before_waiting_on_a_wedged_redis(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_PUBLISH_BACKLOG_WAIT_SECONDS", 0.5)
+    client = _WedgedPublishRedisClient()
+    removed = [f"u{index:03d}" for index in range(300)]
+    token_of = {u: hashlib.sha256(f"key-{u}".encode()).hexdigest() for u in removed}
+    member_keys = [
+        key
+        for u in removed
+        for key in (
+            u,
+            token_of[u],
+            team_membership_auth_cache_key(team_id=TEAM, user_id=u),
+            team_membership_reservation_cache_key(user_id=u, team_id=TEAM),
+        )
+    ]  # comprehension-ok: a test fixture listing each member's four cache keys
+    redis = _AuthRedisCache({key: {"cache_key": key} for key in member_keys})
+    cache = UserApiKeyCache(
+        in_memory_cache=InMemoryCache(max_size_in_memory=5_000),
+        key_object_in_memory_cache=InMemoryCache(max_size_in_memory=5_000),
+    )
+    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    for key in member_keys:
+        cache.in_memory_cache_for(key).set_cache(key=key, value={"cache_key": key})
+    prisma = _FakePrisma(
+        users=[_user(u, TEAM) for u in removed],
+        teams=[_team(*(_member(u) for u in removed))],
+        memberships=[(TEAM, u) for u in removed],
+        tokens=[{"token": token_of[u], "user_id": u, "team_id": TEAM} for u in removed],
+    )
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),  # pyright: ignore[reportArgumentType]  # the wedged fake only publishes
+    ):
+        sync = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
+        await asyncio.sleep(0.1)
+        refilled = [key for key in member_keys if await cache.async_get_cache(key=key) is not None]
+        client.release.set()
+        outcome = await sync
+        await pubsub_module.await_publish_backlog()
+
+    assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
+    assert refilled == []
+    assert not any(key in redis.entries for key in member_keys)
+
+
 @pytest.mark.asyncio
 async def test_a_failed_commit_leaves_every_table_and_cache_entry_as_it_was():
     prisma = _FakePrisma(

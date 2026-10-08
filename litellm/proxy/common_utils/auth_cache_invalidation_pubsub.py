@@ -157,6 +157,31 @@ def evict_local(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache"
         user_api_key_cache.in_memory_cache_for(cache_key).delete_cache(cache_key)
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def evict_shared(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
+    """
+    Drop cached objects from the cache's Redis layer, when it has one, in one chunked round trip.
+
+    Runs right after ``evict_local``: with ``enable_redis_auth_cache`` on, a miss on this worker
+    refills from Redis, so an entry dropped from memory alone comes straight back until its own
+    slice of the paced broadcast reaches Redis. Best-effort and bounded like the backlog wait: the
+    rows are already gone, so a Redis that errors or never answers must not fail the caller, and
+    every slice still deletes its own keys behind this.
+    """
+    if user_api_key_cache.redis_cache is None or not cache_keys:
+        return
+    try:
+        await asyncio.wait_for(
+            user_api_key_cache.async_delete_cache_keys(cache_keys), timeout=_PUBLISH_BACKLOG_WAIT_SECONDS
+        )
+    except Exception as e:  # noqa: BLE001  # best-effort: a Redis error must not fail a committed write
+        verbose_proxy_logger.warning(
+            "Failed to drop %d cached entries from Redis; stale objects may be served until their TTL expires: %s",
+            len(cache_keys),
+            e,
+        )
+
+
 async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
     """
     Drop cached management objects here and on every other worker.

@@ -29,6 +29,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     await_publish_backlog,
     evict_and_broadcast,
     evict_local,
+    evict_shared,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
@@ -279,12 +280,11 @@ async def _settle_caches(
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
     deleted_tokens: Final = tuple(key.token for key in removal.deleted_keys)
-    evict_local(
-        cache_keys=deleted_tokens
-        + removal.jwt_mapping_cache_keys
-        + tuple(_member_cache_keys(team.team_id, changed_user_ids)),
-        user_api_key_cache=user_api_key_cache,
+    settled_keys: Final = (
+        deleted_tokens + removal.jwt_mapping_cache_keys + tuple(_member_cache_keys(team.team_id, changed_user_ids))
     )
+    evict_local(cache_keys=settled_keys, user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=settled_keys, user_api_key_cache=user_api_key_cache)
     await delete_cache_team_object(
         team_id=team.team_id,
         team_alias=team.team_alias,
