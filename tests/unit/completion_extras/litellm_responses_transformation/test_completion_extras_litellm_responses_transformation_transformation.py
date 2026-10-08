@@ -4897,3 +4897,84 @@ def test_every_bridged_chunk_after_response_created_carries_the_served_service_t
     relayed = [iterator.chunk_parser(event).model_dump().get("service_tier") for event in events]
 
     assert relayed == ["default"] * len(events), relayed
+
+
+_AUDIO_PART: Final = {"type": "input_audio", "input_audio": {"data": "Zm9v", "format": "wav"}}
+_TEXT_PART: Final = {"type": "text", "text": "Transcribe this"}
+
+
+def test_convert_chat_completion_messages_to_responses_api_maps_input_audio_block():
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {
+            "role": "user",
+            "content": [_TEXT_PART, {**_AUDIO_PART, "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        }
+    ]
+
+    items, _ = handler.convert_chat_completion_messages_to_responses_api(messages, keep_prompt_cache_breakpoints=True)
+
+    assert items[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        {
+            "type": "input_audio",
+            "input_audio": {"data": "Zm9v", "format": "wav"},
+            "prompt_cache_breakpoint": {"mode": "explicit"},
+        },
+    ]
+
+
+@pytest.fixture
+def registered_audio_models():
+    models = {
+        "unit-audio-capable": {"litellm_provider": "openai", "mode": "chat", "supports_audio_input": True},
+        "unit-text-only": {"litellm_provider": "openai", "mode": "chat", "supports_audio_input": False},
+    }
+    litellm.register_model(models, persist_across_reloads=False)
+    try:
+        yield
+    finally:
+        for key in models:
+            litellm.model_cost.pop(key, None)
+
+
+def _bridge_input(model: str, drop_params: bool) -> list:
+    request = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": [_TEXT_PART, _AUDIO_PART]}],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    return request["input"]
+
+
+def test_transform_request_forwards_input_audio_without_drop_params(monkeypatch, registered_audio_models):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("unit-text-only", drop_params=False)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        _AUDIO_PART,
+    ]
+
+
+def test_transform_request_drops_input_audio_under_drop_params_when_model_lacks_audio_input(
+    monkeypatch, registered_audio_models
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("unit-text-only", drop_params=True)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"}
+    ]
+
+
+def test_transform_request_keeps_input_audio_under_drop_params_when_model_supports_audio_input(
+    monkeypatch, registered_audio_models
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    assert _bridge_input("unit-audio-capable", drop_params=True)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this"},
+        _AUDIO_PART,
+    ]
