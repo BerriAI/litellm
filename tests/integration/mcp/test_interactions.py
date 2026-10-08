@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Final
 
@@ -13,6 +14,9 @@ from integration._support.wire import Reply, Request, wire_server
 
 
 _KEY: Final = "sk-interaction-test"
+_PROXY_PYTHONPATH: Final = os.pathsep.join(
+    (str(Path(__file__).resolve().parents[3]), str(Path(__file__).resolve().parents[2]))
+)
 _META: Final = {
     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
     "io.modelcontextprotocol/clientInfo": {"name": "continuation-test", "version": "1"},
@@ -131,6 +135,7 @@ def test_continuations_resume_on_another_replica_and_reject_changed_operations(
         )
         seed: Final = Gateway(client, _KEY, peer.url)
         environment: Final = {
+            "PYTHONPATH": _PROXY_PYTHONPATH,
             "STORE_MODEL_IN_DB": "False",
             "DISABLE_SCHEMA_UPDATE": "true",
             "LITELLM_SALT_KEY": "shared-interaction-test",
@@ -232,7 +237,12 @@ def test_continuation_reauthenticates_caller_and_rechecks_revoked_permissions(tm
         with owned_proxy(
             Gateway(client, _KEY, peer.url),
             tmp_path / "proxy",
-            {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "caller-test-salt"},
+            {
+                "PYTHONPATH": _PROXY_PYTHONPATH,
+                "STORE_MODEL_IN_DB": "False",
+                "DISABLE_SCHEMA_UPDATE": "true",
+                "LITELLM_SALT_KEY": "caller-test-salt",
+            },
             config=config,
             database_setup=(),
             remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "REDIS_URL", "REDIS_HOST"),
