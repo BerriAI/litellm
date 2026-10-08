@@ -1,0 +1,2 @@
+SET LOCAL lock_timeout = '900ms';
+ALTER TABLE "LiteLLM_DailyTagSpend" ADD COLUMN IF NOT EXISTS "team_id" TEXT NOT NULL DEFAULT '';
