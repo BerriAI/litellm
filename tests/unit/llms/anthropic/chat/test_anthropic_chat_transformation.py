@@ -1058,15 +1058,17 @@ def test_get_supported_params_thinking():
     assert "thinking" in params
 
 
-def test_transform_request_promotes_anthropic_thinking_from_extra_body():
-    config = AnthropicConfig()
-    optional_params = {
+def test_transform_request_promotes_anthropic_thinking_from_extra_body() -> None:
+    config: Final = AnthropicConfig()
+    optional_params: Final[dict[str, object]] = {
         "extra_body": {
             "thinking": {"type": "enabled", "budget_tokens": 1024},
         },
     }
 
-    result = config.transform_request(
+    original_params: Final = copy.deepcopy(optional_params)
+
+    result: Final = config.transform_request(
         model="claude-sonnet-4-20250514",
         messages=[{"role": "user", "content": "Think carefully."}],
         optional_params=optional_params,
@@ -1074,20 +1076,21 @@ def test_transform_request_promotes_anthropic_thinking_from_extra_body():
         headers={},
     )
 
+    assert optional_params == original_params
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024}
     assert "extra_body" not in result
 
 
-def test_transform_request_drops_non_thinking_extra_body_from_anthropic_body():
-    config = AnthropicConfig()
-    optional_params = {
+def test_transform_request_drops_non_thinking_extra_body_from_anthropic_body() -> None:
+    config: Final = AnthropicConfig()
+    optional_params: Final[dict[str, object]] = {
         "extra_body": {
             "thinking": {"type": "enabled", "budget_tokens": 1024},
             "custom_field": "preserved",
         },
     }
 
-    result = config.transform_request(
+    result: Final = config.transform_request(
         model="claude-sonnet-4-20250514",
         messages=[{"role": "user", "content": "Think carefully."}],
         optional_params=optional_params,
@@ -1100,10 +1103,10 @@ def test_transform_request_drops_non_thinking_extra_body_from_anthropic_body():
     assert "extra_body" not in result
 
 
-def test_transform_extra_body_promotes_only_anthropic_thinking():
-    config = AnthropicConfig()
+def test_transform_extra_body_promotes_only_anthropic_thinking() -> None:
+    config: Final = AnthropicConfig()
 
-    result = config.transform_extra_body(
+    result: Final = config.transform_extra_body(
         extra_body={"thinking": {"type": "enabled", "budget_tokens": 1024}, "custom_field": "ignored"},
         request={},
         model="claude-sonnet-4-20250514",
@@ -1113,11 +1116,14 @@ def test_transform_extra_body_promotes_only_anthropic_thinking():
     assert result == {"thinking": {"type": "enabled", "budget_tokens": 1024}}
 
 
-def test_transform_extra_body_preserves_bedrock_extra_body_behavior():
-    config = AmazonAnthropicClaudeConfig()
-    extra_body = {"thinking": {"type": "enabled", "budget_tokens": 1024}, "custom_field": "preserved"}
+def test_transform_extra_body_preserves_bedrock_extra_body_behavior() -> None:
+    config: Final = AmazonAnthropicClaudeConfig()
+    extra_body: Final[dict[str, object]] = {
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "custom_field": "preserved",
+    }
 
-    result = config.transform_extra_body(
+    result: Final = config.transform_extra_body(
         extra_body=extra_body,
         request={},
         model="anthropic.claude-sonnet-4-20250514-v1:0",
@@ -1131,15 +1137,15 @@ def test_transform_extra_body_preserves_bedrock_extra_body_behavior():
     "config",
     [AmazonAnthropicClaudeConfig(), VertexAIAnthropicConfig()],
 )
-def test_transform_request_does_not_promote_extra_body_for_bedrock_or_vertex(config):
-    optional_params = {
+def test_transform_request_does_not_promote_extra_body_for_bedrock_or_vertex(config: AnthropicConfig) -> None:
+    optional_params: Final[dict[str, object]] = {
         "extra_body": {
             "thinking": {"type": "enabled", "budget_tokens": 1024},
             "custom_field": "preserved",
         },
     }
 
-    result = config.transform_request(
+    result: Final = config.transform_request(
         model="claude-sonnet-4-20250514",
         messages=[{"role": "user", "content": "Think carefully."}],
         optional_params=optional_params,
@@ -1151,17 +1157,17 @@ def test_transform_request_does_not_promote_extra_body_for_bedrock_or_vertex(con
     assert result["extra_body"] == optional_params["extra_body"]
 
 
-def test_transform_request_keeps_azure_extra_body_promotion():
-    config = AzureAnthropicConfig()
-    expected_thinking = {"type": "enabled", "budget_tokens": 1024}
-    optional_params = {
+def test_transform_request_keeps_azure_extra_body_promotion() -> None:
+    config: Final = AzureAnthropicConfig()
+    expected_thinking: Final[dict[str, object]] = {"type": "enabled", "budget_tokens": 1024}
+    optional_params: Final[dict[str, object]] = {
         "extra_body": {
             "thinking": expected_thinking,
             "custom_field": "preserved",
         },
     }
 
-    result = config.transform_request(
+    result: Final = config.transform_request(
         model="claude-sonnet-4-20250514",
         messages=[{"role": "user", "content": "Think carefully."}],
         optional_params=optional_params,
