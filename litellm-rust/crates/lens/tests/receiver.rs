@@ -2,7 +2,7 @@ use litellm_lens::{
     State, Storage,
     auth::{Credential, Snapshot, unix_seconds},
     config::http_client,
-    router,
+    router_with_root_path,
 };
 use litellm_traces::Tenant;
 use litellm_traces_clickhouse::Config;
@@ -37,6 +37,10 @@ impl Drop for Server {
 }
 
 async fn serve(clickhouse: &str, ready: bool) -> Server {
+    serve_with_root_path(clickhouse, ready, "").await
+}
+
+async fn serve_with_root_path(clickhouse: &str, ready: bool, server_root_path: &str) -> Server {
     let storage = Storage::new(
         Config::new("litellm".into(), clickhouse, 14, 65_536).unwrap(),
         http_client().unwrap(),
@@ -62,7 +66,7 @@ async fn serve(clickhouse: &str, ready: bool) -> Server {
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let app = router(state.clone());
+    let app = router_with_root_path(state.clone(), server_root_path);
     let task = tokio::spawn(async {
         axum::serve(listener, app).await.unwrap();
     });
@@ -323,26 +327,42 @@ async fn ingestion_confirms_storage_and_overwrites_exporter_tenant() {
 }
 
 #[rstest]
+#[case::root("")]
+#[case::nested("/services/llm")]
 #[tokio::test]
-async fn shared_ingress_prefix_exposes_uploads_without_internal_control_routes() {
+async fn shared_ingress_prefix_exposes_uploads_without_internal_control_routes(
+    #[case] server_root_path: &str,
+) {
     let store = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200))
         .expect(1)
         .mount(&store)
         .await;
-    let server = serve(&store.uri(), true).await;
+    let server = serve_with_root_path(&store.uri(), true, server_root_path).await;
     let client = http_client().unwrap();
     let upload = client
-        .post(format!("{}/lens-ingest/v1/traces", server.url))
+        .post(format!(
+            "{}{server_root_path}/lens-ingest/v1/traces",
+            server.url
+        ))
         .bearer_auth(KEY)
         .json(&export())
         .send()
         .await
         .unwrap();
     assert_eq!(upload.status(), 200);
+    let health = client
+        .get(format!("{}/health/live", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(health.status(), 200);
     let internal = client
-        .get(format!("{}/lens-ingest/internal/status", server.url))
+        .get(format!(
+            "{}{server_root_path}/lens-ingest/internal/status",
+            server.url
+        ))
         .bearer_auth(SERVICE_TOKEN)
         .send()
         .await
@@ -351,7 +371,7 @@ async fn shared_ingress_prefix_exposes_uploads_without_internal_control_routes()
     let preflight = client
         .request(
             http::Method::OPTIONS,
-            format!("{}/lens-ingest/v1/traces", server.url),
+            format!("{}{server_root_path}/lens-ingest/v1/traces", server.url),
         )
         .header("origin", "https://dashboard.example")
         .header("access-control-request-method", "POST")

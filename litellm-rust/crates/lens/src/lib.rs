@@ -93,6 +93,10 @@ async fn wait_for_read_slot<P>(
 }
 
 pub fn router(state: Arc<State>) -> Router {
+    router_with_root_path(state, "")
+}
+
+pub fn router_with_root_path(state: Arc<State>, server_root_path: &str) -> Router {
     let public = Router::new()
         .route("/health/live", get(|| async { StatusCode::OK }))
         .route("/health/ready", get(ready))
@@ -111,7 +115,7 @@ pub fn router(state: Arc<State>) -> Router {
         );
     public
         .clone()
-        .nest("/lens-ingest", public)
+        .nest(&format!("{server_root_path}/lens-ingest"), public)
         .merge(
             Router::new()
                 .route("/internal/read", post(read))

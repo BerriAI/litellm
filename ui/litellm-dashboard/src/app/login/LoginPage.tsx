@@ -339,7 +339,7 @@ function LoginPageContent() {
                         // SSO on the worker (or this instance if no worker), always
                         // include return_to so the callback redirects back here
                         const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
-                        const returnTo = encodeURIComponent(getLoginUrl(window.location.origin));
+                        const returnTo = encodeURIComponent(new URL(getLoginUrl(), window.location.origin).href);
                         router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
                       }}
                       className="w-full"

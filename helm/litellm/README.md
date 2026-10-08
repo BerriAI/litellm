@@ -23,6 +23,8 @@ The chart passes `SERVER_ROOT_PATH` to gateway, backend and UI. The UI image pre
 
 When the chart's ingress is enabled, its built-in routes and `ingress.extraPaths` are prefixed. Paths in `extraPaths` remain root-relative, for example `/custom-provider`, and the chart adds the configured prefix. The ingress must preserve the path sent upstream. Prefixes containing dots require Gateway API or the ALB controller; ingress-nginx cannot preserve all of the chart's exact matches with its dotted-path normalization
 
+If Lens is enabled, its shared-ingress upload address also includes the prefix. A Lens worker image built with this implementation accepts that prefixed ingestion route while keeping container health probes and internal routes unchanged. An explicit `lensWorker.publicUrl` or dedicated Lens ingress keeps its own address
+
 With an external Gateway API controller, route UI requests to port 3000, inference requests to port 4000, and management/configuration/SSO to port 4001. Preserve the prefix for Python services. The UI accepts both a preserved prefix and a prefix stripped by `URLRewrite`
 
 This Istio example covers the UI, configuration/SSO, chat completions and model listing. Add other inference routes from `templates/ingress.yaml` as needed. Do not send all `/v1` paths to the gateway: several management endpoints also use that version prefix

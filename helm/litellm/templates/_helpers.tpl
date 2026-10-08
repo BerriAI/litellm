@@ -551,7 +551,7 @@ shutdown drain window.
 {{- printf "%s://%s" (ternary "https" "http" $tls) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
 {{- else if and .Values.ingress.enabled .Values.ingress.host -}}
 {{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
-{{- printf "%s://%s/lens-ingest" (ternary "https" "http" $tls) .Values.ingress.host -}}
+{{- printf "%s://%s%s/lens-ingest" (ternary "https" "http" $tls) .Values.ingress.host (include "litellm.serverRootPath" .) -}}
 {{- else -}}
 {{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
 {{- end -}}
