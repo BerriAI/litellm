@@ -27,19 +27,23 @@ def resolve_request_priority(
     return InvalidPriority(value=requested)
 
 
+def _explicit_drop_params(scope: Mapping[str, object]) -> bool | None:
+    return normalize_drop_params(scope.get("drop_params"))
+
+
 def request_drops_params(
     kwargs: Mapping[str, object],
     router_defaults: Mapping[str, object],
     deployment_params: Iterable[Mapping[str, object]],
 ) -> bool:
-    for scope in (kwargs, router_defaults):
-        flag: Final = normalize_drop_params(scope.get("drop_params"))
-        if flag is not None:
-            return flag
+    request_flag: Final = _explicit_drop_params(kwargs)
+    if request_flag is not None:
+        return request_flag
+    router_flag: Final = _explicit_drop_params(router_defaults)
+    if router_flag is not None:
+        return router_flag
     deployment_flags: Final = tuple(
-        flag
-        for flag in (normalize_drop_params(params.get("drop_params")) for params in deployment_params)
-        if flag is not None
+        flag for flag in (_explicit_drop_params(params) for params in deployment_params) if flag is not None
     )
     if deployment_flags:
         return any(deployment_flags)
