@@ -112,7 +112,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-from litellm.proxy.utils import normalize_route_for_root_path
+from litellm.proxy.utils import ProxyLogging, normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
@@ -1056,8 +1056,18 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
-def _has_default_on_guardrail_callback() -> bool:
-    return any(isinstance(callback, CustomGuardrail) and callback.default_on is True for callback in litellm.callbacks)
+def _has_passthrough_body_hook() -> bool:
+    # Non-object bodies are forwarded as raw bytes. Dict-based content hooks
+    # cannot inspect or rewrite those bytes, so reject before invoking them.
+    return any(
+        isinstance(callback, CustomLogger)
+        and (
+            callback.default_on is True
+            if isinstance(callback, CustomGuardrail)
+            else type(callback).async_pre_call_hook is not CustomLogger.async_pre_call_hook
+        )
+        for callback in ProxyLogging._callback_capabilities().resolved_callbacks  # pyright: ignore[reportPrivateUsage]  # resolve callback strings exactly as the pre-call dispatcher does
+    )
 
 
 async def pass_through_request(
@@ -1202,10 +1212,10 @@ async def pass_through_request(
             passthrough_guardrails_config=guardrails_config,
         )
 
-        if (guardrails_to_run or _has_default_on_guardrail_callback()) and not isinstance(_parsed_body, dict):
+        if (guardrails_to_run or _has_passthrough_body_hook()) and not isinstance(_parsed_body, dict):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="JSON request body must be an object when guardrails run on this pass-through endpoint",
+                detail="JSON request body must be an object when pre-call hooks or guardrails run on this pass-through endpoint",
             )
 
         # Add guardrails to metadata if any should run

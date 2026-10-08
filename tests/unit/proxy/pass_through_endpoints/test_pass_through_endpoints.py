@@ -7939,8 +7939,9 @@ async def _send_through_proxy(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("callback", [None, CustomLogger()])
 async def test_config_pass_through_forwards_non_object_json_bytes_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, callback: CustomLogger | None
 ) -> None:
     proxy: Final = await _boot_db_backed_proxy(
         tmp_path,
@@ -7951,6 +7952,7 @@ async def test_config_pass_through_forwards_non_object_json_bytes_unchanged(
         db_pass_through_endpoints=[],
     )
     await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(litellm, "callbacks", [] if callback is None else [callback])
     body: Final = b'[1, {"a":2}]'
 
     response, upstream_requests = await _send_through_proxy(
@@ -8025,6 +8027,67 @@ async def test_config_pass_through_rejects_non_object_json_for_default_on_guardr
     assert response.status_code == 400, response.text
     assert "JSON request body must be an object" in response.text
     assert upstream_requests == []
+
+
+class _PassThroughContentPolicy(CustomLogger):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if "blocked" in json.dumps(data.get("messages", [])):
+            raise HTTPException(status_code=400, detail="Content policy rejected this request")
+        return {**data, "policy_checked": True}
+
+
+class _InheritedPassThroughContentPolicy(_PassThroughContentPolicy):
+    pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [b'[{"content":"blocked"}]', b'"blocked"', b"null"])
+@pytest.mark.parametrize("policy_class", [_PassThroughContentPolicy, _InheritedPassThroughContentPolicy])
+async def test_config_pass_through_cannot_bypass_custom_pre_call_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: bytes, policy_class: type[CustomLogger]
+) -> None:
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-hook", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(litellm, "callbacks", [policy_class()])
+
+    response, upstream_requests = await _send_through_proxy(
+        "/cfg-hook", {"Content-Type": "application/json"}, body=body
+    )
+
+    assert response.status_code == 400, response.text
+    assert "JSON request body must be an object" in response.text
+    assert upstream_requests == []
+
+
+@pytest.mark.asyncio
+async def test_config_pass_through_applies_custom_hook_to_object_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-object-hook", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(litellm, "callbacks", [_PassThroughContentPolicy()])
+
+    response, upstream_requests = await _send_through_proxy(
+        "/cfg-object-hook", {"Content-Type": "application/json"}, body=b'{"messages":[]}'
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(upstream_requests) == 1
+    assert json.loads(upstream_requests[0].content) == {"messages": [], "policy_checked": True}
 
 
 @pytest.mark.asyncio
