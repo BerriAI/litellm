@@ -368,6 +368,14 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Content Moderation"],
   },
   {
+    id: "agentguards",
+    name: "AgentGuards",
+    description: "Jailbreak & prompt-injection detection and data-exfiltration blocking for LLM apps.",
+    category: "partner",
+    logo: guardrailLogoMap["AgentGuards"],
+    tags: ["Prompt Injection", "Security"],
+  },
+  {
     id: "pangea",
     name: "Pangea Guardrail",
     description: "Pangea's AI guardrails for secure, compliant, and trustworthy AI applications.",
