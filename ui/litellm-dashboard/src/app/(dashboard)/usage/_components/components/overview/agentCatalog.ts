@@ -210,56 +210,66 @@ export const userAgentProduct = (tag: string): string => {
 const familyFor = (product: string): AgentFamily | null =>
   FAMILIES.find((family) => family.match.test(product)) ?? null;
 
+const isBareTag = (row: TagSummaryRow, product: string) =>
+  row.tag.trim().replace(USER_AGENT_PREFIX, "").trim() === product;
+
 /**
- * Collapses `/tag/summary` rows into one row per agent. The endpoint reports a bare product tag
- * (`claude-cli`) as the rollup of its versioned children (`claude-cli/2.1.263 ...`), so a product
- * that has a bare row is counted from that row alone; summing both would double-count. Products
- * with only versioned rows are summed across them. Unrecognised products keep their own name.
+ * The rows that count toward a product. `/tag/summary` reports a bare tag (`claude-cli`) as the
+ * rollup of its versioned children, and a request carries both, so a bare row alone stands for the
+ * product. These same rows become the agent's drill-in filter, keeping it from double-counting.
+ */
+const contributingRows = (product: string, rows: readonly TagSummaryRow[]): readonly TagSummaryRow[] => {
+  const bare = rows.find((row) => isBareTag(row, product));
+  return bare ? [bare] : rows;
+};
+
+const agentFor = (product: string, rows: readonly TagSummaryRow[]): AgentRow => {
+  const family = familyFor(product);
+  return {
+    id: family?.id ?? `ua:${product.toLowerCase()}`,
+    label: family?.label ?? product,
+    description: family?.description ?? "Custom client",
+    kind: family?.kind ?? "sdk",
+    logo: family?.logo ?? null,
+    spend: rows.reduce((sum, row) => sum + (row.total_spend || 0), 0),
+    tokens: rows.reduce((sum, row) => sum + (row.total_tokens || 0), 0),
+    requests: rows.reduce((sum, row) => sum + (row.total_requests || 0), 0),
+    // Users overlap across a family's products, so the largest is the honest lower bound.
+    users: Math.max(0, ...rows.map((row) => row.unique_users || 0)),
+    tags: rows.map((row) => row.tag),
+  };
+};
+
+const mergeAgents = (a: AgentRow, b: AgentRow): AgentRow => ({
+  ...a,
+  spend: a.spend + b.spend,
+  tokens: a.tokens + b.tokens,
+  requests: a.requests + b.requests,
+  users: Math.max(a.users, b.users),
+  tags: [...a.tags, ...b.tags],
+});
+
+/**
+ * One row per agent from `/tag/summary`. Products are keyed case-sensitively: prod reports `python`
+ * and `Python` as distinct products, and folding them let one rollup overwrite the other.
  */
 export const topAgents = (rows: readonly TagSummaryRow[]): AgentRow[] => {
-  const byProduct = new Map<string, { bare: TagSummaryRow | null; versioned: TagSummaryRow[] }>();
-  for (const row of rows) {
-    if (!isUserAgentTag(row.tag)) continue;
-    // Keyed case-sensitively: prod reports `python` ($61K) and `Python` ($1) as distinct products,
-    // and folding them together let the small one's rollup overwrite the large one's.
-    const key = userAgentProduct(row.tag);
-    if (!key) continue;
-    const entry = byProduct.get(key) ?? { bare: null, versioned: [] };
-    if (row.tag.trim().replace(USER_AGENT_PREFIX, "").trim() === key) entry.bare = row;
-    else entry.versioned.push(row);
-    byProduct.set(key, entry);
-  }
-
-  const agents = new Map<string, AgentRow>();
-  for (const [key, { bare, versioned }] of byProduct) {
-    const source = bare ? [bare] : versioned;
-    const family = familyFor(key);
-    const id = family?.id ?? `ua:${key.toLowerCase()}`;
-    const row = agents.get(id) ?? {
-      id,
-      label: family?.label ?? (bare ? userAgentProduct(bare.tag) : userAgentProduct(versioned[0].tag)),
-      description: family?.description ?? "Custom client",
-      kind: family?.kind ?? "sdk",
-      logo: family?.logo ?? null,
-      spend: 0,
-      tokens: 0,
-      requests: 0,
-      users: 0,
-      tags: [],
-    };
-    // Every tag the agent was seen under, so a drill-in filter catches all its versions.
-    row.tags.push(...(bare ? [bare.tag] : []), ...versioned.map((item) => item.tag));
-    for (const item of source) {
-      row.spend += item.total_spend || 0;
-      row.tokens += item.total_tokens || 0;
-      row.requests += item.total_requests || 0;
-      // Users can overlap across a family's products, so take the largest rather than a sum that would overstate.
-      row.users = Math.max(row.users, item.unique_users || 0);
-    }
-    agents.set(id, row);
-  }
-
-  return [...agents.values()]
+  const userAgentRows = rows.filter((row) => isUserAgentTag(row.tag) && userAgentProduct(row.tag));
+  const products = [...new Set(userAgentRows.map((row) => userAgentProduct(row.tag)))];
+  const perProduct = products.map((product) =>
+    agentFor(
+      product,
+      contributingRows(
+        product,
+        userAgentRows.filter((row) => userAgentProduct(row.tag) === product),
+      ),
+    ),
+  );
+  const byAgent = perProduct.reduce<ReadonlyMap<string, AgentRow>>((acc, agent) => {
+    const existing = acc.get(agent.id);
+    return new Map([...acc, [agent.id, existing ? mergeAgents(existing, agent) : agent]]);
+  }, new Map());
+  return [...byAgent.values()]
     .filter((agent) => agent.spend > 0 || agent.tokens > 0 || agent.requests > 0)
     .sort((a, b) => b.tokens - a.tokens || b.spend - a.spend);
 };
