@@ -506,7 +506,7 @@ def test_skipped_estimation_preserves_paid_cache_without_refreshing_it(reason: s
     assert followup[0].usage is not None and followup[0].usage.prompt_tokens_details.cached_tokens == 8000
     _, refreshed = advance_baseline_history(
         retained,
-        (first.model_copy(update={"request_id": "refreshed", "started_at": 11800.0, "available_at": 11801.0}),),
+        (first.model_copy(update={"request_id": "refreshed", "started_at": 10602.0, "available_at": 10603.0}),),
     )
     assert refreshed[0].reason == "history_unavailable"
     _, expired = advance_baseline_history(
@@ -623,3 +623,46 @@ def test_partial_multimodal_cache_replaces_observed_splits_without_double_chargi
         assert (priced := price_baseline_comparison(snapshot, value, "modeled")) is not None
         assert priced.baseline == pytest.approx(expected)
     assert usage.prompt_tokens_details.cached_tokens_details.audio_tokens == 800
+
+
+def test_openai_unset_retention_matches_explicit_in_memory() -> None:
+    unset: Final = estimate_cache_plan(_request(), "gpt-6-astra", "openai", _PRICES, _usage())
+    in_memory: Final = estimate_cache_plan(
+        _request(prompt_cache_retention="in_memory"), "gpt-6-astra", "openai", _PRICES, _usage()
+    )
+    assert unset is not None and in_memory is not None
+    assert unset.plan == in_memory.plan and unset.assumptions == in_memory.assumptions
+    assert {marker.ttl_seconds for marker in unset.plan.breakpoints} == {600}
+
+
+@pytest.mark.parametrize("cached", (False, True))
+def test_bedrock_claude_caches_only_at_explicit_points_for_five_minutes(cached: bool) -> None:
+    model: Final = "anthropic.claude-3-7-sonnet-20250219-v1:0"
+    content: Final = [{"type": "text", "text": _PROMPT, **({"cache_control": {"type": "ephemeral"}} if cached else {})}]
+    captured: Final = estimate_cache_plan(
+        {"messages": [{"role": "user", "content": content}]},
+        model,
+        "bedrock",
+        litellm.get_model_info(model=model, custom_llm_provider="bedrock"),
+        _usage(),
+    )
+    assert captured is not None
+    assert [marker.ttl_seconds for marker in captured.plan.breakpoints] == ([300] if cached else [])
+
+
+def test_base64_image_does_not_shrink_cached_prefix() -> None:
+    system: Final = {
+        "role": "system",
+        "content": [{"type": "text", "text": _PROMPT, "cache_control": {"type": "ephemeral"}}],
+    }
+    image: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 80000}}
+    captured: Final = estimate_cache_plan(
+        {"messages": [system, {"role": "user", "content": [{"type": "text", "text": "what is this"}, image]}]},
+        "claude-sonnet-5",
+        "anthropic",
+        _PRICES,
+        _usage(),
+        lambda model, text: len(text) // 4,
+    )
+    assert captured is not None and captured.plan.breakpoints
+    assert captured.plan.breakpoints[0].prefix_tokens > 0.9 * captured.plan.total_tokens
