@@ -2398,7 +2398,7 @@ async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
 
     import litellm.proxy.video_endpoints.endpoints as endpoints
     from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
     body = urlencode(form).encode()
     stream = {"sent": False}
@@ -2423,7 +2423,7 @@ async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
         receive,
     )
 
-    await _read_request_body(request=request)
+    await read_request_body(request=request)
 
     handler = getattr(endpoints, handler_name)
     with pytest.raises(ProxyException) as exc_info:

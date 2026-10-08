@@ -18,13 +18,19 @@ if TYPE_CHECKING:
 # Legacy XSalsa20-Poly1305 (nacl) values carry no marker; the colon in the
 # prefix can never appear in base64url(nacl output), so the prefix check is an
 # unambiguous discriminator between the formats on read.
-_V3_GCM_PREFIX: Final = "v3:gcm:"
-_V2_GCM_PREFIX: Final = "v2:gcm:"
-_GCM_PREFIXES: Final = (_V3_GCM_PREFIX, _V2_GCM_PREFIX)
+V3_GCM_PREFIX: Final = "v3:gcm:"
+V2_GCM_PREFIX: Final = "v2:gcm:"
+
+_V3_GCM_PREFIX: Final = V3_GCM_PREFIX
+_V2_GCM_PREFIX: Final = V2_GCM_PREFIX
+_GCM_PREFIXES: Final = (V3_GCM_PREFIX, V2_GCM_PREFIX)
 _HKDF_INFO: Final = b"litellm-at-rest-v3"
 
-_ENCRYPTION_ALGORITHM_SETTING: Final = "encryption_algorithm"
-_ALGO_AES_GCM: Final = "aes-256-gcm"
+ENCRYPTION_ALGORITHM_SETTING: Final = "encryption_algorithm"
+ALGO_AES_GCM: Final = "aes-256-gcm"
+
+_ENCRYPTION_ALGORITHM_SETTING: Final = ENCRYPTION_ALGORITHM_SETTING
+_ALGO_AES_GCM: Final = ALGO_AES_GCM
 _ALGO_XSALSA20: Final = "xsalsa20-poly1305"
 
 _NACL_MIN_CIPHERTEXT_BYTES: Final = 40
@@ -43,7 +49,7 @@ def is_versioned_gcm(value: str) -> bool:
     return value.startswith(_GCM_PREFIXES)
 
 
-def _get_salt_key():
+def get_salt_key() -> str | None:
     from litellm.proxy.proxy_server import master_key
 
     salt_key = os.getenv("LITELLM_SALT_KEY", None)
@@ -52,6 +58,9 @@ def _get_salt_key():
         salt_key = master_key
 
     return salt_key
+
+
+_get_salt_key: Final = get_salt_key
 
 
 def _get_encryption_algorithm() -> str:
@@ -136,7 +145,7 @@ def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
 
 def encrypt_bearer_token(value: str, prefix: str) -> str:
     """AES-256-GCM as unpadded base64url behind ``prefix``, which is also the AAD so a token can't change kind."""
-    salt_key: Final = _get_salt_key()
+    salt_key: Final = get_salt_key()
     if not isinstance(salt_key, str):
         raise ValueError("Set LITELLM_SALT_KEY or a master key to mint bearer tokens")
     sealed: Final = _seal_aes_gcm(value=value, signing_key=salt_key, aad=prefix.encode("utf-8"))
@@ -145,7 +154,7 @@ def encrypt_bearer_token(value: str, prefix: str) -> str:
 
 def decrypt_bearer_token(token: str, prefix: str) -> str | None:
     """None unless ``token`` came from :func:`encrypt_bearer_token` with the same ``prefix``."""
-    salt_key: Final = _get_salt_key()
+    salt_key: Final = get_salt_key()
     if not isinstance(salt_key, str) or not token.startswith(prefix):
         return None
     encoded: Final = token.removeprefix(prefix)
@@ -157,7 +166,7 @@ def decrypt_bearer_token(token: str, prefix: str) -> str | None:
 
 
 def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
-    signing_key: Final = new_encryption_key or _get_salt_key()
+    signing_key: Final = new_encryption_key or get_salt_key()
 
     try:
         if isinstance(value, str):
@@ -223,7 +232,7 @@ def decrypt_value_helper(
     exception_type: Literal["debug", "error"] = "error",
     return_original_value: bool = False,
 ) -> str | None:
-    signing_key: Final = _get_salt_key()
+    signing_key: Final = get_salt_key()
 
     try:
         if isinstance(value, str):

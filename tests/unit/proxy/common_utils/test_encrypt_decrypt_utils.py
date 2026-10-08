@@ -257,15 +257,15 @@ def test_empty_string_round_trips_under_aes():
 def test_callback_prefix_composes_with_v3():
     """litellm_enc:: + v3:gcm:... round-trips through the callback read path."""
     from litellm.proxy.common_utils.callback_utils import (
-        _CALLBACK_VAR_ENCRYPTED_PREFIX,
+        CALLBACK_VAR_ENCRYPTED_PREFIX,
         _decrypt_or_passthrough,
         _encrypt_if_plaintext,
     )
 
     stored = _encrypt_if_plaintext("gcs_path_service_account", "my-sa-secret")
 
-    assert stored.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX)
-    inner = stored[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
+    assert stored.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
+    inner = stored[len(CALLBACK_VAR_ENCRYPTED_PREFIX) :]
     assert inner.startswith(_V3_GCM_PREFIX)
     assert _decrypt_or_passthrough("gcs_path_service_account", stored) == "my-sa-secret"
 
@@ -381,7 +381,7 @@ def test_stored_value_is_not_a_bearer_token_even_when_reshaped(monkeypatch, use_
         _use_aes(monkeypatch)
     stored = encrypt_value_helper("stored-secret")
 
-    for candidate in (stored, "kind_a_" + stored.removeprefix(_V2_GCM_PREFIX).rstrip("=")):
+    for candidate in (stored, "kind_a_" + stored.removeprefix(_V3_GCM_PREFIX).rstrip("=")):
         assert decrypt_bearer_token(candidate, prefix="kind_a_") is None
 
 

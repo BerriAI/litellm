@@ -1541,7 +1541,7 @@ async def test_master_key_rotation_reencrypts_oauth_client_store(monkeypatch):
         )
     )
 
-    monkeypatch.setattr(enc, "_get_salt_key", lambda: key_old)
+    monkeypatch.setattr(enc, "get_salt_key", lambda: key_old)
 
     prisma = MagicMock()
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
@@ -1558,7 +1558,7 @@ async def test_master_key_rotation_reencrypts_oauth_client_store(monkeypatch):
     assert store_update.await_args.kwargs["where"] == {"server_id": "config_faros"}
     rotated_blob = store_update.await_args.kwargs["data"]["credentials"]
 
-    monkeypatch.setattr(enc, "_get_salt_key", lambda: key_new)
+    monkeypatch.setattr(enc, "get_salt_key", lambda: key_new)
     recovered = decrypt_credentials(credentials=json.loads(rotated_blob))
     assert recovered["client_id"] == "cid-123"
     assert recovered["client_secret"] == "sec-456"

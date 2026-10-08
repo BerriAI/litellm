@@ -1744,7 +1744,7 @@ async def test_redis_proxy_batch_redis_get_cache():
 
     from litellm.caching.caching import Cache, DualCache
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.hooks.batch_redis_get import _PROXY_BatchRedisRequests
+    from litellm.proxy.hooks.batch_redis_get import PROXY_BatchRedisRequests
 
     litellm.cache = Cache(
         type="redis",
@@ -1755,7 +1755,7 @@ async def test_redis_proxy_batch_redis_get_cache():
     )
 
     batch_redis_get_obj = (
-        _PROXY_BatchRedisRequests()
+        PROXY_BatchRedisRequests()
     )  # overrides the .async_get_cache method
 
     user_api_key_cache = DualCache()

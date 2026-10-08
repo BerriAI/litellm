@@ -41,15 +41,20 @@ from litellm.proxy.db.db_span import db_span
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import PrismaClient
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    _ALGO_AES_GCM,
-    _ENCRYPTION_ALGORITHM_SETTING,
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # legacy module exports
+    _ALGO_AES_GCM,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _ENCRYPTION_ALGORITHM_SETTING,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    ALGO_AES_GCM,
+    ENCRYPTION_ALGORITHM_SETTING,
+    V2_GCM_PREFIX,
     SecretMapDecodeError,
     _get_encryption_algorithm,
-    _get_salt_key,
+    _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decode_secret_map,
     decrypt_value_helper,
     encrypt_value_helper,
+    get_salt_key,
     is_versioned_gcm,
     require_legacy_reader_for,
 )
@@ -201,10 +206,10 @@ def _assert_aes_gate_enabled() -> None:
     back into the legacy format — a no-op that silently fails the migration.
     """
     algo: Final = _get_encryption_algorithm()
-    if algo != _ALGO_AES_GCM:
+    if algo != ALGO_AES_GCM:
         raise RuntimeError(
-            f"Encryption migration requires general_settings.{_ENCRYPTION_ALGORITHM_SETTING}: "
-            f"'{_ALGO_AES_GCM}' (the default). Current value: {algo!r}. Remove the legacy opt-in before migrating "
+            f"Encryption migration requires general_settings.{ENCRYPTION_ALGORITHM_SETTING}: "
+            f"'{ALGO_AES_GCM}' (the default). Current value: {algo!r}. Remove the legacy opt-in before migrating "
             "so re-encrypted values are written in the AES-256-GCM format."
         )
 
@@ -439,13 +444,13 @@ def _classify_callback_value(value: object) -> ValueClass:
     even when run with the AES write gate off.
     """
     from litellm.proxy.common_utils.callback_utils import (
-        _CALLBACK_VAR_ENCRYPTED_PREFIX,
+        CALLBACK_VAR_ENCRYPTED_PREFIX,
     )
 
     if not isinstance(value, str):
         return "not-a-string"
     inner = value
-    inner = inner.removeprefix(_CALLBACK_VAR_ENCRYPTED_PREFIX)
+    inner = inner.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)  # rebind-ok: pre-existing rebinding on a rename-only line
     return classify_value(inner, key="callback")
 
 
@@ -639,17 +644,17 @@ async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: obje
     already-v2 / scanned figures. Returns one report per covered location.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _rotate_master_key,
+        rotate_master_key,
     )
 
     pre: Final = {r.location: r for r in await scan_covered_tables(prisma_client)}
 
-    current_key: Final = _get_salt_key()
+    current_key: Final = get_salt_key()
     if current_key is None:
         raise RuntimeError(
             "Cannot migrate covered tables: no salt key / master key is set. Set LITELLM_SALT_KEY before migrating."
         )
-    await _rotate_master_key(
+    await rotate_master_key(
         prisma_client=cast("PrismaClient", prisma_client),
         user_api_key_dict=cast("UserAPIKeyAuth", user_api_key_dict),
         current_master_key=current_key,
