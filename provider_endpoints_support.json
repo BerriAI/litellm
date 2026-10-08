@@ -2499,6 +2499,20 @@
         "image_variations": true
       }
     },
+    "typesafe": {
+      "display_name": "TypeSafe (`typesafe`)",
+      "url": "https://docs.typesafe.ai/models",
+      "endpoints": {
+        "systemone": true
+      }
+    },
+    "strands_decider": {
+      "display_name": "Strands Decider (`strands_decider`)",
+      "url": "https://docs.litellm.ai/docs/providers",
+      "endpoints": {
+        "systemone": true
+      }
+    },
     "tavily": {
       "display_name": "Tavily (`tavily`)",
       "url": "https://docs.litellm.ai/docs/search/tavily",
