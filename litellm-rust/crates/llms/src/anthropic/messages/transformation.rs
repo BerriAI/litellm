@@ -1,4 +1,4 @@
-use litellm_auth::CredentialPlacement;
+use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_llms_types::{
     formats::messages::{
         ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
@@ -13,11 +13,11 @@ use crate::base_llm::messages::context::MessagesTransformContext;
 use crate::{
     Error,
     anthropic::common_utils::{
-        ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_POLICY,
+        ANTHROPIC_AUTH_TOKEN_ENV, ANTHROPIC_BASE_URL_ENV, MISSING_ANTHROPIC_API_KEY, OauthHandling,
+        complete_anthropic_url, get_api_key, get_bearer_auth, has_advisor_tool,
+        is_tool_search_used, merge_beta_headers, optionally_handle_anthropic_oauth,
+        requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
     },
     base_llm::{
         auth::AuthScheme,
@@ -90,19 +90,18 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
             }
             OauthHandling::Untouched(headers) => headers,
         };
-        if has_anthropic_credential(&headers) {
-            return Ok(ValidatedEnvironment {
-                headers,
-                auth: AuthScheme::Forwarded,
-            });
+        let api_key = get_api_key(api_key, env_lookup);
+        if !ANTHROPIC_AUTH_POLICY.has_existing_credential(&headers)
+            && let Some(auth) = get_bearer_auth(api_key.as_deref(), env_lookup)
+        {
+            return Ok(ValidatedEnvironment { headers, auth });
         }
-        let auth = get_auth_header(api_key, env_lookup).ok_or(Error::Auth(
-            litellm_auth::Error::MissingApiKey {
-                provider: "Anthropic",
-                environment_variable: ANTHROPIC_API_KEY_ENV,
-            },
-        ))?;
-        Ok(ValidatedEnvironment { headers, auth })
+        Ok(ValidatedEnvironment::with_api_key(
+            &ANTHROPIC_AUTH_POLICY,
+            headers,
+            api_key.map(SecretValue::new),
+            MISSING_ANTHROPIC_API_KEY,
+        )?)
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {

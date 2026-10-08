@@ -5,7 +5,10 @@
 //! that split: `validate_environment` shapes the forwarded headers and names the credential
 //! as an [`AuthScheme`], and [`resolve_auth`] turns the scheme into headers and a signer.
 
-use litellm_auth::{AuthServices, CredentialPlacement, SecretValue, TokenProviderHandle};
+use litellm_auth::{
+    AuthServices, CredentialPlacement, CredentialPlanKind, ProviderAuthPolicy, SecretValue,
+    TokenProviderHandle,
+};
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
 use litellm_http::request::with_header;
 
@@ -39,6 +42,38 @@ pub enum AuthScheme {
 pub struct ValidatedEnvironment {
     pub headers: Headers,
     pub auth: AuthScheme,
+}
+
+impl ValidatedEnvironment {
+    /// A caller credential header the policy accepts is sent as is. Otherwise the non-blank
+    /// `api_key` goes in the policy's static placement, and its absence is `missing`.
+    pub fn with_api_key(
+        policy: &ProviderAuthPolicy,
+        headers: Headers,
+        api_key: Option<SecretValue>,
+        missing: litellm_auth::Error,
+    ) -> Result<Self, litellm_auth::Error> {
+        if policy.has_existing_credential(&headers) {
+            return Ok(Self {
+                headers,
+                auth: AuthScheme::Forwarded,
+            });
+        }
+        let placement = policy
+            .placement(CredentialPlanKind::Static)
+            .ok_or_else(|| {
+                litellm_auth::Error::InvalidConfiguration(
+                    "the provider auth policy has no static credential rule".into(),
+                )
+            })?;
+        let secret = api_key
+            .filter(|key| !key.expose().trim().is_empty())
+            .ok_or(missing)?;
+        Ok(Self {
+            headers,
+            auth: AuthScheme::Credential { placement, secret },
+        })
+    }
 }
 
 #[derive(Debug)]
