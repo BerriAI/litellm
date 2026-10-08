@@ -972,13 +972,13 @@ async def invoke_agent_a2a(
                         )
                     _validate_push_notification_url(callback_url)
             forward_method: str
-            forward_headers: Mapping[str, str]
+            forward_headers: Mapping[str, str] | None
             if upstream_version == "1.0":
                 # A native 1.0 upstream must receive the PascalCase method,
                 # unlowered params and an explicit negotiated version header
                 # instead of the 0.3 wire (regression: #44531).
                 forward_method = _WIRE_TO_PASCAL.get(method, method)
-                forward_headers = {**agent_extra_headers, "A2A-Version": "1.0"}
+                forward_headers = {**(agent_extra_headers or {}), "A2A-Version": "1.0"}
             else:
                 forward_method = method
                 forward_headers = agent_extra_headers
@@ -1024,11 +1024,10 @@ async def invoke_agent_a2a(
             upstream_version: Final = _upstream_version(agent)
             if isinstance(params, dict) and upstream_version == "0.3":
                 params = normalize_request_params(params, served_version, method=method)
-            forward_method: str
-            forward_headers: Mapping[str, str]
+            forward_headers: Mapping[str, str] | None
             if upstream_version == "1.0":
                 forward_method = _WIRE_TO_PASCAL.get(method, method)
-                forward_headers = {**agent_extra_headers, "A2A-Version": "1.0"}
+                forward_headers = {**(agent_extra_headers or {}), "A2A-Version": "1.0"}
             else:
                 forward_method = method
                 forward_headers = agent_extra_headers
