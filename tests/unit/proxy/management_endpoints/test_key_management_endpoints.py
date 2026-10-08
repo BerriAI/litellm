@@ -21275,7 +21275,7 @@ class _PeerWorkerCoordinationRedis:
 
 
 @pytest.mark.asyncio
-async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker_before_its_ttl(monkeypatch):
+async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker_before_its_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     """/key/delete must broadcast the eviction like every other key mutation: a peer worker that
     still holds the key object in memory has to answer 401 on its next request instead of serving
     the deleted key until the in-memory TTL expires."""
@@ -21339,7 +21339,7 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker_before_
 
 
 @pytest.mark.asyncio
-async def test_delete_verification_tokens_evicts_only_the_rows_the_caller_may_delete(monkeypatch):
+async def test_delete_verification_tokens_evicts_only_the_rows_the_caller_may_delete(monkeypatch: pytest.MonkeyPatch) -> None:
     """A key owner who pads /key/delete with cache key names of other tenants' usage counters must
     not get them evicted from the shared usage cache: only the rows the caller was authorized to
     delete are evicted and broadcast, never the raw request list."""
