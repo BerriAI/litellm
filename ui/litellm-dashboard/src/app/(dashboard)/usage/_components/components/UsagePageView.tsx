@@ -43,6 +43,7 @@ import {
 } from "@/components/UsagePage/dailyActivityApi";
 import { keyDetailFromResponse, overallUsageMetrics } from "@/components/UsagePage/keyActivityData";
 import {
+  failedRequestBreakdown,
   fetchedRangeKey,
   selectForRange,
   selectGatewayActivity,
@@ -229,6 +230,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [isAdmin, gatewayRequest, currentGatewayRangeKey]);
 
   const gatewayActivity = selectGatewayActivity(isAdmin, gatewayActivityData, currentGatewayRangeKey);
+  const gatewayFailedBreakdown = gatewayActivity ? failedRequestBreakdown(gatewayActivity) : null;
 
   const userSpendData = useMemo(
     () => ({
@@ -380,6 +382,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <UsageOverview
                     results={sortedDailyResults}
                     totals={totals}
+                    failureBreakdown={gatewayFailedBreakdown}
                     loading={loading}
                     requestCountsPending={requestCountsPending}
                     budget={currentUser?.max_budget ?? null}

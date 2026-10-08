@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   GATEWAY_TOP_ROUTES,
+  failedRequestBreakdown,
   fetchedRangeKey,
   selectForRange,
   selectGatewayActivity,
+  statusCodeLabel,
   topGatewayRoutes,
   type GatewayActivity,
 } from "./gatewayActivity";
@@ -104,5 +106,68 @@ describe("topGatewayRoutes", () => {
 
   it("renders no bars when there is nothing to show", () => {
     expect(topGatewayRoutes(null)).toEqual([]);
+  });
+});
+
+describe("failedRequestBreakdown", () => {
+  it("splits client and server errors, labels rows in received order, and finds unrecorded failures", () => {
+    const expectedBreakdown = {
+      clientErrors: 3,
+      serverErrors: 3,
+      rows: [
+        { status_code: 500, label: "Internal Server Error", failed_requests: 2 },
+        { status_code: 429, label: "Too Many Requests", failed_requests: 3 },
+        { status_code: 503, label: "Service Unavailable", failed_requests: 1 },
+      ],
+      notRecorded: 4,
+    };
+
+    expect(
+      failedRequestBreakdown({
+        ...activity(0),
+        total_failed_requests: 10,
+        by_status_code: [
+          { status_code: 500, failed_requests: 2 },
+          { status_code: 429, failed_requests: 3 },
+          { status_code: 503, failed_requests: 1 },
+        ],
+      }),
+    ).toEqual(expectedBreakdown);
+  });
+
+  it("treats a missing status-code breakdown as no recorded failures", () => {
+    const result = failedRequestBreakdown({ ...activity(0), total_failed_requests: 3, by_status_code: undefined });
+    const expectedBreakdown = { clientErrors: 0, serverErrors: 0, rows: [], notRecorded: 3 };
+    expect(result).toEqual(expectedBreakdown);
+  });
+
+  it("does not let recorded rows exceed the failed-request total", () => {
+    const result = failedRequestBreakdown({
+      ...activity(0),
+      total_failed_requests: 2,
+      by_status_code: [{ status_code: 0, failed_requests: 3 }],
+    });
+    expect(result.notRecorded).toBe(0);
+  });
+});
+
+describe("statusCodeLabel", () => {
+  it.each([
+    [0, "No response"],
+    [400, "Bad Request"],
+    [401, "Unauthorized"],
+    [403, "Forbidden"],
+    [404, "Not Found"],
+    [408, "Request Timeout"],
+    [413, "Payload Too Large"],
+    [422, "Unprocessable Entity"],
+    [429, "Too Many Requests"],
+    [500, "Internal Server Error"],
+    [502, "Bad Gateway"],
+    [503, "Service Unavailable"],
+    [504, "Gateway Timeout"],
+    [418, "HTTP 418"],
+  ] as const)("labels status %s", (code, label) => {
+    expect(statusCodeLabel(code)).toBe(label);
   });
 });

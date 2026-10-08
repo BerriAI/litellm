@@ -375,6 +375,10 @@ describe("UsagePage", () => {
     total_failed_requests: 909,
     by_date: [{ date: "2025-01-01", successful_requests: 424242, failed_requests: 909 }],
     by_route: [{ category: "llm", route: "/chat/completions", successful_requests: 424242, failed_requests: 909 }],
+    by_status_code: [
+      { status_code: 429, failed_requests: 3 },
+      { status_code: 500, failed_requests: 2 },
+    ],
   };
 
   const defaultProps = {
@@ -594,11 +598,37 @@ describe("UsagePage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
     expect(mockGatewayDailyActivityCall).not.toHaveBeenCalled();
+    expect(overview().queryByText(/Client errors \(4xx\)/)).not.toBeInTheDocument();
+    expect(overview().queryByRole("button", { name: /Failed Requests/ })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(totalRequestsCell()).toHaveTextContent("1,500");
     });
     expect(screen.queryByText("424,242")).not.toBeInTheDocument();
     expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
+  });
+
+  it("shows gateway error summaries and expands status details with keyboard access", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    expect(await screen.findByText("Client errors (4xx): 3")).toBeInTheDocument();
+    expect(screen.getByText("Server errors (5xx): 2")).toBeInTheDocument();
+
+    const failedRequests = screen.getByRole("button", { name: "Failed Requests: 909" });
+    expect(failedRequests).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(failedRequests);
+    expect(screen.getByText("429 Too Many Requests")).toBeInTheDocument();
+    expect(screen.getByText("500 Internal Server Error")).toBeInTheDocument();
+    expect(screen.getByText("Not recorded")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Not recorded failure details" })).toBeInTheDocument();
+    expect(screen.getByText("904")).toBeInTheDocument();
+    expect(failedRequests).toHaveAttribute("aria-expanded", "true");
+
+    await user.keyboard("{Enter}");
+    expect(screen.queryByText("429 Too Many Requests")).not.toBeInTheDocument();
+    await user.keyboard(" ");
+    expect(screen.getByText("429 Too Many Requests")).toBeInTheDocument();
   });
 
   it("should display usage metrics and charts", async () => {

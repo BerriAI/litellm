@@ -15,6 +15,14 @@ export interface GatewayActivity {
   total_failed_requests: number;
   by_date: { date: string; successful_requests: number; failed_requests: number }[];
   by_route: { category: string; route: string; successful_requests: number; failed_requests: number }[];
+  by_status_code?: { status_code: number; failed_requests: number }[];
+}
+
+export interface FailedRequestBreakdown {
+  clientErrors: number;
+  serverErrors: number;
+  rows: { status_code: number; label: string; failed_requests: number }[];
+  notRecorded: number;
 }
 
 /** A fetched result carrying the range key it was fetched for. */
@@ -31,6 +39,44 @@ export interface GatewayRouteBar extends Record<string, unknown> {
   successful_requests: number;
   failed_requests: number;
 }
+
+export const statusCodeLabel = (code: number): string => {
+  const labels: Record<number, string> = {
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    408: "Request Timeout",
+    413: "Payload Too Large",
+    422: "Unprocessable Entity",
+    429: "Too Many Requests",
+    500: "Internal Server Error",
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+    504: "Gateway Timeout",
+  };
+  return code === 0 ? "No response" : labels[code] ?? `HTTP ${code}`;
+};
+
+export const failedRequestBreakdown = (activity: GatewayActivity): FailedRequestBreakdown => {
+  const statusCodes = activity.by_status_code ?? [];
+  const recordedCount = statusCodes.reduce((total, entry) => total + entry.failed_requests, 0);
+  return {
+    clientErrors: statusCodes.reduce(
+      (total, entry) => (entry.status_code >= 400 && entry.status_code <= 499 ? total + entry.failed_requests : total),
+      0,
+    ),
+    serverErrors: statusCodes.reduce(
+      (total, entry) => (entry.status_code >= 500 && entry.status_code <= 599 ? total + entry.failed_requests : total),
+      0,
+    ),
+    rows: statusCodes.map((entry) => ({
+      ...entry,
+      label: statusCodeLabel(entry.status_code),
+    })),
+    notRecorded: Math.max(0, activity.total_failed_requests - recordedCount),
+  };
+};
 
 /**
  * Identifies what a result was fetched for: the date range, plus any other

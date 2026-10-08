@@ -8,8 +8,10 @@
 
 import React, { type ReactNode, useMemo, useState } from "react";
 import type { DailyData } from "@/components/UsagePage/types";
-import { KeyRound } from "lucide-react";
+import { ChevronDown, ChevronRight, Info, KeyRound } from "lucide-react";
 import { StackedUsageChart, type StackedUsageScale } from "@/components/shared/charts";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { FailedRequestBreakdown } from "../gatewayActivity";
 import {
   bucketSeries,
   bucketTotals,
@@ -30,6 +32,7 @@ import { ChartSkeleton, Panel, PANEL_INSET_X, Segmented, Sparkline, Stat } from 
 interface UsageOverviewProps {
   results: readonly DailyData[];
   totals: OverviewTotals;
+  failureBreakdown: FailedRequestBreakdown | null;
   loading: boolean;
   requestCountsPending: boolean;
   budget: number | null;
@@ -53,6 +56,7 @@ const SCALE_OPTIONS = [
 export default function UsageOverview({
   results,
   totals,
+  failureBreakdown,
   loading,
   requestCountsPending,
   topKeys,
@@ -62,6 +66,7 @@ export default function UsageOverview({
   budget,
 }: UsageOverviewProps) {
   const [state, setState] = useState<BreakdownState>({ metric: "spend", dimension: "model_groups" });
+  const [showFailedBreakdown, setShowFailedBreakdown] = useState(false);
   const [granularity, setGranularity] = useState<Granularity>("day");
   const [scale, setScale] = useState<StackedUsageScale>("linear");
   const { series: dailySeries, ranking } = useBreakdown(results, state, 8);
@@ -88,12 +93,39 @@ export default function UsageOverview({
               <span>
                 <span className="text-success tabular-nums">{totals.successful.toLocaleString()}</span> ok
               </span>
-              <span>
-                <span className={totals.failed > 0 ? "text-destructive tabular-nums" : "tabular-nums"}>
-                  {totals.failed.toLocaleString()}
-                </span>{" "}
-                failed
-              </span>
+              {failureBreakdown ? (
+                <button
+                  type="button"
+                  aria-label={`Failed Requests: ${totals.failed.toLocaleString()}`}
+                  aria-expanded={showFailedBreakdown}
+                  aria-controls="gateway-failure-status-breakdown"
+                  className="inline-flex items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  onClick={() => setShowFailedBreakdown(!showFailedBreakdown)}
+                >
+                  <span className={totals.failed > 0 ? "text-destructive tabular-nums" : "tabular-nums"}>
+                    {totals.failed.toLocaleString()}
+                  </span>{" "}
+                  failed
+                  {showFailedBreakdown ? (
+                    <ChevronDown className="size-3 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="size-3 text-muted-foreground" />
+                  )}
+                </button>
+              ) : (
+                <span>
+                  <span className={totals.failed > 0 ? "text-destructive tabular-nums" : "tabular-nums"}>
+                    {totals.failed.toLocaleString()}
+                  </span>{" "}
+                  failed
+                </span>
+              )}
+            </div>
+          )}
+          {failureBreakdown && (
+            <div className="mt-2 space-y-1 text-sm text-muted-foreground">
+              <p>Client errors (4xx): {failureBreakdown.clientErrors.toLocaleString()}</p>
+              <p>Server errors (5xx): {failureBreakdown.serverErrors.toLocaleString()}</p>
             </div>
           )}
         </StatCell>
@@ -118,6 +150,45 @@ export default function UsageOverview({
           </div>
         </StatCell>
       </div>
+
+      {showFailedBreakdown && failureBreakdown && (
+        <div id="gateway-failure-status-breakdown" className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {failureBreakdown.rows.map((row) => (
+            <div key={row.status_code} className="rounded-xl border bg-card p-3">
+              <h3 className="text-sm font-medium text-foreground">
+                {row.status_code} {row.label}
+              </h3>
+              <p className="mt-2 text-2xl font-bold text-destructive">{row.failed_requests.toLocaleString()}</p>
+            </div>
+          ))}
+          {failureBreakdown.notRecorded > 0 && (
+            <div className="rounded-xl border bg-card p-3">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-medium text-foreground">Not recorded</h3>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label="Not recorded failure details"
+                        className="inline-flex items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      >
+                        <Info aria-hidden="true" className="size-4 text-muted-foreground hover:text-foreground" />
+                      </button>
+                    }
+                  />
+                  <TooltipContent>
+                    Failed before per-status tracking was available, or counted by an older proxy version
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <p className="mt-2 text-2xl font-bold text-destructive">
+                {failureBreakdown.notRecorded.toLocaleString()}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       <Panel
         title="Top models"
