@@ -37,10 +37,12 @@ class MCPUpstreamAuthError(Exception):
         status_code: int,
         www_authenticate: str | None,
         server_name: str,
+        required_scope: str | None = None,
     ) -> None:
         self.status_code = status_code
         self.www_authenticate = www_authenticate
         self.server_name = server_name
+        self.required_scope = required_scope
         super().__init__(f"Upstream MCP server {server_name!r} returned {status_code}")
 
     def to_http_exception(
@@ -74,18 +76,24 @@ class MCPUpstreamAuthError(Exception):
         ``get_passthrough_resource_metadata_url`` in ``oauth_utils.py``.
         """
         challenge: str | None = self.www_authenticate
-        if challenge is None and self.status_code == 401 and base_url:
+        if challenge is None and (self.status_code == 401 or self.required_scope is not None) and base_url:
             prefix: Final = base_url.rstrip("/")
             if request_path and request_path.startswith(f"/{self.server_name}/mcp"):
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/{self.server_name}/mcp"
             else:
                 resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"
             challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
+        scoped_challenge: Final = (
+            (f'{challenge}, error="insufficient_scope"' if challenge else 'Bearer error="insufficient_scope"')
+            + (f', scope="{self.required_scope}"' if self.required_scope else "")
+            if self.required_scope is not None
+            else challenge
+        )
         detail: Final = "Forbidden" if self.status_code == 403 else "Unauthorized"
         return HTTPException(
             status_code=self.status_code,
             detail=detail,
-            headers={"www-authenticate": challenge} if challenge else None,
+            headers={"www-authenticate": scoped_challenge} if scoped_challenge else None,
         )
 
 

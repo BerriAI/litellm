@@ -35929,6 +35929,22 @@
                 ],
                 "title": "Resource"
               }
+            },
+            {
+              "in": "query",
+              "name": "scope",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Scope"
+              }
             }
           ],
           "responses": {

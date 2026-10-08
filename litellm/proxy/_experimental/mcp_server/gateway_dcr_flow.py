@@ -250,7 +250,9 @@ class ConsentTeam(LiteLLMBaseModel):
 class LookupVendorCredential(Protocol):
     """Injected read of a user's vendor credential for one server."""
 
-    def __call__(self, user_id: str, server_id: str, /) -> Awaitable[VendorCredentialState]: ...
+    def __call__(
+        self, user_id: str, server_id: str, requested_scopes: tuple[str, ...] = (), /
+    ) -> Awaitable[VendorCredentialState]: ...
 
 
 class LookupServerReachability(Protocol):
@@ -273,7 +275,9 @@ async def _refuse_subject_token(subject_token: str, request: Request) -> Subject
     )
 
 
-async def _unavailable_vendor_credential(user_id: str, server_id: str) -> VendorCredentialState:
+async def _unavailable_vendor_credential(
+    user_id: str, server_id: str, requested_scopes: tuple[str, ...] = ()
+) -> VendorCredentialState:
     return "unavailable"
 
 
@@ -310,6 +314,7 @@ class _ConnectFlow(LiteLLMBaseModel):
     exp: int
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
+    requested_scopes: tuple[str, ...] = ()
 
 
 class _GatewayAuthCode(LiteLLMBaseModel):
@@ -555,6 +560,7 @@ def aggregate_authorize(
     response_type: str | None,
     session_user_id: str | None,
     resource: str | None = None,
+    scope: str | None = None,
 ) -> Response:
     """The aggregate authorize verb: validate the client, require S256 PKCE, interpose
     LiteLLM sign-in, and hand the browser to the connect page with the flow sealed into a
@@ -589,6 +595,7 @@ def aggregate_authorize(
         code_challenge=code_challenge or "",
         resource_server_id=scoped_server.server_id if scoped_server is not None else None,
         audience=None,
+        requested_scopes=tuple((scope or "").split()) if scoped_server is not None else (),
     )
     connect_url: Final = _append_query_params(f"{base_url}/ui/connect", (("connect_flow", handle),))
     response: Final = RedirectResponse(connect_url, status_code=303)
@@ -748,6 +755,7 @@ def _new_connect_flow(
     code_challenge: str,
     resource_server_id: str | None,
     audience: SessionAudience | None,
+    requested_scopes: tuple[str, ...] = (),
 ) -> _ConnectFlow:
     now: Final = datetime.now(timezone.utc)
     return _ConnectFlow(
@@ -760,6 +768,7 @@ def _new_connect_flow(
         exp=int(now.timestamp()) + CONNECT_FLOW_TTL_SECONDS,
         resource_server_id=resource_server_id,
         audience=audience,
+        requested_scopes=requested_scopes,
     )
 
 
@@ -847,6 +856,7 @@ class ConnectFlowDescription(TypedDict):
     server_id: ReadOnly[str | None]
     server_name: ReadOnly[str | None]
     connected: ReadOnly[bool | None]
+    requested_scopes: NotRequired[ReadOnly[tuple[str, ...]]]
 
 
 async def _describe_opened_flow(
@@ -856,7 +866,11 @@ async def _describe_opened_flow(
 ) -> ConnectFlowDescription | Response:
     state, server = await _flow_target(flow, lookup_server_reachability)
     if state == "interactive" and server is not None:
-        credential: Final = await lookup_vendor_credential(flow.user_id, server.server_id)
+        credential: Final = (
+            await lookup_vendor_credential(flow.user_id, server.server_id, flow.requested_scopes)
+            if flow.requested_scopes
+            else await lookup_vendor_credential(flow.user_id, server.server_id)
+        )
         if credential == "unavailable":
             return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
         interactive_description: Final[ConnectFlowDescription] = {
@@ -865,6 +879,7 @@ async def _describe_opened_flow(
             "server_id": server.server_id,
             "server_name": server.server_name or server.alias or server.name,
             "connected": credential == "present",
+            **({"requested_scopes": flow.requested_scopes} if flow.requested_scopes else {}),
         }
         return interactive_description
     described: Final[ConnectFlowDescription] = {

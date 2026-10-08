@@ -991,7 +991,7 @@ SCOPED_RESOURCE = "https://llm.example.com/mcp/github"
 _MANAGER_PATCH = "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
 
 
-def _scoped_authorize(client_id, resource, session_user_id="u1"):
+def _scoped_authorize(client_id, resource, session_user_id="u1", **kwargs):
     return aggregate_authorize(
         request=_request(query=f"client_id={client_id}"),
         client_id=client_id,
@@ -1002,6 +1002,7 @@ def _scoped_authorize(client_id, resource, session_user_id="u1"):
         response_type="code",
         session_user_id=session_user_id,
         resource=resource,
+        **kwargs,
     )
 
 
@@ -2578,3 +2579,25 @@ async def test_token_exchange_relays_a_mint_refusal(failure, status, error):
     response = await _exchange_native(client_id, _Minter(failure), _Exchanger())
     assert response.status_code == status
     assert json.loads(response.body)["error"] == error
+
+
+@pytest.mark.asyncio
+async def test_connect_flow_retains_step_up_scope_until_the_vendor_grants_it():
+    from unittest.mock import AsyncMock, patch
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    server = _scoped_mcp_server()
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = server
+        response = _scoped_authorize(client_id, SCOPED_RESOURCE, scope="tools.write")
+    vendor = AsyncMock(return_value="absent")
+    described = await _describe_page(response, scoped_server=server, vendor=vendor)
+    assert json.loads(described.body)["requested_scopes"] == ["tools.write"]
+    assert json.loads(described.body)["connected"] is False
+    vendor.assert_awaited_once_with("u1", server.server_id, ("tools.write",))
+    premature = await _complete_page(response, scoped_server=server, vendor=vendor)
+    assert premature.status_code == 400
+    vendor.return_value = "present"
+    complete = await _complete_page(response, scoped_server=server, vendor=vendor)
+    assert complete.status_code == 303
+    assert parse_qs(urlparse(complete.headers["location"]).query)["code"][0].startswith(GATEWAY_AUTH_CODE_PREFIX)

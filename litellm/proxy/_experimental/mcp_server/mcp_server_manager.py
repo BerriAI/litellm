@@ -38,6 +38,7 @@ import httpx2
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
+from mcp.shared.auth import OAuthMetadata
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import (
     CallToolResult,
@@ -57,7 +58,7 @@ from mcp.types import (
     ResourceTemplate,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, Field, SecretStr, TypeAdapter
+from pydantic import AnyUrl, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, assert_never
 
 import litellm
@@ -96,6 +97,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     ServerListFault,
     raise_classified_list_failure,
     upstream_auth_challenge,
+    upstream_insufficient_scope,
 )
 from litellm.proxy._experimental.mcp_server.interactions import bind_target
 from litellm.proxy._experimental.mcp_server.mcp_debug import describe_upstream_http_failure, record_auth_resolution
@@ -881,6 +883,10 @@ def carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serve
         new_server.authorization_response_iss_parameter_supported = (  # rebind-ok: publish on the existing rebuild object
             previous_server.authorization_response_iss_parameter_supported
         )
+    if may_carry and new_server.issuer == previous_server.issuer and new_server.authorization_server_metadata is None:
+        new_server.authorization_server_metadata = (  # rebind-ok: publish capability on the existing rebuild object
+            previous_server.authorization_server_metadata
+        )
     if new_server.authorization_url is None and previous_server.authorization_url:
         new_server.authorization_url = previous_server.authorization_url
     if may_carry and new_server.token_url is None and previous_server.token_url:
@@ -916,7 +922,12 @@ def _restrict_discovery_to_corroborated_authorization_server(
         return metadata
     if _endpoints_corroborate_authorization_url(metadata.authorization_url, manual_authorization_url):
         return metadata
-    if not metadata.token_url and not metadata.registration_url and not metadata.client_id_metadata_document_supported:
+    if (
+        not metadata.token_url
+        and not metadata.registration_url
+        and not metadata.client_id_metadata_document_supported
+        and metadata.authorization_server_metadata is None
+    ):
         return metadata
     bridge_note: Final = (
         " The discovered registration_url is rejected with it, so this dcr_bridge server stays on the"
@@ -935,7 +946,12 @@ def _restrict_discovery_to_corroborated_authorization_server(
         bridge_note,
     )
     return metadata.model_copy(
-        update={"token_url": None, "registration_url": None, "client_id_metadata_document_supported": False}
+        update={
+            "token_url": None,
+            "registration_url": None,
+            "client_id_metadata_document_supported": False,
+            "authorization_server_metadata": None,
+        }
     )
 
 
@@ -2069,6 +2085,7 @@ class MCPServerManager:
         return server.model_copy(
             update={
                 "scopes": server.scopes or metadata.scopes,
+                "authorization_server_metadata": metadata.authorization_server_metadata,
                 "issuer": server.issuer or discovered_issuer,
                 "client_id_metadata_document_supported": metadata.client_id_metadata_document_supported,
                 "authorization_response_iss_parameter_supported": (
@@ -2661,6 +2678,9 @@ class MCPServerManager:
                 scopes=resolved_scopes,
                 configured_scopes=tuple(configured_scopes) if configured_scopes else None,
                 issuer=effective_issuer,
+                authorization_server_metadata=(
+                    gated_oauth_metadata.authorization_server_metadata if gated_oauth_metadata else None
+                ),
                 client_id_metadata_document_supported=(
                     gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else None
                 ),
@@ -3242,6 +3262,9 @@ class MCPServerManager:
             scopes=resolved_scopes,
             configured_scopes=configured_scopes,
             issuer=effective_issuer,
+            authorization_server_metadata=(
+                gated_oauth_metadata.authorization_server_metadata if gated_oauth_metadata else None
+            ),
             client_id_metadata_document_supported=(
                 gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else None
             ),
@@ -5366,7 +5389,16 @@ class MCPServerManager:
                 continue
 
             scopes = self._extract_scopes(data.get("scopes_supported"))
+            try:
+                authorization_metadata = OAuthMetadata.model_validate(data)
+            except ValidationError:
+                authorization_metadata = None
             metadata = MCPOAuthMetadata(
+                authorization_server_metadata=(
+                    TypeAdapter(dict[str, object]).validate_python(authorization_metadata.model_dump(mode="json"))
+                    if authorization_metadata is not None
+                    else None
+                ),
                 scopes=scopes,
                 authorization_url=data.get("authorization_endpoint"),
                 token_url=data.get("token_endpoint"),
@@ -6365,11 +6397,12 @@ class MCPServerManager:
             # oauth2 + delegate_auth_to_upstream (is_oauth_passthrough) is being removed, so it is not
             # added here even though the list path still relays for it.
             relays_upstream_auth: Final = mcp_server.is_client_forwarded_token
+            managed_per_user: Final = mcp_server.is_gateway_managed_oauth2 and mcp_server.needs_user_oauth_token
             server_label: Final = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
 
             async def _call_tool_via_client(client, params):
                 async with self._limit_outbound_concurrency(mcp_server):
-                    if not relays_upstream_auth:
+                    if not relays_upstream_auth and not managed_per_user:
                         return await client.call_tool(
                             params,
                             host_progress_callback=host_progress_callback,
@@ -6392,8 +6425,16 @@ class MCPServerManager:
                             allow_input_required=allow_input_required,
                         )
                     except Exception as e:
+                        required_scope: Final = upstream_insufficient_scope(e) if managed_per_user else None
+                        if required_scope is not None:
+                            raise MCPUpstreamAuthError(
+                                status_code=403,
+                                www_authenticate=None,
+                                server_name=mcp_server.alias or server_label,
+                                required_scope=required_scope,
+                            ) from e
                         auth_info: Final = _extract_upstream_auth_failure(e)
-                        if auth_info is None or auth_info[0] != 401:
+                        if not relays_upstream_auth or auth_info is None or auth_info[0] != 401:
                             # A genuine (non-auth or 403-forbidden) upstream/transport failure.
                             # raise_on_error demoted the client-layer log to debug, so surface it here at
                             # warning level to keep the outage visible; the caller still gets the graceful

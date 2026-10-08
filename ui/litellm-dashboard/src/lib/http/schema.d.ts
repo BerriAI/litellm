@@ -51565,6 +51565,7 @@ export interface operations {
                 code_challenge_method?: string | null;
                 response_type?: string | null;
                 resource?: string | null;
+                scope?: string | null;
             };
             header?: never;
             path?: never;

@@ -11981,6 +11981,7 @@ def jwt_oauth_identity(monkeypatch: pytest.MonkeyPatch) -> tuple["JWTHandler", "
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     prisma: Final = MagicMock()
     prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     return handler, signing_key
 
@@ -13732,7 +13733,7 @@ async def test_token_route_preserves_saved_cimd_grant_after_origin_change(
     "matching", "unicode_grant", "foreign_refresh", "missing_refresh", "missing_grant", "database_missing",
     "database_outage", "static_client", "anonymous",
 ])
-async def test_saved_cimd_refresh_identity_is_bound_to_the_callers_stored_grant(
+async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
     monkeypatch: pytest.MonkeyPatch, state: str,
 ) -> None:
     from types import SimpleNamespace
@@ -13766,12 +13767,204 @@ async def test_saved_cimd_refresh_identity_is_bound_to_the_callers_stored_grant(
         table.find_unique.side_effect = RuntimeError("database unavailable")
     if state == "static_client":
         server.client_id = "configured-client"
-    resolved: Final = await endpoints._saved_cimd_refresh_client_id(
+    resolved: Final = await endpoints._saved_refresh_credential(
         server, None if state == "anonymous" else "alice",
         "foreign-refresh" if state == "foreign_refresh" else grant,
     )
-    assert resolved == (identity if state in ("matching", "unicode_grant") else None)
-    if state in ("anonymous", "static_client", "database_missing"):
+    if state in ("matching", "unicode_grant", "static_client"):
+        assert resolved is not None and resolved["cimd_client_id"] == identity
+        assert resolved["refresh_token"] == grant
+    else:
+        assert resolved is None
+    if state in ("anonymous", "database_missing"):
         table.find_unique.assert_not_awaited()
     else:
         table.find_unique.assert_awaited_once_with(where={"user_id_server_id": {"user_id": "alice", "server_id": server.server_id}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prior_scopes, expected", [(["tools.read"], "tools.read tools.write"), (None, "tools.write"), ([], "tools.write")])
+async def test_managed_authorize_retains_the_callers_previous_grant(jwt_oauth_identity, monkeypatch, prior_scopes, expected):
+    from types import SimpleNamespace
+    from urllib.parse import parse_qs, urlsplit
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    _, signing_key = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "scope-grant-test-salt")
+    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client", "scopes": ["tools.read"]})
+    global_mcp_server_manager.registry[server.server_id] = server
+    credential = db.encrypt_value_helper(json.dumps({"type": "oauth2", "access_token": "old-access", "scopes": prior_scopes}))
+    table = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=SimpleNamespace(credential_b64=credential))
+    request = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key, scope='litellm_proxy_admin')}"})
+    response = await endpoints.authorize_with_server(
+        request, server, "scope-client", "http://127.0.0.1:9/cb", scope="tools.write",
+        code_challenge="challenge", code_challenge_method="S256",
+    )
+    assert parse_qs(urlsplit(response.headers["location"]).query)["scope"] == [expected]
+    assert table.find_unique.call_args.kwargs["where"] == {
+        "user_id_server_id": {"user_id": "jwt-owner", "server_id": server.server_id}
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returned_scope, expected", [(None, ["tools.read", "tools.write"]), ("tools.read", ["tools.read"]), ("", None)])
+async def test_managed_code_exchange_preserves_requested_scope_only_when_omitted(
+    jwt_oauth_identity, monkeypatch, respx_mock, returned_scope, expected,
+):
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlsplit
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    _, signing_key = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "requested-scope-test-salt")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client"})
+    global_mcp_server_manager.registry[server.server_id] = server
+    table = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    request = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key, scope='litellm_proxy_admin')}"})
+    started = await endpoints.authorize_with_server(
+        request, server, "scope-client", "http://127.0.0.1:9/cb", scope="tools.read tools.write",
+        code_challenge="challenge", code_challenge_method="S256",
+    )
+    state = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
+    cookies = SimpleCookie()
+    cookies.load(started.headers["set-cookie"])
+    callback_request = _token_request({"Cookie": "; ".join(f"{name}={value.value}" for name, value in cookies.items())})
+    returned = await endpoints.callback(callback_request, code="provider-code", state=state, error=None, iss=None)
+    code = parse_qs(urlsplit(returned.headers["location"]).query)["code"][0]
+    upstream = respx_mock.post(server.token_url).respond(200, json={
+        "access_token": "new-access", "token_type": "Bearer", "refresh_token": "new-refresh",
+        **({"scope": returned_scope} if returned_scope is not None else {}),
+    })
+    exchanged = await endpoints.exchange_token_with_server(
+        request, server, "authorization_code", client_id="scope-client", code=code, code_verifier="verifier", redirect_uri="http://127.0.0.1:9/cb", client_secret=None,
+    )
+    assert parse_qs(upstream.calls[0].request.content.decode())["code"] == ["provider-code"]
+    saved = db.decode_oauth_payload(table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    assert saved is not None and saved.get("scopes") == expected
+    assert json.loads(exchanged.body)["scope"] == " ".join(expected or ())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("advertised, expected", [(True, "tools.read offline_access"), (False, "tools.read")])
+async def test_managed_authorize_requests_only_selected_scope_and_supported_refresh_access(monkeypatch, advertised, expected):
+    from urllib.parse import parse_qs, urlsplit
+
+    from mcp.shared.auth import OAuthMetadata
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "metadata-scope-test-salt")
+    metadata = OAuthMetadata(
+        issuer="https://idp.example.com", authorization_endpoint="https://idp.example.com/authorize",
+        token_endpoint="https://idp.example.com/token", response_types_supported=["code"],
+        scopes_supported=["tools.read", "admin"] + (["offline_access"] if advertised else []),
+    )
+    server = _cimd_oauth_server().model_copy(update={"authorization_server_metadata": metadata.model_dump(mode="json")})
+    response = await endpoints.authorize_with_server(
+        _cimd_request(), server, "scope-client", "http://127.0.0.1:9/cb", scope="tools.read",
+        code_challenge="challenge", code_challenge_method="S256",
+    )
+    assert parse_qs(urlsplit(response.headers["location"]).query)["scope"] == [expected]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["server", "issuer", "user", "mode", "tampered", "invalid_payload"])
+async def test_managed_scope_code_cannot_cross_oauth_boundaries(jwt_oauth_identity, monkeypatch, respx_mock, mismatch):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    _, signing_key = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "scope-boundary-test-salt")
+    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client"})
+    payload = endpoints._ManagedAuthorizationCode(
+        upstream_code="provider-code", mcp_server_id="other-server" if mismatch == "server" else server.server_id,
+        issuer="https://other-issuer.test" if mismatch == "issuer" else server.issuer,
+        requested_scope="tools.read tools.write", scope_user_id="other-user" if mismatch == "user" else "jwt-owner",
+    )
+    code = endpoints._MANAGED_AUTH_CODE_PREFIX + ("invalid" if mismatch == "tampered" else endpoints.encrypt_value_helper("{}" if mismatch == "invalid_payload" else payload.model_dump_json()))
+    request = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key, scope='litellm_proxy_admin')}"})
+    if mismatch == "mode":
+        server.auth_type = MCPAuth.true_passthrough
+    with pytest.raises(HTTPException) as raised:
+        await endpoints.exchange_token_with_server(
+            request, server, "authorization_code", code=code, redirect_uri="http://127.0.0.1:9/cb",
+            client_id="scope-client", client_secret=None, code_verifier="verifier",
+        )
+    assert raised.value.status_code == 400
+    assert respx_mock.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope, expected", [(None, ["tools.read", "tools.write"]), ("tools.read", ["tools.read"]), ("", None)])
+async def test_managed_refresh_retains_only_the_actual_grant(jwt_oauth_identity, monkeypatch, respx_mock, scope, expected):
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    _, signing_key = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "refresh-scope-test-salt")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client"})
+    global_mcp_server_manager.registry[server.server_id] = server
+    credential = db.encrypt_value_helper(json.dumps({
+        "type": "oauth2", "access_token": "old-access", "refresh_token": "owner-refresh", "scopes": ["tools.read", "tools.write"],
+    }))
+    table = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=SimpleNamespace(credential_b64=credential))
+    table.upsert = AsyncMock()
+    upstream = respx_mock.post(server.token_url).respond(200, json={
+        "access_token": "new-access", "token_type": "Bearer", "refresh_token": "new-refresh",
+        **({"scope": scope} if scope is not None else {}),
+    })
+    request = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key, scope='litellm_proxy_admin')}"})
+    await endpoints.exchange_token_with_server(
+        request, server, "refresh_token", code=None, redirect_uri=None, client_id="scope-client", client_secret=None,
+        code_verifier=None, refresh_token="owner-refresh",
+    )
+    saved = db.decode_oauth_payload(table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    assert saved is not None and saved.get("scopes") == expected
+    assert upstream.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("per_server_relay", [False, True])
+async def test_managed_resource_metadata_excludes_refresh_permission(monkeypatch, per_server_relay):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _cimd_oauth_server().model_copy(update={
+        "scopes": ["tools.read", "offline_access"], "per_server_oauth_discovery": per_server_relay,
+    })
+    global_mcp_server_manager.registry[server.server_id] = server
+    result = await endpoints._build_oauth_protected_resource_response(_cimd_request(), server.server_id, True)
+    assert result["scopes_supported"] == ["tools.read"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("granted, required, expected", [
+    (["tools.read"], ("tools.write",), "absent"),
+    (["tools.read", "tools.write"], ("tools.write",), "present"),
+    (None, ("tools.write",), "absent"),
+    (["tools.read"], (), "present"),
+])
+async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted, required, expected):
+    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+
+    credential = {**_stored_grant(), "scopes": granted}
+    read = AsyncMock(return_value=credential)
+    prisma = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(db, "get_user_oauth_credential", read)
+    assert await endpoints._vendor_credential_state("owner", "server", required) == expected
+    read.assert_awaited_once_with(prisma, "owner", "server")

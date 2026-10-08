@@ -498,3 +498,15 @@ def test_passthrough_admission_recognizes_only_matching_authorization(oauth_head
 
     server = MCPServer(server_id="catalog", name="catalog", alias="catalog", transport=MCPTransport.http)
     assert _client_has_passthrough_authorization(server, oauth_headers, server_headers) is authorized
+
+
+@pytest.mark.parametrize("base_url, request_path, scope, expected", [
+    ("https://gateway.test/proxy", "/alias/mcp", "tools.write", 'Bearer resource_metadata="https://gateway.test/proxy/.well-known/oauth-protected-resource/alias/mcp", error="insufficient_scope", scope="tools.write"'),
+    ("https://gateway.test/proxy", "/mcp/alias", "", 'Bearer resource_metadata="https://gateway.test/proxy/.well-known/oauth-protected-resource/mcp/alias", error="insufficient_scope"'),
+    (None, None, "tools.write", 'Bearer error="insufficient_scope", scope="tools.write"'),
+])
+def test_managed_step_up_challenge_uses_only_the_gateway_metadata(base_url, request_path, scope, expected):
+    error = MCPUpstreamAuthError(status_code=403, www_authenticate=None, server_name="alias", required_scope=scope)
+    response = error.to_http_exception(base_url=base_url, request_path=request_path)
+    assert response.status_code == 403
+    assert response.headers == {"www-authenticate": expected}

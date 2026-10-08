@@ -216,7 +216,7 @@ export const useUserMcpOAuthFlow = ({
         access_token: token.access_token,
         refresh_token: token.refresh_token,
         expires_in: token.expires_in,
-        scopes: flowState.scopes,
+        scopes: typeof token.scope === "string" ? token.scope.split(" ").filter(Boolean) : flowState.scopes,
       });
 
       setStatus("success");

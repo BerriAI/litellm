@@ -79,6 +79,7 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
               server={vendorServer}
               accessToken={accessToken}
               onConnect={onConnected}
+              scopes={flow?.requested_scopes}
               variant="button"
               autoStartKey={`litellm-mcp-autostart:${flowHandle}`}
             />
