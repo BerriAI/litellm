@@ -16,7 +16,6 @@ import json
 
 
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
-    test_tool_call_no_arguments = None
     test_async_pdf_handling_with_file_id = None
     test_content_list_handling = None
     test_developer_role_translation = None
