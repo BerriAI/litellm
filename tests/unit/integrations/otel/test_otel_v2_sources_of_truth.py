@@ -31,7 +31,6 @@ from litellm.integrations.otel import (
 )
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
-from litellm.integrations.otel.model.config import CaptureMessageContent
 from litellm.integrations.otel.model.metadata import LLMCallEvent
 from litellm.integrations.otel.model.payloads import (
     EmbeddingOutput,
