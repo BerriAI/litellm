@@ -16,6 +16,7 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
+    cast,
     overload,
     runtime_checkable,
 )
@@ -2319,7 +2320,8 @@ class ProxyBaseLLMRequestProcessing:
                 or rate_limited_data.get("disable_fallbacks")
                 or not isinstance(original_model, str)
                 or (
-                    general_settings.get("disable_fallbacks_on_per_model_rate_limits") is True
+                    cast(Mapping[str, object], general_settings).get("disable_fallbacks_on_per_model_rate_limits")
+                    is True
                     and getattr(original_exc, "descriptor_key", None) in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
                 )
             ):
