@@ -911,7 +911,10 @@ async def _flow_target(
     servers: Final = tuple(server for server in resolved if server is not None)
     if len(servers) > 1:
         return "multi", servers
-    return ("interactive" if servers[0][1] else "m2m"), servers
+    single_server: Final = next(iter(servers), None)
+    if single_server is None:
+        return "stale", ()
+    return ("interactive" if single_server[1] else "m2m"), servers
 
 
 class ConnectFlowServer(TypedDict):
