@@ -1286,17 +1286,18 @@ def test_bedrock_deepseek_v3_reasoning_effort_forwarded_raw():
         "bedrock/converse/global.zai.glm-5.3",
         "bedrock/us.zai.glm-5.3",
         "bedrock/zai.glm-5.3",
+        "bedrock/arn:aws:bedrock:us-west-2:123456789012:inference-profile/global.zai.glm-5.3",
     ],
 )
 def test_bedrock_zai_glm_reasoning_effort_forwarded_raw(model):
     """Bedrock Z.AI GLM takes reasoning_effort verbatim in
     additionalModelRequestFields, never converted into the Anthropic `thinking`
     block that Claude models get (GLM ignores it, and `none` gets dropped)."""
-    config = AmazonConverseConfig()
+    config: Final[AmazonConverseConfig] = AmazonConverseConfig()
 
     assert "reasoning_effort" in config.get_supported_openai_params(model=model)
 
-    optional_params = config.map_openai_params(
+    optional_params: Final = config.map_openai_params(
         non_default_params={"reasoning_effort": "high", "max_tokens": 100},
         optional_params={},
         model=model,
@@ -1304,7 +1305,7 @@ def test_bedrock_zai_glm_reasoning_effort_forwarded_raw(model):
     )
     assert "thinking" not in optional_params
 
-    request = config._transform_request(
+    request: Final = config._transform_request(
         model=model,
         messages=[{"role": "user", "content": "Say hi in one word."}],
         optional_params=optional_params,
@@ -1317,9 +1318,9 @@ def test_bedrock_zai_glm_reasoning_effort_forwarded_raw(model):
 def test_bedrock_zai_glm_reasoning_effort_none_forwarded_raw():
     """reasoning_effort="none" must reach Bedrock GLM so thinking can be turned
     off; the Anthropic mapping drops it entirely (issue #34105)."""
-    config = AmazonConverseConfig()
-    model = "bedrock/global.zai.glm-5.3"
-    optional_params = config.map_openai_params(
+    config: Final[AmazonConverseConfig] = AmazonConverseConfig()
+    model: Final = "bedrock/global.zai.glm-5.3"
+    optional_params: Final = config.map_openai_params(
         non_default_params={"reasoning_effort": "none", "max_tokens": 100},
         optional_params={},
         model=model,
@@ -1328,7 +1329,7 @@ def test_bedrock_zai_glm_reasoning_effort_none_forwarded_raw():
     assert optional_params["reasoning_effort"] == "none"
     assert "thinking" not in optional_params
 
-    request = config._transform_request(
+    request: Final = config._transform_request(
         model=model,
         messages=[{"role": "user", "content": "Say hi in one word."}],
         optional_params=optional_params,
@@ -1342,8 +1343,8 @@ def test_bedrock_zai_glm_thinking_not_advertised():
     """GLM on Bedrock does not accept the Anthropic `thinking` block, so it must
     not be advertised as a supported param (reasoning goes through
     reasoning_effort only)."""
-    config = AmazonConverseConfig()
-    supported = config.get_supported_openai_params(model="bedrock/global.zai.glm-5.3")
+    config: Final[AmazonConverseConfig] = AmazonConverseConfig()
+    supported: Final = config.get_supported_openai_params(model="bedrock/global.zai.glm-5.3")
     assert "reasoning_effort" in supported
     assert "thinking" not in supported
 

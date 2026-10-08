@@ -408,15 +408,26 @@ class AmazonConverseConfig(BaseConfig):
     def _requires_min_max_tokens(model: str) -> bool:
         return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
 
-    def _is_zai_glm_model(self, model: str) -> bool:
-        """Whether the model is a Z.AI GLM model served on Bedrock.
-
-        Bedrock GLM takes ``reasoning_effort`` verbatim under
-        ``additionalModelRequestFields`` (levels: none, low, medium, high,
-        xhigh, max) and ignores the Anthropic ``thinking`` block. Verified
-        against ``global.zai.glm-5.3``; see issue #34105.
+    @classmethod
+    def _supports_raw_reasoning_effort(cls, model: str) -> bool:
+        """Whether the model takes ``reasoning_effort`` verbatim in
+        ``additionalModelRequestFields`` (the ``supports_raw_reasoning_effort`` flag
+        in model_prices_and_context_window.json), rather than an Anthropic ``thinking``
+        block. Resolves Bedrock regional prefixes (``global.``/``us.``/``eu.``) and
+        inference-profile ARNs via the base model, like ``_supports_sampling_params``.
         """
-        return "zai.glm" in model
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        candidates: Final = (model, *(f"{prefix}{base_model}" for prefix in ("", "global.", "us.", "eu.")))
+        for candidate in candidates:
+            if (
+                flag := AnthropicModelInfo._get_model_capability(  # pyright: ignore[reportPrivateUsage]  # Shared API
+                    candidate, "supports_raw_reasoning_effort"
+                )
+            ) is not None:
+                return flag
+        return False
 
     def _is_nova_2_model(self, model: str) -> bool:
         """
@@ -547,14 +558,15 @@ class AmazonConverseConfig(BaseConfig):
         """
         Handle the reasoning_effort parameter based on the model type.
 
-        - GPT-OSS, DeepSeek V3 and Z.AI GLM models: passed through unchanged via
+        - GPT-OSS, DeepSeek V3 and models flagged ``supports_raw_reasoning_effort``
+          (e.g. Z.AI GLM on Bedrock): passed through unchanged via
           additionalModelRequestFields.
         - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
-        if "gpt-oss" in model or "deepseek" in model or self._is_zai_glm_model(model):
+        if "gpt-oss" in model or "deepseek" in model or self._supports_raw_reasoning_effort(model):
             optional_params["reasoning_effort"] = reasoning_effort
         elif self._is_openai_gpt_reasoning_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
@@ -750,8 +762,7 @@ class AmazonConverseConfig(BaseConfig):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
             # These models use a different reasoning structure than Anthropic's thinking parameter
             supported_params.append("reasoning_effort")
-        elif self._is_zai_glm_model(model):
-            # Bedrock GLM takes reasoning_effort verbatim in additionalModelRequestFields
+        elif self._supports_raw_reasoning_effort(model):
             supported_params.append("reasoning_effort")
         elif self._model_accepts_anthropic_thinking_param(model=model, base_model=base_model):
             supported_params.append("thinking")
