@@ -106,6 +106,7 @@ class LiteLLMCompletionTransformationHandler:
             litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
+                instructions=responses_api_request.get("instructions"),
             )
 
         acompletion_args: Final = {}

@@ -541,9 +541,6 @@ class TestResponses:
         assert arguments.locations, f"get_locations returned no locations: {function_call.arguments}"
 
     @pytest.mark.covers("llm.responses.anthropic.multi_turn.nonstream.works")
-    @pytest.mark.skip(
-        reason="stage red: product gap, Anthropic previous_response_id continuation sends invalid unmatched tool_use history"
-    )
     @meta(
         Subject(
             domain=Domain.LLM_TRANSLATION,
@@ -593,7 +590,7 @@ class TestResponses:
             tools=[LOCATIONS_TOOL],
             extra_body=NO_PROXY_CACHE,
         )
-        assert tool_result in second.output_text, f"follow-up omitted tool result: {second.output_text!r}"
+        assert "47" in second.output_text, f"follow-up omitted tool result: {second.output_text!r}"
 
     @pytest.mark.covers("llm.responses.bedrock_converse.basic.nonstream.works")
     @meta(
