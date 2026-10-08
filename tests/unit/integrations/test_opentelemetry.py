@@ -884,6 +884,69 @@ class TestOpenTelemetryCaptureMessageContent(unittest.TestCase):
         self.assertTrue(kept._capture_in_event())
 
 
+@pytest.mark.parametrize("experimental", [False, True])
+@pytest.mark.parametrize(
+    ("capture_mode", "global_redact"),
+    [("SPAN_AND_EVENT", True), ("NO_CONTENT", False), ("EVENT_ONLY", False), ("SPAN_AND_EVENT", False)],
+)
+@pytest.mark.parametrize(
+    ("call_type", "legacy_operation", "experimental_operation"),
+    [("completion", "chat", "chat"), ("acompletion", "acompletion", "chat"), ("embedding", "embedding", "embeddings")],
+)
+def test_operation_name_is_metadata_independent_of_message_capture(
+    monkeypatch: pytest.MonkeyPatch,
+    experimental: bool,
+    capture_mode: str,
+    global_redact: bool,
+    call_type: str,
+    legacy_operation: str,
+    experimental_operation: str,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", global_redact)
+    monkeypatch.setattr(litellm, "service_callback", [])
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+    monkeypatch.setenv("OTEL_SEMCONV_STABILITY_OPT_IN", "")
+    span_exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    handler: Final = OpenTelemetry(
+        config=OpenTelemetryConfig(
+            exporter=span_exporter,
+            capture_message_content=capture_mode,
+            semconv_stability_opt_in={OTELSemconvCategory.GEN_AI_LATEST_EXPERIMENTAL} if experimental else set(),
+        ),
+        tracer_provider=provider,
+    )
+    kwargs: Final = {
+        "model": "test-model",
+        "call_type": call_type,
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "litellm_params": {"custom_llm_provider": "openai"},
+        "standard_logging_object": {"call_type": call_type, "metadata": {}},
+    }
+    response: Final = {
+        "model": "test-model",
+        "choices": [{"message": {"role": "assistant", "content": "private response"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+    }
+    with handler.tracer.start_as_current_span("test") as span:
+        handler.set_attributes(span, kwargs, response)
+    attributes: Final = span_exporter.get_finished_spans()[0].attributes
+    provider.shutdown()
+    assert attributes is not None
+    assert attributes[SpanAttributes.GEN_AI_OPERATION_NAME.value] == (
+        experimental_operation if experimental else legacy_operation
+    )
+    assert attributes[SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS.value] == 3
+    assert attributes[SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS.value] == 2
+    assert (SpanAttributes.GEN_AI_INPUT_MESSAGES.value in attributes) == (
+        capture_mode == "SPAN_AND_EVENT" and not global_redact
+    )
+    assert (SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value in attributes) == (
+        capture_mode == "SPAN_AND_EVENT" and not global_redact
+    )
+
+
 class TestOpenTelemetrySemconvStability(unittest.TestCase):
     """OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental opts into
     semconv-conformant span shape (name, kind, no raw_gen_ai_request child)."""
