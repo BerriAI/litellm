@@ -663,7 +663,7 @@ def _dumps_cache_value(value: object) -> str:
     import orjson  # noqa: PLC0415  # orjson only ships with the litellm[proxy] extra
 
     try:
-        return orjson.dumps(value, option=orjson.OPT_NON_STR_KEYS).decode()
+        return orjson.dumps(value, option=orjson.OPT_NON_STR_KEYS).decode()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # orjson is absent from the typecheck venv
     except TypeError:
         return json.dumps(value)
 

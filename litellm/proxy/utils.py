@@ -3928,7 +3928,7 @@ class ProxyLogging:
 
                         if (
                             callback.should_run_guardrail(
-                                data=_stream_model_level_guardrail_data(data, llm_router),
+                                data=_stream_model_level_guardrail_data(data, llm_router),  # pyright: ignore[reportUnknownArgumentType]  # the hook's data param is a bare dict
                                 event_type=GuardrailEventHooks.post_call,
                             )
                             is not True
@@ -8218,16 +8218,19 @@ def _to_ns(dt):
     return int(dt.timestamp() * 1e9)
 
 
-_STREAM_MODEL_LEVEL_GUARDRAIL_DATA: Final[ContextVar[tuple[dict[str, object], dict[str, object]] | None]] = ContextVar(
-    "_STREAM_MODEL_LEVEL_GUARDRAIL_DATA", default=None
+_GUARDRAIL_DATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_STREAM_MODEL_LEVEL_GUARDRAIL_DATA: Final[ContextVar[tuple[Mapping[str, object], Mapping[str, object]] | None]] = (
+    ContextVar("_STREAM_MODEL_LEVEL_GUARDRAIL_DATA", default=None)
 )
 
 
-def _stream_model_level_guardrail_data(data: dict[str, object], llm_router: Router | None) -> dict[str, object]:
+def _stream_model_level_guardrail_data(data: Mapping[str, object], llm_router: Router | None) -> Mapping[str, object]:
     cached: Final = _STREAM_MODEL_LEVEL_GUARDRAIL_DATA.get()
     if cached is not None and cached[0] is data:
         return cached[1]
-    merged: Final[dict[str, object]] = check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
+    merged: Final = _GUARDRAIL_DATA_ADAPTER.validate_python(
+        check_and_merge_model_level_guardrails(data=dict(data), llm_router=llm_router)
+    )
     _ = _STREAM_MODEL_LEVEL_GUARDRAIL_DATA.set((data, merged))
     return merged
 
