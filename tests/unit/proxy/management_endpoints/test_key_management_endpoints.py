@@ -21279,15 +21279,16 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker_before_
     """/key/delete must broadcast the eviction like every other key mutation: a peer worker that
     still holds the key object in memory has to answer 401 on its next request instead of serving
     the deleted key until the in-memory TTL expires."""
-    raw_key = "sk-" + uuid.uuid4().hex
-    hashed_token = hash_token(raw_key)
-    deleting_worker_cache = UserApiKeyCache()
-    peer_worker_cache = UserApiKeyCache()
+    raw_key: Final = "sk-" + uuid.uuid4().hex
+    hashed_token: Final = hash_token(raw_key)
+    deleting_worker_cache: Final = UserApiKeyCache()
+    peer_worker_cache: Final = UserApiKeyCache()
     for cache in (deleting_worker_cache, peer_worker_cache):
         cache.set_cache(hashed_token, UserAPIKeyAuth(token=hashed_token, user_id="user-123"), model_type=UserAPIKeyAuth)
-    coordination_redis = _PeerWorkerCoordinationRedis(peer_worker_cache=peer_worker_cache)
+    coordination_redis: Final = _PeerWorkerCoordinationRedis(peer_worker_cache=peer_worker_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
 
-    key_row = LiteLLM_VerificationToken(
+    key_row: Final = LiteLLM_VerificationToken(
         token=hashed_token,
         user_id="user-123",
         team_id=None,
@@ -21304,7 +21305,7 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker_before_
         soft_budget_cooldown=False,
         allowed_routes=[],
     )
-    mock_prisma_client = AsyncMock()
+    mock_prisma_client: Final = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key_row])
     mock_prisma_client.db.litellm_jwtkeymapping = _CascadingJWTMappingTable([])
     mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
@@ -21312,23 +21313,19 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker_before_
     mock_prisma_client.get_data = AsyncMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=coordination_redis,
-    ):
-        await delete_verification_tokens(
-            tokens=[raw_key],
-            user_api_key_cache=deleting_worker_cache,
-            user_api_key_dict=UserAPIKeyAuth(
-                user_id="admin-user",
-                api_key="sk-admin",
-                user_role=LitellmUserRoles.PROXY_ADMIN.value,
-            ),
-        )
-        for _ in range(200):
-            if peer_worker_cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is None:
-                break
-            await asyncio.sleep(0.01)
+    await delete_verification_tokens(
+        tokens=[raw_key],
+        user_api_key_cache=deleting_worker_cache,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+    )
+    for _ in range(200):
+        if peer_worker_cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is None:
+            break
+        await asyncio.sleep(0.01)
 
     with pytest.raises(ProxyException) as denied:
         await get_key_object(
