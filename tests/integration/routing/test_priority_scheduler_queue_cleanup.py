@@ -489,16 +489,42 @@ def test_other_prioritized_endpoints_are_served_once_and_billed(
     spend_row_lands(identity)
 
 
-@pytest.mark.parametrize("priority", ("1", [1], "", "p" * 5120, 0), ids=("string", "list", "empty", "5kb", "zero"))
-def test_non_integer_priority_bypasses_the_scheduler_and_is_forwarded(
+def upstream_body_for(wire: Wire, marker: str) -> dict[str, JsonValue]:
+    (upstream_request,) = tuple(request for request in wire.drain() if marker.encode() in request.body)
+    return JSON_OBJECT.validate_json(upstream_request.body)
+
+
+@pytest.mark.parametrize("priority", ("1", [1], "", "p" * 5120, True), ids=("string", "list", "empty", "5kb", "bool"))
+def test_non_integer_priority_is_refused_before_the_upstream(
     gateway: Gateway, rig_model: tuple[str, Wire], priority: JsonValue
 ) -> None:
     model, wire = rig_model
     marker: Final = new_marker()
     answer: Final = post(gateway, "/v1/chat/completions", chat_body(model, marker, priority=priority))
+    assert answer.status == 400, (answer.status, answer.text)
+    error: Final = JSON_OBJECT.validate_json(answer.text)["error"]
+    assert isinstance(error, dict), answer.text
+    assert error["param"] == "priority", answer.text
+    assert "priority must be an integer" in str(error["message"]), answer.text
+    assert_never(received_markers(wire), (marker,))
+
+
+def test_non_integer_priority_is_dropped_under_drop_params(gateway: Gateway, rig_model: tuple[str, Wire]) -> None:
+    model, wire = rig_model
+    marker: Final = new_marker()
+    answer: Final = post(gateway, "/v1/chat/completions", chat_body(model, marker, priority="1", drop_params=True))
     assert_served(answer, marker)
-    (upstream_request,) = tuple(request for request in wire.drain() if marker.encode() in request.body)
-    assert JSON_OBJECT.validate_json(upstream_request.body).get("priority") == priority
+    assert answer.headers.get("x-litellm-request-prioritization-used") is None, answer.headers
+    assert "priority" not in upstream_body_for(wire, marker)
+
+
+def test_zero_priority_is_scheduled_and_not_forwarded(gateway: Gateway, rig_model: tuple[str, Wire]) -> None:
+    model, wire = rig_model
+    marker: Final = new_marker()
+    answer: Final = post(gateway, "/v1/chat/completions", chat_body(model, marker, priority=0))
+    assert_served(answer, marker)
+    assert answer.headers.get("x-litellm-request-prioritization-used") == "True", answer.headers
+    assert "priority" not in upstream_body_for(wire, marker)
 
 
 def test_unauthenticated_prioritized_request_never_reaches_the_upstream(
