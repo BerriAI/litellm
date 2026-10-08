@@ -47,7 +47,6 @@ USAGE: Final[dict[str, JsonValue]] = {"prompt_tokens": 5, "completion_tokens": 3
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 OWNED_CELL_TIMEOUT: Final = 2 * graceful_stop_seconds() + 120
 PAIR_CELL_TIMEOUT: Final = 3 * graceful_stop_seconds() + 120
-WORKER_HEALTHCHECK_ARGUMENTS: Final = ("--timeout_worker_healthcheck", str(int(graceful_stop_seconds())))
 PINNED_CONNECTION_TIMEOUT_SECONDS: Final = 30
 PINNED_LIMITS: Final = httpx.Limits(max_connections=1, max_keepalive_connections=1, keepalive_expiry=30)
 ENDPOINTS: Final[tuple[Endpoint, ...]] = (
@@ -593,11 +592,7 @@ def test_in_memory_queue_forgets_served_requests_before_a_cooldown(gateway: Gate
     with ExitStack() as stack:
         wire: Final = stack.enter_context(wire_server(answering_model_discovery(upstream.respond)))
         config: Final = owned_config(tmp_path, wire, (INMEM_GROUP,), cooldown_settings(None))
-        owned: Final = stack.enter_context(
-            owned_proxy_process(
-                gateway, tmp_path, {}, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
-            )
-        )
+        owned: Final = stack.enter_context(owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2))
         worker: Final = pinned(owned.gateway, stack)
         served: Final = new_marker()
         assert_served(post(worker, "/v1/chat/completions", chat_body(INMEM_GROUP, served, priority=1)), served)
@@ -632,15 +627,9 @@ def pair(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pair]:
         wire: Final = stack.enter_context(wire_server(answering_model_discovery(upstream.respond)))
         config: Final = owned_config(directory, wire, PAIR_GROUPS, cooldown_settings(cache), cancel_on_disconnect=True)
         overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
-        first: Final = stack.enter_context(
-            owned_proxy_process(
-                gateway, directory, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
-            )
-        )
+        first: Final = stack.enter_context(owned_proxy_process(gateway, directory, overrides, config=config, workers=2))
         second: Final = stack.enter_context(
-            owned_proxy_process(
-                gateway, directory, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
-            )
+            owned_proxy_process(gateway, directory, overrides, config=config, workers=2)
         )
         yield Pair(first.gateway, second.gateway, cache, wire, upstream)
 
@@ -858,9 +847,7 @@ def test_prioritized_requests_survive_a_redis_outage(gateway: Gateway, tmp_path:
             "REDIS_PORT": str(cache.port),
             "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "1",
         }
-        with owned_proxy_process(
-            gateway, tmp_path, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
-        ) as owned:
+        with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
             before: Final = assert_all_served(burst(owned.gateway, OUTAGE_GROUP, 12, priority))
             cache.stop()
             during: Final = assert_all_served(burst(owned.gateway, OUTAGE_GROUP, 12, priority))
@@ -888,9 +875,7 @@ def test_sibling_worker_keeps_serving_prioritized_requests_after_a_worker_is_kil
     with owned_redis(tmp_path) as cache, wire_server(answering_model_discovery(upstream.respond)) as wire:
         config: Final = owned_config(tmp_path, wire, (KILL_GROUP,), {**redis_settings(cache), **default_for(priority)})
         overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
-        with owned_proxy_process(
-            gateway, tmp_path, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
-        ) as owned:
+        with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
             workers: Final = eventually(
                 lambda: tuple(int(found.group(1)) for found in STARTED_WORKER.finditer(owned.log.read_text())),
                 lambda pids: len(pids) == 2,
@@ -986,15 +971,9 @@ def defaulted(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Defaulted]:
             litellm_settings={"global_prompt_directory": str(prompt_directory(directory))},
         )
         overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
-        first: Final = stack.enter_context(
-            owned_proxy_process(
-                gateway, directory, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
-            )
-        )
+        first: Final = stack.enter_context(owned_proxy_process(gateway, directory, overrides, config=config, workers=2))
         second: Final = stack.enter_context(
-            owned_proxy_process(
-                gateway, directory, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
-            )
+            owned_proxy_process(gateway, directory, overrides, config=config, workers=2)
         )
         yield Defaulted(Pair(first.gateway, second.gateway, cache, wire, upstream), team_key)
 
@@ -1194,9 +1173,7 @@ def test_zero_default_priority_queues_requests_without_one_and_dropped_ones(gate
         }
         config: Final = owned_config(tmp_path, wire, ZERO_GROUPS, settings)
         overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
-        with owned_proxy_process(
-            gateway, tmp_path, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
-        ) as owned:
+        with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
             plain, dropped = ZERO_GROUPS
             assert_waits_at(owned.gateway, cache, upstream, plain, 0, chat_body(plain, new_marker()))
             assert_waits_at(owned.gateway, cache, upstream, dropped, 0, chat_body(dropped, new_marker(), priority="1"))
@@ -1211,9 +1188,7 @@ def test_digit_string_default_priority_queues_requests_without_one_and_dropped_o
         settings: Final[dict[str, JsonValue]] = {**cooldown_settings(cache), "default_priority": "2"}
         config: Final = owned_config(tmp_path, wire, DIGIT_GROUPS, settings, litellm_settings={"drop_params": True})
         overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
-        with owned_proxy_process(
-            gateway, tmp_path, overrides, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
-        ) as owned:
+        with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
             plain, dropped = DIGIT_GROUPS
             assert_waits_at(owned.gateway, cache, upstream, plain, 2, chat_body(plain, new_marker()))
             assert_waits_at(owned.gateway, cache, upstream, dropped, 2, chat_body(dropped, new_marker(), priority="1"))
@@ -1229,9 +1204,7 @@ def test_an_invalid_default_priority_is_ignored_with_a_warning(
         config: Final = owned_config(
             tmp_path, wire, (IGNORED_GROUP,), {"num_retries": 0, "default_priority": configured}
         )
-        with owned_proxy_process(
-            gateway, tmp_path, {}, config=config, workers=2, extra_arguments=WORKER_HEALTHCHECK_ARGUMENTS
-        ) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
             marker: Final = new_marker()
             answer: Final = post(owned.gateway, "/v1/chat/completions", chat_body(IGNORED_GROUP, marker))
             assert_served(answer, marker)
