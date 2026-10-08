@@ -8911,7 +8911,7 @@ GEMINI_TTS_PREBUILT_VOICES: Final[frozenset[str]] = frozenset(
     }
 )
 OPENAI_TTS_VOICES: Final[tuple[str, ...]] = (
-    "alloy", "ash", "ballad", "cedar", "coral", "echo", "fable", "marin", "nova", "onyx", "sage", "shimmer", "verse",
+    "alloy", "ash", "ballad", "cedar", "coral", "echo", "fable", "marin", "onyx", "sage", "shimmer", "verse",
 )
 
 
@@ -8931,7 +8931,8 @@ def test_map_audio_params_maps_the_health_check_default_voice_to_kore() -> None:
     assert _mapped_voice_name({"voice": "alloy", "format": "pcm16"}) == "Kore"
 
 
-@pytest.mark.parametrize("gemini_voice", ("Kore", "Puck", "Sulafat", "custom-voice"))
+# nova is accepted by Gemini 3.x TTS models as given (live check 2026-10-08), so it must not be remapped
+@pytest.mark.parametrize("gemini_voice", ("Kore", "Puck", "Sulafat", "nova", "custom-voice"))
 def test_map_audio_params_passes_non_openai_voice_names_through(gemini_voice: str) -> None:
     assert _mapped_voice_name({"voice": gemini_voice, "format": "pcm16"}) == gemini_voice
 

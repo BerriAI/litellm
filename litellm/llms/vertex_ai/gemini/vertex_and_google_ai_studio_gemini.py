@@ -116,7 +116,8 @@ else:
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
 
-# Gemini prebuilt voices per https://ai.google.dev/gemini-api/docs/speech-generation (2026-10-01), by nearest character
+# Gemini prebuilt voices per https://ai.google.dev/gemini-api/docs/speech-generation (2026-10-01), by nearest character;
+# nova is left out since Gemini 3.x TTS models accept it as given (live check 2026-10-08)
 OPENAI_TO_GEMINI_TTS_VOICES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "alloy": "Kore",
@@ -127,7 +128,6 @@ OPENAI_TO_GEMINI_TTS_VOICES: Final[Mapping[str, str]] = MappingProxyType(
         "echo": "Charon",
         "fable": "Umbriel",
         "marin": "Despina",
-        "nova": "Zephyr",
         "onyx": "Orus",
         "sage": "Vindemiatrix",
         "shimmer": "Achernar",
