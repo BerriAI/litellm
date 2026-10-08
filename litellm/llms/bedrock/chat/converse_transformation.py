@@ -408,6 +408,16 @@ class AmazonConverseConfig(BaseConfig):
     def _requires_min_max_tokens(model: str) -> bool:
         return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
 
+    def _is_zai_glm_model(self, model: str) -> bool:
+        """Whether the model is a Z.AI GLM model served on Bedrock.
+
+        Bedrock GLM takes ``reasoning_effort`` verbatim under
+        ``additionalModelRequestFields`` (levels: none, low, medium, high,
+        xhigh, max) and ignores the Anthropic ``thinking`` block. Verified
+        against ``global.zai.glm-5.3``; see issue #34105.
+        """
+        return "zai.glm" in model
+
     def _is_nova_2_model(self, model: str) -> bool:
         """
         Check if the model is a Nova 2 model that supports reasoningConfig.
@@ -537,13 +547,14 @@ class AmazonConverseConfig(BaseConfig):
         """
         Handle the reasoning_effort parameter based on the model type.
 
-        - GPT-OSS and DeepSeek V3 models: passed through unchanged via additionalModelRequestFields.
+        - GPT-OSS, DeepSeek V3 and Z.AI GLM models: passed through unchanged via
+          additionalModelRequestFields.
         - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
-        if "gpt-oss" in model or "deepseek" in model:
+        if "gpt-oss" in model or "deepseek" in model or self._is_zai_glm_model(model):
             optional_params["reasoning_effort"] = reasoning_effort
         elif self._is_openai_gpt_reasoning_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
@@ -738,6 +749,9 @@ class AmazonConverseConfig(BaseConfig):
         elif self._is_nova_2_model(model):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
             # These models use a different reasoning structure than Anthropic's thinking parameter
+            supported_params.append("reasoning_effort")
+        elif self._is_zai_glm_model(model):
+            # Bedrock GLM takes reasoning_effort verbatim in additionalModelRequestFields
             supported_params.append("reasoning_effort")
         elif self._model_accepts_anthropic_thinking_param(model=model, base_model=base_model):
             supported_params.append("thinking")
