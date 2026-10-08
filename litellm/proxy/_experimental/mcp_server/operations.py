@@ -1888,7 +1888,7 @@ async def execute_mcp_tool(
 def resolve_requested_server(
     *,
     requested_server_id: str | None,
-    allowed_mcp_servers: list[MCPServer],
+    allowed_mcp_servers: Sequence[MCPServer],
     scoped_server_name: str | None = None,
 ) -> MCPServer | None:
     """Resolve the server a tool call is scoped to, from server-side state only.
