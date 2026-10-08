@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
+from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,7 +22,7 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
 )
 from litellm.proxy.litellm_pre_call_utils import (
-    _get_dynamic_logging_metadata,
+    get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
 from pydantic import ValidationError
@@ -294,7 +294,7 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -332,7 +332,7 @@ def test_dynamic_logging_metadata_ignores_env_references_from_key_metadata(
         team_metadata={},
     )
 
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -410,7 +410,7 @@ def test_dynamic_turn_off_message_logging(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -774,7 +774,7 @@ def test_get_redoc_url(env_vars, expected_url):
     for key, value in env_vars.items():
         os.environ[key] = value
 
-    result = _get_redoc_url()
+    result = get_redoc_url()
     assert result == expected_url
 
 
@@ -799,7 +799,7 @@ def test_get_docs_url(env_vars, expected_url):
     for key, value in env_vars.items():
         os.environ[key] = value
 
-    result = _get_docs_url()
+    result = get_docs_url()
     assert result == expected_url
 
 
@@ -824,7 +824,7 @@ def test_get_openapi_url(env_vars, expected_url):
     for key, value in env_vars.items():
         os.environ[key] = value
 
-    result = _get_openapi_url()
+    result = get_openapi_url()
     assert result == expected_url
 
 
@@ -1569,7 +1569,7 @@ def test_is_allowed_to_make_key_request():
 
 def test_get_model_group_info():
     from litellm import Router
-    from litellm.proxy.proxy_server import _get_model_group_info
+    from litellm.proxy.proxy_server import get_model_group_info
 
     router = Router(
         model_list=[
@@ -1589,7 +1589,7 @@ def test_get_model_group_info():
             },
         ]
     )
-    model_list = _get_model_group_info(
+    model_list = get_model_group_info(
         llm_router=router,
         all_models_str=["openai/tts-1", "openai/gpt-3.5-turbo"],
         model_group="openai/tts-1",

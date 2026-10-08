@@ -417,6 +417,7 @@ model LiteLLM_MCPServerTable {
   source_url            String?
   timeout               Float?
   max_concurrent_requests Int?
+  rpm                   Int?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
@@ -1969,6 +1970,11 @@ model LiteLLM_LensWorker {
   id         String @id
   token_hash String @unique
   data       Json
+}
+
+model LiteLLM_LensIngestionKey {
+  id   String @id
+  data Json
 }
 
 model LiteLLM_LensDataset {

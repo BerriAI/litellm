@@ -18,14 +18,14 @@ from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import active_request_redis_batches, request_redis_batch_scope
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
-from litellm.proxy.auth.auth_checks import _cache_team_object
+from litellm.proxy.auth.auth_checks import cache_team_object
 from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back, prefetch_identity_keys
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     CHECK_AND_INCREMENT_BY_N_SCRIPT,
     RateLimitDescriptor,
     RateLimitUnverifiableError,
-    _PROXY_MaxParallelRequestsHandler_v3,
+    PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
@@ -46,9 +46,9 @@ def sha_of(script: str) -> str:
     return hashlib.sha1(script.encode()).hexdigest()  # noqa: S324
 
 
-def _limiter(redis_cache: FakeRedisCache, fail_closed: bool = False) -> _PROXY_MaxParallelRequestsHandler_v3:
+def _limiter(redis_cache: FakeRedisCache, fail_closed: bool = False) -> PROXY_MaxParallelRequestsHandler_v3:
     dual_cache = DualCache()
-    limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(dual_cache=dual_cache),
         fail_closed_resolver=lambda: fail_closed,
     )
@@ -64,7 +64,7 @@ def _descriptor(key: str, value: str, rpm: int) -> RateLimitDescriptor:
     return {"key": key, "value": value, "rate_limit": {"requests_per_unit": rpm}}
 
 
-def _refunds(limiter: _PROXY_MaxParallelRequestsHandler_v3) -> list[tuple[str, float]]:
+def _refunds(limiter: PROXY_MaxParallelRequestsHandler_v3) -> list[tuple[str, float]]:
     refund_script = limiter.window_guarded_token_increment_script
     assert isinstance(refund_script, AsyncMock)
     return [(call.kwargs["keys"][1], call.kwargs["args"][1]) for call in refund_script.await_args_list]
@@ -1029,7 +1029,7 @@ async def test_a_team_refresh_inside_a_request_sends_its_set_and_alias_del_in_on
     proxy_logging_obj.internal_usage_cache = InternalUsageCache(dual_cache=usage_cache)
     team = LiteLLM_TeamTableCachedObj(team_id="t1", team_alias="alpha")
     with request_redis_batch_scope() as request:
-        await _cache_team_object("t1", team, cache, proxy_logging_obj)
+        await cache_team_object("t1", team, cache, proxy_logging_obj)
         assert [c[:2] for c in client.pipelines[0].commands] == [("SET", "team_id:t1"), ("DEL", "team_alias:alpha")], (
             "the alias DEL must reach Redis before the refresh returns, or another request can refill memory from it"
         )

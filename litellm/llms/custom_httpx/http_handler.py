@@ -450,6 +450,18 @@ def get_shared_realtime_ssl_context() -> bool | str | ssl.SSLContext:
     return _shared_realtime_ssl_context
 
 
+def realtime_ssl_for_url(url: str) -> bool | str | ssl.SSLContext | None:
+    if url.startswith("ws://"):
+        return None
+    shared: Final = get_shared_realtime_ssl_context()
+    if shared is not False:
+        return shared
+    unverified: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    unverified.check_hostname = False
+    unverified.verify_mode = ssl.CERT_NONE
+    return unverified
+
+
 def mask_sensitive_info(error_message):
     # Find the start of the key parameter
     if isinstance(error_message, str):

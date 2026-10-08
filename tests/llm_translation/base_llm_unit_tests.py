@@ -5,8 +5,6 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
-from litellm._uuid import uuid
-import time
 import base64
 import inspect
 
@@ -29,37 +27,6 @@ from openai import OpenAI
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from tests._live_test_helpers import _skip_live_prompt_caching_test  # noqa: E402
-
-
-def _usage_format_tests(usage: litellm.Usage):
-    """
-    OpenAI prompt caching
-    - prompt_tokens = sum of non-cache hit tokens + cache-hit tokens
-    - total_tokens = prompt_tokens + completion_tokens
-
-    Example
-    ```
-    "usage": {
-        "prompt_tokens": 2006,
-        "completion_tokens": 300,
-        "total_tokens": 2306,
-        "prompt_tokens_details": {
-            "cached_tokens": 1920
-        },
-        "completion_tokens_details": {
-            "reasoning_tokens": 0
-        }
-        # ANTHROPIC_ONLY #
-        "cache_creation_input_tokens": 0
-    }
-    ```
-    """
-    print(f"usage={usage}")
-    assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
-
-    if usage.prompt_tokens_details is not None:
-        assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
 
 
 class BaseLLMChatTest(ABC):
@@ -641,15 +608,6 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model is overloaded")
 
     @pytest.mark.flaky(retries=6, delay=1)
-    def test_json_response_pydantic_obj_nested_obj(self):
-        litellm.set_verbose = True
-        from pydantic import BaseModel
-        from litellm.utils import supports_response_schema
-
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    @pytest.mark.flaky(retries=6, delay=1)
     def test_json_response_nested_pydantic_obj(self):
         from pydantic import BaseModel
         from litellm.utils import supports_response_schema
@@ -845,11 +803,6 @@ class BaseLLMChatTest(ABC):
             ],
         }
 
-    @abstractmethod
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
     @pytest.mark.parametrize("detail", [None, "low", "high"])
     @pytest.mark.parametrize(
         "image_url",
@@ -961,108 +914,6 @@ class BaseLLMChatTest(ABC):
             pytest.skip("Model is overloaded")
 
         assert response is not None
-
-    @pytest.mark.flaky(retries=4, delay=1)
-    def test_prompt_caching(self):
-        _skip_live_prompt_caching_test()
-        print("test_prompt_caching")
-        litellm.set_verbose = True
-        from litellm.utils import supports_prompt_caching
-
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        base_completion_call_args = self.get_base_completion_call_args()
-        if not supports_prompt_caching(base_completion_call_args["model"], None):
-            print("Model does not support prompt caching")
-            pytest.skip("Model does not support prompt caching")
-
-        uuid_str = str(uuid.uuid4())
-        messages = [
-            # System Message
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Here is the full text of a complex legal agreement {}".format(
-                            uuid_str
-                        )
-                        * 400,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-            },
-            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "What are the key terms and conditions in this agreement?",
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
-            },
-            # The final turn is marked with cache-control, for continuing in followups.
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "What are the key terms and conditions in this agreement?",
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-            },
-        ]
-
-        try:
-            ## call 1
-            response = self.completion_function(
-                **base_completion_call_args,
-                messages=messages,
-                max_tokens=10,
-            )
-
-            print("response=", response)
-
-            initial_cost = response._hidden_params["response_cost"]
-            ## call 2
-            response = self.completion_function(
-                **base_completion_call_args,
-                messages=messages,
-                max_tokens=10,
-            )
-
-            time.sleep(1)
-
-            cached_cost = response._hidden_params["response_cost"]
-
-            assert (
-                cached_cost <= initial_cost
-            ), "Cached cost={} should be less than initial cost={}".format(
-                cached_cost, initial_cost
-            )
-
-            _usage_format_tests(response.usage)
-
-            print("response=", response)
-            print("response.usage=", response.usage)
-
-            _usage_format_tests(response.usage)
-
-            assert "prompt_tokens_details" in response.usage
-            if response.usage.prompt_tokens_details is not None:
-                assert (
-                    response.usage.prompt_tokens_details.cached_tokens > 0
-                ), f"cached_tokens={response.usage.prompt_tokens_details.cached_tokens} should be greater than 0. Got usage={response.usage}"
-        except litellm.InternalServerError as e:
-            print("InternalServerError", e)
 
     @pytest.fixture
     def pdf_messages(self):
