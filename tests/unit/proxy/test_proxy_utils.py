@@ -3406,3 +3406,22 @@ async def test_record_served_stream_output_lets_the_event_loop_run_while_assembl
 
     assert logging_obj.model_call_details[SERVED_OUTPUT_TEXTS_KEY] == ("final answer",)
     assert turns_during > 0
+
+
+class _RedisDown:
+    async def async_delete_cache(self, key: str) -> None:
+        raise ConnectionError("redis is down")
+
+
+async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_outage() -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import _config_cache_key, evict_config_param
+
+    cache: Final = DualCache(redis_cache=_RedisDown())
+    await cache.in_memory_cache.async_set_cache(
+        _config_cache_key("router_settings"), {"param_name": "router_settings", "param_value": {"fallbacks": []}}
+    )
+
+    await evict_config_param("router_settings", cache=cache)
+
+    assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None

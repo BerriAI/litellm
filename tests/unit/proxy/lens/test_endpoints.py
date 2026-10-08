@@ -1,5 +1,6 @@
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -49,7 +50,7 @@ from litellm.proxy.lens.models import (
     TraceIdentity,
     Worker,
 )
-from litellm.proxy.lens.repository import DueLens, Row
+from litellm.proxy.lens.repository import Database, DueLens, Row
 from litellm.proxy.lens.signals import SignalConfig, StoredTraceSignal
 from litellm.proxy.lens.state import claim_job, queue_job, replace_job
 from litellm.rust_bridge.trace.generated.models import ExecutionRow, LensSampleParams
@@ -68,6 +69,10 @@ class ResultDatabase:
     def __init__(self, stored: Lens) -> None:
         self.stored = stored
         self.completed: tuple[ReviewVersion, ...] = ()
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncGenerator[Database]:
+        yield self
 
     async def query_raw(self, query: str, *args: object) -> tuple[Row, ...]:
         if query.startswith("SELECT data FROM"):

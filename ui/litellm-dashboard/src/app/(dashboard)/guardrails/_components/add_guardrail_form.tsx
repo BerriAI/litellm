@@ -23,11 +23,14 @@ import {
   shouldRenderContentFilterConfigSettings,
   shouldRenderLLMJudgeFields,
   shouldRenderPIIConfigSettings,
-  supportsDirectionalLoggingOnlyScope,
+  streamScopePayload,
   toModeArray,
+  type GuardrailStreamScope,
+  supportsDirectionalLoggingOnlyScope,
   type LoggingOnlyScope,
   type LoggingOnlyScopeChoice,
 } from "./guardrail_info_helpers";
+import { StreamScopeFormField } from "./StreamScopeFields";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { FieldGroup } from "@/components/ui/field";
@@ -172,6 +175,7 @@ const INITIAL_VALUES: GuardrailFormValues = {
   logging_only_scope_choice: "default",
   skip_system_message_choice: "inherit",
   skip_tool_message_choice: "inherit",
+  stream_scope_by_mode: {},
 };
 
 const ALWAYS_ON_ITEMS = [
@@ -465,6 +469,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         },
         guardrail_info: {},
       };
+
+      const streamScope = streamScopePayload(
+        toModeArray(values.mode),
+        (values.stream_scope_by_mode as Record<string, GuardrailStreamScope> | undefined) ?? {},
+      );
+      if (streamScope !== undefined) {
+        guardrailData.litellm_params.stream_scope = streamScope;
+      }
 
       const skipForCreate = choiceToSkipSystemForCreate(asSkipChoice(values.skip_system_message_choice));
       if (skipForCreate !== undefined) {
@@ -772,6 +784,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             />
           )}
         </GuardrailField>
+
+        <StreamScopeFormField control={form.control} modes={toModeArray(form.watch("mode"))} />
 
         <GuardrailField
           control={form.control}

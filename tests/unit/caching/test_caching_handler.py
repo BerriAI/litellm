@@ -41,6 +41,7 @@ from litellm.types.utils import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 from collections.abc import Awaitable, Callable
 from datetime import timedelta, datetime
+from typing import Final
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm._logging import verbose_logger
@@ -2714,3 +2715,88 @@ async def test_async_get_cache_forgets_the_worker_copy_of_a_stored_response_with
 
     assert lookup.cached_result is None
     assert await handler.dual_cache.async_get_cache(key) is None
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_partial_hit_keeps_file_block_items_uncached() -> None:
+    setup_cache()
+    fixed_start: Final = datetime(2026, 1, 1)
+    caching_handler: Final = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=fixed_start)
+    model: Final = "gemini/gemini-embedding-2-preview"
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id=str(uuid.uuid4()),
+        call_type=CallTypes.aembedding.value,
+        model=model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=fixed_start,
+    )
+    await caching_handler.async_set_cache(
+        result=EmbeddingResponse(model=model, data=[Embedding(embedding=[0.1, 0.2], index=0, object="embedding")]),
+        original_function=aembedding,
+        kwargs={"model": model, "input": ["a red bus"], "caching": True},
+    )
+    clip_block: Final = {
+        "type": "file",
+        "file": {
+            "file_data": "data:video/mp4;base64,AAAA",
+            "format": "video/mp4",
+            "video_metadata": {"fps": 1, "start_offset": "0s", "end_offset": "1s"},
+        },
+        "detail": "left for the provider transformation to judge",
+    }
+
+    cached_response: Final = await caching_handler.async_get_cache(
+        model=model,
+        original_function=aembedding,
+        logging_obj=logging_obj,
+        start_time=fixed_start,
+        call_type=CallTypes.aembedding.value,
+        kwargs={"model": model, "input": [clip_block, "a red bus"], "caching": True},
+    )
+
+    assert cached_response.embedding_all_elements_cache_hit is False
+    assert cached_response.embedding_uncached_input == [clip_block]
+    assert cached_response.final_embedding_cached_response is not None
+    assert cached_response.final_embedding_cached_response.data[1].embedding == [0.1, 0.2]
+    assert cached_response.final_embedding_cached_response.data[0] is None
+
+
+def test_handle_kwargs_input_answers_400_for_a_single_object_input() -> None:
+    caching_handler: Final = LLMCachingHandler(
+        original_function=aembedding, request_kwargs={}, start_time=datetime(2026, 1, 1)
+    )
+    clip_block: Final = {"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAA"}}
+    with pytest.raises(litellm.BadRequestError, match="string or a list"):
+        caching_handler.handle_kwargs_input_list_or_str(
+            {"model": "gemini/gemini-embedding-2-preview", "custom_llm_provider": "gemini", "input": clip_block}
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_answers_400_for_a_single_object_embedding_input() -> None:
+    setup_cache()
+    fixed_start: Final = datetime(2026, 1, 1)
+    caching_handler: Final = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=fixed_start)
+    model: Final = "gemini/gemini-embedding-2-preview"
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id=str(uuid.uuid4()),
+        call_type=CallTypes.aembedding.value,
+        model=model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=fixed_start,
+    )
+    clip_block: Final = {"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAA"}}
+
+    with pytest.raises(litellm.BadRequestError, match="string or a list"):
+        await caching_handler.async_get_cache(
+            model=model,
+            original_function=aembedding,
+            logging_obj=logging_obj,
+            start_time=fixed_start,
+            call_type=CallTypes.aembedding.value,
+            kwargs={"model": model, "custom_llm_provider": "gemini", "input": clip_block, "caching": True},
+        )

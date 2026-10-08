@@ -16,6 +16,7 @@ from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName,
 
 MAX_RESPONSE_BYTES: Final = 64 * 1024 * 1024
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_INSERT_PATHS: Final[Mapping[str, str]] = {"spend_logs": "/internal/spend", "lens_feedback": "/internal/feedback"}
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -125,9 +126,10 @@ class RemoteTraceStore:
             return _ReadFailure.INVALID_RESPONSE
 
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
-        if table != "spend_logs":
-            raise ValueError("Lens only accepts gateway request records on this endpoint")
-        response: Final = await self.client.post("/internal/spend", json=tuple(dict(row) for row in rows))
+        path: Final = _INSERT_PATHS.get(table)
+        if path is None:
+            raise ValueError("Lens only accepts gateway request records and feedback on this endpoint")
+        response: Final = await self.client.post(path, json=tuple(dict(row) for row in rows))
         response.raise_for_status()
 
     async def ingest(
