@@ -436,6 +436,8 @@ async def test_service_client_is_replaced_at_the_exact_ttl_boundary(mock_env_var
         ("resp_YWJjZGU=", "resp_YWJjZGU.json"),
         ("resp_+/8=", "resp_+_8.json"),
         ("resp_a+b", "resp_a+b.json"),
+        ("resp_v3:gcm:a-b_c==", "resp_v3_gcm_a-b_c.json"),
+        ("resp_v2:gcm:a-b_c=", "resp_v2_gcm_a-b_c.json"),
         ("chatcmpl-abc123", "chatcmpl-abc123.json"),
     ),
 )
