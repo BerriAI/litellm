@@ -36,8 +36,8 @@ from e2e_config import (
     PROMPT_CACHING_OPT_IN_ENV,
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
-    REDIS_CHAOS_OPT_IN_ENV,
     RDS_IAM_OPT_IN_ENV,
+    REDIS_CHAOS_OPT_IN_ENV,
     SECRET_MANAGER_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
     unique_marker,
@@ -222,9 +222,14 @@ def _needs_unset_opt_in(item: pytest.Item) -> bool:
 
 
 def _reaches_proxy(item: pytest.Item) -> bool:
-    """True for a live test that talks to the shared proxy: `e2e`-marked and not a
-    `migration_startup` test, which boots its own container instead."""
-    return item.get_closest_marker("e2e") is not None and item.get_closest_marker("migration_startup") is None
+    """True for a live test that talks to the shared proxy: `e2e`-marked and neither
+    a `migration_startup` test, which boots its own container, nor an `rds_iam`
+    test, which boots its own proxy."""
+    return (
+        item.get_closest_marker("e2e") is not None
+        and item.get_closest_marker("migration_startup") is None
+        and item.get_closest_marker("rds_iam") is None
+    )
 
 
 def _uses_idle_rss(item: pytest.Item) -> bool:

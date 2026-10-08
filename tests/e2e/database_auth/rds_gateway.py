@@ -19,6 +19,7 @@ import psycopg
 from e2e_config import INHERITED_ENV_PREFIXES, MASTER_KEY, available_port
 from e2e_http import NoBody
 from idp import stop_process_group
+from models import LiteLLMParamsBody
 from proxy_client import ProxyClient, build_proxy_client
 from psycopg.rows import class_row
 from pydantic import BaseModel
@@ -140,10 +141,7 @@ def owned_rds_gateway(directory: Path, cleanup: ExitStack, overrides: Mapping[st
 
     config: Final = directory / "rds-gateway.yaml"
     config.write_text(
-        "model_list:\n"
-        f"  - model_name: {NOVA_MICRO_MODEL}\n"
-        "    litellm_params:\n"
-        "      model: bedrock/us.amazon.nova-micro-v1:0\n"
+        "model_list: []\n"
         "general_settings:\n"
         "  master_key: os.environ/LITELLM_MASTER_KEY\n"
     )
@@ -173,6 +171,7 @@ def owned_rds_gateway(directory: Path, cleanup: ExitStack, overrides: Mapping[st
         "LITELLM_MASTER_KEY": MASTER_KEY,
         "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true",
         "DISABLE_SCHEMA_UPDATE": "true",
+        "STORE_MODEL_IN_DB": "True",
         "PYTHONPATH": str(Path(__file__).resolve().parents[3]),
         **overrides,
     }
@@ -193,4 +192,8 @@ def owned_rds_gateway(directory: Path, cleanup: ExitStack, overrides: Mapping[st
     )
     cleanup.callback(gateway.stop)
     gateway.start()
+    model_id: Final = gateway.proxy.create_model(
+        NOVA_MICRO_MODEL, LiteLLMParamsBody(model="bedrock/us.amazon.nova-micro-v1:0")
+    )
+    cleanup.callback(lambda: gateway.proxy.delete_model(model_id))
     return gateway

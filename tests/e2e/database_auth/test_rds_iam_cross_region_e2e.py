@@ -21,7 +21,7 @@ from rds_gateway import (
     replica_now,
 )
 
-pytestmark = [pytest.mark.rds_iam, pytest.mark.timeout(600)]
+pytestmark = [pytest.mark.e2e, pytest.mark.rds_iam, pytest.mark.timeout(600)]
 
 
 def _chat_once(gateway: RdsGateway, key: str) -> ChatResponse:
