@@ -12,6 +12,7 @@ aquery carries the completion response with real usage and cost.
 
 import asyncio
 import json
+from concurrent.futures import Future
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
@@ -22,8 +23,10 @@ import respx
 from pydantic import ValidationError
 
 import litellm
+import litellm.utils as litellm_utils
 from litellm._internal_context import is_internal_call
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import CallTypes, ModelResponse
 
@@ -46,9 +49,13 @@ class RecordingLogger(CustomLogger):
     def __init__(self):
         super().__init__()
         self.success_events = []
+        self.sync_success_events = []
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.success_events.append({"kwargs": kwargs, "response_obj": response_obj})
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.sync_success_events.append({"kwargs": kwargs, "response_obj": response_obj})
 
 
 @pytest.mark.asyncio
@@ -105,6 +112,63 @@ async def test_aquery_single_billing_event_carries_completion_usage_and_cost(use
     assert standard_logging_object["prompt_tokens"] > 0
     assert standard_logging_object["completion_tokens"] > 0
     assert standard_logging_object["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_router", [False, True])
+async def test_aquery_vector_store_search_sub_call_logs_no_sync_success_event_on_the_parent(use_router, monkeypatch):
+    await _drain_logging_worker()
+    recording_logger = RecordingLogger()
+
+    class InlineExecutor:
+        def submit(self, fn, *args, **kwargs):
+            future = Future()
+            future.set_result(fn(*args, **kwargs))
+            return future
+
+    monkeypatch.setattr(litellm_utils, "executor", InlineExecutor())
+    monkeypatch.setattr(litellm_logging, "executor", InlineExecutor())
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+
+    router_kwargs = {}
+    if use_router:
+        router_kwargs["router"] = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                }
+            ]
+        )
+
+    response = await litellm.aquery(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What is the secret project codename?"}],
+        retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
+        mock_response="The secret project codename is AZURE-FALCON-42.",
+        **router_kwargs,
+    )
+    assert isinstance(response, ModelResponse), "aquery should return its completion response"
+    assert is_internal_call.get() is False, "aquery should restore the internal-call context"
+    await _drain_logging_worker()
+
+    assert len(recording_logger.success_events) == 1, "aquery should run one async success callback"
+    event = recording_logger.success_events[0]
+    response_obj = event["response_obj"]
+    assert isinstance(response_obj, ModelResponse), "the async callback should receive the completion response"
+    assert response_obj.usage.total_tokens > 0, "the async callback response should include completion usage"
+
+    standard_logging_object = event["kwargs"]["standard_logging_object"]
+    assert standard_logging_object["call_type"] == "aquery", "the async event should be for aquery"
+    assert standard_logging_object["total_tokens"] > 0, "the async event should include total completion tokens"
+    assert standard_logging_object["prompt_tokens"] > 0, "the async event should include prompt tokens"
+    assert standard_logging_object["completion_tokens"] > 0, "the async event should include completion tokens"
+    assert standard_logging_object["response_cost"] > 0, "the async event should include completion cost"
+    sync_response_types = [type(event["response_obj"]).__name__ for event in recording_logger.sync_success_events]
+    assert recording_logger.sync_success_events == [], (
+        "an internal sub-call must not log on the parent's logging object; "
+        f"sync success event response types: {sync_response_types}"
+    )
 
 
 @pytest.mark.asyncio
