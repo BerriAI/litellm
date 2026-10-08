@@ -6,8 +6,6 @@ import litellm.proxy
 import litellm.proxy.proxy_server
 
 from typing import Dict, Final, List, Optional
-import time
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1857,7 +1855,7 @@ async def test_user_api_key_auth_websocket_logs_a_model_access_denial_as_one_war
     _serve_virtual_key(
         monkeypatch,
         user_key,
-        UserAPIKeyAuth(token=hash_token(user_key), models=["gpt-5.4-mini"], last_refreshed_at=time.time()),
+        UserAPIKeyAuth(token=hash_token(user_key), models=["gpt-5.4-mini"]),
     )
     sent: Final[list[Message]] = []
     with (
@@ -1882,12 +1880,12 @@ async def test_user_api_key_auth_websocket_rejection_adds_no_traceback_for_other
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
     from litellm.proxy.proxy_server import hash_token
 
-    user_key: Final = "sk-websocket-key-expired-yesterday"
-    expired_yesterday: Final = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    user_key: Final = "sk-websocket-key-expired-in-2020"
+    expired_in_2020: Final = "2020-01-01T00:00:00+00:00"
     _serve_virtual_key(
         monkeypatch,
         user_key,
-        UserAPIKeyAuth(token=hash_token(user_key), expires=expired_yesterday, last_refreshed_at=time.time()),
+        UserAPIKeyAuth(token=hash_token(user_key), expires=expired_in_2020),
     )
     sent: Final[list[Message]] = []
     with (
