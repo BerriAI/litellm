@@ -1539,15 +1539,15 @@ class CustomGuardrail(CustomLogger):
         ):
             return data.get("messages")
 
-        if (
-            call_type == CallTypes.embedding.value
-            or call_type == CallTypes.aembedding.value
-            or call_type == CallTypes.responses.value
-            or call_type == CallTypes.aresponses.value
+        if call_type in (
+            CallTypes.embedding.value,
+            CallTypes.aembedding.value,
+            CallTypes.responses.value,
+            CallTypes.aresponses.value,
         ):
             input_data: Final = data.get("input")
 
-            if call_type == CallTypes.embedding.value or call_type == CallTypes.aembedding.value:
+            if call_type in (CallTypes.embedding.value, CallTypes.aembedding.value):
                 if isinstance(input_data, str):
                     return [{"role": "user", "content": input_data}]
                 if isinstance(input_data, list):
