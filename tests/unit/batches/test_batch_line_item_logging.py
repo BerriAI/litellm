@@ -144,9 +144,7 @@ def recorder():
         litellm._async_success_callback
     )  # test-quality-ok: the feature dispatches through this global list; restored in teardown
     saved_failure = list(litellm._async_failure_callback)  # test-quality-ok: same dispatch seam, restored in teardown
-    litellm._async_success_callback = [
-        logger
-    ]  # test-quality-ok: there is no injection seam for callback lists; teardown restores
+    litellm._async_success_callback = [logger]  # test-quality-ok: no injection seam; teardown restores
     litellm._async_failure_callback = [logger]  # test-quality-ok: same dispatch seam, restored in teardown
     yield logger
     litellm.store_batch_line_items_in_callbacks = saved_flag  # test-quality-ok: teardown restoring the value set above
@@ -195,9 +193,7 @@ def _hidden(event: dict) -> dict:
 
 @pytest.mark.asyncio
 async def test_line_items_emitted_alongside_aggregate(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     batch = _batch()
     with (
         patch(
@@ -253,9 +249,7 @@ async def test_flag_off_emits_only_aggregate(recorder):
 
 @pytest.mark.asyncio
 async def test_line_items_skipped_for_unsupported_provider(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     file_mock: Final = AsyncMock(side_effect=_file_content)
     with patch(
         "litellm.files.main.afile_content", file_mock
@@ -271,9 +265,7 @@ async def test_line_items_skipped_for_unsupported_provider(recorder):
 
 @pytest.mark.asyncio
 async def test_in_progress_batch_poll_emits_no_line_events(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     in_progress: Final = LiteLLMBatch(
         id="batch_wip",
         object="batch",
@@ -298,9 +290,7 @@ async def test_in_progress_batch_poll_emits_no_line_events(recorder):
 
 @pytest.mark.asyncio
 async def test_input_fetch_failure_still_emits_aggregate(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     with patch(
         "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=ValueError("boom")
     ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
@@ -547,9 +537,7 @@ def _parent_logging_with_params(litellm_params: dict) -> Logging:
 
 @pytest.mark.asyncio
 async def test_line_items_edge_shapes_and_edge_cases(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     batch = LiteLLMBatch(
         id="batch_edge",
         object="batch",
@@ -611,9 +599,7 @@ async def test_line_items_edge_shapes_and_edge_cases(recorder):
 
 @pytest.mark.asyncio
 async def test_line_items_child_params_drop_parent_credentials(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     file_mock: Final = AsyncMock(side_effect=_file_content)
     parent: Final = _parent_logging_with_params(
         {
@@ -648,9 +634,7 @@ async def test_line_items_child_params_drop_parent_credentials(recorder):
 
 @pytest.mark.asyncio
 async def test_line_items_anthropic_shapes(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     batch = LiteLLMBatch(
         id="batch_anth",
         object="batch",
@@ -704,9 +688,7 @@ def _provider_batch(batch_id: str, input_file_id: str, output_file_id: str) -> L
 
 @pytest.mark.asyncio
 async def test_line_items_bedrock_shapes(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     file_mock: Final = AsyncMock(side_effect=_edge_file_content)
     with (
         patch(
@@ -751,9 +733,7 @@ async def test_line_items_bedrock_shapes(recorder):
 
 @pytest.mark.asyncio
 async def test_line_items_mistral_shape(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     file_mock: Final = AsyncMock(side_effect=_edge_file_content)
     with (
         patch(
@@ -820,9 +800,7 @@ def _scoped_file_content(file_map):
 
 @pytest.mark.asyncio
 async def test_line_items_anthropic_failure_keeps_provider_error(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     file_mock: Final = AsyncMock(
         side_effect=_scoped_file_content(
             {
@@ -860,9 +838,7 @@ BODYLESS_ERR_OUTPUT_JSONL = json.dumps({"custom_id": "bare", "response": None, "
 
 @pytest.mark.asyncio
 async def test_line_items_failure_without_error_or_response_body_still_reaches_callbacks(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     file_mock: Final = AsyncMock(
         side_effect=_scoped_file_content(
             {
@@ -889,9 +865,7 @@ async def test_line_items_failure_without_error_or_response_body_still_reaches_c
 
 @pytest.mark.asyncio
 async def test_line_items_native_vertex_rows_are_skipped(recorder):
-    litellm.store_batch_line_items_in_callbacks = (
-        True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    )
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     file_mock: Final = AsyncMock(
         side_effect=_scoped_file_content(
             {

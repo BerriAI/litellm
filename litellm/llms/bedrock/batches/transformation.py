@@ -118,7 +118,7 @@ def bedrock_batch_line_to_response(
     if "output" in model_output:
         from ..chat.converse_transformation import AmazonConverseConfig
 
-        return AmazonConverseConfig()._transform_response(  # pyright: ignore[reportPrivateUsage]  # same reconstruction the converse chat path performs on the live response
+        return AmazonConverseConfig()._transform_response(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # same reconstruction the converse chat path performs on the live response
             model=model,
             response=Response(200, json=dict(model_output)),
             model_response=ModelResponse(),

@@ -8153,7 +8153,7 @@ async def test_update_general_settings_store_batch_line_items_in_callbacks():
             await proxy_config._update_general_settings(db_general_settings={})
         assert litellm.store_batch_line_items_in_callbacks is False
     finally:
-        litellm.store_batch_line_items_in_callbacks = saved_flag
+        litellm.store_batch_line_items_in_callbacks = saved_flag  # test-quality-ok: restores the prior flag
 
 
 @pytest.mark.asyncio

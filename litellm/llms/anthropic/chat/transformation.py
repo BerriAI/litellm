@@ -2887,7 +2887,7 @@ def _valid_user_id(user_id: str) -> bool:
 def anthropic_message_to_model_response(result: Mapping[str, object], speed: str | None) -> ModelResponse:
     pydantic_result: Final = AnthropicResponse.model_validate(result)
     result_id: Final = result.get("id")
-    return AnthropicConfig().transform_parsed_response(
+    return AnthropicConfig().transform_parsed_response(  # pyright: ignore[reportUnknownMemberType]  # completion_response is a bare dict upstream
         completion_response=pydantic_result.model_dump(),
         raw_response=httpx.Response(
             status_code=200,

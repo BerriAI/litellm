@@ -7087,12 +7087,9 @@ class ProxyConfig:
             health_check_concurrency = general_settings.get("health_check_concurrency", None)
             health_check_details = general_settings.get("health_check_details", True)
             ### BATCH LINE ITEM CALLBACKS ###
-            _store_batch_line_items: Final[object] = general_settings.get("store_batch_line_items_in_callbacks")
+            _store_batch_line_items: Final = coerce_bool(general_settings.get("store_batch_line_items_in_callbacks"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # general_settings is untyped upstream
             if _store_batch_line_items is not None:
-                if isinstance(_store_batch_line_items, str):
-                    litellm.store_batch_line_items_in_callbacks = _store_batch_line_items.lower() == "true"
-                else:
-                    litellm.store_batch_line_items_in_callbacks = bool(_store_batch_line_items)
+                litellm.store_batch_line_items_in_callbacks = bool(_store_batch_line_items)
             # Health-check-driven routing (opt-in, passes through to Router later)
             _enable_hc_routing = general_settings.get("enable_health_check_routing", False)
             _hc_staleness = general_settings.get("health_check_staleness_threshold", None)

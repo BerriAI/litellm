@@ -19,9 +19,9 @@ if TYPE_CHECKING:
 
     from litellm.types.utils import ModelResponseStream
 
-    Span = _Span | object
+    Span = _Span | Any
 else:
-    Span = object
+    Span = Any
 
 
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
@@ -271,7 +271,7 @@ def remove_index_from_tool_calls(
                         tool_call.pop("index", None)
 
 
-def remove_items_at_indices(items: list[object] | None, indices: Iterable[int]) -> None:
+def remove_items_at_indices(items: list[Any] | None, indices: Iterable[int]) -> None:
     """Remove items from a list in-place by index"""
     if items is None:
         return
@@ -728,9 +728,9 @@ def filter_internal_params(data: dict, additional_internal_params: set | None = 
 
 
 def redact_nested_match_and_regex_keys(
-    payload: dict | list[object] | str | None,
+    payload: dict | list[Any] | str | None,
     keys: Collection[str] = ("match", "regex"),
-) -> dict | list[object] | str | None:
+) -> dict | list[Any] | str | None:
     """
     Deep-copy `payload` and replace every configured string field with "[REDACTED]"
     anywhere in nested dict/list structures.
@@ -796,13 +796,13 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
 BATCH_PARENT_ID_KEY: Final = "batch_parent_id"
 
 
-def is_batch_line_item_event(kwargs: object) -> bool:
-    if not isinstance(kwargs, Mapping):
-        return False
-    litellm_params: Final[object] = kwargs.get("litellm_params")
-    if not isinstance(litellm_params, Mapping):
-        return False
-    return bool(litellm_params.get(BATCH_PARENT_ID_KEY))
+def is_batch_line_item_event(kwargs: Any) -> bool:  # noqa: ANN401  # every hook passes its own unannotated callback kwargs
+    """Whether a callback event is one JSONL line of a completed batch rather than a request"""
+    match kwargs:
+        case {"litellm_params": {"batch_parent_id": str() as batch_parent_id}}:
+            return bool(batch_parent_id)
+        case _:
+            return False
 
 
 _HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])

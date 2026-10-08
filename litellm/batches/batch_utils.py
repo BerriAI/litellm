@@ -139,7 +139,7 @@ async def handle_completed_batch_with_files(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None = None,
-    litellm_params: dict[str, object] | None = None,  # mutable-ok: file fetchers require a plain dict
+    litellm_params: Mapping[str, object] | None = None,
     model_info: ModelInfo | None = None,
 ) -> "tuple[BatchCostUsageResult, BatchResultFiles]":
     """_handle_completed_batch plus the raw output/error bytes it fetched, so
@@ -522,7 +522,7 @@ async def _fetch_batch_output_file_content(
 async def fetch_batch_error_file_content(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
-    litellm_params: dict[str, object] | None,  # mutable-ok: file fetchers require a plain dict
+    litellm_params: Mapping[str, object] | None,
 ) -> bytes | None:
     """Fetch the batch's separate error file bytes; None when it has none or the fetch fails."""
     if batch.error_file_id is None:

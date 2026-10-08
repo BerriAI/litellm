@@ -149,8 +149,8 @@ async def _log_completed_batch(monkeypatch: pytest.MonkeyPatch, loggers: list, f
     monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", flag, raising=False)
     saved_success = list(litellm._async_success_callback)
     saved_failure = list(litellm._async_failure_callback)
-    litellm._async_success_callback = list(loggers)
-    litellm._async_failure_callback = list(loggers)
+    litellm._async_success_callback = list(loggers)  # test-quality-ok: no injection seam; finally restores
+    litellm._async_failure_callback = list(loggers)  # test-quality-ok: same dispatch seam
     buf = io.StringIO()
     try:
         with (
@@ -169,8 +169,8 @@ async def _log_completed_batch(monkeypatch: pytest.MonkeyPatch, loggers: list, f
                 batch_completion_cost=0.5,
             )
     finally:
-        litellm._async_success_callback = saved_success
-        litellm._async_failure_callback = saved_failure
+        litellm._async_success_callback = saved_success  # test-quality-ok: restores the seam
+        litellm._async_failure_callback = saved_failure  # test-quality-ok: restores the seam
 
 
 def _openmeter_sinks() -> tuple[Any, RecordingHTTP]:

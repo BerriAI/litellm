@@ -3,7 +3,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast, get_args
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from typing_extensions import assert_never
 
@@ -35,7 +35,6 @@ _BatchLineProvider: TypeAlias = Literal[
     "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"
 ]
 
-_SUPPORTED_LINE_PROVIDERS: Final = frozenset(get_args(_BatchLineProvider))
 
 _SECRET_PARAM_KEYS: Final = frozenset(
     {
@@ -53,9 +52,11 @@ _SECRET_PARAM_KEYS: Final = frozenset(
 
 
 def _supported_line_provider(value: str) -> _BatchLineProvider | None:
-    if value in _SUPPORTED_LINE_PROVIDERS:
-        return cast("_BatchLineProvider", value)  # cast-ok: membership in the literal's args was just checked
-    return None
+    match value:
+        case "openai" | "azure" | "vertex_ai" | "hosted_vllm" | "anthropic" | "bedrock" | "mistral":
+            return value
+        case _:
+            return None
 
 
 _CALL_TYPE_BY_BATCH_URL: Final = MappingProxyType(
@@ -332,8 +333,7 @@ async def _emit_line_event(
     status_code: Final = _line_status_code(entry, custom_llm_provider)
     request_call_type: Final = _call_type_for_request(request_line)
     response_body: Final = _get_response_from_batch_job_output_file(entry, custom_llm_provider)
-    parent_start_time: Final = parent.start_time  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # Logging.start_time is untyped upstream
-    start_time: Final = parent_start_time if isinstance(parent_start_time, datetime) else datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
+    start_time: Final = parent.start_time
     parent_params: Final = _as_object_mapping(parent.litellm_params) or _EMPTY_BODY  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped upstream
     model: Final = _line_model(response_body, request_body, parent)
 
