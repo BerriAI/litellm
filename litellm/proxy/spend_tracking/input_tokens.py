@@ -167,7 +167,29 @@ def _count_text_tokens(model: str, text: object) -> int:
             stack.extend(item)
             continue
         if isinstance(item, dict):
-            token_count += litellm.token_counter(model=model, text=json.dumps(item))
+            token_count += litellm.token_counter(model=model, text=json.dumps(_without_inline_data(item)))
             continue
-        token_count += litellm.token_counter(model=model, text=str(item))
+        token_count += litellm.token_counter(model=model, text=str(_without_inline_data(item)))
     return token_count
+
+
+_DATA_URL_PREFIX: Final = "data:"
+_BASE64_MARKER: Final = ";base64,"
+
+
+def _without_inline_data(value: object) -> object:
+    """`value` with the payload of every base64 `data:` URL cut after `;base64,`.
+
+    Images and files a Responses `input` carries inline are priced by the
+    provider per image or file, not per character, so tokenizing their base64
+    as text inflates the count by orders of magnitude: one screenshot alone is
+    hundreds of thousands of "tokens". The Rust counter cuts the same strings."""
+    if isinstance(value, str):
+        if value.startswith(_DATA_URL_PREFIX) and (marker := value.find(_BASE64_MARKER)) != -1:
+            return value[: marker + len(_BASE64_MARKER)]
+        return value
+    if isinstance(value, dict):
+        return {key: _without_inline_data(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_without_inline_data(item) for item in value]
+    return value
