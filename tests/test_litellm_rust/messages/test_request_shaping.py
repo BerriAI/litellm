@@ -5,7 +5,8 @@ adaptive-thinking model without sampling params; Claude Haiku 4.5 is a legacy-th
 2026-09-24; the cost map is LiteLLM's own file.
 """
 
-from collections.abc import Iterator
+import asyncio
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import pytest
@@ -315,3 +316,206 @@ async def test_native_messages_reads_optional_positional_body_parameters(message
     assert body["temperature"] == args[7]
     assert body["system"] == args[6]
     assert body["metadata"] == metadata
+
+
+@pytest.fixture
+def provider_fields_model(monkeypatch: pytest.MonkeyPatch) -> str:
+    model: Final = "claude-test-provider-fields"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "supports_sampling_params": False,
+            "supports_reasoning": True,
+        },
+    )
+    return model
+
+
+async def invoke_native_messages(
+    server: RecordingServer, asynchronous: bool, model: str, options: Mapping[str, object]
+) -> object:
+    from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES
+    from litellm.rust_bridge.public_call import NativeCall
+
+    bound: Final = {
+        "model": model,
+        "messages": MESSAGES,
+        "max_tokens": 32,
+        "stream": False,
+        "api_key": "test-key",
+        "api_base": server.base_url,
+        "custom_llm_provider": "anthropic",
+        **options,
+    }
+    request: Final = NativeCall(args=(), kwargs=bound, bound=bound)
+    if asynchronous:
+        native_async: Final = NATIVE_AMESSAGES.load()
+        assert native_async is not None
+        return await native_async(request)
+    native_sync: Final = NATIVE_MESSAGES.load()
+    assert native_sync is not None
+    return await asyncio.to_thread(native_sync, request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("drop_params", [False, True], ids=["keep", "drop"])
+@pytest.mark.parametrize("in_extra_body", [False, True], ids=["kwargs", "extra_body"])
+@pytest.mark.parametrize(
+    "extension", [None, {"mode": "future", "values": [True, None, {"nested": 7}]}], ids=["null", "nested"]
+)
+async def test_unknown_provider_fields_reach_messages_transport(
+    messages_server: RecordingServer,
+    provider_fields_model: str,
+    asynchronous: bool,
+    drop_params: bool,
+    in_extra_body: bool,
+    extension: object,
+) -> None:
+    fields: Final = {"future_provider_option": extension}
+    options: Final = {"drop_params": drop_params, **({"extra_body": fields} if in_extra_body else fields)}
+
+    await invoke_native_messages(messages_server, asynchronous, provider_fields_model, options)
+
+    body, _ = sent(messages_server)
+    if extension is None and not in_extra_body:
+        assert "future_provider_option" not in body
+    else:
+        assert body["future_provider_option"] == extension
+    assert fields == {"future_provider_option": extension}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("field", "extension"),
+    [
+        ("service_tier", "future_tier"),
+        ("tools", [{"type": "future_tool", "future_config": {"mode": "new"}}]),
+        ("thinking", {"type": "future_mode", "future_config": {"values": [True, None]}}),
+        ("thinking", {"type": "disabled", "future_hint": {"mode": "new"}}),
+    ],
+    ids=["future_enum", "future_tool", "future_thinking", "known_variant_extension"],
+)
+async def test_extensible_provider_types_reach_messages_transport(
+    messages_server: RecordingServer,
+    provider_fields_model: str,
+    asynchronous: bool,
+    field: str,
+    extension: object,
+) -> None:
+    await invoke_native_messages(messages_server, asynchronous, provider_fields_model, {field: extension})
+
+    body, _ = sent(messages_server)
+    assert body[field] == extension
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_messages_resolves_overrides_before_additional_drop_params(
+    messages_server: RecordingServer, provider_fields_model: str, asynchronous: bool
+) -> None:
+    options: Final = {
+        "future_provider_option": {"old": True},
+        "extra_body": {"future_provider_option": {"keep": True, "remove": {"nested": 7}}},
+        "additional_drop_params": ["future_provider_option.remove"],
+    }
+
+    await invoke_native_messages(messages_server, asynchronous, provider_fields_model, options)
+
+    body, _ = sent(messages_server)
+    assert body["future_provider_option"] == {"keep": True}
+    assert options["extra_body"] == {"future_provider_option": {"keep": True, "remove": {"nested": 7}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("drop_params", [False, True], ids=["reject", "drop"])
+async def test_messages_applies_model_policy_to_effective_extra_body_values(
+    messages_server: RecordingServer, provider_fields_model: str, asynchronous: bool, drop_params: bool
+) -> None:
+    options: Final = {
+        "temperature": 1.0,
+        "extra_body": {"top_k": 5, "future_provider_option": {"keep": True}},
+        "drop_params": drop_params,
+    }
+    if not drop_params:
+        messages_server.expected_requests = 0
+        with pytest.raises(litellm.BadRequestError, match="does not support top_k=5"):
+            await invoke_native_messages(messages_server, asynchronous, provider_fields_model, options)
+        assert messages_server.requests == []
+        return
+
+    await invoke_native_messages(messages_server, asynchronous, provider_fields_model, options)
+
+    body, _ = sent(messages_server)
+    assert "top_k" not in body
+    assert body["future_provider_option"] == {"keep": True}
+    assert body["temperature"] == options["temperature"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_messages_decodes_effective_typed_values_before_transport(
+    messages_server: RecordingServer, provider_fields_model: str, asynchronous: bool
+) -> None:
+    messages_server.expected_requests = 0
+
+    with pytest.raises(litellm.BadRequestError, match="invalid type"):
+        await invoke_native_messages(
+            messages_server, asynchronous, provider_fields_model, {"extra_body": {"max_tokens": "invalid"}}
+        )
+
+    assert messages_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_messages_excludes_opaque_controls_from_extra_body(
+    messages_server: RecordingServer, provider_fields_model: str, asynchronous: bool
+) -> None:
+    opaque: Final = object()
+    overrides: Final = {
+        "callbacks": [opaque],
+        "api_key": opaque,
+        "litellm_metadata": opaque,
+        "model": "ignored",
+        "messages": ["ignored"],
+        "future_provider_option": {"keep": True},
+    }
+
+    await invoke_native_messages(messages_server, asynchronous, provider_fields_model, {"extra_body": overrides})
+
+    body, headers = sent(messages_server)
+    assert body["model"] == provider_fields_model
+    assert body["messages"] == list(MESSAGES)
+    assert body["future_provider_option"] == {"keep": True}
+    assert not {"callbacks", "api_key", "litellm_metadata", "extra_body"} & body.keys()
+    assert headers["x-api-key"] == "test-key"
+    assert overrides["api_key"] is opaque
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_public_messages_preserves_unknown_kwargs_and_extra_body(
+    messages_server: RecordingServer, provider_fields_model: str, asynchronous: bool
+) -> None:
+    options: Final = arguments(
+        messages_server,
+        model=provider_fields_model,
+        custom_llm_provider="anthropic",
+        future_provider_option=None,
+        extra_body={"another_future_option": {"values": [True, None, 0]}},
+        drop_params=True,
+    )
+    if asynchronous:
+        await litellm.anthropic.messages.acreate(**options)
+    else:
+        await asyncio.to_thread(litellm.anthropic.messages.create, **options)
+
+    body, _ = sent(messages_server)
+    assert "future_provider_option" not in body
+    assert body["another_future_option"] == {"values": [True, None, 0]}

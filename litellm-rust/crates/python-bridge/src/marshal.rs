@@ -4,7 +4,7 @@ use std::{
 };
 
 use litellm_auth::InputSource;
-use litellm_host_python::{from_py, from_py_argument, to_py};
+use litellm_host_python::{from_py_argument, to_py};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
@@ -97,20 +97,6 @@ pub(crate) fn value_route_options(fields: &Bound<'_, PyDict>) -> PyResult<RouteO
 
 /// Builds a route's optional body fields from the caller's Python arguments, in `names` order.
 /// `lookup` decides what counts as unset: a name it returns `None` for is left out of the map.
-pub(crate) fn project_optional_fields<'a, 'py>(
-    names: impl IntoIterator<Item = &'a str>,
-    lookup: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
-) -> PyResult<Map<String, Value>> {
-    names
-        .into_iter()
-        .filter_map(|name| match lookup(name) {
-            Ok(Some(value)) => Some(from_py(&value).map(|value| (name.to_string(), value))),
-            Ok(None) => None,
-            Err(error) => Some(Err(error)),
-        })
-        .collect()
-}
-
 /// Converts a Rust route response to Python and returns `module.response(...)` called on it,
 /// so each route's Python factory builds the public LiteLLM response object.
 pub(crate) fn public_response(
@@ -190,6 +176,7 @@ pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String
 
 #[cfg(test)]
 mod tests {
+    use litellm_host_python::from_py;
     use pyo3::exceptions::PyTypeError;
     use rstest::rstest;
     use serde_json::json;
@@ -200,92 +187,6 @@ mod tests {
         let locals = PyDict::new(py);
         py.run(source, Some(&locals), Some(&locals)).unwrap();
         locals
-    }
-
-    #[rstest]
-    #[case::keep_none(false)]
-    #[case::skip_none(true)]
-    fn selected_fields_preserve_lookup_order_and_caller_none_policy(#[case] skip_none: bool) {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = eval(
-                py,
-                c"
-reads = []
-fields = {'first': {'future': [None, True, 2]}, 'second': None, 'unused': object()}
-def lookup(name):
-    reads.append(name)
-    if name == 'first':
-        fields['last'] = 'observed after first'
-    return fields.get(name)
-",
-            );
-            let lookup = locals.get_item("lookup").unwrap().unwrap();
-            let result = project_optional_fields(["first", "second", "last"], |name| {
-                let value = lookup.call1((name,))?;
-                Ok((!skip_none || !value.is_none()).then_some(value))
-            })
-            .unwrap();
-            let expected = if skip_none {
-                json!({"first": {"future": [null, true, 2]}, "last": "observed after first"})
-            } else {
-                json!({"first": {"future": [null, true, 2]}, "second": null, "last": "observed after first"})
-            };
-            assert_eq!(Value::Object(result), expected);
-            assert_eq!(
-                locals
-                    .get_item("reads")
-                    .unwrap()
-                    .unwrap()
-                    .extract::<Vec<String>>()
-                    .unwrap(),
-                ["first", "second", "last"]
-            );
-        });
-    }
-
-    #[rstest]
-    fn selected_field_failure_stops_lookup_and_keeps_python_provenance() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = eval(
-                py,
-                c"
-reads = []
-failure = LookupError('selected field failed')
-cause = ValueError('cause')
-def lookup(name):
-    reads.append(name)
-    raise failure from cause
-",
-            );
-            let lookup = locals.get_item("lookup").unwrap().unwrap();
-            let error =
-                project_optional_fields(["first", "later"], |name| lookup.call1((name,)).map(Some))
-                    .unwrap_err();
-            assert!(
-                error
-                    .value(py)
-                    .is(locals.get_item("failure").unwrap().unwrap())
-            );
-            assert!(
-                error
-                    .cause(py)
-                    .unwrap()
-                    .value(py)
-                    .is(locals.get_item("cause").unwrap().unwrap())
-            );
-            assert!(error.traceback(py).is_some());
-            assert_eq!(
-                locals
-                    .get_item("reads")
-                    .unwrap()
-                    .unwrap()
-                    .extract::<Vec<String>>()
-                    .unwrap(),
-                ["first"]
-            );
-        });
     }
 
     #[rstest]
