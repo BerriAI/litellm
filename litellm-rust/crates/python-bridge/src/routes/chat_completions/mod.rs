@@ -1,21 +1,22 @@
 mod host;
 
+use host::ChatCompletionsPythonHost;
+use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_inference_chat::ChatCompletionsRoute;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
 };
 
-fn run_public(
+use super::inference::InferenceHost;
+
+fn run_chat_completions(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    use litellm_callbacks_legacy_python::LoggingOperation;
-
-    use super::inference::InferenceHost;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.chat_completions.route_host",
@@ -55,7 +56,7 @@ fn run_public(
             };
             Ok(route.machine(request, cache_options.policy))
         },
-        host::ChatCompletionsPythonHost(host),
+        ChatCompletionsPythonHost(host),
         hooks,
         asynchronous,
     )
@@ -64,11 +65,11 @@ fn run_public(
 #[pyfunction]
 pub(crate) fn completion(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_public(py, call.bound.into_any(), call.args, call.kwargs, false)
+    run_chat_completions(py, call.bound.into_any(), call.args, call.kwargs, false)
 }
 
 #[pyfunction]
 pub(crate) fn acompletion(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_public(py, call.bound.into_any(), call.args, call.kwargs, true)
+    run_chat_completions(py, call.bound.into_any(), call.args, call.kwargs, true)
 }
