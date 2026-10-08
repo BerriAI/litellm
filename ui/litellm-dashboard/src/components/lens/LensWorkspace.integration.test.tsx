@@ -178,6 +178,7 @@ describe("Lens interactive demo", () => {
       if (path.endsWith("/runs")) return Response.json(saved.jobs);
       if (path === "/v1/traces") return Response.json({ data: data.runs.map((run) => run.trace.summary) });
       if (path === "/lens/traces/findings") return Response.json([]);
+      if (path === "/lens/feedback/summary") return Response.json([]);
       return Response.json({ data: [], traces: true, requests: false });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
@@ -358,6 +359,7 @@ describe("Lens interactive demo", () => {
       if (path.startsWith("/lens/preview")) return Response.json({ eligible: 0, selected: 0, executions: [] });
       if (path === "/v1/traces") return Response.json({ data: [createLensDemoData().runs[0].trace.summary] });
       if (path === "/lens/traces/findings") return Response.json([]);
+      if (path === "/lens/feedback/summary") return Response.json([]);
       return Response.json({ data: [], traces: true, requests: false });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {

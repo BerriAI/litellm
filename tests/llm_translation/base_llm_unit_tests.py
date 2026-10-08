@@ -5,8 +5,6 @@ import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
-from litellm._uuid import uuid
-import time
 import base64
 import inspect
 
@@ -29,36 +27,6 @@ from openai import OpenAI
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-
-
-def _usage_format_tests(usage: litellm.Usage):
-    """
-    OpenAI prompt caching
-    - prompt_tokens = sum of non-cache hit tokens + cache-hit tokens
-    - total_tokens = prompt_tokens + completion_tokens
-
-    Example
-    ```
-    "usage": {
-        "prompt_tokens": 2006,
-        "completion_tokens": 300,
-        "total_tokens": 2306,
-        "prompt_tokens_details": {
-            "cached_tokens": 1920
-        },
-        "completion_tokens_details": {
-            "reasoning_tokens": 0
-        }
-        # ANTHROPIC_ONLY #
-        "cache_creation_input_tokens": 0
-    }
-    ```
-    """
-    print(f"usage={usage}")
-    assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
-
-    if usage.prompt_tokens_details is not None:
-        assert usage.prompt_tokens > usage.prompt_tokens_details.cached_tokens
 
 
 class BaseLLMChatTest(ABC):

@@ -440,6 +440,37 @@ class Provider:
             while pending:
                 await websocket.send_json(_rendered_realtime_event(pending.popleft(), scenario_id))
 
+    async def gemini_live(self, websocket: WebSocket) -> None:
+        authorization: Final = websocket.headers.get("authorization", "")
+        scenario_id: Final = websocket.headers.get("x-goog-user-project", "")
+        self.observations.put(
+            Observation(
+                websocket.url.path,
+                authorization,
+                {"host": websocket.headers.get("host", "")},
+                "WEBSOCKET",
+                scenario_id,
+            )
+        )
+        response: Final = self.scenario_store.get(scenario_id)
+        if not isinstance(response, RealtimeResponse):
+            await websocket.close(code=4404)
+            return
+        await websocket.accept()
+        pending: Final = deque(response.events)
+        async for message in websocket.iter_json():
+            payload: Final = JSON_OBJECT.validate_python(message)
+            self.observations.put(
+                Observation(websocket.url.path, authorization, payload, "WEBSOCKET_FRAME", scenario_id)
+            )
+            if "setup" in payload:
+                await websocket.send_json({"setupComplete": {}})
+                continue
+            if not _GEMINI_LIVE_TRIGGERS.intersection(payload):
+                continue
+            while pending:
+                await websocket.send_json(_rendered_realtime_event(pending.popleft(), scenario_id))
+
     @staticmethod
     def _response(response: StoredResponse, scenario_id: str) -> Response:
         unique_id: Final = f"{scenario_id}-{uuid.uuid4().hex[:8]}"
@@ -539,6 +570,7 @@ class Provider:
                 WebSocketRoute("/openai/v1/realtime", self.realtime),
                 WebSocketRoute("/openai/realtime", self.realtime),
                 WebSocketRoute("/v1/asr/realtime", self.muse_realtime),
+                WebSocketRoute(GEMINI_LIVE_PATH, self.gemini_live),
             ]
         )
 
@@ -562,6 +594,8 @@ def _interaction_body(interaction_id: str, state: InteractionState) -> dict[str,
 
 
 _REALTIME_TRIGGERS: Final = frozenset({"response.create", "input_audio_buffer.commit"})
+_GEMINI_LIVE_TRIGGERS: Final = frozenset({"clientContent", "realtimeInput"})
+GEMINI_LIVE_PATH: Final = "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
 _TRANSCRIPTION_UPDATE_REFUSED: Final = "Passing a realtime session update to a transcription session is not allowed."
 _REALTIME_UPDATE_REFUSED: Final = "Passing a transcription session update to a realtime session is not allowed."
 _NESTED_TURN_DETECTION_TYPE: Final = "session.audio.input.turn_detection.type"

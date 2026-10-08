@@ -88,6 +88,10 @@ pub struct RunSource {
     pub kind: RunSourceType,
     pub url: String,
     pub title: String,
+    /// Who started the conversation, e.g. the Slack user's email.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub user: String,
 }
 
 #[macro_rules_attribute::apply(response_type)]
@@ -127,6 +131,9 @@ pub struct TraceSummary {
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trace {
+    /// Read-cache metadata from gateway resolution; display estimates must not clear it.
+    #[serde(skip)]
+    pub gateway_spend_pending: bool,
     pub summary: TraceSummary,
     pub agents: Vec<AgentNode>,
     pub spans: Vec<Span>,

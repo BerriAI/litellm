@@ -3883,7 +3883,7 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
         return {}
 
     monkeypatch.setattr(pc, "get_config", fake_get_config)
-    monkeypatch.setattr(pc, "_get_models_from_db", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pc, "get_models_from_db", AsyncMock(return_value=[]))
     monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", AsyncMock())
     monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
     monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=None))
@@ -3963,7 +3963,7 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconcilin
     async def install_models(new_models: object, proxy_logging_obj: object) -> None:
         installed(credential=CredentialAccessor.get_credential_values("openai-cred"))
 
-    monkeypatch.setattr(pc, "_get_models_from_db", read_models_while_a_credential_lands)
+    monkeypatch.setattr(pc, "get_models_from_db", read_models_while_a_credential_lands)
     monkeypatch.setattr(pc, "_update_llm_router", install_models)
 
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
@@ -3987,7 +3987,7 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_even_when_models_
     _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
     monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["mcp"]})
     models_fetch = AsyncMock(return_value=[])
-    monkeypatch.setattr(pc, "_get_models_from_db", models_fetch)
+    monkeypatch.setattr(pc, "get_models_from_db", models_fetch)
 
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
 

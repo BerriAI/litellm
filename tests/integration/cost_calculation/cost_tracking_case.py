@@ -250,7 +250,7 @@ class CostTrackingTestCase(BaseModel):
             "/v1/audio/speech",
             "/v1/images/generations",
             "/v1/images/edits",
-            "/v1/decisions",
+            "/v1/systemone",
         ]
         | Annotated[str, Field(pattern=r"^/(gemini|anthropic|bedrock)/")]
     ) = "/v1/chat/completions"

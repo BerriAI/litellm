@@ -49,7 +49,7 @@ class SpendLogPayload(TypedDict, total=False):
     cache_hit: ReadOnly[bool | None]
     session_id: ReadOnly[str | None]
     trace_id: ReadOnly[str | None]
-    request_tags: ReadOnly[Sequence[str] | None]
+    request_tags: ReadOnly[Sequence[object] | None]
     messages: ReadOnly[object]
     response: ReadOnly[object]
 

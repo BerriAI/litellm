@@ -1,34 +1,19 @@
-import pytest
-
 import litellm
 from base_responses_api import BaseResponsesAPITest
 from openai.types.responses.function_tool import FunctionTool
 
 
 class TestAnthropicResponsesAPITest(BaseResponsesAPITest):
+    test_basic_openai_responses_delete_endpoint = None
+    test_basic_openai_responses_streaming_delete_endpoint = None
+    test_basic_openai_responses_get_endpoint = None
+    test_basic_openai_responses_cancel_endpoint = None
+
     def get_base_completion_call_args(self):
         # litellm.turn_on_debug()
         return {
             "model": "anthropic/claude-sonnet-4-5",
         }
-
-    async def test_basic_openai_responses_delete_endpoint(self, sync_mode=False):
-        pytest.skip("DELETE responses is not supported for anthropic")
-
-    async def test_basic_openai_responses_streaming_delete_endpoint(
-        self, sync_mode=False
-    ):
-        pytest.skip("DELETE responses is not supported for anthropic")
-
-    async def test_basic_openai_responses_get_endpoint(self, sync_mode=False):
-        pytest.skip("GET responses is not supported for anthropic")
-
-    async def test_basic_openai_responses_cancel_endpoint(self, sync_mode=False):
-        pytest.skip("CANCEL responses is not supported for anthropic")
-
-    async def test_cancel_responses_invalid_response_id(self, sync_mode=False):
-        pytest.skip("CANCEL responses is not supported for anthropic")
-
 
 def test_multiturn_tool_calls():
     # Test streaming response with tools for Anthropic

@@ -1,7 +1,6 @@
 """Test health check helper functions"""
 
 import json
-import os
 import socket
 import struct
 import zlib
@@ -840,12 +839,12 @@ async def test_ahealth_check_without_mode_reports_the_real_failure(
 
 def test_update_litellm_params_for_health_check():
     """
-    Test if _update_litellm_params_for_health_check correctly:
+    Test if update_litellm_params_for_health_check correctly:
     1. Updates messages with a random message
     2. Updates model name when health_check_model is provided
     3. Updates voice when health_check_voice is provided for audio_speech mode
     """
-    from litellm.proxy.health_check import _update_litellm_params_for_health_check
+    from litellm.proxy.health_check import update_litellm_params_for_health_check
 
     model_info = {"health_check_model": "gpt-5-mini"}
     litellm_params = {
@@ -853,7 +852,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
 
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert "messages" in updated_params
     assert isinstance(updated_params["messages"], list)
@@ -865,7 +864,7 @@ def test_update_litellm_params_for_health_check():
         "api_key": "fake_key",
     }
 
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert "messages" in updated_params
     assert isinstance(updated_params["messages"], list)
@@ -876,7 +875,7 @@ def test_update_litellm_params_for_health_check():
         "model": "gpt-5.5",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" in updated_params
     assert updated_params["voice"] == "en-US-JennyNeural"
 
@@ -885,7 +884,7 @@ def test_update_litellm_params_for_health_check():
         "model": "gpt-5.5",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" in updated_params
     assert updated_params["voice"] == "alloy"
 
@@ -894,7 +893,7 @@ def test_update_litellm_params_for_health_check():
         "model": "gpt-5.5",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert "voice" not in updated_params
 
     model_info = {}
@@ -902,28 +901,28 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
     litellm_params = {
         "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     litellm_params = {
         "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     litellm_params = {
         "model": "openai/gpt-5.5",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "openai/gpt-5.5"
 
     cris_prefixes = ["us.", "eu.", "apac.", "jp.", "au.", "us-gov.", "global."]
@@ -932,7 +931,7 @@ def test_update_litellm_params_for_health_check():
             "model": f"bedrock/{prefix}anthropic.claude-3-haiku-20240307-v1:0",
             "api_key": "fake_key",
         }
-        updated_params = _update_litellm_params_for_health_check(
+        updated_params = update_litellm_params_for_health_check(
             model_info, litellm_params
         )
         assert (
@@ -943,21 +942,21 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
 
     litellm_params = {
         "model": "bedrock/us-gov-east-1/anthropic.claude-instant-v1",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "anthropic.claude-instant-v1"
 
     litellm_params = {
         "model": "bedrock/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
         == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
@@ -967,7 +966,7 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
         == "deepseek_r1/arn:aws:bedrock:us-west-2:456:imported-model/xyz"
@@ -977,7 +976,7 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
         == "converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -987,14 +986,14 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/invoke/us-west-2/anthropic.claude-instant-v1",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert updated_params["model"] == "invoke/anthropic.claude-instant-v1"
 
     litellm_params = {
         "model": "bedrock/arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
         == "arn:aws:bedrock:eu-central-1:000:application-inference-profile/abc"
@@ -1004,7 +1003,7 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/us-west-2/llama/arn:aws:bedrock:us-east-1:123:imported-model/abc",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"]
         == "llama/arn:aws:bedrock:us-east-1:123:imported-model/abc"
@@ -1014,7 +1013,7 @@ def test_update_litellm_params_for_health_check():
         "model": "bedrock/converse/us-west-2/eu.anthropic.claude-3-sonnet-20240229-v1:0",
         "api_key": "fake_key",
     }
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
     assert (
         updated_params["model"] == "converse/eu.anthropic.claude-3-sonnet-20240229-v1:0"
     )
@@ -1235,3 +1234,193 @@ async def test_health_check_with_custom_llm_provider(
     assert "error" not in response, response
     assert upstream.called
     assert json.loads(upstream.calls[0].request.content)["model"] == "deepseek-r1-distill-qwen-1.5B-q4"
+
+
+@pytest.mark.asyncio
+async def test_azure_chat_health_check_surfaces_provider_rate_limit_headers(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(
+        url__regex=r"https://resource\.example/openai/deployments/gpt-4\.1-mini/chat/completions.*"
+    ).respond(
+        json={
+            "id": "chatcmpl-health",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4.1-mini",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+        headers={"x-ratelimit-remaining-tokens": "42"},
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "azure/gpt-4.1-mini",
+            "api_key": "fake-key",
+            "api_base": "https://resource.example",
+            "api_version": "2024-06-01",
+        },
+        mode="chat",
+    )
+
+    assert response["x-ratelimit-remaining-tokens"] == "42"
+    assert upstream.called
+
+
+@pytest.mark.asyncio
+async def test_azure_embedding_health_check_surfaces_provider_rate_limit_headers(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(
+        url__regex=r"https://resource\.example/openai/deployments/text-embedding-ada-002/embeddings.*"
+    ).respond(
+        json={
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+            "model": "text-embedding-ada-002",
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        },
+        headers={"x-ratelimit-remaining-tokens": "84"},
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "azure/text-embedding-ada-002",
+            "api_key": "fake-key",
+            "api_base": "https://resource.example",
+            "api_version": "2024-06-01",
+        },
+        input=["health check"],
+        mode="embedding",
+    )
+
+    assert response["x-ratelimit-remaining-tokens"] == "84"
+    assert upstream.called
+
+
+@pytest.mark.asyncio
+async def test_image_generation_health_check_returns_a_successful_response(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/images/generations").respond(
+        json={"created": 1, "data": [{"b64_json": "AA=="}]}
+    )
+
+    response: Final = await ahealth_check(
+        {"model": "gpt-image-1", "api_key": "fake-key"},
+        mode="image_generation",
+        prompt="health check",
+    )
+
+    assert "error" not in response
+    assert upstream.called
+
+
+@pytest.mark.asyncio
+async def test_groq_wildcard_health_check_uses_a_concrete_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "models_by_provider",
+        {"groq": ["groq/openai/gpt-oss-20b"]},
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.groq.com/openai/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-health",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "groq/openai/gpt-oss-20b",
+            "service_tier": "on_demand",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "2"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "groq/*",
+            "api_key": "fake-key",
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert upstream.called
+    assert json.loads(upstream.calls.last.request.content)["model"] == "openai/gpt-oss-20b"
+    assert response == {}
+
+
+@pytest.mark.asyncio
+async def test_cohere_rerank_health_check_returns_a_successful_response(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.cohere.com/v2/rerank").respond(
+        json={
+            "id": "rerank-health",
+            "results": [{"index": 0, "relevance_score": 0.7}],
+            "meta": {"billed_units": {"search_units": 1}},
+        }
+    )
+
+    response: Final = await ahealth_check(
+        {"model": "cohere/rerank-english-v3.0", "api_key": "fake-key"},
+        mode="rerank",
+        prompt="health check",
+    )
+
+    assert "error" not in response
+    assert upstream.called
+    assert json.loads(upstream.calls.last.request.content)["query"] == "health check"
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_health_check_returns_audio(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/audio/speech").respond(
+        content=b"audio",
+        headers={"content-type": "audio/mpeg"},
+    )
+
+    response: Final = await ahealth_check(
+        {"model": "openai/tts-1", "api_key": "fake-key"},
+        mode="audio_speech",
+        prompt="health check",
+    )
+
+    assert "error" not in response
+    assert upstream.called
+    assert json.loads(upstream.calls.last.request.content)["input"] == "health check"
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_health_check_returns_transcribed_text(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").respond(
+        json={"text": "health check audio"}
+    )
+
+    response: Final = await ahealth_check(
+        {"model": "openai/whisper-1", "api_key": "fake-key"},
+        mode="audio_transcription",
+    )
+
+    assert "error" not in response
+    assert upstream.called
+    assert b'name="file"' in upstream.calls.last.request.content

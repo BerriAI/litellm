@@ -2,7 +2,7 @@ import os
 # What this tests?
 ## Tests /spend endpoints.
 
-import pytest, time, uuid, json
+import pytest, uuid, json
 import asyncio
 import aiohttp
 
@@ -54,32 +54,6 @@ async def chat_completion(session, key, model="gpt-3.5-turbo"):
             raise Exception(f"Request did not return a 200 status code: {status}")
 
         return await response.json()
-
-
-async def chat_completion_high_traffic(session, key, model="gpt-3.5-turbo"):
-    url = "http://0.0.0.0:4000/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-    data = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": f"Hello! {uuid.uuid4()}"},
-        ],
-    }
-    try:
-        async with session.post(url, headers=headers, json=data) as response:
-            status = response.status
-            response_text = await response.text()
-
-            if status != 200:
-                raise Exception(f"Request did not return a 200 status code: {status}")
-
-            return await response.json()
-    except Exception as e:
-        return None
 
 
 async def get_spend_logs(session, request_id=None, api_key=None):
@@ -142,7 +116,7 @@ async def generate_team(session: aiohttp.ClientSession, org_id: str) -> dict:
 
 
 @pytest.mark.skip(
-    reason="Flaky in CI: /spend/logs?request_id=... returns 500 even after a 20s wait for the spend log to be written. Same write-then-read race against the spend logs DB as test_spend_logs. Spend-log accuracy is covered by tests/unit/proxy/spend_tracking/ and the proxy_spend_accuracy_tests CircleCI job."
+    reason="Flaky in CI: /spend/logs?request_id=... returns 500 even after a 20s wait for the spend log to be written. Spend-log accuracy is covered by tests/unit/proxy/spend_tracking/ and tests/integration/spend/."
 )
 @pytest.mark.asyncio
 async def test_spend_logs_with_org_id():

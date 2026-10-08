@@ -371,3 +371,30 @@ shutdown drain window.
 {{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
 {{- toYaml $labels -}}
 {{- end -}}
+
+{{- define "litellm.lensWorker.serviceTokenSecretName" -}}
+{{- .Values.lensWorker.serviceTokenSecret.name | default (printf "%s-lens-service" (include "litellm.fullname" .)) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.bundledClickhouse" -}}
+{{- if and .Values.lensWorker.enabled .Values.lensWorker.clickhouse.enabled (not .Values.lensWorker.clickhouseSecret.name) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.publicUrl" -}}
+{{- if .Values.lensWorker.publicUrl -}}
+{{- .Values.lensWorker.publicUrl -}}
+{{- else if .Values.lensWorker.ingress.enabled -}}
+{{- $tls := or (not (empty .Values.lensWorker.ingress.tls)) (hasKey .Values.lensWorker.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s" (ternary "https" "http" $tls) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
+{{- else if and .Values.ingress.enabled (eq (len .Values.ingress.hosts) 1) -}}
+{{- $host := required "ingress.hosts[0].host is required" (first .Values.ingress.hosts).host -}}
+{{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s/lens-ingest" (ternary "https" "http" $tls) $host -}}
+{{- else -}}
+{{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.clickhouseName" -}}
+{{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
+{{- end -}}
