@@ -42,9 +42,26 @@ function canvasLoop(canvas: HTMLCanvasElement, draw: Draw): () => void {
   observer.observe(canvas);
   if (reduce) frame(0);
   else rafId = requestAnimationFrame(frame);
+  let visibilityObserver: IntersectionObserver | null = null;
+  if (typeof IntersectionObserver !== "undefined") {
+    visibilityObserver = new IntersectionObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      if (entry.isIntersecting) {
+        if (!reduce) {
+          cancelAnimationFrame(rafId);
+          rafId = requestAnimationFrame(frame);
+        }
+      } else {
+        cancelAnimationFrame(rafId);
+      }
+    });
+    visibilityObserver.observe(canvas);
+  }
   return () => {
     cancelAnimationFrame(rafId);
     observer.disconnect();
+    visibilityObserver?.disconnect();
   };
 }
 

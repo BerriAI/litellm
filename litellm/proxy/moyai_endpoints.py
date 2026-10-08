@@ -127,7 +127,6 @@ def _decode_connect_code(master_key: str, code: str) -> dict:
     "/moyai/connect/start",
     response_model=MoyaiConnectStartResponse,
     tags=["moyai"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def moyai_connect_start(
     request: Request,

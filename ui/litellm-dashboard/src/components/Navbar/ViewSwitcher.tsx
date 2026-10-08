@@ -55,8 +55,6 @@ export default function ViewSwitcher() {
 
   const selectMode = (key: string) => {
     setMode(key);
-    // The chat and Moyai routes live outside the dashboard SPA shell that reacts to `mode`,
-    // so switching modes from there needs a real navigation, not just state.
     if (isStandaloneRoute) {
       window.location.assign(uiHref(""));
     }

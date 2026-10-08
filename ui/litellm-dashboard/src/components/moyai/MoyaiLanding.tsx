@@ -109,7 +109,23 @@ function Orbit({
       if (!reduce) rafId = requestAnimationFrame(frame);
     };
     rafId = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(rafId);
+    let resizeObserver: ResizeObserver | null = null;
+    let onResize: (() => void) | null = null;
+    if (reduce) {
+      const reposition = () => frame(performance.now());
+      if (typeof ResizeObserver !== "undefined" && heroRef.current) {
+        resizeObserver = new ResizeObserver(reposition);
+        resizeObserver.observe(heroRef.current);
+      } else {
+        onResize = reposition;
+        window.addEventListener("resize", reposition);
+      }
+    }
+    return () => {
+      cancelAnimationFrame(rafId);
+      resizeObserver?.disconnect();
+      if (onResize) window.removeEventListener("resize", onResize);
+    };
   }, [items, radius, speed, heroRef, anchorRef]);
 
   return (

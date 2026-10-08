@@ -7,6 +7,7 @@ import Navbar from "@/components/navbar";
 import MoyaiConnected from "@/components/moyai/MoyaiConnected";
 import MoyaiLanding from "@/components/moyai/MoyaiLanding";
 import { startMoyaiQuickConnect } from "@/components/networking";
+import { PluginModeProvider } from "@/contexts/PluginModeContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { isProxyAdminRole } from "@/utils/roles";
 import { uiHref } from "@/utils/uiHref";
@@ -44,7 +45,8 @@ function MoyaiPageContent() {
 
   const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
 
-  const shouldOpenMoyai = parsed && !connectedParams && !isLoading && moyaiUrl;
+  const settingsReady = parsed && !isLoading;
+  const shouldOpenMoyai = settingsReady && !connectedParams && moyaiUrl;
   useEffect(() => {
     if (shouldOpenMoyai) {
       window.location.replace(moyaiUrl as string);
@@ -77,12 +79,14 @@ function MoyaiPageContent() {
   }
 
   return (
-    <ThemeProvider accessToken={accessToken}>
-      <div className="flex h-screen flex-col">
-        <Navbar accessToken={accessToken} isPublicPage={false} />
-        <main className="min-h-0 flex-1 overflow-y-auto">{content}</main>
-      </div>
-    </ThemeProvider>
+    <PluginModeProvider accessToken={accessToken}>
+      <ThemeProvider accessToken={accessToken}>
+        <div className="flex h-screen flex-col">
+          <Navbar accessToken={accessToken} isPublicPage={false} />
+          <main className="min-h-0 flex-1 overflow-y-auto">{content}</main>
+        </div>
+      </ThemeProvider>
+    </PluginModeProvider>
   );
 }
 
