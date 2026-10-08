@@ -47,8 +47,8 @@ def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_Manag
     return ManagedObjectRepository(prisma_client).table
 
 
-def _is_provider_not_found(error: Exception) -> bool:
-    return getattr(error, "status_code", None) == 404
+def _is_response_gone_at_provider(error: Exception, provider_response_id: str) -> bool:
+    return getattr(error, "status_code", None) == 404 and provider_response_id in str(error)
 
 
 class CheckResponsesCost:
@@ -196,13 +196,16 @@ class CheckResponsesCost:
                 if model_name:
                     litellm_metadata["model"] = model_name
                     litellm_metadata["model_group"] = model_name  # Use same value for model_group
+                via_router = self._resolve_deployment(responses_id_security)
             except Exception as e:
                 verbose_proxy_logger.warning(
                     f"Skipping job {unified_object_id} due to error: {e}"
                 )
                 continue
 
-            via_router = self._resolve_deployment(responses_id_security)
+            provider_response_id = ResponsesAPIRequestUtils.decode_responses_api_response_id(
+                responses_id_security
+            ).get("response_id", responses_id_security)
             try:
                 response = await self._get_response(
                     response_id=responses_id_security,
@@ -215,7 +218,7 @@ class CheckResponsesCost:
                 )
 
             except Exception as e:
-                if via_router and _is_provider_not_found(e):
+                if via_router and _is_response_gone_at_provider(e, provider_response_id):
                     verbose_proxy_logger.info(
                         f"Response {unified_object_id} no longer available at provider (404), marking stale_expired: {e}"
                     )
