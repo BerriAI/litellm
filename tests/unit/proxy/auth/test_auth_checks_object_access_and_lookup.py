@@ -7929,6 +7929,29 @@ async def test_auth_registries_survive_management_cache_churn():
     for key, _, sentinel in registry_cases:
         assert isinstance(await _cached_registry(key, sentinel, cache), _RegistryNotCached)
 
+    key = tag_registry_cache_key()
+    cache.set_cache(key, ("sync-tag",), local_only=True, ttl=60)
+    assert registry_memory.get_cache(key) == ("sync-tag",)
+    cache.delete_cache(key)
+    assert registry_memory.get_cache(key) is None
+
+    await cache.async_set_cache_pipeline(((key, ("pipeline-tag",)),), local_only=True, ttl=60)
+    assert registry_memory.get_cache(key) == ("pipeline-tag",)
+    assert await cache.async_delete_cache_pre_call(key) is None
+    assert registry_memory.get_cache(key) == ("pipeline-tag",)
+
+    with (
+        patch.object(
+            cache.auth_registry_cache,
+            "async_set_cache_pre_call",
+            new=AsyncMock(return_value=object()),
+        ) as set_pre_call,
+        patch.object(cache.auth_registry_cache, "async_set_cache", new=AsyncMock()) as direct_set,
+    ):
+        assert await cache.async_set_cache(key, ("queued-tag",), ttl=60) is None
+    set_pre_call.assert_awaited_once_with(key, ("queued-tag",), 60)
+    direct_set.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 async def test_get_end_user_object_registry_db_error_negative_caches_and_keeps_per_id_fetch(

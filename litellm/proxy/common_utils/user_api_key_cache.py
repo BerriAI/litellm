@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast, overload
 
 from pydantic import BaseModel
 
@@ -32,6 +32,21 @@ def is_user_key_cache_key(key: str) -> bool:
 
 
 _PIPELINED_SET_OPTIONS: Final = frozenset(("ttl",))
+
+
+class _AuthRegistryCacheCalls(Protocol):
+    def get_cache(
+        self, key: str, parent_otel_span: Span | None = None, local_only: bool = False, **kwargs: object
+    ) -> object: ...
+    async def async_get_cache(
+        self, key: str, parent_otel_span: Span | None = None, local_only: bool = False, **kwargs: object
+    ) -> object: ...
+    def set_cache(self, key: str, value: object, local_only: bool = False, **kwargs: object) -> None: ...
+    async def async_set_cache(self, key: str, value: object, local_only: bool = False, **kwargs: object) -> None: ...
+    def delete_cache(self, key: str) -> None: ...
+    async def async_set_cache_pipeline(
+        self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs: object
+    ) -> None: ...
 
 
 class UserApiKeyCache(DualCache):
@@ -88,6 +103,10 @@ class UserApiKeyCache(DualCache):
             redis_cache=redis_cache,
             default_in_memory_ttl=default_in_memory_ttl,
             default_redis_ttl=default_redis_ttl,
+        )
+        # DualCache leaves these methods untyped; record the exact call surface without a runtime wrapper.
+        self._auth_registry_cache_calls: Final[_AuthRegistryCacheCalls] = cast(
+            _AuthRegistryCacheCalls, cast(object, self.auth_registry_cache)
         )
 
     def in_memory_cache_for(self, key: str) -> InMemoryCache:
@@ -148,9 +167,7 @@ class UserApiKeyCache(DualCache):
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         cached: Final = (
-            self.auth_registry_cache.get_cache(
-                key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
-            )
+            self._auth_registry_cache_calls.get_cache(key, parent_otel_span, local_only, **kwargs)
             if is_auth_registry_cache_key(key)
             else self.key_object_cache.get_cache(
                 key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
@@ -204,9 +221,7 @@ class UserApiKeyCache(DualCache):
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         cached: Final = (
-            await self.auth_registry_cache.async_get_cache(
-                key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
-            )
+            await self._auth_registry_cache_calls.async_get_cache(key, parent_otel_span, local_only, **kwargs)
             if is_auth_registry_cache_key(key)
             else await self.key_object_cache.async_get_cache(
                 key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
@@ -234,7 +249,7 @@ class UserApiKeyCache(DualCache):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         if key is not None and is_auth_registry_cache_key(key):
-            return self.auth_registry_cache.set_cache(key=key, value=payload, local_only=local_only, **kwargs)
+            return self._auth_registry_cache_calls.set_cache(key, payload, local_only, **kwargs)
         if key is not None and is_user_key_cache_key(key):
             return self.key_object_cache.set_cache(key=key, value=payload, local_only=local_only, **kwargs)
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
@@ -245,29 +260,30 @@ class UserApiKeyCache(DualCache):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         ttl: Final = kwargs.get("ttl")
+        pipeline_ttl: float | None = ttl if isinstance(ttl, (int, float)) else None
         pipelined: Final = (
             key is not None
             and not local_only
             and kwargs.keys() <= _PIPELINED_SET_OPTIONS
             and (ttl is None or isinstance(ttl, (int, float)))
         )
+        if pipelined and key is not None:
+            pre_call_cache: DualCache = self
+            if is_auth_registry_cache_key(key):
+                pre_call_cache = self.auth_registry_cache
+            elif is_user_key_cache_key(key):
+                pre_call_cache = self.key_object_cache
+            if await pre_call_cache.async_set_cache_pre_call(key, payload, pipeline_ttl) is not None:
+                return None
         if key is not None and is_auth_registry_cache_key(key):
-            if pipelined and await self.auth_registry_cache.async_set_cache_pre_call(key, payload, ttl) is not None:
-                return None
-            return await self.auth_registry_cache.async_set_cache(
-                key=key, value=payload, local_only=local_only, **kwargs
-            )
+            return await self._auth_registry_cache_calls.async_set_cache(key, payload, local_only, **kwargs)
         if key is not None and is_user_key_cache_key(key):
-            if pipelined and await self.key_object_cache.async_set_cache_pre_call(key, payload, ttl) is not None:
-                return None
             return await self.key_object_cache.async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
-        if pipelined and await super().async_set_cache_pre_call(key, payload, ttl) is not None:
-            return None
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     def delete_cache(self, key: str) -> None:
         if is_auth_registry_cache_key(key):
-            self.auth_registry_cache.delete_cache(key)
+            self._auth_registry_cache_calls.delete_cache(key)
             return
         if is_user_key_cache_key(key):
             self.key_object_cache.delete_cache(key)
@@ -294,7 +310,7 @@ class UserApiKeyCache(DualCache):
         """Batch twin of ``async_delete_cache``, partitioned like
         ``async_set_cache_pipeline``.
 
-        Both partitions are cleared even when one raises, because a caller
+        All three partitions are cleared even when one raises, because a caller
         batching these has already committed the rows they cache.
         """
         registry_keys: Final = tuple(key for key in keys if is_auth_registry_cache_key(key))
@@ -339,9 +355,7 @@ class UserApiKeyCache(DualCache):
             if not is_auth_registry_cache_key(entry[0]) and not is_user_key_cache_key(entry[0])
         )
         if registry_entries:
-            await self.auth_registry_cache.async_set_cache_pipeline(
-                cache_list=registry_entries, local_only=local_only, **kwargs
-            )
+            await self._auth_registry_cache_calls.async_set_cache_pipeline(registry_entries, local_only, **kwargs)
         if key_object_entries:
             await self.key_object_cache.async_set_cache_pipeline(
                 cache_list=key_object_entries, local_only=local_only, **kwargs
