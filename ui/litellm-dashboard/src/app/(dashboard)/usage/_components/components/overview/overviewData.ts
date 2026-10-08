@@ -15,44 +15,35 @@ interface RankedRow extends Record<string, unknown> {
   tokens: number;
 }
 
-const EMPTY_RANKED = { spend: 0, requests: 0, successful_requests: 0, failed_requests: 0, tokens: 0 } as const;
-
 /** Sums one breakdown dimension across every day, highest spend first. */
 export const rollUpBreakdown = (results: readonly DailyData[], dimension: BreakdownDimension): RankedRow[] => {
-  const entries = results.flatMap((day) => Object.entries(day.breakdown[dimension] ?? {}));
-  const totals = entries.reduce<ReadonlyMap<string, RankedRow>>((acc, [key, entry]) => {
-    const row = acc.get(key) ?? { key, ...EMPTY_RANKED };
-    return new Map([
-      ...acc,
-      [
-        key,
-        {
-          ...row,
-          spend: row.spend + entry.metrics.spend,
-          requests: row.requests + entry.metrics.api_requests,
-          successful_requests: row.successful_requests + (entry.metrics.successful_requests || 0),
-          failed_requests: row.failed_requests + (entry.metrics.failed_requests || 0),
-          tokens: row.tokens + entry.metrics.total_tokens,
-        },
-      ],
-    ]);
-  }, new Map());
-  return [...totals.values()].sort((a, b) => b.spend - a.spend);
+  // Sorting once and slicing each key's run stays O(n log n); copying a map per entry was quadratic.
+  const entries = results
+    .flatMap((day) => Object.entries(day.breakdown[dimension] ?? {}))
+    .sort(([a], [b]) => (a < b ? -1 : Number(a > b)));
+  const starts = entries.map((_, i) => i).filter((i) => i === 0 || entries[i][0] !== entries[i - 1][0]);
+  const groups = starts.map((start, n) => entries.slice(start, starts[n + 1] ?? entries.length));
+  return groups
+    .map((group) => ({
+      key: group[0][0],
+      spend: group.reduce((sum, [, entry]) => sum + entry.metrics.spend, 0),
+      requests: group.reduce((sum, [, entry]) => sum + entry.metrics.api_requests, 0),
+      successful_requests: group.reduce((sum, [, entry]) => sum + (entry.metrics.successful_requests || 0), 0),
+      failed_requests: group.reduce((sum, [, entry]) => sum + (entry.metrics.failed_requests || 0), 0),
+      tokens: group.reduce((sum, [, entry]) => sum + entry.metrics.total_tokens, 0),
+    }))
+    .sort((a, b) => b.spend - a.spend);
 };
 
 export const OTHER_COLOR = "#94a3b8";
 const OTHER_SERIES = "Other";
 
 export interface SeriesDay extends Record<string, unknown> {
-  /** ISO date, the chart's category key: unique across years, unlike its display label. */
   date: string;
   label: string;
 }
 
-/**
- * `keys` are internal (`s0`, `s1`, ...) so a series named `date`, `label` or `Other` cannot
- * collide with the day's own fields; `labels` carry the display names in the same order.
- */
+/** `keys` are internal so a series named `date`, `label` or `Other` cannot collide with a day's own fields. */
 export interface Series {
   data: SeriesDay[];
   keys: string[];
