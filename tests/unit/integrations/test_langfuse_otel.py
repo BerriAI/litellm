@@ -1006,5 +1006,74 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["arguments"] == {}
 
 
+    @staticmethod
+    def _observation_output_for(content):
+        """Run _set_observation_output over a Responses message with ``content`` parts."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        response = ResponsesAPIResponse(
+            id="resp_123",
+            created_at=1700000000,
+            model="gpt-5.6",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": content,
+                }
+            ],
+        )
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_set:
+            LangfuseOtelLogger._set_observation_output(span=MagicMock(), response_obj=response)
+        output_calls = [
+            call
+            for call in mock_set.call_args_list
+            if call.args[1] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+        ]
+        assert len(output_calls) == 1, "observation.output should be set exactly once"
+        return json.loads(output_calls[0].args[2])
+
+    def test_message_observation_output_keeps_every_output_text_part(self):
+        """A message item can carry several output_text parts. Reading only the
+        first one silently dropped the rest of the answer."""
+        result = self._observation_output_for(
+            [
+                {"type": "output_text", "text": "Part one. ", "annotations": []},
+                {"type": "output_text", "text": "Part two.", "annotations": []},
+            ]
+        )
+        assert result[0]["content"] == "Part one. Part two."
+
+    def test_message_observation_output_keeps_refusal_text(self):
+        """A refusal-only message previously produced content="" because the code
+        looked for a ``text`` attribute on the refusal part, which does not exist."""
+        result = self._observation_output_for(
+            [{"type": "refusal", "refusal": "I can't help with that."}]
+        )
+        assert result[0]["refusal"] == "I can't help with that."
+        assert "content" not in result[0], "a refusal message must not also claim empty content"
+
+    def test_message_observation_output_keeps_text_and_refusal_separate(self):
+        result = self._observation_output_for(
+            [
+                {"type": "output_text", "text": "partial answer. ", "annotations": []},
+                {"type": "refusal", "refusal": "then I stopped."},
+            ]
+        )
+        assert result[0]["content"] == "partial answer. "
+        assert result[0]["refusal"] == "then I stopped."
+
+    def test_message_observation_output_tolerates_empty_content(self):
+        """Indexing content[0] raised IndexError on an empty content list, which
+        turned a recoverable message into a failed logging call."""
+        result = self._observation_output_for([])
+        assert result[0]["role"] == "assistant"
+        assert "content" not in result[0]
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
