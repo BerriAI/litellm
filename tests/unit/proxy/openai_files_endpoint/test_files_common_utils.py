@@ -514,3 +514,144 @@ class TestCompletedBatchSafeToRetire:
 )
 def test_is_litellm_executed_batch_reads_the_llm_batch_id_prefix(decoded_unified_batch_id: str, executed: bool):
     assert is_litellm_executed_batch(decoded_unified_batch_id) is executed
+
+
+@pytest.mark.asyncio
+async def test_batch_status_sync_from_provider_to_database():
+    import json
+
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_batch_from_database,
+        update_batch_in_database,
+    )
+
+    batch_id: Final = "batch_test123"
+    unified_batch_id: Final = "litellm_proxy:test_unified_batch"
+
+    mock_db_batch: Final = MagicMock()
+    mock_db_batch.unified_object_id = batch_id
+    mock_db_batch.status = "validating"
+    mock_db_batch.file_object = json.dumps(
+        {
+            "id": batch_id,
+            "object": "batch",
+            "status": "validating",
+            "endpoint": "/v1/chat/completions",
+            "input_file_id": "file-test123",
+            "completion_window": "24h",
+            "created_at": 1234567890,
+        }
+    )
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+        return_value=mock_db_batch
+    )
+    mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+
+    mock_managed_files: Final = MagicMock()
+    mock_logger: Final = MagicMock()
+
+    db_batch_object, response_batch = await get_batch_from_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma_client,
+        verbose_proxy_logger=mock_logger,
+    )
+
+    mock_prisma_client.db.litellm_managedobjecttable.find_first.assert_called_once_with(
+        where={"unified_object_id": batch_id}
+    )
+    assert db_batch_object is not None
+    assert response_batch is not None
+    assert response_batch.id == batch_id
+    assert response_batch.status == "validating"
+
+    updated_batch_response: Final = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="completed",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+        output_file_id="file-output123",
+    )
+
+    await update_batch_in_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        response=updated_batch_response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma_client,
+        verbose_proxy_logger=mock_logger,
+        db_batch_object=db_batch_object,
+        operation="retrieve",
+    )
+
+    mock_prisma_client.db.litellm_managedobjecttable.update.assert_called_once()
+    update_call_args: Final = mock_prisma_client.db.litellm_managedobjecttable.update.call_args
+
+    assert update_call_args.kwargs["where"]["unified_object_id"] == batch_id
+    assert update_call_args.kwargs["data"]["status"] == "complete"
+    assert "file_object" in update_call_args.kwargs["data"]
+    assert "updated_at" in update_call_args.kwargs["data"]
+    assert update_call_args.kwargs["data"]["batch_processed"] is True
+
+    mock_logger.info.assert_called()
+    log_message: Final = mock_logger.info.call_args[0][0] % mock_logger.info.call_args[0][1:]
+    assert "validating" in log_message
+    assert "completed" in log_message
+
+
+@pytest.mark.asyncio
+async def test_batch_cancel_updates_database():
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        update_batch_in_database,
+    )
+
+    batch_id: Final = "batch_cancel_test"
+    unified_batch_id: Final = "litellm_proxy:cancel_test"
+
+    cancelled_batch_response: Final = LiteLLMBatch(
+        id=batch_id,
+        object="batch",
+        status="cancelled",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-test123",
+        completion_window="24h",
+        created_at=1234567890,
+        cancelled_at=1234567999,
+    )
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+
+    mock_managed_files: Final = MagicMock()
+    mock_logger: Final = MagicMock()
+
+    await update_batch_in_database(
+        batch_id=batch_id,
+        unified_batch_id=unified_batch_id,
+        response=cancelled_batch_response,
+        managed_files_obj=mock_managed_files,
+        prisma_client=mock_prisma_client,
+        verbose_proxy_logger=mock_logger,
+        operation="cancel",
+    )
+
+    mock_prisma_client.db.litellm_managedobjecttable.update.assert_called_once()
+    update_call_args: Final = mock_prisma_client.db.litellm_managedobjecttable.update.call_args
+
+    assert update_call_args.kwargs["where"]["unified_object_id"] == batch_id
+    assert update_call_args.kwargs["data"]["status"] == "cancelled"
+    assert "file_object" in update_call_args.kwargs["data"]
+
+    mock_logger.info.assert_called()
+    log_message: Final = mock_logger.info.call_args[0][0] % mock_logger.info.call_args[0][1:]
+    assert "cancel" in log_message.lower()
+    assert "cancelled" in log_message

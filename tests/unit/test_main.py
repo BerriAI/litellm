@@ -5831,3 +5831,149 @@ def test_completion_openai_metadata(monkeypatch, enable_preview_features):
             }
         else:
             assert "metadata" not in mock_completion.call_args.kwargs
+
+
+AZURE_TTS_BASE: Final = "https://tts.example.azure.com"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_speech_azure_returns_binary_audio(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        url__regex=rf"{AZURE_TTS_BASE}/openai/deployments/tts/audio/speech\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, content=b"ID3-fake-mp3"))
+
+    speech_kwargs: Final = {
+        "model": "azure/tts",
+        "input": "the quick brown fox jumped over the lazy dogs",
+        "voice": "alloy",
+        "api_base": AZURE_TTS_BASE,
+        "api_key": "fake-key",
+        "max_retries": 1,
+        "timeout": 60,
+    }
+    response: Final = (
+        litellm.speech(**speech_kwargs) if sync_mode else await litellm.aspeech(**speech_kwargs)
+    )
+
+    assert route.called
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+    assert isinstance(response, HttpxBinaryResponseContent)
+    assert response.content == b"ID3-fake-mp3"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_speech_openai_returns_binary_audio(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"ID3-fake-mp3")
+    )
+
+    speech_kwargs: Final = {
+        "model": "openai/tts-1",
+        "input": "the quick brown fox jumped over the lazy dogs",
+        "voice": "alloy",
+        "api_key": "fake-key",
+        "max_retries": 1,
+        "timeout": 60,
+    }
+    response: Final = (
+        litellm.speech(**speech_kwargs) if sync_mode else await litellm.aspeech(**speech_kwargs)
+    )
+
+    assert route.called
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+    assert isinstance(response, HttpxBinaryResponseContent)
+    assert response.content == b"ID3-fake-mp3"
+
+
+GETTYSBURG_WAV: Final = ("gettysburg.wav", b"RIFF\x00\x00\x00\x00WAVE-gettysburg", "audio/wav")
+EAGLE_WAV: Final = ("eagle.wav", b"RIFF\x00\x00\x00\x00WAVE-eagle", "audio/wav")
+
+
+async def test_transcription_caching_hit_same_file_miss_different_file(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.caching.caching import Cache
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.cache = Cache()
+    route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        side_effect=[
+            httpx.Response(200, json={"text": "gettysburg transcript"}),
+            httpx.Response(200, json={"text": "eagle transcript"}),
+        ]
+    )
+
+    await litellm.atranscription(model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key")
+    await GLOBAL_LOGGING_WORKER.clear_queue()
+    for _ in range(50):
+        if litellm.cache.cache.cache_dict:
+            break
+        await asyncio.sleep(0.1)
+    assert litellm.cache.cache.cache_dict
+
+    response_2: Final = await litellm.atranscription(
+        model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key"
+    )
+    assert response_2._hidden_params["cache_hit"] is True
+
+    response_3: Final = await litellm.atranscription(
+        model="openai/whisper-1", file=EAGLE_WAV, api_key="fake-key"
+    )
+    assert response_3._hidden_params.get("cache_hit") is not True
+    assert response_3.text != response_2.text
+    assert route.call_count == 2
+
+
+async def test_whisper_log_pre_call_fires_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+    calls: Final[list] = []
+
+    class _PreCallRecorder(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            calls.append((model, messages, kwargs))
+
+    litellm.callbacks = [_PreCallRecorder()]
+
+    await litellm.atranscription(model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key")
+
+    assert len(calls) == 1
+
+
+TRANSCRIBE_MODELS: Final = ("gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1")
+
+
+async def test_transcription_model_names_pass_through(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    for model in TRANSCRIBE_MODELS:
+        response: Final = await litellm.atranscription(
+            model=f"openai/{model}",
+            file=GETTYSBURG_WAV,
+            api_key="fake-key",
+            response_format="json",
+        )
+        assert response._hidden_params["model"] == model
+        assert response._hidden_params["custom_llm_provider"] == "openai"
+        assert response.text is not None
+
+    for index, model in enumerate(TRANSCRIBE_MODELS):
+        assert model.encode() in route.calls[index].request.content, model

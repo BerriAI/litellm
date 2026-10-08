@@ -1,6 +1,6 @@
 import base64
 from typing import Final
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -663,3 +663,103 @@ def test_transform_text_to_speech_response_rejects_malformed_payloads_without_ec
         )
 
     assert "input_value" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+@patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post", new_callable=AsyncMock)
+@patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
+async def test_aspeech_vertex_ai_default_voice_posts_synthesize_request(mock_ensure_token, mock_post):
+    mock_ensure_token.return_value = ("mock-token", "test-project")
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"audioContent": "dGVzdCByZXNwb25zZQ=="}
+    mock_post.return_value = mock_response
+
+    await litellm.aspeech(
+        model="vertex_ai/test",
+        input="async hello what llm guardrail do you have",
+        vertex_project="test-project",
+        vertex_location="us-central1",
+    )
+
+    mock_post.assert_called_once()
+    call_kwargs: Final = mock_post.call_args.kwargs
+    assert call_kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
+    assert "x-goog-user-project" in call_kwargs["headers"]
+    assert call_kwargs["headers"]["Authorization"] == "Bearer mock-token"
+    assert call_kwargs["json"] == {
+        "input": {"text": "async hello what llm guardrail do you have"},
+        "voice": {"languageCode": "en-US", "name": "en-US-Studio-O"},
+        "audioConfig": {"audioEncoding": "LINEAR16", "speakingRate": "1"},
+    }
+
+
+@pytest.mark.asyncio
+@patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post", new_callable=AsyncMock)
+@patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
+async def test_aspeech_vertex_ai_forwards_caller_voice_and_audio_config(mock_ensure_token, mock_post):
+    mock_ensure_token.return_value = ("mock-token", "test-project")
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"audioContent": "dGVzdCByZXNwb25zZQ=="}
+    mock_post.return_value = mock_response
+
+    await litellm.aspeech(
+        model="vertex_ai/test",
+        input="async hello what llm guardrail do you have",
+        voice={"languageCode": "en-UK", "name": "en-UK-Studio-O"},
+        audioConfig={"audioEncoding": "LINEAR22", "speakingRate": "10"},
+        vertex_project="test-project",
+        vertex_location="us-central1",
+    )
+
+    mock_post.assert_called_once()
+    call_kwargs: Final = mock_post.call_args.kwargs
+    assert call_kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
+    assert "x-goog-user-project" in call_kwargs["headers"]
+    assert call_kwargs["headers"]["Authorization"] == "Bearer mock-token"
+    assert call_kwargs["json"] == {
+        "input": {"text": "async hello what llm guardrail do you have"},
+        "voice": {"languageCode": "en-UK", "name": "en-UK-Studio-O"},
+        "audioConfig": {"audioEncoding": "LINEAR22", "speakingRate": "10"},
+    }
+
+
+@pytest.mark.asyncio
+@patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post", new_callable=AsyncMock)
+@patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
+async def test_aspeech_vertex_ai_sends_ssml_input(mock_ensure_token, mock_post):
+    mock_ensure_token.return_value = ("mock-token", "test-project")
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"audioContent": "dGVzdCByZXNwb25zZQ=="}
+    mock_post.return_value = mock_response
+    ssml: Final = """
+    <speak>
+        <p>Hello, world!</p>
+        <p>This is a test of the <break strength="medium" /> text-to-speech API.</p>
+    </speak>
+    """
+
+    await litellm.aspeech(
+        model="vertex_ai/test",
+        input=ssml,
+        voice={"languageCode": "en-UK", "name": "en-UK-Studio-O"},
+        audioConfig={"audioEncoding": "LINEAR22", "speakingRate": "10"},
+        vertex_project="test-project",
+        vertex_location="us-central1",
+    )
+
+    mock_post.assert_called_once()
+    call_kwargs: Final = mock_post.call_args.kwargs
+    assert call_kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
+    assert "x-goog-user-project" in call_kwargs["headers"]
+    assert call_kwargs["headers"]["Authorization"] == "Bearer mock-token"
+    assert call_kwargs["json"] == {
+        "input": {"ssml": ssml},
+        "voice": {"languageCode": "en-UK", "name": "en-UK-Studio-O"},
+        "audioConfig": {"audioEncoding": "LINEAR22", "speakingRate": "10"},
+    }

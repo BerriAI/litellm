@@ -8,6 +8,7 @@ from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -20,6 +21,7 @@ from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _extract_usage_for_ocr_call,
     _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
     _get_request_duration_ms,
@@ -5805,3 +5807,232 @@ def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_
     )
     assert payload["agent_id"] == "header-selected-agent"
     assert payload["billing_agent_id"] == billing_agent
+
+
+class _OcrUsageInfo(BaseModel):
+    pages_processed: int
+    doc_size_bytes: int | None = None
+
+
+class _OcrResponse(BaseModel):
+    id: str
+    object: str
+    model: str
+    usage_info: _OcrUsageInfo
+
+
+class TestExtractUsageForOCRCall:
+    def test_extract_usage_from_dict(self) -> None:
+        response_obj_dict: Final = {"usage_info": {"pages_processed": 5}}
+
+        usage: Final = _extract_usage_for_ocr_call(response_obj_dict, response_obj_dict)
+
+        assert usage["prompt_tokens"] == 0
+        assert usage["completion_tokens"] == 0
+        assert usage["total_tokens"] == 0
+        assert usage["pages_processed"] == 5
+
+    def test_extract_usage_from_pydantic_model(self) -> None:
+        response_obj: Final = _OcrResponse(
+            id="ocr-123",
+            object="ocr",
+            model="test-ocr-model",
+            usage_info=_OcrUsageInfo(pages_processed=10, doc_size_bytes=1024),
+        )
+
+        usage: Final = _extract_usage_for_ocr_call(response_obj, response_obj.model_dump())
+
+        assert usage["prompt_tokens"] == 0
+        assert usage["completion_tokens"] == 0
+        assert usage["total_tokens"] == 0
+        assert usage["pages_processed"] == 10
+
+    def test_extract_usage_with_object_attributes(self) -> None:
+        class _SimpleUsageInfo:
+            def __init__(self, pages_processed: int) -> None:
+                self.pages_processed = pages_processed
+
+        class _SimpleOCRResponse:
+            def __init__(self) -> None:
+                self.usage_info = _SimpleUsageInfo(pages_processed=3)
+
+        usage: Final = _extract_usage_for_ocr_call(_SimpleOCRResponse(), {})
+
+        assert usage["prompt_tokens"] == 0
+        assert usage["completion_tokens"] == 0
+        assert usage["total_tokens"] == 0
+        assert usage["pages_processed"] == 3
+
+    def test_extract_usage_missing_usage_info(self) -> None:
+        assert _extract_usage_for_ocr_call({}, {}) == {}
+
+    def test_extract_usage_empty_usage_info(self) -> None:
+        usage: Final = _extract_usage_for_ocr_call({"usage_info": {}}, {"usage_info": {}})
+
+        assert usage["prompt_tokens"] == 0
+        assert usage["completion_tokens"] == 0
+        assert usage["total_tokens"] == 0
+        assert usage["pages_processed"] == 0
+
+
+class TestGetLoggingPayloadOCR:
+    @pytest.fixture
+    def base_kwargs(self) -> dict:
+        return {
+            "model": "test-ocr-model",
+            "call_type": "ocr",
+            "litellm_params": {},
+            "response_cost": 0.05,
+        }
+
+    def test_ocr_call_with_dict_response(self, base_kwargs: dict) -> None:
+        now: Final = datetime.datetime.now(timezone.utc)
+        response_obj: Final = {
+            "id": "ocr-test-123",
+            "object": "ocr",
+            "model": "test-ocr-model",
+            "usage_info": {"pages_processed": 7, "doc_size_bytes": 2048},
+        }
+
+        payload: Final = get_logging_payload(
+            kwargs=base_kwargs,
+            response_obj=response_obj,
+            start_time=now,
+            end_time=now,
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == 0.05
+        metadata: Final = json.loads(payload["metadata"])
+        assert metadata["additional_usage_values"]["pages_processed"] == 7
+
+    def test_aocr_call_with_pydantic_response(self, base_kwargs: dict) -> None:
+        now: Final = datetime.datetime.now(timezone.utc)
+        base_kwargs["call_type"] = "aocr"
+        response_obj: Final = _OcrResponse(
+            id="aocr-test-456",
+            object="ocr",
+            model="test-ocr-model",
+            usage_info=_OcrUsageInfo(pages_processed=12),
+        )
+
+        payload: Final = get_logging_payload(
+            kwargs=base_kwargs,
+            response_obj=response_obj,
+            start_time=now,
+            end_time=now,
+        )
+
+        assert payload["call_type"] == "aocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        metadata: Final = json.loads(payload["metadata"])
+        assert metadata["additional_usage_values"]["pages_processed"] == 12
+
+    def test_ocr_call_missing_usage_info(self, base_kwargs: dict) -> None:
+        now: Final = datetime.datetime.now(timezone.utc)
+        response_obj: Final = {
+            "id": "ocr-test-789",
+            "object": "ocr",
+            "model": "test-ocr-model",
+        }
+
+        payload: Final = get_logging_payload(
+            kwargs=base_kwargs,
+            response_obj=response_obj,
+            start_time=now,
+            end_time=now,
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+
+    def test_ocr_call_with_zero_pages(self, base_kwargs: dict) -> None:
+        now: Final = datetime.datetime.now(timezone.utc)
+        response_obj: Final = {
+            "id": "ocr-test-000",
+            "object": "ocr",
+            "model": "test-ocr-model",
+            "usage_info": {"pages_processed": 0},
+        }
+
+        payload: Final = get_logging_payload(
+            kwargs=base_kwargs,
+            response_obj=response_obj,
+            start_time=now,
+            end_time=now,
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        metadata: Final = json.loads(payload["metadata"])
+        assert metadata["additional_usage_values"]["pages_processed"] == 0
+
+    def test_non_ocr_call_uses_token_based_usage(self) -> None:
+        now: Final = datetime.datetime.now(timezone.utc)
+        kwargs: Final = {
+            "model": "gpt-5.5",
+            "call_type": "completion",
+            "litellm_params": {},
+            "response_cost": 0.02,
+        }
+        response_obj: Final = {
+            "id": "completion-test-123",
+            "object": "chat.completion",
+            "model": "gpt-5.5",
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 100,
+                "total_tokens": 150,
+            },
+        }
+
+        payload: Final = get_logging_payload(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=now,
+            end_time=now,
+        )
+
+        assert payload["call_type"] == "completion"
+        assert payload["prompt_tokens"] == 50
+        assert payload["completion_tokens"] == 100
+        assert payload["total_tokens"] == 150
+
+    def test_ocr_with_metadata(self, base_kwargs: dict) -> None:
+        now: Final = datetime.datetime.now(timezone.utc)
+        base_kwargs["litellm_params"] = {
+            "metadata": {
+                "user_api_key_user_id": "test-user",
+                "user_api_key_team_id": "test-team",
+            }
+        }
+        response_obj: Final = {
+            "id": "ocr-metadata-test",
+            "object": "ocr",
+            "model": "test-ocr-model",
+            "usage_info": {"pages_processed": 5, "doc_size_bytes": 1024},
+        }
+
+        payload: Final = get_logging_payload(
+            kwargs=base_kwargs,
+            response_obj=response_obj,
+            start_time=now,
+            end_time=now,
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["user"] == "test-user"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        metadata: Final = json.loads(payload["metadata"])
+        assert metadata["additional_usage_values"]["pages_processed"] == 5
+        assert metadata["additional_usage_values"]["doc_size_bytes"] == 1024
