@@ -10,6 +10,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
@@ -59,7 +60,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             verbose_logger.debug("Processing Azure AI Anthropic CountTokens request for model: %s", model)
 
             # Transform request to Anthropic format
-            request_body: Final = self.transform_request_to_count_tokens(
+            request_body: Final = await asyncify(self.transform_request_to_count_tokens)(
                 model=model,
                 messages=messages,
                 tools=tools,

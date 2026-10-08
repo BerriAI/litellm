@@ -110,6 +110,14 @@ pub struct TraceSpansRow {
     pub call_evidence: Option<crate::CallEvidenceKind>,
     #[serde(default)]
     pub tool_call_id: String,
+    #[serde(default)]
+    pub source_type: String,
+    #[serde(default)]
+    pub source_url: String,
+    #[serde(default)]
+    pub source_title: String,
+    #[serde(default)]
+    pub source_user: String,
     pub team_id: String,
     pub api_key_hash: String,
     pub user_id: String,

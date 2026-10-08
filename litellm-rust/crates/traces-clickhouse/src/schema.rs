@@ -14,10 +14,11 @@ static MIGRATOR: Migrator = Migrator {
     ..sqlx::migrate!("./migrations")
 };
 
-const RETENTION: [(&str, &str); 3] = [
+const RETENTION: [(&str, &str); 4] = [
     ("otel_traces", "toDateTime(Timestamp)"),
     ("agent_traces_by_key", "toDateTime(StartTs)"),
     ("spend_logs", "toDateTime(start_time)"),
+    ("lens_feedback", "toDateTime(CreatedAt)"),
 ];
 
 fn validate_schema(database: &str, retention_days: u32) -> Result<(), Error> {
