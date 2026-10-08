@@ -50509,7 +50509,7 @@
       },
       "/scim/v2/Groups/{group_id}": {
         "delete": {
-          "description": "Delete a group according to SCIM v2 protocol",
+          "description": "Delete a group according to SCIM v2 protocol.\n\nThe group's team is deleted the way ``/team/delete`` deletes it, so the members'\ngroup entries, their membership rows and every key issued on the team go with it,\nhowever many members the group has. The roles are recomputed again for every user\nthe delete detached, so a member a concurrent group write added after the roster\nwas read is demoted with the rest.",
           "operationId": "delete_group_scim_v2_Groups__group_id__delete",
           "parameters": [
             {
