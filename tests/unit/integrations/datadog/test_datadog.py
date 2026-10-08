@@ -25,6 +25,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_source,
     get_datadog_tags,
 )
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.integrations.datadog import DatadogInitParams, DatadogPayload, DataDogStatus
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
@@ -908,6 +909,7 @@ async def test_a_failing_redis_cache_is_delivered_to_datadog_as_redis_warnings(
             mock_response="Accepted",
             caching=True,
         )
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
     await datadog_logger.async_send_batch()
 
     assert intake.call_count == 1

@@ -14,7 +14,8 @@ import litellm
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 
 _OPENAI_URL: Final = "https://api.openai.com/v1/chat/completions"
-_EXPECTED_SPAN_NAMES: Final = frozenset({"litellm_request", "raw_gen_ai_request"})
+_EXPECTED_SPAN_NAMES: Final = ("litellm_request", "raw_gen_ai_request")
+_USER: Final = "OTEL_USER"
 _USAGE: Final = {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10}
 _COMPLETION: Final = {
     "id": "chatcmpl-otel",
@@ -80,6 +81,15 @@ _RAW_NON_STREAMING_ATTRIBUTES: Final = (
 )
 
 
+def _is_our_request(span: ReadableSpan) -> bool:
+    return span.name == "litellm_request" and (span.attributes or {}).get("llm.user") == _USER
+
+
+def _trace_id(span: ReadableSpan) -> int:
+    assert span.context is not None
+    return span.context.trace_id
+
+
 class _SignallingExporter(InMemorySpanExporter):
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         super().__init__()
@@ -88,7 +98,7 @@ class _SignallingExporter(InMemorySpanExporter):
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         result: Final = super().export(spans)
-        if any(span.name == "litellm_request" for span in spans):
+        if any(_is_our_request(span) for span in spans):
             self.loop.call_soon_threadsafe(self.request_span_exported.set)
         return result
 
@@ -118,7 +128,7 @@ async def test_otel_callback_emits_the_request_and_raw_provider_spans(
         model="gpt-4.1-mini",
         messages=[{"role": "user", "content": "hi"}],
         temperature=0.1,
-        user="OTEL_USER",
+        user=_USER,
         stream=streaming,
         api_key="sk-unit-test",
     )
@@ -126,16 +136,18 @@ async def test_otel_callback_emits_the_request_and_raw_provider_spans(
         assert [chunk async for chunk in response]
     await asyncio.wait_for(exporter.request_span_exported.wait(), timeout=10)
 
-    spans: Final = {span.name: span for span in exporter.get_finished_spans()}
-    assert len(exporter.get_finished_spans()) == 2
-    assert set(spans) == _EXPECTED_SPAN_NAMES
+    finished: Final = exporter.get_finished_spans()
+    request_span: Final = next(span for span in finished if _is_our_request(span))
+    ours: Final = tuple(span for span in finished if _trace_id(span) == _trace_id(request_span))
+    assert tuple(sorted(span.name for span in ours)) == _EXPECTED_SPAN_NAMES
+    spans: Final = {span.name: span for span in ours}
     request_attributes: Final = spans["litellm_request"].attributes or {}
     assert all(request_attributes.get(name) is not None for name in _LITELLM_REQUEST_ATTRIBUTES)
     assert request_attributes["gen_ai.request.model"] == "gpt-4.1-mini"
     assert request_attributes["gen_ai.system"] == "openai"
     assert request_attributes["gen_ai.request.temperature"] == 0.1
     assert request_attributes["llm.is_streaming"] == str(streaming)
-    assert request_attributes["llm.user"] == "OTEL_USER"
+    assert request_attributes["llm.user"] == _USER
     assert request_attributes["gen_ai.response.id"] == "chatcmpl-otel"
     assert request_attributes["gen_ai.usage.input_tokens"] == _USAGE["prompt_tokens"]
     assert request_attributes["gen_ai.usage.output_tokens"] == _USAGE["completion_tokens"]
