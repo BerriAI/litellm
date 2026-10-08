@@ -54,11 +54,11 @@ impl OcrPythonHost {
             .acquire(py)
     }
 
-    fn projection(&mut self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<OcrCall> {
+    fn projection(&mut self, arguments: &Bound<'_, PyDict>) -> PyResult<OcrCall> {
         let OcrHostData::Unprojected = self.data else {
             return Err(missing_state());
         };
-        let (request, handles) = project_request(self.request.bind(py), arguments)?;
+        let (request, handles) = project_request(arguments)?;
         let caller_token = handles.azure_ad_token_provider.is_some();
         self.data = OcrHostData::Projected(Box::new(handles));
         Ok(OcrCall {
@@ -96,7 +96,7 @@ impl PythonBinding for OcrPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<OcrCall, InvokeError<Error>> {
-        self.projection(py, arguments)
+        self.projection(arguments)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
     }
 
@@ -167,6 +167,39 @@ impl PythonOwned for OcrPythonHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[rstest::rstest]
+    fn an_option_missing_from_the_arguments_is_not_sent() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = |source: &std::ffi::CStr| {
+                py.eval(source, None, None)
+                    .unwrap()
+                    .cast_into::<PyDict>()
+                    .unwrap()
+            };
+            let call = c"{
+                'model': 'mistral/mistral-ocr-latest',
+                'custom_llm_provider': None,
+                'document': {'type': 'document_url', 'document_url': 'https://example.com/a.pdf'},
+                'api_key': None,
+                'api_base': None,
+                'extra_headers': None,
+                'timeout': None,
+            }";
+            let caller = dict(call);
+            caller.set_item("pages", vec![1]).unwrap();
+            let mut host = OcrPythonHost::new(caller.unbind());
+            let decoded = host.decode_request(py, &dict(call)).unwrap();
+            assert!(
+                decoded
+                    .request
+                    .optional_params
+                    .select(&["pages"])
+                    .is_empty()
+            );
+        });
+    }
 
     #[rstest::rstest]
     #[case::acquired(true)]

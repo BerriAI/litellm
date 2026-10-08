@@ -306,6 +306,38 @@ async def test_native_projection_reads_positional_parameters(route: Route, recor
 
 
 @pytest.mark.asyncio
+async def test_native_keyword_deleted_by_a_hook_falls_back_to_the_default(
+    route: Route, recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.chat_completions.dispatch import (
+        _DISPATCH as chat_dispatch,  # pyright: ignore[reportPrivateUsage]  # exercise the request passed to the native boundary
+    )
+    from litellm.responses.dispatch import (
+        _DISPATCH as responses_dispatch,  # pyright: ignore[reportPrivateUsage]  # exercise the request passed to the native boundary
+    )
+
+    class Drop(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object]:
+            return {name: value for name, value in kwargs.items() if name != "api_base"}
+
+    monkeypatch.setattr(litellm, "callbacks", [Drop()])
+    monkeypatch.setattr(litellm, "api_base", recording_server.base_url)
+    recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE if route == "chat" else RESPONSES_RESPONSE)
+    kwargs: Final = {"api_key": "test-key", "api_base": "http://127.0.0.1:1"}
+    if route == "chat":
+        request: Final = chat_dispatch.request((MESSAGES_MODEL, list(MESSAGES)), {**kwargs, "max_tokens": 16})
+        assert request is not None
+        await _native.acompletion(request)
+    else:
+        response_request: Final = responses_dispatch.request(("hello", RESPONSES_MODEL), kwargs)
+        assert response_request is not None
+        await _native.aresponses(response_request)
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", (False, True))
 @pytest.mark.parametrize("source", ("explicit", "base_url", "global", "provider", "environment", "empty"))
 async def test_native_connection_settings_reach_the_provider(

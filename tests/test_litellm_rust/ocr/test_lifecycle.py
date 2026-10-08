@@ -88,6 +88,17 @@ async def test_response_replacement_finalized_before_dispatch_in_caller_task(ocr
 
 
 @pytest.mark.asyncio
+async def test_option_deleted_by_a_hook_does_not_reach_the_provider(ocr_server: RecordingServer) -> None:
+    class Drop(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            return {name: value for name, value in kwargs.items() if name != "pages"}
+
+    litellm.callbacks.append(Drop())
+    await call_aocr(ocr_server, pages=[1])
+    assert "pages" not in ocr_server.requests[0].body
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_metadata_failure_dispatches_only_failure_and_releases_logger(
     ocr_server: RecordingServer, asynchronous: bool

@@ -44,7 +44,7 @@ impl InferenceHost {
         arguments: &Bound<'_, PyDict>,
         input: &str,
     ) -> PyResult<ProjectedCall> {
-        let argument = |name: &str| self.argument(py, arguments, name);
+        let argument = |name: &str| present(arguments, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
@@ -87,15 +87,6 @@ impl InferenceHost {
         })
     }
 
-    pub fn argument<'py>(
-        &self,
-        py: Python<'py>,
-        arguments: &Bound<'py, PyDict>,
-        name: &str,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        present(arguments, self.request.bind(py), name)
-    }
-
     pub fn parameters(
         &self,
         py: Python<'_>,
@@ -103,7 +94,7 @@ impl InferenceHost {
     ) -> PyResult<Map<String, Value>> {
         let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
         project_optional_fields(names.iter().map(String::as_str), |name| {
-            self.argument(py, arguments, name)
+            present(arguments, name)
         })
     }
 
@@ -192,4 +183,52 @@ where
         hooks,
         asynchronous,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rstest::rstest]
+    fn a_keyword_missing_from_the_arguments_takes_the_connection_default() {
+        Python::initialize();
+        Python::attach(|py| {
+            py.run(
+                c"
+import sys
+import types
+route_host = types.ModuleType('inference_projection_route_host')
+route_host.PARAMETERS = ['temperature']
+route_host.connection_defaults = lambda provider: (None, 'http://default')
+sys.modules[route_host.__name__] = route_host
+",
+                None,
+                None,
+            )
+            .unwrap();
+            let dict = |source: &std::ffi::CStr| {
+                py.eval(source, None, None)
+                    .unwrap()
+                    .cast_into::<PyDict>()
+                    .unwrap()
+            };
+            let host = InferenceHost::new(
+                dict(c"{'model': 'openai/m', 'messages': [], 'api_base': 'http://caller', 'temperature': 0.5}")
+                    .unbind(),
+                "inference_projection_route_host",
+            );
+            let projected = host
+                .project(
+                    py,
+                    &dict(c"{'model': 'openai/m', 'messages': []}"),
+                    "messages",
+                )
+                .unwrap();
+            assert_eq!(
+                projected.options.api_base.as_deref(),
+                Some("http://default")
+            );
+            assert!(projected.params.is_empty(), "{:?}", projected.params);
+        });
+    }
 }

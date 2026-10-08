@@ -33,7 +33,7 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
     {
         return Err(RustBridgeDeclined::new_err(reason));
     }
-    let argument = |name: &str| present(&call.kwargs, &call.base, name);
+    let argument = |name: &str| present(&resolved, name);
     let model = argument("model")?
         .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("model is required"))?
         .extract::<String>()?;

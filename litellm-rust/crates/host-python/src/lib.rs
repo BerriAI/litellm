@@ -19,7 +19,7 @@ mod owned;
 mod runtime;
 mod services;
 
-pub use argument::{effective, lookup, present};
+pub use argument::{effective, present};
 pub use binding::PythonBinding;
 pub use conversion_cache::{FromPythonCache, ToPythonCache};
 pub use driver::{CallArguments, CallOptions, run_call};

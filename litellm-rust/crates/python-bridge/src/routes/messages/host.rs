@@ -63,6 +63,26 @@ fn merge_headers(
     (!merged.is_empty()).then_some(merged)
 }
 
+fn merged_headers_of(arguments: &Bound<'_, PyDict>) -> PyResult<Option<Map<String, Value>>> {
+    let mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
+        present(arguments, name)?
+            .map(|value| from_py(&value))
+            .transpose()
+    };
+    Ok(merge_headers(
+        mapping("headers")?,
+        mapping("extra_headers")?,
+    ))
+}
+
+fn provider_specific_header_of(
+    arguments: &Bound<'_, PyDict>,
+) -> PyResult<Option<ProviderSpecificHeaders>> {
+    present(arguments, "provider_specific_header")?
+        .map(|value| from_py(&value))
+        .transpose()
+}
+
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
     match error {
         Error::Transport(TransportError::Http { status, body }) => {
@@ -106,8 +126,7 @@ impl MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Result<MessagesCall, Error>> {
-        let request = self.request.bind(py);
-        let argument = |name: &str| present(arguments, request, name);
+        let argument = |name: &str| present(arguments, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
@@ -130,8 +149,8 @@ impl MessagesPythonHost {
         let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
         let api_key = string("api_key")?;
         let api_base = string("api_base")?;
-        let extra_headers = self.merged_headers(py, arguments)?;
-        let provider_specific_header = self.provider_specific_header(py, arguments)?;
+        let extra_headers = merged_headers_of(arguments)?;
+        let provider_specific_header = provider_specific_header_of(arguments)?;
         Ok(messages_body(body).map(|body| MessagesCall {
             body,
             api_key,
@@ -142,33 +161,6 @@ impl MessagesPythonHost {
             timeout: optional_timeout(timeout),
             shaping,
         }))
-    }
-
-    fn merged_headers(
-        &self,
-        py: Python<'_>,
-        arguments: &Bound<'_, PyDict>,
-    ) -> PyResult<Option<Map<String, Value>>> {
-        let request = self.request.bind(py);
-        let mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
-            present(arguments, request, name)?
-                .map(|value| from_py(&value))
-                .transpose()
-        };
-        Ok(merge_headers(
-            mapping("headers")?,
-            mapping("extra_headers")?,
-        ))
-    }
-
-    fn provider_specific_header(
-        &self,
-        py: Python<'_>,
-        arguments: &Bound<'_, PyDict>,
-    ) -> PyResult<Option<ProviderSpecificHeaders>> {
-        present(arguments, self.request.bind(py), "provider_specific_header")?
-            .map(|value| from_py(&value))
-            .transpose()
     }
 
     fn shaping(
