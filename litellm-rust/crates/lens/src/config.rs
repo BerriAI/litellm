@@ -88,30 +88,6 @@ fn normalize_server_root_path(value: &str) -> Result<String, Error> {
     Ok(root.to_owned())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::normalize_server_root_path;
-    use rstest::rstest;
-
-    #[rstest]
-    #[case::empty("", "")]
-    #[case::root("/", "")]
-    #[case::nested("/services/llm", "/services/llm")]
-    #[case::trailing_slash("/services/llm/", "/services/llm")]
-    fn normalizes_server_root_path(#[case] input: &str, #[case] expected: &str) {
-        assert_eq!(normalize_server_root_path(input).unwrap(), expected);
-    }
-
-    #[rstest]
-    #[case::relative("relative")]
-    #[case::traversal("/a/../b")]
-    #[case::double_slash("/a//b")]
-    #[case::query("/a?b")]
-    fn rejects_unsafe_server_root_path(#[case] input: &str) {
-        assert!(normalize_server_root_path(input).is_err());
-    }
-}
-
 fn clickhouse_url() -> Result<String, Error> {
     if let Ok(url) = required("CLICKHOUSE_URL") {
         return Ok(url);
@@ -136,4 +112,28 @@ pub fn http_client() -> Result<Client, Error> {
         &Resolution::from(&settings).config,
         ClientVariant::NoRedirect,
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_server_root_path;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::empty("", "")]
+    #[case::root("/", "")]
+    #[case::nested("/services/llm", "/services/llm")]
+    #[case::trailing_slash("/services/llm/", "/services/llm")]
+    fn normalizes_server_root_path(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(normalize_server_root_path(input).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::relative("relative")]
+    #[case::traversal("/a/../b")]
+    #[case::double_slash("/a//b")]
+    #[case::query("/a?b")]
+    fn rejects_unsafe_server_root_path(#[case] input: &str) {
+        assert!(normalize_server_root_path(input).is_err());
+    }
 }
