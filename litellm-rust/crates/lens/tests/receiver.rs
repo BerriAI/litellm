@@ -10,7 +10,10 @@ use rstest::rstest;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use wiremock::{
@@ -114,6 +117,175 @@ async fn agent_picker_query_preserves_scope_through_the_internal_read_route() {
         .unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(response.json::<serde_json::Value>().await.unwrap(), result);
+}
+
+#[rstest]
+#[case::list_paid("list", None, 0.75)]
+#[case::list_zero("list", None, 0.0)]
+#[case::detail_paid("trace", None, 0.75)]
+#[case::paged_zero("trace", Some(1), 0.0)]
+#[tokio::test]
+async fn internal_reads_refresh_delayed_gateway_amounts(
+    #[case] operation: &str,
+    #[case] page_size: Option<u32>,
+    #[case] cost: f64,
+) {
+    let store = MockServer::start().await;
+    let start_ms = (unix_seconds() as i64 - 600) * 1000;
+    let available = Arc::new(AtomicBool::new(false));
+    Mock::given(body_string_contains("FROM agent_traces_by_key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [{
+            "trace_id": "trace", "trace_ref": "ref", "team_id": "team",
+            "api_key_hash": "key", "user_id": "owner", "name": "model call",
+            "service": "agent", "input_preview": "", "status": "STATUS_CODE_OK",
+            "start_ms": start_ms, "duration_ms": 1, "span_count": 1,
+            "agent_count": 0, "agent_invocations": 0, "llm_calls": 1,
+            "tool_calls": 0, "input_tokens": 1, "output_tokens": 1,
+            "models": ["test-model"], "error_count": 0, "request_ids": []
+        }]})))
+        .mount(&store)
+        .await;
+    Mock::given(body_string_contains("o.SpanId AS span_id"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [{
+            "trace_id": "trace", "span_id": "span", "parent_span_id": "",
+            "name": "model call", "type": "llm", "agent": "",
+            "status": "STATUS_CODE_OK", "status_message": "", "error_truncated": 0,
+            "start_ns": start_ms * 1_000_000, "duration_ns": 1_000_000,
+            "service": "agent", "input_preview": "", "model": "test-model",
+            "input_tokens": 1, "output_tokens": 1, "litellm_request_id": "",
+            "call_keys": ["provider_response:response"], "call_evidence": "complete",
+            "team_id": "team", "api_key_hash": "key", "user_id": "owner"
+        }]})))
+        .expect(2)
+        .mount(&store)
+        .await;
+    let spend_available = available.clone();
+    Mock::given(body_string_contains("FROM spend_logs FINAL"))
+        .respond_with(move |_: &wiremock::Request| {
+            let rows = if spend_available.load(Ordering::Acquire) {
+                json!([{
+                    "request_id": "request", "litellm_call_id": "",
+                    "response_id": "response", "upstream_response_id": "",
+                    "trace_id": "", "span_id": "", "team_id": "team",
+                    "api_key": "key", "user": "owner", "spend": cost,
+                    "start_ms": start_ms
+                }])
+            } else {
+                json!([])
+            };
+            ResponseTemplate::new(200).set_body_json(json!({"data": rows}))
+        })
+        .expect(2)
+        .mount(&store)
+        .await;
+    let server = serve(&store.uri(), true).await;
+    let scope = json!({"all_teams": 0, "user_id": "owner", "team_ids": []});
+    let (request, summary_path) = if operation == "list" {
+        (
+            json!({
+                "operation": operation, "scope": scope, "start_ms": start_ms,
+                "end_ms": start_ms + 1000, "cursor": null, "limit": 50
+            }),
+            "/data/0",
+        )
+    } else {
+        (
+            json!({
+                "operation": operation, "scope": scope, "trace_id": "trace",
+                "trace_ref": "ref", "cursor": null, "page_size": page_size
+            }),
+            "/summary",
+        )
+    };
+    let client = http_client().unwrap();
+    for expected in [None, Some(cost)] {
+        if expected.is_some() {
+            available.store(true, Ordering::Release);
+            tokio::time::sleep(litellm_traces_cache::LIVE_TTL + Duration::from_millis(200)).await;
+        }
+        let response = client
+            .post(format!("{}/internal/read", server.url))
+            .bearer_auth(SERVICE_TOKEN)
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = response.json::<serde_json::Value>().await.unwrap();
+        let summary = body.pointer(summary_path).unwrap();
+        assert_eq!(summary["spend"], json!(expected));
+        assert_eq!(summary["priced_calls"], u64::from(expected.is_some()));
+        assert_eq!(summary["llm_calls"], 1);
+        assert!(!body.to_string().contains("gateway_spend_pending"));
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn feedback_summary_query_preserves_scope_through_the_internal_read_route() {
+    let store = MockServer::start().await;
+    let result = json!({"data": [{
+        "trace_id": "1234567890abcdef1234567890abcdef", "trace_ref": "REF",
+        "count": "2", "average": 5.5, "lowest": "2"
+    }]});
+    Mock::given(method("POST"))
+        .and(body_string_contains("FROM lens_feedback FINAL"))
+        .and(query_param("param_all_teams", "0"))
+        .and(query_param("param_team", "feedback-team"))
+        .and(query_param(
+            "param_trace_ids",
+            "['1234567890abcdef1234567890abcdef']",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&result))
+        .expect(1)
+        .mount(&store)
+        .await;
+    let server = serve(&store.uri(), true).await;
+    let response = http_client()
+        .unwrap()
+        .post(format!("{}/internal/read", server.url))
+        .bearer_auth(SERVICE_TOKEN)
+        .json(&json!({
+            "operation": "query", "name": "feedback_summary", "parameters": {
+                "all_teams": 0, "team": "feedback-team", "key_hash": "",
+                "trace_ids": ["1234567890abcdef1234567890abcdef"]
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.json::<serde_json::Value>().await.unwrap(), result);
+}
+
+#[rstest]
+#[tokio::test]
+async fn feedback_rows_are_written_to_the_feedback_table() {
+    let store = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(query_param(
+            "query",
+            "INSERT INTO `litellm`.lens_feedback FORMAT JSONEachRow",
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&store)
+        .await;
+    let server = serve(&store.uri(), true).await;
+    let response = http_client()
+        .unwrap()
+        .post(format!("{}/internal/feedback", server.url))
+        .bearer_auth(SERVICE_TOKEN)
+        .json(&json!([{
+            "TeamId": "team", "ApiKeyHash": "", "TraceId": "1234567890abcdef1234567890abcdef",
+            "Author": "customer-1042", "Score": 2, "Comment": "wrong command",
+            "CreatedAt": "2026-10-07T21:57:01.414Z", "UpdatedAt": "2026-10-07T21:57:01.414Z",
+            "IsDeleted": 0
+        }]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 204);
 }
 
 #[rstest]
@@ -297,7 +469,7 @@ async fn ingestion_key_cannot_read_or_export_gateway_records() {
     let store = MockServer::start().await;
     let server = serve(&store.uri(), true).await;
     let client = http_client().unwrap();
-    for path in ["/internal/read", "/internal/spend"] {
+    for path in ["/internal/read", "/internal/spend", "/internal/feedback"] {
         let response = client
             .post(format!("{}{path}", server.url))
             .bearer_auth(KEY)

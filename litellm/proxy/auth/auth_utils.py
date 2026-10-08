@@ -60,6 +60,12 @@ def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     return getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
 
 
+def log_model_access_denial(exc: BaseException) -> None:
+    if not isinstance(exc, ModelAccessDeniedProxyException):
+        return
+    verbose_proxy_logger.warning(exc.sanitized_internal_message())
+
+
 def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual_key: bool) -> ProxyException:
     """Return an independently marked malformed-key exception after callback transformations."""
     if not is_invalid_virtual_key or str(exception.code) != str(status.HTTP_401_UNAUTHORIZED):
@@ -425,6 +431,9 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # so a caller-supplied value picks a transport and a callback surface the
     # admin did not choose.
     "rust",
+    # Deployment opt-in: a caller-supplied false would switch off identity
+    # forwarding and let the caller choose the `user` Fireworks sees.
+    "fireworks_forward_user_id",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",

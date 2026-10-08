@@ -488,6 +488,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search/{search_tool_name}",
         "/decisions",
         "/v1/decisions",
+        "/systemone",
+        "/v1/systemone",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -549,6 +551,8 @@ class LiteLLMRoutes(enum.Enum):
         "/lens/{lens_id}/executions/{execution_id}",
         "/lens/{lens_id}/cancel",
         "/lens/{lens_id}/findings/{finding_id}",
+        "/lens/feedback",
+        "/lens/feedback/summary",
         "/lens/preview/sample",
         "/lens/workers/register",
         "/lens/workers/{worker_id}",
@@ -1064,6 +1068,7 @@ class LiteLLMRoutes(enum.Enum):
     admin_viewer_routes = (
         [
             "/lens/traces/findings",
+            "/lens/feedback/summary",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
@@ -2738,6 +2743,9 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
+DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -3048,6 +3056,12 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=None,
         description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
     )
+    responses_websocket_session_limit_seconds: float = Field(
+        default=DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS,
+        ge=60,
+        le=7200,
+        description="Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.",
+    )
     pass_through_endpoints: list[PassThroughGenericEndpoint] | None = Field(
         default=None,
         description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
@@ -3170,6 +3184,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         ge=1,
         description="Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.",
+    )
+    mcp_prefer_client_id_metadata_document: bool | None = Field(
+        None,
+        description="When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.",
     )
     trusted_proxy_ranges: list[str] | None = Field(
         None,

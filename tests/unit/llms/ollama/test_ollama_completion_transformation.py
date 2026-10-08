@@ -596,6 +596,28 @@ class TestOllamaConfig:
 
 
 class TestOllamaTextCompletionResponseIterator:
+    def test_every_chunk_of_one_stream_carries_the_same_response_id(self):
+        iterator: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+        ollama_chunks: Final = (
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "", "thinking": "Hm", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "Hel", "done": False},
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "lo", "done": False},
+        )
+
+        results: Final = tuple(iterator.chunk_parser(chunk) for chunk in ollama_chunks)
+
+        ids: Final = {result.id for result in results if isinstance(result, ModelResponseStream)}
+        assert len(results) == len(ollama_chunks) and len(ids) == 1, ids
+        assert next(iter(ids)).startswith("chatcmpl-")
+        other: Final = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+        other_result: Final = other.chunk_parser(ollama_chunks[2])
+        assert isinstance(other_result, ModelResponseStream) and other_result.id not in ids
+
     def test_chunk_parser_with_thinking_field(self):
         """Test that chunks with 'thinking' field and empty 'response' are handled correctly."""
         iterator = OllamaTextCompletionResponseIterator(

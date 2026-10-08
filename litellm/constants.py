@@ -1,9 +1,19 @@
 import os
 import sys
+from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_range, get_env_int_or_none
+
+SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
+
+
+class ServerStreamingClassification(str, Enum):
+    MARKER = "litellm-server-streaming"
+
+
+SERVER_STREAMING_CLASSIFICATION_MARKER: Final = ServerStreamingClassification.MARKER
 
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
@@ -64,6 +74,8 @@ AGENT_TRACING_AGENT_LIST_LIMIT: Final = get_env_int("AGENT_TRACING_AGENT_LIST_LI
 LENS_DATASET_MAX_CASES: Final = get_env_int("LENS_DATASET_MAX_CASES", 200)
 LENS_DATASET_MAX_CASE_CHARS: Final = get_env_int("LENS_DATASET_MAX_CASE_CHARS", 20_000)
 LENS_DATASET_TRACE_PAGE_SIZE: Final = 500
+LENS_FEEDBACK_MAX_COMMENT_CHARS: Final = 10_000
+LENS_FEEDBACK_MAX_SCORE: Final = 10
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
 DEFAULT_S3_MAX_CONCURRENT_UPLOADS: Final = int(os.getenv("DEFAULT_S3_MAX_CONCURRENT_UPLOADS", "16"))

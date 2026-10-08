@@ -22,7 +22,11 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () =>
   usePtuCostAttributionEnabled: () => mockPtuEnabled(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({ useModelCostMap: () => ({ data: {} }) }));
+const mockUseModelCostMap = vi.fn();
+
+vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
+  useModelCostMap: (...args: unknown[]) => mockUseModelCostMap(...args),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
   useCredentials: () => ({ data: { credentials: [] } }),
@@ -138,8 +142,27 @@ const setup = async () => {
 describe("AddModelPanel submit payload contract", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: {} });
     mockPtuEnabled.mockReturnValue(false);
     mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  it("lists catalog models in the model picker, not entries registered at runtime for deployments", async () => {
+    mockUseModelCostMap.mockImplementation((_enabled: boolean, catalogOnly: boolean) => ({
+      data: catalogOnly
+        ? { "gpt-4o-2024-08-06": { litellm_provider: "openai" } }
+        : {
+            "gpt-4o-2024-08-06": { litellm_provider: "openai" },
+            "openai-gpt-4o-deployment-id": { litellm_provider: "openai" },
+          },
+    }));
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("OpenAI"));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+
+    expect(await screen.findByText("gpt-4o-2024-08-06")).toBeInTheDocument();
+    expect(screen.queryByText("openai-gpt-4o-deployment-id")).not.toBeInTheDocument();
   });
 
   it("sends only the always-mounted fields while Advanced Settings stays closed", async () => {
@@ -295,6 +318,7 @@ describe("AddModelPanel submit payload contract", () => {
 describe("AddModelPanel empty-string skip", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: {} });
     mockPtuEnabled.mockReturnValue(false);
     mockAuthorized.mockReturnValue(PROXY_ADMIN);
   });
@@ -376,6 +400,7 @@ describe("AddModelPanel validation gates", () => {
 describe("AddModelPanel behaviours the removed Advanced Settings form instance never drove", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: {} });
     mockPtuEnabled.mockReturnValue(false);
     mockAuthorized.mockReturnValue(PROXY_ADMIN);
   });

@@ -9521,6 +9521,30 @@
           ]
         }
       },
+      "/systemone": {
+        "post": {
+          "operationId": "systemone_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
       "/v1/decisions": {
         "post": {
           "operationId": "decisions_v1_decisions_post",
@@ -9540,6 +9564,30 @@
             }
           ],
           "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/v1/systemone": {
+        "post": {
+          "operationId": "systemone_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
           "tags": [
             "decisions"
           ]
@@ -11857,6 +11905,34 @@
               "default": true,
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
+            },
+            "stream_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "streaming",
+                    "non_streaming",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "enum": [
+                      "streaming",
+                      "non_streaming",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.",
+              "title": "Stream Scope"
             },
             "template_id": {
               "anyOf": [
@@ -14782,6 +14858,34 @@
               "default": true,
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
+            },
+            "stream_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "streaming",
+                    "non_streaming",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "enum": [
+                      "streaming",
+                      "non_streaming",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.",
+              "title": "Stream Scope"
             },
             "template_id": {
               "anyOf": [

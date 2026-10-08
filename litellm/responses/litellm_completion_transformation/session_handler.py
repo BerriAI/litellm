@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -41,6 +42,11 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 
 
+def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
+    instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
+    return instructions if isinstance(instructions, str) and instructions else None
+
+
 class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
@@ -70,10 +76,15 @@ class ResponsesSessionHandler:
             | ChatCompletionResponseMessage
             | Message
         ] = []
-        for spend_log in all_spend_logs:
+        proxy_server_requests: Final = [
+            await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
+            for spend_log in all_spend_logs
+        ]
+        for spend_log, proxy_server_request_dict in zip(all_spend_logs, proxy_server_requests):
             chat_completion_message_history = (
-                await ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+                ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
                     spend_log=spend_log,
+                    proxy_server_request_dict=proxy_server_request_dict,
                     chat_completion_message_history=chat_completion_message_history,
                 )
             )
@@ -85,11 +96,20 @@ class ResponsesSessionHandler:
         return ChatCompletionSession(
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
+            instructions=next(
+                (
+                    instructions
+                    for instructions in map(_stored_instructions, reversed(proxy_server_requests))
+                    if instructions
+                ),
+                None,
+            ),
         )
 
     @staticmethod
-    async def extend_chat_completion_message_with_spend_log_payload(
+    def extend_chat_completion_message_with_spend_log_payload(
         spend_log: "SpendLogsPayload",
+        proxy_server_request_dict: Mapping[str, object] | None,
         chat_completion_message_history: list[
             AllMessageValues
             | GenericChatCompletionMessage
@@ -105,18 +125,15 @@ class ResponsesSessionHandler:
             LiteLLMCompletionResponsesConfig,
         )
 
-        proxy_server_request_dict: Final = await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(
-            spend_log=spend_log,
-        )
         response_input_param: str | ResponseInputParam | None = None
-        _messages: str | ResponseInputParam | None = None
 
         ############################################################
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
-            _response_input_param: Final = proxy_server_request_dict.get("input", None)
-            _messages = proxy_server_request_dict.get("messages", None)
+            _response_input_param: Final = proxy_server_request_dict.get("input") or proxy_server_request_dict.get(
+                "messages"
+            )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
             elif isinstance(_response_input_param, dict):
@@ -126,25 +143,13 @@ class ResponsesSessionHandler:
                 )
 
         if response_input_param:
-            chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=response_input_param,
-                responses_api_request=proxy_server_request_dict or {},
-                replay_reasoning=True,
+            chat_completion_message_history.extend(
+                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                    input=response_input_param,
+                    responses_api_request={},
+                    replay_reasoning=True,
+                )
             )
-            chat_completion_message_history.extend(chat_completion_messages)
-
-        ############################################################
-        # Check if `messages` field is present in the proxy server request dict
-        ############################################################
-        elif _messages:
-            # ensure all messages are /chat/completions/messages
-            # certain requests can be stored as Responses API format - this ensures they are transformed to /chat/completions/messages
-            chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=_messages,
-                responses_api_request=proxy_server_request_dict or {},
-                replay_reasoning=True,
-            )
-            chat_completion_message_history.extend(chat_completion_messages)
 
         ############################################################
         # Add Output messages for this Spend Log
@@ -162,7 +167,7 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_proxy_server_request_from_spend_log(
         spend_log: "SpendLogsPayload",
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get the parsed proxy server request from the spend log
         """
