@@ -236,7 +236,7 @@ class ConfigSyncSubscriber:
                     await pubsub.subscribe(config_sync_channel(self._redis_cache))
                     backoff_seconds = self._backoff_initial_seconds
                     if self._resync_on_subscribe:
-                        await self._resync()
+                        await self._resync(pubsub)
                         self._resync_on_subscribe = False
                     await self._consume(pubsub)
                 finally:

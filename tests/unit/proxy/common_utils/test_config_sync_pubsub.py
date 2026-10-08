@@ -1,6 +1,7 @@
 import asyncio
 import json
 import random
+import typing
 from typing import Callable, Coroutine, Iterable, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -434,13 +435,13 @@ async def test_writes_during_the_throttle_wait_collapse_into_the_next_resync() -
 
 
 async def test_write_arriving_during_throttle_wait_does_not_trigger_an_extra_resync() -> None:
-    pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    clock = _FakeClock()
-    first_resync = asyncio.Event()
-    second_resync = asyncio.Event()
-    inserted_during_wait = asyncio.Event()
-    resyncs: List[str] = []
+    pubsub: typing.Final = _QueuePubSub()
+    cache: typing.Final = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
+    clock: typing.Final = _FakeClock()
+    first_resync: typing.Final = asyncio.Event()
+    second_resync: typing.Final = asyncio.Event()
+    inserted_during_wait: typing.Final = asyncio.Event()
+    resyncs: typing.Final[List[str]] = []
 
     async def recording_sleep(seconds: float) -> None:
         if seconds > 0 and not inserted_during_wait.is_set():
@@ -455,7 +456,7 @@ async def test_write_arriving_during_throttle_wait_does_not_trigger_an_extra_res
         if len(resyncs) == 2:
             second_resync.set()
 
-    subscriber = ConfigSyncSubscriber(
+    subscriber: typing.Final = ConfigSyncSubscriber(
         redis_cache=cache,
         resync_callbacks=(resync,),
         debounce_seconds=0.0,
