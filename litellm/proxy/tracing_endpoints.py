@@ -3,6 +3,7 @@ Agent tracing endpoints. Thin wrappers over `TraceReceiver`: auth -> tenant/scop
 
 POST /v1/traces                              OTLP/HTTP trace export (protobuf or JSON)
 GET  /v1/traces                              TracePage
+GET  /v1/traces/agents                       TraceAgentList
 GET  /v1/traces/{trace_id}                   Trace
 GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 """
@@ -20,7 +21,11 @@ from pydantic import ConfigDict
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import OTLP_RETRY_AFTER_SECONDS, TRACE_READ_RETRY_AFTER_SECONDS
+from litellm.constants import (
+    DEFAULT_AGENT_TRACING_RETENTION_DAYS,
+    OTLP_RETRY_AFTER_SECONDS,
+    TRACE_READ_RETRY_AFTER_SECONDS,
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
@@ -50,6 +55,7 @@ from litellm.rust_bridge.trace.generated.types import (
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError, encode_otlp_response
+from litellm.tracing.types import TraceAgentList
 from litellm.types.llms.base import LiteLLMBaseModel
 
 router = APIRouter(tags=["agent tracing"])
@@ -209,6 +215,34 @@ async def list_agent_traces(
             cursor=request.cursor,
         )
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
+
+
+class TraceAgentListRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    start_ms: int | None = None
+    end_ms: int | None = None
+
+
+@router.get("/v1/traces/agents", response_model=TraceAgentList)
+async def list_trace_agents(
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
+    now_ms: Annotated[int, Depends(current_time_ms)],
+    request: Annotated[TraceAgentListRequest, Query()],
+) -> TraceAgentList:
+    try:
+        tracing, scope = context.reader()
+        return await tracing.list_agents(
+            scope=scope,
+            start_ms=(
+                request.start_ms
+                if request.start_ms is not None
+                else now_ms - DEFAULT_AGENT_TRACING_RETENTION_DAYS * MS_PER_DAY
+            ),
+            end_ms=request.end_ms if request.end_ms is not None else now_ms,
+        )
+    except (ValueError, RuntimeError) as error:
         raise read_failure(error) from error
 
 

@@ -1,5 +1,6 @@
 import { ApiError } from "@/lib/http/client";
 import type { TracesApi } from "@/components/lens/traces/api";
+import { rollUpAgents } from "@/components/lens/agents/agentRollup";
 import type { LensServices } from "../LensServices";
 import type { LensApi } from "../service";
 import { demoDatasetsApi } from "./demoDatasets";
@@ -37,6 +38,8 @@ function demoLensApi(data: LensDemoData): LensApi {
     saveLens: readOnly,
     startRun: readOnly,
     watchAll: async () => ({ watching: [], skipped: [] }),
+    signalConfig: async () => ({ model: "", threshold: 0.5, signals: [] }),
+    saveSignalConfig: readOnly,
     cancelRun: readOnly,
     reviewFinding: readOnly,
     registerWorker: readOnly,
@@ -47,6 +50,11 @@ function demoLensApi(data: LensDemoData): LensApi {
   };
 }
 
+const summariesIn = (data: LensDemoData, startMs: number, endMs: number) =>
+  data.runs
+    .map((item) => item.trace.summary)
+    .filter((trace) => Date.parse(trace.start_time) >= startMs && Date.parse(trace.start_time) <= endMs);
+
 function demoTracesApi(data: LensDemoData): TracesApi {
   const run = (traceId: string) => data.runs.find(({ trace }) => trace.summary.trace_id === traceId);
   return {
@@ -56,12 +64,8 @@ function demoTracesApi(data: LensDemoData): TracesApi {
       const step = spanId ? found?.details.find((span) => span.span_id === spanId) : found;
       return { text: JSON.stringify(step, null, 2), copied: spanId ? "Step copied" : "Trace copied" };
     },
-    list: async ({ startMs, endMs }) => ({
-      data: data.runs
-        .map((item) => item.trace.summary)
-        .filter((trace) => Date.parse(trace.start_time) >= startMs && Date.parse(trace.start_time) <= endMs),
-      next_cursor: null,
-    }),
+    list: async ({ startMs, endMs }) => ({ data: summariesIn(data, startMs, endMs), next_cursor: null }),
+    agents: async ({ startMs, endMs }) => rollUpAgents(summariesIn(data, startMs, endMs)),
     findings: async (traces) =>
       traces.map((trace) => {
         const jobs = data.lenses.flatMap((lens) => lens.jobs).filter((job) => job.status === "completed");
@@ -90,6 +94,8 @@ function demoTracesApi(data: LensDemoData): TracesApi {
         );
         return { ...trace, finding_count: assessed.length ? findings.size : null };
       }),
+    signals: async (traces) =>
+      traces.map((trace) => ({ ...trace, status: "unclassified" as const, flags: [], model: "", classified_at: null })),
     anyRecorded: async () => data.runs.length > 0,
     trace: (traceId) => found(run(traceId)?.trace),
     span: (traceId, spanId) => found(run(traceId)?.details.find((span) => span.span_id === spanId)),

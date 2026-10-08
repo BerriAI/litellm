@@ -1,397 +1,229 @@
+from __future__ import annotations
+
 import asyncio
-import dataclasses
+import re
 import signal
 import threading
 import uuid
-from collections import Counter
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from contextlib import ExitStack
 from pathlib import Path
 from queue import SimpleQueue
-from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final
 from urllib.parse import urlsplit
 
 import httpx
 import psutil
 import pytest
 import yaml
-from integration._support import prompt_cache_breakpoint as pcb
-from integration._support import responses_vendor as rv
-from integration._support.client import Gateway, eventually, gateway_from_environment, string_value
-from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
+from integration._support.client import Gateway, eventually
+from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
-from pydantic import JsonValue
+from integration.providers._responses_bridge_prompt_cache_breakpoint import (
+    _Call,
+    _JSON_OBJECT,
+    _MODEL,
+    _assert_spend_for_result,
+    _burst,
+    _calls,
+    _peer_marker_matches_response,
+    _request_marker,
+    _responses_reply,
+    _send_call,
+)
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+_CONFIG_MODEL: Final = "responses-bridge-cache-breakpoint-chaos"
 
-_GLOBAL_UNSET: Final = "bridge-breakpoint-global-unset"
-_GLOBAL_FALSE: Final = "bridge-breakpoint-global-false"
-_ENDPOINTS: Final = ("chat", "messages", "responses")
+_API_KEY: Final = "synthetic-responses-bridge-key"
 
-Endpoint: TypeAlias = Literal["chat", "messages", "responses"]
-_RecordProperty: TypeAlias = Callable[[str, object], None]
+_STARTED_WORKER: Final[re.Pattern[str]] = re.compile(r"Started server process \[(\d+)\]")
 
-
-@dataclass(frozen=True, slots=True)
-class _Call:
-    endpoint: Endpoint
-    stream: bool
-    marker: str
-
-
-@dataclass(frozen=True, slots=True)
-class _Served:
-    call: _Call
-    status: int
-    text: str
-    call_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class _GlobalRig:
-    wire: Wire
-    proxy: OwnedProxy
-
-    @property
-    def gateway(self) -> Gateway:
-        return self.proxy.gateway
-
-
-def _global_config(directory: Path, api_base: str) -> Path:
-    stock: Final = rv.JSON_OBJECT.validate_python(
+def _chaos_config(wire: Wire, tmp_path: Path) -> Path:
+    base_config: Final = _JSON_OBJECT.validate_python(
         yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     )
-    deployment: Final[Mapping[str, JsonValue]] = {
-        "model": pcb.MODEL,
-        "api_base": api_base,
-        "api_key": "integration-provider-key",
-    }
-    config: Final[Mapping[str, JsonValue]] = {
-        **stock,
+    config: Final = {
+        **base_config,
         "model_list": [
-            {"model_name": _GLOBAL_UNSET, "litellm_params": dict(deployment)},
-            {"model_name": _GLOBAL_FALSE, "litellm_params": {**deployment, "drop_params": False}},
+            {
+                "model_name": _CONFIG_MODEL,
+                "litellm_params": {
+                    "model": _MODEL,
+                    "api_base": wire.url + "/v1",
+                    "api_key": _API_KEY,
+                },
+            },
         ],
-        "litellm_settings": {**rv.JSON_OBJECT.validate_python(stock["litellm_settings"]), "drop_params": True},
-        "router_settings": {**rv.JSON_OBJECT.validate_python(stock.get("router_settings") or {}), "num_retries": 0},
     }
-    path: Final = directory / "bridge-breakpoint-global.yaml"
+    path: Final = tmp_path / "responses-bridge-cache-breakpoint-chaos.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
 
-
-@pytest.fixture(scope="module")
-def global_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_GlobalRig]:
-    directory: Final = tmp_path_factory.mktemp("bridge-breakpoint-global")
-    with wire_server(pcb.respond) as wire, gateway_from_environment() as gateway:
-        config: Final = _global_config(directory, f"{wire.url}/v1")
-        with owned_proxy_process(gateway, directory, {}, config=config, workers=2) as owned:
-            yield _GlobalRig(wire, owned)
-
-
-@pytest.fixture(scope="module")
-def spend() -> Iterator[pcb.SpendLogs]:
-    with pcb.spend_logs() as logs:
-        yield logs
-
-
-def _path(endpoint: Endpoint) -> str:
-    match endpoint:
-        case "chat":
-            return "/v1/chat/completions"
-        case "messages":
-            return "/v1/messages"
-        case "responses":
-            return "/v1/responses"
-
-
-def _body(model: str, call: _Call, breakpoint: JsonValue) -> Mapping[str, JsonValue]:
-    common: Final[Mapping[str, JsonValue]] = {"model": model, "stream": call.stream, **pcb.NO_CACHE}
-    text: Final = pcb.marked(pcb.text(pcb.prompt(call.marker)), breakpoint)
-    match call.endpoint:
-        case "chat":
-            return {**common, "messages": [{"role": "user", "content": [text]}]}
-        case "messages":
-            return {**common, "max_tokens": 64, "messages": [{"role": "user", "content": [text]}]}
-        case "responses":
-            return {
-                **common,
-                "input": [{"type": "message", "role": "user", "content": [{**text, "type": "input_text"}]}],
-            }
-
-
-def _calls(count: int, endpoints: tuple[Endpoint, ...], *, stream: bool | None = None) -> tuple[_Call, ...]:
-    return tuple(
-        _Call(endpoints[index % len(endpoints)], index % 2 == 1 if stream is None else stream, uuid.uuid4().hex)
-        for index in range(count)
+def _open_upstream_connections(pid: int, port: int) -> int:
+    return sum(
+        1
+        for connection in psutil.Process(pid).net_connections(kind="tcp")
+        if connection.status == psutil.CONN_ESTABLISHED and connection.raddr and connection.raddr.port == port
     )
 
-
-async def _send(client: httpx.AsyncClient, key: str, model: str, call: _Call, breakpoint: JsonValue) -> _Served:
-    async with client.stream(
-        "POST",
-        _path(call.endpoint),
-        json=_body(model, call, breakpoint),
-        headers={"Authorization": f"Bearer {key}", "anthropic-version": "2023-06-01"},
-    ) as response:
-        raw: Final = await response.aread()
-    return _Served(call, response.status_code, raw.decode(), response.headers["x-litellm-call-id"])
-
-
-async def _burst(
+@pytest.mark.timeout(180)
+async def test_worker_and_peer_outages_preserve_markers_and_recover(
     gateway: Gateway,
-    model: str,
-    calls: tuple[_Call, ...],
-    *,
-    breakpoint: JsonValue = pcb.EXPLICIT,
-    tolerate_transport_errors: bool = False,
-) -> tuple[_Served, ...]:
-    async with httpx.AsyncClient(base_url=str(gateway.client.base_url), timeout=60, trust_env=False) as client:
-        results: Final = await asyncio.gather(
-            *(_send(client, gateway.key, model, call, breakpoint) for call in calls),
-            return_exceptions=tolerate_transport_errors,
-        )
-    for result in results:
-        assert not isinstance(result, BaseException) or isinstance(result, httpx.TransportError), repr(result)
-    return tuple(result for result in results if isinstance(result, _Served))
-
-
-def _frames(text: str) -> tuple[Mapping[str, JsonValue], ...]:
-    return tuple(rv.JSON_OBJECT.validate_json(line[6:]) for line in text.splitlines() if line.startswith("data: {"))
-
-
-def _upstream_id_shown_to_caller(served: _Served) -> str | None:
-    if served.call.endpoint == "messages":
-        return None
-    if not served.call.stream:
-        return string_value(rv.JSON_OBJECT.validate_json(served.text)["id"])
-    frames: Final = _frames(served.text)
-    if served.call.endpoint == "responses":
-        (completed,) = [frame for frame in frames if frame.get("type") == "response.completed"]
-        return string_value(rv.JSON_OBJECT.validate_python(completed["response"])["id"])
-    return string_value(frames[0]["id"])
-
-
-def _assert_answered_in_its_own_shape(served: _Served) -> None:
-    assert served.status == 200, served.text
-    assert set(rv.MARKER.findall(served.text)) == {served.call.marker}, served.text
-    assert served.text.startswith(("event:", "data:")) == served.call.stream, served.text
-    assert served.text.startswith("{") != served.call.stream, served.text
-    assert ("response.completed" in served.text) == (served.call.stream and served.call.endpoint == "responses")
-    shown: Final = _upstream_id_shown_to_caller(served)
-    assert shown is None or rv.same_response(shown, pcb.response_id(served.call.marker)), served.text
-
-
-def _marked_once(posts: Sequence[Request], calls: Sequence[_Call], expected: JsonValue) -> None:
-    by_marker: Final = {marker: request for request in posts if (marker := rv.newest_marker(request.body.decode()))}
-    assert len(by_marker) == len(posts), [request.body for request in posts]
-    assert set(by_marker) == {call.marker for call in calls}, sorted(by_marker)
-    for call in calls:
-        block: Final = pcb.single_block(pcb.input_items(by_marker[call.marker]), "user")
-        assert block["type"] == "input_text" and block["text"] == pcb.prompt(call.marker), block
-        pcb.assert_marker(block, expected)
-
-
-def _assert_each_lands_once(
-    spend: pcb.SpendLogs, model: str, failed: Sequence[_Served], served: Sequence[_Served]
+    tmp_path: Path,
 ) -> None:
-    expected: Final = len(failed) + len(served)
-    rows: Final = eventually(lambda: spend.rows_for(model), lambda found: len(found) >= expected, seconds=70)
-    by_call: Final = {string_value(row["litellm_call_id"]): row for row in rows}
-    assert len(by_call) == len(rows) == expected, rows
-    for item in failed:
-        assert by_call[item.call_id]["status"] == "failure", (item.call_id, rows)
-    for item in served:
-        row: Final = by_call[item.call_id]
-        assert row["status"] == "success", (item.call_id, row)
-        shown: Final = _upstream_id_shown_to_caller(item)
-        assert shown is None or rv.same_response(string_value(row["request_id"]), shown), (row, shown)
+    calls: Final = _calls(30)
+    release: Final = threading.Event()
+    early_release: Final = threading.Event()
+    outage_release: Final = threading.Event()
+    held_markers: Final[SimpleQueue[str]] = SimpleQueue()
+    early_calls: Final = calls[:10]
+    early_markers: Final = frozenset(call.marker for call in early_calls)
 
+    def held(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return _responses_reply(request)
+        marker: Final = _request_marker(request)
+        held_markers.put(marker)
+        gate: Final = early_release if marker in early_markers else release
+        assert gate.wait(timeout=60), "The worker-kill burst was never released"
+        return _responses_reply(request)
 
-def _health(gateway: Gateway, model: str) -> Mapping[str, JsonValue]:
-    response: Final = gateway.request("GET", f"/health?model={model}", None)
-    assert response.status_code in (200, 503), response.text
-    return rv.JSON_OBJECT.validate_json(response.text)
-
-
-def _free_port() -> int:
-    with wire_server(pcb.respond) as probe:
-        port: Final = urlsplit(probe.url).port
-    assert port is not None, probe.url
-    return port
-
-
-def _chat(gateway: Gateway, model: str, marker: str, breakpoint: JsonValue) -> httpx.Response:
-    return gateway.request("POST", "/v1/chat/completions", dict(_body(model, _Call("chat", False, marker), breakpoint)))
-
-
-def _completion(response: httpx.Response, marker: str) -> str:
-    assert response.status_code == 200, response.text
-    body: Final = rv.JSON_OBJECT.validate_json(response.text)
-    assert rv.same_response(string_value(body["id"]), pcb.response_id(marker)), body
-    assert rv.answer(marker) in response.text, response.text
-    return response.headers["x-litellm-call-id"]
-
-
-def _user_block_on_wire(wire: Wire, marker: str) -> dict[str, JsonValue]:
-    block: Final = pcb.single_block(pcb.input_items(pcb.posted(wire, marker)), "user")
-    assert block["type"] == "input_text" and block["text"] == pcb.prompt(marker), block
-    return block
-
-
-@pytest.mark.parametrize("model", (_GLOBAL_UNSET, _GLOBAL_FALSE), ids=("deployment-unset", "deployment-false"))
-def test_global_drop_params_drops_a_malformed_marker(global_rig: _GlobalRig, model: str, spend: pcb.SpendLogs) -> None:
-    marker: Final = uuid.uuid4().hex
-    call_id: Final = _completion(_chat(global_rig.gateway, model, marker, "yes"), marker)
-    pcb.assert_marker(_user_block_on_wire(global_rig.wire, marker), None)
-    spend.landed(model, call_id, pcb.response_id(marker))
-    control: Final = uuid.uuid4().hex
-    control_id: Final = _completion(_chat(global_rig.gateway, model, control, pcb.EXPLICIT), control)
-    pcb.assert_marker(_user_block_on_wire(global_rig.wire, control), pcb.EXPLICIT)
-    spend.landed(model, control_id, pcb.response_id(control))
-
-
-async def test_mixed_burst_carries_every_marker_once(gateway: Gateway, spend: pcb.SpendLogs) -> None:
-    calls: Final = _calls(24, _ENDPOINTS)
-    with wire_server(pcb.respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=pcb.MODEL, api_base=f"{wire.url}/v1", drop_params=True)
-        served: Final = await _burst(gateway, model, calls)
-        assert len(served) == 24
-        for item in served:
-            _assert_answered_in_its_own_shape(item)
-        _marked_once(pcb.drained_posts(wire), calls, pcb.EXPLICIT)
-        _assert_each_lands_once(spend, model, (), served)
-
-
-async def test_upstream_outage_fails_cleanly_and_the_restarted_upstream_serves_marked_calls(
-    gateway: Gateway, spend: pcb.SpendLogs
-) -> None:
-    port: Final = _free_port()
-    while_down: Final = _calls(12, _ENDPOINTS)
-    after: Final = _calls(12, _ENDPOINTS)
-    with gateway.scenario() as scenario:
-        model: Final = scenario.model(model=pcb.MODEL, api_base=f"http://127.0.0.1:{port}/v1", drop_params=True)
-        failed: Final = await _burst(gateway, model, while_down)
-        assert len(failed) == 12
-        for item in failed:
-            assert item.status >= 500, (item.status, item.text)
-            assert "answer marker" not in item.text and "event:" not in item.text, item.text
-        down: Final = _health(gateway, model)
-        assert (down["healthy_count"], down["unhealthy_count"]) == (0, 1), down
-        with wire_server(pcb.respond, port=port) as wire:
-            _health(gateway, model)
-            probes: Final = pcb.drained_posts(wire)
-            assert [rv.newest_marker(request.body.decode()) for request in probes] == [None], probes
-            served: Final = await _burst(gateway, model, after)
-            assert len(served) == 12
-            for item in served:
-                _assert_answered_in_its_own_shape(item)
-            _marked_once(pcb.drained_posts(wire), after, pcb.EXPLICIT)
-        _assert_each_lands_once(spend, model, failed, served)
-
-
-def _slow(request: Request) -> Reply:
-    reply: Final = pcb.respond(request)
-    return dataclasses.replace(reply, pause_between_chunks=0.4) if reply.chunks else reply
-
-
-async def test_concurrent_slow_streams_each_complete_with_one_upstream_call(
-    gateway: Gateway, spend: pcb.SpendLogs
-) -> None:
-    calls: Final = _calls(6, ("chat",), stream=True)
-    with wire_server(_slow) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=pcb.MODEL, api_base=f"{wire.url}/v1", drop_params=True)
-        served: Final = await _burst(gateway, model, calls)
-        assert len(served) == 6
-        for item in served:
-            _assert_answered_in_its_own_shape(item)
-        _marked_once(pcb.drained_posts(wire), calls, pcb.EXPLICIT)
-        _assert_each_lands_once(spend, model, (), served)
-
-
-@dataclass(frozen=True, slots=True)
-class _Held:
-    release: threading.Event
-    markers: SimpleQueue[str]
-
-    def respond(self, request: Request) -> Reply:
-        marker: Final = rv.newest_marker(request.body.decode()) if request.method == "POST" else None
-        if marker is None:
-            return pcb.respond(request)
-        self.markers.put(marker)
-        if not self.release.wait(timeout=60):
-            return rv.error(504, "the burst was never released", "held")
-        return pcb.respond(request)
-
-
-def _worker_pids(owned: OwnedProxy) -> tuple[int, ...]:
-    return eventually(lambda: pcb.started_worker_pids(owned.log), lambda pids: len(pids) == 2, seconds=30)
-
-
-async def _hold_burst(
-    held: _Held, candidate: Gateway, model: str, calls: tuple[_Call, ...]
-) -> asyncio.Task[tuple[_Served, ...]]:
-    burst: Final = asyncio.create_task(_burst(candidate, model, calls, tolerate_transport_errors=True))
-    await asyncio.to_thread(eventually, held.markers.qsize, lambda size: size == len(calls), 60)
-    return burst
-
-
-async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering(
-    gateway: Gateway, tmp_path: Path, spend: pcb.SpendLogs
-) -> None:
-    calls: Final = _calls(20, ("chat",), stream=False)
-    held: Final = _Held(threading.Event(), SimpleQueue())
-    with wire_server(held.respond) as wire:
-        config: Final = _global_config(tmp_path, f"{wire.url}/v1")
+    with ExitStack() as peer_stack:
+        wire: Final = peer_stack.enter_context(wire_server(held))
+        config: Final = _chaos_config(wire, tmp_path)
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
-            candidate: Final = owned.gateway
-            workers: Final = _worker_pids(owned)
-            burst: Final = await _hold_burst(held, candidate, _GLOBAL_UNSET, calls)
-            held_by: Final = MappingProxyType({pid: pcb.open_upstream_connections(pid, wire.url) for pid in workers})
-            assert sum(held_by.values()) == 20, held_by
-            victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            held.release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_answered_in_its_own_shape(item)
-            _marked_once(pcb.drained_posts(wire), calls, pcb.EXPLICIT)
-            follow_up: Final = uuid.uuid4().hex
-            call_id: Final = _completion(_chat(candidate, _GLOBAL_UNSET, follow_up, "yes"), follow_up)
-            pcb.assert_marker(_user_block_on_wire(wire, follow_up), None)
-            spend.landed(_GLOBAL_UNSET, call_id, pcb.response_id(follow_up))
+            try:
+                candidate: Final = owned.gateway
+                workers: Final[tuple[int, ...]] = eventually(
+                    lambda: tuple(int(match.group(1)) for match in _STARTED_WORKER.finditer(owned.log.read_text())),
+                    lambda pids: len(pids) == 2,
+                    seconds=30,
+                )
+                async with httpx.AsyncClient(
+                    base_url=str(candidate.client.base_url),
+                    headers={"Authorization": f"Bearer {candidate.key}"},
+                    timeout=20,
+                    trust_env=False,
+                    limits=httpx.Limits(max_connections=100),
+                ) as client:
+                    burst_tasks: Final = tuple(
+                        asyncio.create_task(_send_call(client, _CONFIG_MODEL, call)) for call in calls
+                    )
+                    await asyncio.to_thread(eventually, held_markers.qsize, lambda size: size == len(calls), 60)
+                    early_release.set()
+                    early_served: Final = await asyncio.gather(*burst_tasks[: len(early_calls)])
+                    early_successful: Final = tuple(item for item in early_served if item.status == 200)
+                    for item in early_successful:
+                        _assert_spend_for_result(item, _CONFIG_MODEL)
+                    upstream_port_value: Final = urlsplit(wire.url).port
+                    assert upstream_port_value is not None
+                    upstream_port: Final = upstream_port_value
+                    active_by_worker: Final = eventually(
+                        lambda: {pid: _open_upstream_connections(pid, upstream_port) for pid in workers},
+                        lambda counts: sum(counts.values()) == len(calls) - len(early_calls),
+                        seconds=30,
+                    )
+                    victim_pid: Final = max(workers, key=active_by_worker.__getitem__)
+                    survivor_pids: Final = tuple(pid for pid in workers if pid != victim_pid)
+                    assert active_by_worker[victim_pid] > 0 and len(survivor_pids) == 1, active_by_worker
+                    (survivor_pid,) = survivor_pids
+                    victim: Final = psutil.Process(victim_pid)
+                    victim.suspend()
+                    victim.send_signal(signal.SIGKILL)
+                    release.set()
+                    remaining_served: Final = await asyncio.gather(*burst_tasks[len(early_calls) :])
+                    served: Final = (*early_served, *remaining_served)
+                successful: Final = tuple(item for item in served if item.status == 200)
+                connection_errors: Final = tuple(item for item in served if item.status == 0)
+                print(f"worker-kill burst: {len(successful)} HTTP 200, {len(connection_errors)} connection errors")
+                assert len(successful) + len(connection_errors) == len(calls), {
+                    "successes": len(successful),
+                    "connection_errors": len(connection_errors),
+                    "responses": served,
+                }
+                assert successful and connection_errors, {
+                    "successes": len(successful),
+                    "connection_errors": len(connection_errors),
+                }
+                follow_ups: Final = (
+                    _Call("chat", False, uuid.uuid4().hex),
+                    _Call("responses", False, uuid.uuid4().hex),
+                )
+                recovered: Final = await _burst(
+                    str(candidate.client.base_url),
+                    candidate.key,
+                    _CONFIG_MODEL,
+                    follow_ups,
+                )
+                assert all(item.status == 200 for item in recovered), recovered
+                assert psutil.pid_exists(survivor_pid), survivor_pid
+                received_after_worker_kill: Final = wire.drain()
+                worker_marker_failures: Final = tuple(
+                    item.call.marker
+                    for item in (*successful, *recovered)
+                    if not _peer_marker_matches_response(item, received_after_worker_kill)
+                )
+                for item in (*successful, *recovered):
+                    assert item.response_id is not None, item
+                    _assert_spend_for_result(item, _CONFIG_MODEL)
 
+                peer_stack.close()
+                outage_seen: Final[SimpleQueue[str]] = SimpleQueue()
 
-async def test_proxy_restart_mid_burst_never_lands_a_served_call_twice(
-    gateway: Gateway, tmp_path: Path, record_property: _RecordProperty, spend: pcb.SpendLogs
-) -> None:
-    calls: Final = _calls(20, ("chat",), stream=False)
-    held: Final = _Held(threading.Event(), SimpleQueue())
-    with wire_server(held.respond) as wire:
-        config: Final = _global_config(tmp_path, f"{wire.url}/v1")
-        with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as first:
-            _worker_pids(first)
-            burst: Final = await _hold_burst(held, first.gateway, _GLOBAL_UNSET, calls)
-            first.process.terminate()
-            held.release.set()
-            served: Final = await burst
-        for item in served:
-            _assert_answered_in_its_own_shape(item)
-        second_directory: Final = tmp_path / "second"
-        second_directory.mkdir()
-        with owned_proxy_process(gateway, second_directory, {}, config=config, workers=2) as second:
-            follow_up: Final = uuid.uuid4().hex
-            call_id: Final = _completion(_chat(second.gateway, _GLOBAL_UNSET, follow_up, pcb.EXPLICIT), follow_up)
-            pcb.assert_marker(_user_block_on_wire(wire, follow_up), pcb.EXPLICIT)
-            spend.landed(_GLOBAL_UNSET, call_id, pcb.response_id(follow_up))
-    counts: Final = Counter(string_value(row["litellm_call_id"]) for row in spend.rows_for(_GLOBAL_UNSET))
-    assert all(count == 1 for count in counts.values()), counts
-    landed: Final = sum(1 for item in served if item.call_id in counts)
-    record_property("served", len(served))
-    record_property("landed", landed)
-    record_property("lost_responses", len(calls) - len(served))
+                def outage(request: Request) -> Reply:
+                    if request.method == "GET" and request.target == "/v1/models":
+                        return _responses_reply(request)
+                    outage_seen.put(_request_marker(request))
+                    assert outage_release.wait(timeout=60), "The peer-outage burst was never stopped"
+                    return Reply(
+                        status=503,
+                        body=b'{"error":{"message":"synthetic peer outage","type":"server_error"}}',
+                    )
+
+                peer_stack.enter_context(wire_server(outage, port=upstream_port))
+                outage_calls: Final = _calls(12)
+                outage_burst: Final = asyncio.create_task(
+                    _burst(str(candidate.client.base_url), candidate.key, _CONFIG_MODEL, outage_calls)
+                )
+                await asyncio.to_thread(eventually, outage_seen.qsize, lambda size: size == len(outage_calls), 30)
+                outage_release.set()
+                peer_stack.close()
+                outage_served: Final = await outage_burst
+                assert len(outage_served) == len(outage_calls), outage_served
+                assert all(item.status >= 400 and "error" in item.text.lower() for item in outage_served), outage_served
+                down_call: Final = _Call("chat", False, uuid.uuid4().hex)
+                (down_response,) = await _burst(
+                    str(candidate.client.base_url),
+                    candidate.key,
+                    _CONFIG_MODEL,
+                    (down_call,),
+                )
+                assert down_response.status >= 400 and "error" in down_response.text.lower(), down_response
+
+                restarted_wire: Final = peer_stack.enter_context(wire_server(_responses_reply, port=upstream_port))
+                recovery_calls: Final = (
+                    _Call("chat", False, uuid.uuid4().hex),
+                    _Call("responses", False, uuid.uuid4().hex),
+                )
+                recovered_after_peer_restart: Final = await _burst(
+                    str(candidate.client.base_url),
+                    candidate.key,
+                    _CONFIG_MODEL,
+                    recovery_calls,
+                )
+                assert all(item.status == 200 for item in recovered_after_peer_restart), recovered_after_peer_restart
+                restarted_requests: Final = restarted_wire.drain()
+                recovery_marker_failures: Final = tuple(
+                    item.call.marker
+                    for item in recovered_after_peer_restart
+                    if not _peer_marker_matches_response(item, restarted_requests)
+                )
+                for item in recovered_after_peer_restart:
+                    assert item.response_id is not None, item
+                    _assert_spend_for_result(item, _CONFIG_MODEL)
+                assert not (*worker_marker_failures, *recovery_marker_failures), {
+                    "worker_marker_failures": worker_marker_failures,
+                    "recovery_marker_failures": recovery_marker_failures,
+                }
+            finally:
+                release.set()
+                outage_release.set()

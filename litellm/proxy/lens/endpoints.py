@@ -52,6 +52,8 @@ from litellm.proxy.lens.models import (
 from litellm.proxy.lens.release import PROTOCOL_VERSION, release_tag, worker_image
 from litellm.proxy.lens.repository import DueLens, LensRepository, WriterDatabase
 from litellm.proxy.lens.reviews import criteria_key
+from litellm.proxy.lens.signal_repository import SignalRepository
+from litellm.proxy.lens.signals import SignalConfig, TraceSignals, trace_signals
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
     can_access,
@@ -69,6 +71,7 @@ from litellm.proxy.lens.state import (
     summarized,
 )
 from litellm.proxy.tracing_runtime import provide_storage
+from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"])
@@ -101,6 +104,14 @@ def repository() -> LensRepository:
     return LensRepository(WriterDatabase(writer_wrapper(prisma_client.db)))
 
 
+def signals_repository() -> SignalRepository:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(503, "Lens needs a connected Postgres database")
+    return SignalRepository(WriterDatabase(writer_wrapper(prisma_client.db)))
+
+
 def source_reader(storage: Storage | None) -> SourceReader:
     if storage is None:
         raise HTTPException(
@@ -116,6 +127,20 @@ def user_scope(auth: UserAPIKeyAuth, write: bool = False) -> Scope:
     if auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
         return Scope(all_teams=True)
     raise HTTPException(403, "Lens requires proxy administrator access")
+
+
+def validate_signal_model(config: SignalConfig, llm_router: Router | None) -> None:
+    if not config.model:
+        return
+    message: Final = "Choose a System 1 model (evaluation mode) configured on this proxy"
+    if llm_router is None:
+        raise HTTPException(400, message)
+    try:
+        model_group: Final = llm_router.get_model_group_info(model_group=config.model)
+    except Exception as error:
+        raise HTTPException(400, message) from error
+    if model_group is None or model_group.mode != "evaluation":
+        raise HTTPException(400, message)
 
 
 async def get_lens(lens_id: str, scope: Scope) -> Lens:
@@ -259,6 +284,39 @@ async def activity_available(auth: Auth, storage: StorageDep) -> ActivityAvailab
 async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
     scope: Final = user_scope(auth)
     return await source_reader(storage).agents(scope) if storage is not None else ()
+
+
+@router.get("/signals", response_model=SignalConfig)
+async def get_signals(auth: Auth) -> SignalConfig:
+    user_scope(auth)
+    return await signals_repository().get_config()
+
+
+@router.put("/signals", response_model=SignalConfig)
+async def put_signals(body: SignalConfig, auth: Auth) -> SignalConfig:
+    user_scope(auth, write=True)
+    from litellm.proxy.proxy_server import llm_router
+
+    validate_signal_model(body, llm_router)
+    await signals_repository().save_config(body)
+    return body
+
+
+@router.post("/traces/signals", response_model=tuple[TraceSignals, ...])
+async def trace_signal_statuses(body: TraceFindingsRequest, auth: Auth) -> tuple[TraceSignals, ...]:
+    user_scope(auth)
+    repo: Final = signals_repository()
+    config: Final = await repo.get_config()
+    existing: Final = await repo.traces(body.traces)
+    rows: Final = MappingProxyType({(row.trace_id, row.trace_ref): row for row in existing})
+    return tuple(
+        trace_signals(
+            trace,
+            rows.get((trace.trace_id, trace.trace_ref)),
+            config,
+        )
+        for trace in body.traces
+    )
 
 
 @router.post("/traces/findings", response_model=tuple[TraceFindingCount, ...])
