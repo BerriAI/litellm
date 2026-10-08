@@ -742,7 +742,7 @@ def _tool_schema_properties(model, tool, litellm_params=None):
         "us.xai.grok-4.6",
         "us-gov.xai.grok-4.6",
         "global.xai.grok-4.7",
-        "xai.grok-4.7",
+        "us.xai.grok-4.7",
     ],
 )
 def test_transform_request_drops_lookaround_regex_for_models_the_cost_map_flags(tool, model):
