@@ -214,7 +214,7 @@ def test_realtime_config_uses_xai_key_when_provider_does_not_resolve_key(monkeyp
     async def mock_async_realtime(**kwargs):
         captured_kwargs.update(kwargs)
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model, "xai", None, api_base
 
     monkeypatch.setattr(litellm, "xai_key", "xai_key_value")
@@ -244,7 +244,7 @@ def test_realtime_config_uses_generic_key_when_provider_does_not_resolve_key(
     async def mock_async_realtime(**kwargs):
         captured_kwargs.update(kwargs)
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model, "xai", None, api_base
 
     monkeypatch.setattr(litellm, "xai_key", None)

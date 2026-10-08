@@ -78,7 +78,7 @@ def _run_client_secret(session, model, monkeypatch):
         captured.update(kwargs)
         return object()
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model, "openai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
