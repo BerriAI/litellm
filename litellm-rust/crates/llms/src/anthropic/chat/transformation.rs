@@ -241,7 +241,7 @@ fn anthropic_body(
         .iter()
         .map(|turn| {
             json!({
-                "role": turn.role.as_str(),
+                "role": <&'static str>::from(turn.role),
                 "content": turn.texts.iter().map(|text| text_block(text)).collect::<Vec<_>>(),
             })
         })

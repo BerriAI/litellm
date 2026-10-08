@@ -32,20 +32,32 @@ pub use metadata::{AgentMetadata, AgentType, Integration};
 #[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
+#[strum(ascii_case_insensitive)]
 #[cfg_attr(feature = "schema", schemars(rename = "SpanType"))]
 pub enum ObservationType {
+    #[strum(serialize = "agent")]
     Agent,
+    #[strum(serialize = "llm")]
     Llm,
+    #[strum(serialize = "tool")]
     Tool,
+    #[strum(serialize = "chain")]
     Chain,
+    #[strum(serialize = "framework")]
     Framework,
+    #[strum(serialize = "retriever")]
     Retriever,
+    #[strum(serialize = "embedding")]
     Embedding,
+    #[strum(serialize = "reranker")]
     Reranker,
+    #[strum(serialize = "guardrail")]
     Guardrail,
+    #[strum(serialize = "evaluator")]
     Evaluator,
+    #[strum(serialize = "prompt")]
     Prompt,
+    #[strum(serialize = "decision")]
     Decision,
 }
 

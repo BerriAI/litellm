@@ -7,32 +7,37 @@ use std::{
     str::FromStr,
 };
 
+use strum::VariantArray;
+
 /// A provider column of `litellm/anthropic_beta_headers_config.json`: which betas a host accepts
 /// and under which name.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Hash, strum::AsRefStr, strum::Display, strum::EnumString,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+    strum::VariantArray,
 )]
-#[strum(serialize_all = "snake_case")]
 pub enum BetaProvider {
+    #[strum(serialize = "anthropic")]
     Anthropic,
+    #[strum(serialize = "azure_ai")]
     AzureAi,
+    #[strum(serialize = "bedrock_converse")]
     BedrockConverse,
+    #[strum(serialize = "bedrock")]
     Bedrock,
+    #[strum(serialize = "bedrock_mantle")]
     BedrockMantle,
+    #[strum(serialize = "vertex_ai")]
     VertexAi,
+    #[strum(serialize = "databricks")]
     Databricks,
-}
-
-impl BetaProvider {
-    pub const ALL: &[Self] = &[
-        Self::Anthropic,
-        Self::AzureAi,
-        Self::BedrockConverse,
-        Self::Bedrock,
-        Self::BedrockMantle,
-        Self::VertexAi,
-        Self::Databricks,
-    ];
 }
 
 /// One value of the `anthropic-beta` header. Equality, ordering and hashing follow the wire
@@ -203,7 +208,7 @@ impl AnthropicBeta {
             | Self::McpServers20251204
             | Self::StructuredOutput20240301
             | Self::TextEditor20241022
-            | Self::TextEditor20250124 => BetaProvider::ALL,
+            | Self::TextEditor20250124 => BetaProvider::VARIANTS,
             Self::ClaudeCode20250219 | Self::ToolExamples20251029 => &[
                 BetaProvider::Anthropic,
                 BetaProvider::AzureAi,
@@ -271,7 +276,7 @@ impl AnthropicBeta {
                 BetaProvider::BedrockConverse,
                 BetaProvider::Databricks,
             ],
-            Self::Other(_) => BetaProvider::ALL,
+            Self::Other(_) => BetaProvider::VARIANTS,
         }
     }
 }
@@ -462,15 +467,17 @@ mod tests {
     #[case::bedrock_mantle(BetaProvider::BedrockMantle)]
     #[case::vertex_ai(BetaProvider::VertexAi)]
     #[case::databricks(BetaProvider::Databricks)]
-    fn provider_columns_match_beta_provider_all(#[case] provider: BetaProvider) {
+    fn provider_columns_match_beta_provider_variants(#[case] provider: BetaProvider) {
         let config = beta_headers_config();
         let config_columns: Vec<String> = config
             .keys()
             .filter(|column| column.as_str() != "description")
             .cloned()
             .collect();
-        let beta_provider_columns: Vec<String> =
-            BetaProvider::ALL.iter().map(ToString::to_string).collect();
+        let beta_provider_columns: Vec<String> = BetaProvider::VARIANTS
+            .iter()
+            .map(ToString::to_string)
+            .collect();
         assert_eq!(config_columns, beta_provider_columns);
         assert_eq!(
             provider.to_string().parse::<BetaProvider>().unwrap(),
@@ -481,7 +488,7 @@ mod tests {
     #[rstest]
     fn on_matches_every_config_cell() {
         let config = beta_headers_config();
-        for provider in BetaProvider::ALL {
+        for provider in BetaProvider::VARIANTS {
             for beta in &AnthropicBeta::KNOWN {
                 let expected = config
                     .get(provider.as_ref())

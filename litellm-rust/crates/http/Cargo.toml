@@ -21,6 +21,7 @@ rustls-native-certs.workspace = true
 tokio-tungstenite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+strum.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
