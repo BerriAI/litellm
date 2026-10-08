@@ -192,6 +192,141 @@ class ExecutionRow(LiteLLMBaseModel):
     selection_key: str = ""
 
 
+Score: TypeAlias = Annotated[
+    int,
+    Field(
+        ...,
+        ge=0,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        le=18446744073709551615,
+    ),
+]
+
+
+Score1: TypeAlias = Annotated[
+    str,
+    Field(
+        ...,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        pattern="^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$",
+    ),
+]
+
+
+class FeedbackRow(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        frozen=True,
+    )
+
+    trace_id: str
+    trace_ref: str
+    author: str
+    score: int = Field(..., ge=0, le=18446744073709551615)
+    comment: str
+    created_at: str
+    updated_at: str
+
+
+Count2: TypeAlias = Annotated[
+    int,
+    Field(
+        ...,
+        ge=0,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        le=18446744073709551615,
+    ),
+]
+
+
+Count3: TypeAlias = Annotated[
+    str,
+    Field(
+        ...,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        pattern="^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$",
+    ),
+]
+
+
+Lowest: TypeAlias = Annotated[
+    int,
+    Field(
+        ...,
+        ge=0,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        le=18446744073709551615,
+    ),
+]
+
+
+Lowest1: TypeAlias = Annotated[
+    str,
+    Field(
+        ...,
+        json_schema_extra={
+            "x-python-normalized": {
+                "type": "int",
+                "minimum": 0,
+                "maximum": 18446744073709551615,
+            }
+        },
+        pattern="^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0}|18446744073709551615)$",
+    ),
+]
+
+
+class FeedbackSummaryRow(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        frozen=True,
+    )
+
+    trace_id: str
+    trace_ref: str
+    count: int = Field(..., ge=0, le=18446744073709551615)
+    average: float
+    lowest: int = Field(..., ge=0, le=18446744073709551615)
+
+
+class FeedbackTargetRow(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        frozen=True,
+    )
+
+    team_id: str
+    key_hash: str
+    trace_ref: str
+
+
 class LensAccessParams(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -237,6 +372,44 @@ class LensEvidenceParams(LiteLLMBaseModel):
     trace_ref: str
     span: str
     quote: str
+
+
+class LensFeedbackParams(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    all_teams: Literal[0, 1]
+    team: str
+    key_hash: str
+    trace_id: str
+    trace_ref: str
+
+
+class LensFeedbackSummaryParams(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    all_teams: Literal[0, 1]
+    team: str
+    key_hash: str
+    trace_ids: tuple[str, ...]
+
+
+class LensFeedbackTargetParams(LiteLLMBaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+
+    all_teams: Literal[0, 1]
+    team: str
+    key_hash: str
+    trace_id: str
+    trace_ref: str
 
 
 ExecutionSource: TypeAlias = Literal["traces", "requests", "both"]
@@ -555,9 +728,15 @@ TraceWireModels: TypeAlias = Annotated[
     | AgentRow
     | CountRow
     | ExecutionRow
+    | FeedbackRow
+    | FeedbackSummaryRow
+    | FeedbackTargetRow
     | LensAccessParams
     | LensContentParams
     | LensEvidenceParams
+    | LensFeedbackParams
+    | LensFeedbackSummaryParams
+    | LensFeedbackTargetParams
     | LensSampleParams
     | PartRow
     | TraceAgentRow

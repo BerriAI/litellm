@@ -1,11 +1,13 @@
 
 import copy
 import json
+from typing import Final
 
 import pytest
 
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
+    update_request_with_filtered_beta,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
@@ -380,6 +382,33 @@ def test_vertex_ai_anthropic_extra_headers_beta_propagation():
     # Verify HTTP header is also set
     assert "anthropic-beta" in headers
     assert "interleaved-thinking-2025-05-14" in headers["anthropic-beta"]
+
+
+def test_vertex_ai_anthropic_inline_tools_beta_survives_the_chat_beta_filter(local_beta_headers_config: None) -> None:
+    """The chat path runs the Vertex beta filter over both the header and the `anthropic_beta` body field right
+    before the request goes out, so inline-tools-2026-09-15 must survive both (source and date in
+    tests/unit/test_anthropic_beta_headers_filtering.py)."""
+    config: Final = VertexAIAnthropicConfig()
+    headers: Final[dict[str, str]] = {}
+    optional_params: Final[dict[str, object]] = {
+        "max_tokens": 100,
+        "is_vertex_request": True,
+        "extra_headers": {"anthropic-beta": "inline-tools-2026-09-15"},
+    }
+
+    request_data: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+    filtered_headers, filtered_request = update_request_with_filtered_beta(
+        headers=headers, request_data=request_data, provider="vertex_ai"
+    )
+
+    assert filtered_headers["anthropic-beta"].split(",").count("inline-tools-2026-09-15") == 1
+    assert "inline-tools-2026-09-15" in filtered_request["anthropic_beta"]
 
 
 def test_vertex_ai_anthropic_extra_headers_beta_merged_with_auto_betas():

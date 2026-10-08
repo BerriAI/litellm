@@ -90,6 +90,7 @@ CONNECTION_NAMES: Final = (
     "github_copilot_auth_type",
     "configurable_clientside_auth_params",
     "use_xai_oauth",
+    "fireworks_forward_user_id",
     "aws_batch_role_arn",
     "s3_bucket_name",
     "s3_region_name",

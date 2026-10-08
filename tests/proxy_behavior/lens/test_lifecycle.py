@@ -361,10 +361,10 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         await endpoints.repository().save_worker(legacy)
         authenticated_legacy: Final = await endpoints.worker_auth(credentials)
         assert authenticated_legacy.analysis_key_id is None
-        with pytest.raises(HTTPException) as needs_billing:
+        assert (
             await endpoints.claim(authenticated_legacy, protocol_version=PROTOCOL_VERSION, worker_release=release_tag())
-        assert needs_billing.value.status_code == 409
-        assert "Assign an analysis key" in needs_billing.value.detail
+            is None
+        )
         assert await endpoints.heartbeat(lens.id, claimed.job.id, authenticated_legacy)
         finished: Final = await endpoints.result(
             lens.id, claimed.job.id, Result(coverage=Coverage(screened=2)), authenticated_legacy, storage=None

@@ -5798,6 +5798,7 @@ def completion(
                     "github_copilot_auth_type",
                     "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+                    "fireworks_forward_user_id",
                 )
                 if key in kwargs
             },
