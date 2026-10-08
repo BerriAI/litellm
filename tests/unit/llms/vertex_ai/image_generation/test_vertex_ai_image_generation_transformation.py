@@ -699,3 +699,115 @@ def test_gemini_image_generation_response_rejects_non_object_usage_metadata_with
         _transform_gemini_response({"candidates": [], "usageMetadata": usage_metadata})
 
     assert "input_value" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"candidates": []},
+        {"candidates": ""},
+        {"candidates": {}},
+        {"candidates": [{}]},
+        {"candidates": [{"finishReason": "SAFETY"}]},
+        {"candidates": [{"content": {}}]},
+        {"candidates": [{"content": {"parts": ""}}]},
+        {"candidates": [{"content": {"parts": "plain text"}}]},
+        {"candidates": [{"content": {"parts": {"text": "only text"}}}]},
+        {"candidates": [{"content": {"parts": [{"text": "only text"}, "plain text", ["text"], [], ""]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png"}}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": "no image"}, {"inlineData": ["mimeType"]}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": ""}, {"inlineData": []}, {"inlineData": {}}]}}]},
+        {"candidates": [{"content": {"parts": [{"inline_data": {"data": "snake-case-is-not-read"}}]}}]},
+    ],
+)
+def test_gemini_image_generation_response_without_inline_image_data_has_no_images(payload: object):
+    assert _transform_gemini_response(payload).data == []
+
+
+def test_gemini_image_generation_response_keeps_image_order_and_thought_signatures():
+    response = _transform_gemini_response(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": "caption"},
+                            {"inlineData": {"mimeType": "image/png", "data": "first"}, "thoughtSignature": "sig-1"},
+                            "plain text",
+                        ]
+                    }
+                },
+                {
+                    "content": {
+                        "parts": [
+                            {"inlineData": {"data": "second"}},
+                            {"inlineData": {"data": None}, "thoughtSignature": ""},
+                            {"inlineData": {"data": "fourth"}, "thoughtSignature": {"nested": ["sig"]}},
+                        ]
+                    }
+                },
+            ]
+        }
+    )
+
+    assert [(image.b64_json, image.provider_specific_fields) for image in response.data or []] == [
+        ("first", {"thought_signature": "sig-1"}),
+        ("second", None),
+        (None, None),
+        ("fourth", {"thought_signature": {"nested": ["sig"]}}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["vertex-secret"],
+        "vertex-secret",
+        {"candidates": None},
+        {"candidates": 7},
+        {"candidates": "vertex-secret"},
+        {"candidates": ["vertex-secret"]},
+        {"candidates": [{"content": None}]},
+        {"candidates": [{"content": "vertex-secret"}]},
+        {"candidates": [{"content": ["vertex-secret"]}]},
+        {"candidates": [{"content": {"parts": None}}]},
+        {"candidates": [{"content": {"parts": [None]}}]},
+        {"candidates": [{"content": {"parts": [7]}}]},
+        {"candidates": [{"content": {"parts": ["inlineData vertex-secret"]}}]},
+        {"candidates": [{"content": {"parts": [["inlineData", "vertex-secret"]]}}]},
+        {"candidates": [{"content": {"parts": {"inlineData": "vertex-secret"}}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": None}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": 7}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": "data vertex-secret"}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": ["data", "vertex-secret"]}]}}]},
+    ],
+)
+def test_gemini_image_generation_response_rejects_malformed_candidates_without_echoing_them(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_gemini_response(payload)
+
+    assert "vertex-secret" not in str(exc_info.value)
+
+
+def _gemini_rejection_text(payload: object) -> str:
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_gemini_response(payload)
+
+    return str(exc_info.value)
+
+
+@pytest.mark.parametrize("position", [403, 429])
+@pytest.mark.parametrize("malformed_entry", [None, 7, "inlineData"])
+def test_gemini_image_generation_response_rejection_text_is_the_same_wherever_the_malformed_entry_sits(
+    position: int, malformed_entry: object
+):
+    late_parts = [*[{"text": "caption"}] * position, malformed_entry]
+    late_candidates = [*[{"finishReason": "STOP"}] * position, malformed_entry]
+
+    assert _gemini_rejection_text({"candidates": [{"content": {"parts": late_parts}}]}) == _gemini_rejection_text(
+        {"candidates": [{"content": {"parts": [malformed_entry]}}]}
+    )
+    assert _gemini_rejection_text({"candidates": late_candidates}) == _gemini_rejection_text(
+        {"candidates": [malformed_entry]}
+    )

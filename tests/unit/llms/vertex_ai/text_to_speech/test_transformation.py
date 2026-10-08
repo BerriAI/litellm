@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 import litellm
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.llms.vertex_ai.text_to_speech.transformation import (
     VertexAILyriaTextToSpeechConfig,
     VertexAITextToSpeechConfig,
@@ -663,3 +664,170 @@ def test_transform_text_to_speech_response_rejects_malformed_payloads_without_ec
         )
 
     assert "input_value" not in str(exc_info.value)
+
+
+_WAV_AUDIO_B64: Final = "UklGRiQAAABXQVZFZm10IA=="
+_WAV_AUDIO: Final = b"RIFF$\x00\x00\x00WAVEfmt "
+_UNLABELED_AUDIO_B64: Final = "bHlyaWEtMy1hdWRpbw=="
+_UNLABELED_AUDIO: Final = b"lyria-3-audio"
+
+
+@pytest.mark.parametrize(
+    ("model", "payload", "expected_audio", "expected_mime_type"),
+    [
+        pytest.param(
+            "lyria-002",
+            {
+                "predictions": [
+                    {"audioContent": None, "bytesBase64Encoded": _WAV_AUDIO_B64, "mimeType": None},
+                    "trailing entry that is never read",
+                ],
+                "deployedModelId": "123",
+            },
+            _WAV_AUDIO,
+            "audio/wav",
+            id="predict-null-fields-and-unread-trailing-prediction",
+        ),
+        pytest.param(
+            "lyria-002",
+            {"predictions": [{"audioContent": _WAV_AUDIO_B64, "mimeType": ""}]},
+            _WAV_AUDIO,
+            "audio/wav",
+            id="predict-empty-mime-type-is-sniffed",
+        ),
+        pytest.param(
+            "lyria-002",
+            {"predictions": [{"audioContent": _WAV_AUDIO_B64, "mimeType": "audio/x-custom"}]},
+            _WAV_AUDIO,
+            "audio/x-custom",
+            id="predict-declared-mime-type-wins-over-sniffing",
+        ),
+        pytest.param(
+            "lyria-002",
+            {"predictions": [{"audioContent": "", "bytesBase64Encoded": ""}]},
+            b"",
+            "audio/mpeg",
+            id="predict-empty-audio-strings-yield-empty-audio",
+        ),
+        pytest.param(
+            "lyria-3-pro-preview",
+            {
+                "steps": [
+                    {"type": "thought", "content": "free text that is never read as content parts"},
+                    {"type": "model_output", "content": None},
+                    {"type": "model_output", "content": [{"type": "audio", "data": _WAV_AUDIO_B64, "mime_type": None}]},
+                ]
+            },
+            _WAV_AUDIO,
+            "audio/wav",
+            id="interactions-unread-step-content-and-null-fields",
+        ),
+        pytest.param(
+            "lyria-3-pro-preview",
+            {"steps": None, "outputs": [{"type": "audio", "data": _UNLABELED_AUDIO_B64, "mime_type": "audio/mpeg"}]},
+            _UNLABELED_AUDIO,
+            "audio/mpeg",
+            id="interactions-null-steps-fall-back-to-outputs",
+        ),
+        pytest.param(
+            "lyria-3-clip-preview",
+            {
+                "outputs": [
+                    {"type": "audio", "data": 7, "mime_type": 5},
+                    {"type": "audio", "data": _UNLABELED_AUDIO_B64, "mime_type": "audio/mpeg"},
+                    {"type": "audio", "data": ""},
+                ]
+            },
+            _UNLABELED_AUDIO,
+            "audio/mpeg",
+            id="interactions-last-non-empty-audio-part-wins-over-an-earlier-malformed-one",
+        ),
+    ],
+)
+def test_lyria_transform_response_tolerates_optional_and_unread_provider_fields(
+    model: str, payload: dict[str, object], expected_audio: bytes, expected_mime_type: str
+):
+    response: Final = VertexAILyriaTextToSpeechConfig().transform_text_to_speech_response(
+        model=model,
+        raw_response=httpx.Response(200, json=payload),
+        logging_obj=MagicMock(),
+    )
+
+    assert response.content == expected_audio
+    assert response.response.headers["content-type"] == expected_mime_type
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        ("lyria-002", {}),
+        ("lyria-002", {"predictions": None}),
+        ("lyria-002", {"predictions": []}),
+        ("lyria-002", {"predictions": [{}]}),
+        ("lyria-002", {"predictions": [{"audioContent": "", "bytesBase64Encoded": None}]}),
+        ("lyria-3-pro-preview", {}),
+        ("lyria-3-pro-preview", {"steps": [], "outputs": None}),
+        ("lyria-3-pro-preview", {"steps": [{"type": "model_output", "content": []}]}),
+        ("lyria-3-pro-preview", {"outputs": [{"type": "audio", "data": ""}, {"type": "text", "data": "ignored"}]}),
+    ],
+)
+def test_lyria_transform_response_without_audio_reports_it_missing(model: str, payload: dict[str, object]):
+    with pytest.raises(ValueError, match=f"No generated audio found in Vertex AI {model} response"):
+        VertexAILyriaTextToSpeechConfig().transform_text_to_speech_response(
+            model=model,
+            raw_response=httpx.Response(200, json=payload),
+            logging_obj=MagicMock(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        ("lyria-002", ["not", "an", "object"]),
+        ("lyria-002", {"predictions": {"audioContent": _WAV_AUDIO_B64}}),
+        ("lyria-002", {"predictions": ["not-an-object"]}),
+        ("lyria-002", {"predictions": [{"audioContent": 7}]}),
+        ("lyria-002", {"predictions": [{"audioContent": _WAV_AUDIO_B64, "mimeType": ["audio/wav"]}]}),
+        ("lyria-3-pro-preview", ["not", "an", "object"]),
+        ("lyria-3-pro-preview", {"steps": ["not-an-object"]}),
+        ("lyria-3-pro-preview", {"steps": [{"type": "model_output", "content": ["not-an-object"]}]}),
+        ("lyria-3-pro-preview", {"outputs": [{"type": "audio", "data": [_WAV_AUDIO_B64]}]}),
+        ("lyria-3-pro-preview", {"outputs": [{"type": "audio", "data": _WAV_AUDIO_B64, "mime_type": 5}]}),
+    ],
+)
+def test_lyria_transform_response_rejects_malformed_payloads_without_echoing_them(model: str, payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        VertexAILyriaTextToSpeechConfig().transform_text_to_speech_response(
+            model=model,
+            raw_response=httpx.Response(200, json=payload),
+            logging_obj=MagicMock(),
+        )
+
+    assert "input_value" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"steps": [{"type": "thought"}] * 403 + ["not-an-object"]}, id="step"),
+        pytest.param({"outputs": [{"type": "text"}] * 403 + [None]}, id="output"),
+        pytest.param(
+            {"steps": [{"type": "model_output", "content": [{"type": "text"}] * 403 + [7]}]},
+            id="content-part",
+        ),
+    ],
+)
+def test_lyria_malformed_item_position_does_not_change_the_mapped_error(payload: dict[str, object]):
+    with pytest.raises(ValidationError) as exc_info:
+        VertexAILyriaTextToSpeechConfig().transform_text_to_speech_response(
+            model="lyria-3-pro-preview",
+            raw_response=httpx.Response(200, json=payload),
+            logging_obj=MagicMock(),
+        )
+
+    with pytest.raises(litellm.APIConnectionError):
+        exception_type(
+            model="vertex_ai/lyria-3-pro-preview",
+            custom_llm_provider="vertex_ai",
+            original_exception=exc_info.value,
+        )

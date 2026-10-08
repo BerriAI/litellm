@@ -4,9 +4,11 @@ Calls Linkup's /search endpoint to search the web.
 Linkup API Reference: https://docs.linkup.so/pages/documentation/api-reference/endpoint/post-search
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final, Literal, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -15,6 +17,9 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _LinkupSearchRequestRequired(TypedDict):
@@ -165,35 +170,39 @@ class LinkupSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         results: Final = []
 
         # Process results array
-        raw_results: Final = response_json.get("results", [])
+        raw_results: Final = _JSON_OBJECTS.validate_python(response_json.get("results", []))
 
         for result in raw_results:
             # Handle both text and image result types
             result_type = result.get("type", "text")
 
             if result_type == "text":
-                search_result = SearchResult(
-                    title=result.get("name", ""),
-                    url=result.get("url", ""),
-                    snippet=result.get("content", ""),
-                    date=None,
-                    last_updated=None,
+                search_result = SearchResult.model_validate(
+                    {
+                        "title": result.get("name", ""),
+                        "url": result.get("url", ""),
+                        "snippet": result.get("content", ""),
+                        "date": None,
+                        "last_updated": None,
+                    }
                 )
                 results.append(search_result)
             elif result_type == "image":
                 # For image results, use the URL as both title and snippet if name not provided
-                search_result = SearchResult(
-                    title=result.get("name", result.get("url", "")),
-                    url=result.get("url", ""),
-                    snippet=result.get("content", ""),
-                    date=None,
-                    last_updated=None,
+                search_result = SearchResult.model_validate(
+                    {
+                        "title": result.get("name", result.get("url", "")),
+                        "url": result.get("url", ""),
+                        "snippet": result.get("content", ""),
+                        "date": None,
+                        "last_updated": None,
+                    }
                 )
                 results.append(search_result)
 

@@ -7,6 +7,7 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
+from pydantic import BaseModel
 
 import litellm
 from litellm.types.llms.openai import AllMessageValues
@@ -54,7 +55,7 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
 
 
 def validate_dict(
-    data: dict, model: type
+    data: dict, model: type[BaseModel]
 ) -> dict:  # mutable-ok: pydantic validation boundary; both input and output are untyped wire dicts
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 

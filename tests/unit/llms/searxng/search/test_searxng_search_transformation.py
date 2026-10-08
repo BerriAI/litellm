@@ -10,7 +10,9 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
+from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -320,6 +322,100 @@ class TestSearXNGSearchHeaders:
     def test_http_method_is_get(self):
         """Test that the HTTP method is GET."""
         assert self.config.get_http_method() == "GET"
+
+
+def _transform(payload: object) -> SearchResponse:
+    raw_response = httpx.Response(200, json=payload, request=httpx.Request("GET", "https://searxng.example.com/search"))
+    return SearXNGSearchConfig().transform_search_response(raw_response=raw_response, logging_obj=None)
+
+
+def test_searxng_results_keep_provider_order_and_ignore_engine_metadata():
+    response = _transform(
+        {
+            "query": "litellm",
+            "number_of_results": 0,
+            "results": [
+                {
+                    "url": "https://example.com/litellm",
+                    "title": "LiteLLM",
+                    "content": "Call every LLM API",
+                    "publishedDate": "2025-01-15T00:00:00",
+                    "pubdate": "2025-01-10",
+                    "thumbnail": None,
+                    "engines": ["google", "bing"],
+                    "positions": [1, 2],
+                    "score": 4.0,
+                },
+                {"url": "https://example.com/docs", "title": "Docs", "content": "Docs", "publishedDate": None},
+            ],
+            "answers": [],
+            "infoboxes": [],
+            "unresponsive_engines": [["brave", "timeout"]],
+        }
+    )
+
+    assert response.object == "search"
+    assert response.results == [
+        SearchResult(
+            title="LiteLLM",
+            url="https://example.com/litellm",
+            snippet="Call every LLM API",
+            date="2025-01-15T00:00:00",
+        ),
+        SearchResult(title="Docs", url="https://example.com/docs", snippet="Docs", date=None),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("dates", "expected"),
+    [
+        ({"publishedDate": "2025-01-15", "pubdate": "2025-01-10"}, "2025-01-15"),
+        ({"publishedDate": None, "pubdate": "2025-01-10"}, "2025-01-10"),
+        ({"publishedDate": "", "pubdate": "2025-01-10"}, "2025-01-10"),
+        ({"publishedDate": 0, "pubdate": "2025-01-10"}, "2025-01-10"),
+        ({"publishedDate": None, "pubdate": None}, None),
+        ({"publishedDate": "", "pubdate": ""}, ""),
+        ({"publishedDate": 0}, None),
+        ({}, None),
+    ],
+)
+def test_searxng_date_prefers_published_date_and_falls_back_to_pubdate_when_it_is_empty(dates, expected):
+    response = _transform({"results": [{"title": "T", "url": "https://example.com", "content": "C", **dates}]})
+
+    assert response.results == [SearchResult(title="T", url="https://example.com", snippet="C", date=expected)]
+
+
+@pytest.mark.parametrize("payload", [{}, {"results": ""}, {"results": {}}])
+def test_searxng_response_with_empty_non_list_results_is_empty(payload):
+    assert _transform(payload).results == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("title", None),
+        ("title", 7),
+        ("url", None),
+        ("content", None),
+        ("content", ["snippet"]),
+        ("publishedDate", 1736899200),
+        ("pubdate", ["2025-01-10"]),
+    ],
+)
+def test_searxng_result_with_field_of_wrong_type_is_rejected(field, value):
+    result = {"title": "T", "url": "https://example.com", "content": "C", field: value}
+
+    with pytest.raises(ValidationError):
+        _transform({"results": [result]})
+
+
+def test_searxng_result_with_several_fields_of_wrong_type_reports_every_field():
+    result = {"title": 7, "url": None, "content": ["snippet"], "publishedDate": 1736899200}
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"results": [result]})
+
+    assert [error["loc"] for error in exc_info.value.errors()] == [("title",), ("url",), ("snippet",), ("date",)]
 
 
 @pytest.fixture(autouse=True)

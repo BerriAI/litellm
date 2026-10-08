@@ -398,3 +398,24 @@ def test_router_deployment_with_a_non_numeric_stream_chunk_size_gets_a_400_befor
 
     assert exc_info.value.status_code == 400
     send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    [
+        pytest.param("us.anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic", id="region-prefixed-model-id"),
+        pytest.param(
+            "arn:aws:bedrock:us-east-1:123:inference-profile/us.meta.llama3-2-90b-instruct-v1:0",
+            "meta",
+            id="inference-profile-arn",
+        ),
+        pytest.param("my-anthropic-and-cohere-model", "cohere", id="two-providers-named-earliest-listed-wins"),
+        pytest.param("us.twelvelabs.pegasus-1-2-v1:0", "twelvelabs", id="provider-listed-late"),
+        pytest.param("unknown-model", None, id="no-provider-named"),
+        pytest.param("", None, id="empty-model"),
+    ],
+)
+def test_get_bedrock_invoke_provider_finds_a_provider_named_anywhere_in_the_model(
+    model: str, expected_provider: str | None
+) -> None:
+    assert AmazonInvokeConfig.get_bedrock_invoke_provider(model) == expected_provider

@@ -4,9 +4,11 @@ Calls Exa AI's /search endpoint to search the web.
 Exa AI API Reference: https://docs.exa.ai/reference/search
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -15,6 +17,10 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_STRS: Final = TypeAdapter(Iterable[str], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _ExaAISearchRequestRequired(TypedDict):
@@ -177,20 +183,22 @@ class ExaAISearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         results: Final = []
-        for result in response_json.get("results", []):
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=result.get("text")
-                or "\n\n".join(result.get("highlights") or [])
-                or result.get("summary")
-                or "",
-                date=result.get("publishedDate"),  # ISO 8601 datetime string
-                last_updated=None,  # Exa AI doesn't provide last_updated in response
+        for result in _JSON_OBJECTS.validate_python(response_json.get("results", [])):
+            search_result = SearchResult.model_validate(
+                {
+                    "title": result.get("title", ""),
+                    "url": result.get("url", ""),
+                    "snippet": result.get("text")
+                    or "\n\n".join(_STRS.validate_python(result.get("highlights") or []))
+                    or result.get("summary")
+                    or "",
+                    "date": result.get("publishedDate"),  # ISO 8601 datetime string
+                    "last_updated": None,  # Exa AI doesn't provide last_updated in response
+                }
             )
             results.append(search_result)
 

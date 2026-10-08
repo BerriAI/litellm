@@ -6,9 +6,11 @@ containing content blocks, unlike standard Voyage embeddings which use
 /v1/embeddings and a string/list `input` field.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -16,6 +18,9 @@ from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_INT: Final = TypeAdapter(int)
 
 
 class VoyageMultimodalEmbeddingError(BaseLLMException):
@@ -160,8 +165,8 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage_payload: Final = raw_response_json.get("usage", {})
-        total_tokens: Final = usage_payload.get("total_tokens", 0)
+        usage_payload: Final = _JSON_OBJECT.validate_python(raw_response_json.get("usage", {}))
+        total_tokens: Final = _INT.validate_python(usage_payload.get("total_tokens", 0) or 0)
         model_response.usage = Usage(
             prompt_tokens=total_tokens,
             total_tokens=total_tokens,

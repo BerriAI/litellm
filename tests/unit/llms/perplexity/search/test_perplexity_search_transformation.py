@@ -1,0 +1,110 @@
+import datetime
+
+import httpx
+import pytest
+from pydantic import ValidationError
+
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
+
+
+def _transform(payload: object) -> SearchResponse:
+    logging_obj = Logging(
+        model="perplexity/search",
+        messages=[],
+        stream=False,
+        call_type="search",
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+    return PerplexitySearchConfig().transform_search_response(
+        raw_response=httpx.Response(200, json=payload), logging_obj=logging_obj
+    )
+
+
+def test_perplexity_results_keep_provider_order_fields_and_dates():
+    response = _transform(
+        {
+            "id": "search-1",
+            "server_time": None,
+            "results": [
+                {
+                    "title": "LiteLLM",
+                    "url": "https://example.com/litellm",
+                    "snippet": "Call every LLM API",
+                    "date": "2024-01-05",
+                    "last_updated": "2024-02-01",
+                },
+                {
+                    "title": "Docs",
+                    "url": "https://example.com/docs",
+                    "snippet": "Docs",
+                    "date": None,
+                    "last_updated": None,
+                },
+            ],
+        }
+    )
+
+    assert response.object == "search"
+    assert response.results == [
+        SearchResult(
+            title="LiteLLM",
+            url="https://example.com/litellm",
+            snippet="Call every LLM API",
+            date="2024-01-05",
+            last_updated="2024-02-01",
+        ),
+        SearchResult(title="Docs", url="https://example.com/docs", snippet="Docs", date=None, last_updated=None),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"id": "search-1"}, {"id": "search-1", "results": []}, {"results": ""}, {"results": {}}],
+)
+def test_perplexity_response_without_results_is_empty(payload):
+    assert _transform(payload).results == []
+
+
+def test_perplexity_result_missing_optional_fields_defaults_to_empty_strings_and_no_dates():
+    assert _transform({"results": [{"score": 0.5}]}).results == [
+        SearchResult(title="", url="", snippet="", date=None, last_updated=None)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("title", None),
+        ("title", 7),
+        ("url", None),
+        ("url", ["https://example.com"]),
+        ("snippet", None),
+        ("snippet", {"text": "snippet"}),
+        ("date", 1704412800),
+        ("last_updated", ["2024-02-01"]),
+    ],
+)
+def test_perplexity_result_with_field_of_wrong_type_is_rejected(field, value):
+    result = {"title": "T", "url": "https://example.com", "snippet": "S", field: value}
+
+    with pytest.raises(ValidationError):
+        _transform({"results": [result]})
+
+
+def test_perplexity_result_with_several_fields_of_wrong_type_reports_every_field():
+    result = {"title": 7, "url": None, "snippet": ["snippet"], "date": 1704412800, "last_updated": ["2024-02-01"]}
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"results": [result]})
+
+    assert [error["loc"] for error in exc_info.value.errors()] == [
+        ("title",),
+        ("url",),
+        ("snippet",),
+        ("date",),
+        ("last_updated",),
+    ]

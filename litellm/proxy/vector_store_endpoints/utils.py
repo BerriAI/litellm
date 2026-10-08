@@ -5,6 +5,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from fastapi import HTTPException, Request
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -21,6 +22,8 @@ from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+
 
 def _normalize_litellm_params(
     vector_store: LiteLLM_ManagedVectorStore,
@@ -29,8 +32,7 @@ def _normalize_litellm_params(
     if isinstance(litellm_params, str):
         normalized: Final = LiteLLM_ManagedVectorStore(**dict(vector_store))
         try:
-            parsed: Final = json.loads(litellm_params)
-            normalized["litellm_params"] = parsed if isinstance(parsed, dict) else {}
+            normalized["litellm_params"] = _JSON_OBJECT.validate_python(json.loads(litellm_params))
         except (TypeError, ValueError):
             normalized["litellm_params"] = {}
         return normalized
