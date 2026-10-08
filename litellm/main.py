@@ -5372,7 +5372,7 @@ def completion(
     context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", None)
     organization: Final = kwargs.get("organization", None)
     ### VERIFY SSL ###
-    ssl_verify: Final = kwargs.get("ssl_verify", None)
+    ssl_verify: Final = kwargs.pop("ssl_verify", None)
     ### CUSTOM MODEL COST ###
     input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
     output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
@@ -7356,7 +7356,7 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
-                litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
+                litellm_params={"ssl_verify": kwargs.pop("ssl_verify", None)},
             )
         elif custom_llm_provider == "perplexity":
             response = base_llm_http_handler.embedding(

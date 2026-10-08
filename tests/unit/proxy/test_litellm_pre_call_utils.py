@@ -1088,6 +1088,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "hello"}],
         "mock_response": "free response",
+        "ssl_verify": False,
         "mock_tool_calls": [{"id": "call_1"}],
         "disable_global_guardrails": True,
         "enable_prompt_caching": True,
@@ -1108,6 +1109,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         version="test-version",
     )
 
+    assert "ssl_verify" not in updated
     assert "mock_response" not in updated
     assert "mock_tool_calls" not in updated
     assert "disable_global_guardrails" not in updated
