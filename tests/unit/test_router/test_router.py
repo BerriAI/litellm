@@ -4724,11 +4724,13 @@ async def test_aresponses_streaming_iterator_fallback():
 
 
 @pytest.mark.asyncio
-async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reasoning_the_next_provider_cannot_decrypt():
+async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reasoning_the_next_provider_cannot_decrypt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
     """A Codex-style multi-turn history replays the order-1 provider's encrypted reasoning. When that
     provider's stream breaks before its first output chunk, the order-2 hop must not replay reasoning
     the next provider cannot decrypt; the readable summary stays."""
-    inputs_by_provider: Final[dict[str, list]] = {}
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     def history() -> list:
         return [
@@ -4743,30 +4745,65 @@ async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reas
             {"type": "message", "role": "user", "content": "And 19*21?"},
         ]
 
-    async def _handler(**handler_kwargs):
-        provider: Final = handler_kwargs["custom_llm_provider"]
-        inputs_by_provider[provider] = copy.deepcopy(handler_kwargs["input"])
-        if provider == "openai":
-            return _make_responses_iterator(
-                chunks=[MagicMock(type="response.created"), MagicMock(type="response.in_progress")],
-                error=MidStreamFallbackError(
-                    message="The server had an error while processing your request",
-                    model="gpt-6-astra",
-                    llm_provider="openai",
-                    original_exception=litellm.InternalServerError(
-                        message="server_error", llm_provider="openai", model="gpt-6-astra"
-                    ),
-                    generated_content="",
-                    is_pre_first_chunk=True,
-                ),
-                model="gpt-6-astra",
-                hidden_params={"model_id": "openai-order-1"},
-            )
-        return _make_responses_iterator(
-            chunks=[MagicMock(type="response.created"), MagicMock(type="response.completed")],
-            model="openai.gpt-6-astra",
-            hidden_params={"model_id": "mantle-order-2"},
+    def response_body(response_id: str, model: str, status: str, output: list) -> dict:
+        return {
+            "id": response_id,
+            "object": "response",
+            "created_at": 0,
+            "status": status,
+            "model": model,
+            "output": output,
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2} if status == "completed" else None,
+        }
+
+    def sse(events: list) -> httpx.Response:
+        body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+    openai_opened: Final = response_body("resp_openai", "gpt-6-astra", "in_progress", [])
+    openai_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=sse(
+            [
+                {"type": "response.created", "sequence_number": 0, "response": openai_opened},
+                {"type": "response.in_progress", "sequence_number": 1, "response": openai_opened},
+                {
+                    "type": "error",
+                    "sequence_number": 2,
+                    "error": {
+                        "type": "server_error",
+                        "code": "server_error",
+                        "message": "The server had an error while processing your request",
+                        "param": None,
+                    },
+                },
+            ]
         )
+    )
+    mantle_answer: Final = [
+        {
+            "id": "msg_mantle",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "399", "annotations": []}],
+        }
+    ]
+    mantle_route: Final = respx_mock.post("https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses").mock(
+        return_value=sse(
+            [
+                {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": response_body("resp_mantle", "openai.gpt-6-astra", "in_progress", []),
+                },
+                {
+                    "type": "response.completed",
+                    "sequence_number": 1,
+                    "response": response_body("resp_mantle", "openai.gpt-6-astra", "completed", mantle_answer),
+                },
+            ]
+        )
+    )
 
     router = litellm.Router(
         model_list=[
@@ -4788,16 +4825,12 @@ async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reas
         ],
         num_retries=0,
     )
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-        new=AsyncMock(side_effect=_handler),
-    ):
-        stream = await router.aresponses(model="gpt-6-astra", input=history(), store=False, stream=True)
-        collected = [event async for event in stream]
+    stream = await router.aresponses(model="gpt-6-astra", input=history(), store=False, stream=True)
+    collected = [event async for event in stream]
 
     assert [event.type for event in collected] == ["response.created", "response.completed"]
-    assert inputs_by_provider["openai"] == history()
-    assert inputs_by_provider["bedrock_mantle"] == [
+    assert json.loads(openai_route.calls.last.request.read())["input"] == history()
+    assert json.loads(mantle_route.calls.last.request.read())["input"] == [
         {"type": "message", "role": "user", "content": "What is 17*23?"},
         {"type": "reasoning", "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}]},
         {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "391"}]},

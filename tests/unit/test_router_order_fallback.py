@@ -6,20 +6,18 @@ should be tried first, and higher order deployments should be used as fallbacks
 when lower order deployments fail.
 """
 
-import copy
 import json
 from typing import Final, Optional
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import respx
 from openai import AsyncOpenAI
 
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
-from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import RouterRateLimitError
 from litellm.utils import get_deployment_order, get_order_filtered_deployments
 
@@ -649,6 +647,31 @@ async def test_text_completion_order_fallback_hop_does_not_send_target_order_ups
 
 
 
+_OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
+_MANTLE_RESPONSES_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
+_OVERLOADED_UPSTREAM: Final = {"error": {"message": "overloaded", "type": "server_error", "code": "server_error"}}
+
+
+def _completed_response_body(response_id: str, model: str, text: str) -> dict[str, object]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 0,
+        "status": "completed",
+        "model": model,
+        "output": [
+            {
+                "id": f"msg_{response_id}",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+
 def _responses_history_with_order_1_reasoning() -> list[dict]:
     return [
         {"type": "message", "role": "user", "content": "What is 17*23?"},
@@ -658,6 +681,15 @@ def _responses_history_with_order_1_reasoning() -> list[dict]:
             "encrypted_content": "gAAAAA-minted-by-order-1",
             "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}],
         },
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "391"}]},
+        {"type": "message", "role": "user", "content": "And 19*21?"},
+    ]
+
+
+def _responses_history_without_order_1_encrypted_reasoning() -> list[dict]:
+    return [
+        {"type": "message", "role": "user", "content": "What is 17*23?"},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}]},
         {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "391"}]},
         {"type": "message", "role": "user", "content": "And 19*21?"},
     ]
@@ -686,48 +718,78 @@ def _openai_then_mantle_order_router() -> Router:
     )
 
 
+def _two_openai_orders_on_one_encryption_boundary_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "openai-key",
+                    "order": 1,
+                },
+                "model_info": {"id": "openai-order-1"},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra-mini",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "openai-key",
+                    "order": 2,
+                },
+                "model_info": {"id": "openai-order-2"},
+            },
+        ],
+        num_retries=0,
+    )
+
+
 @pytest.mark.asyncio
-async def test_responses_order_fallback_hop_drops_the_encrypted_reasoning_the_next_provider_cannot_decrypt():
-    inputs_by_provider: Final[dict[str, list]] = {}
+async def test_responses_order_fallback_hop_drops_the_encrypted_reasoning_the_next_provider_cannot_decrypt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    openai_route: Final = respx_mock.post(_OPENAI_RESPONSES_URL).mock(
+        return_value=httpx.Response(500, json=_OVERLOADED_UPSTREAM)
+    )
+    mantle_route: Final = respx_mock.post(_MANTLE_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json=_completed_response_body("resp_mantle", "openai.gpt-6-astra", "399"))
+    )
 
-    async def _handler(**handler_kwargs):
-        provider: Final = handler_kwargs["custom_llm_provider"]
-        inputs_by_provider[provider] = copy.deepcopy(handler_kwargs["input"])
-        if provider == "openai":
-            raise litellm.InternalServerError(message="overloaded", llm_provider="openai", model="gpt-6-astra")
-        return ResponsesAPIResponse(
-            id="resp_mantle",
-            created_at=0,
-            status="completed",
-            model="openai.gpt-6-astra",
-            output=[
-                {
-                    "type": "message",
-                    "id": "msg_mantle",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [{"type": "output_text", "text": "399", "annotations": []}],
-                }
-            ],
-            usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        )
-
-    router = _openai_then_mantle_order_router()
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-        new=AsyncMock(side_effect=_handler),
-    ):
-        response = await router.aresponses(
-            model="gpt-6-astra", input=_responses_history_with_order_1_reasoning(), store=False
-        )
+    response = await _openai_then_mantle_order_router().aresponses(
+        model="gpt-6-astra", input=_responses_history_with_order_1_reasoning(), store=False
+    )
 
     assert response._hidden_params["model_id"] == "mantle-order-2"
-    assert inputs_by_provider["openai"] == _responses_history_with_order_1_reasoning()
-    assert inputs_by_provider["bedrock_mantle"] == [
-        {"type": "message", "role": "user", "content": "What is 17*23?"},
-        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}]},
-        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "391"}]},
-        {"type": "message", "role": "user", "content": "And 19*21?"},
+    assert json.loads(openai_route.calls.last.request.read())["input"] == _responses_history_with_order_1_reasoning()
+    assert (
+        json.loads(mantle_route.calls.last.request.read())["input"]
+        == _responses_history_without_order_1_encrypted_reasoning()
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_order_fallback_hop_keeps_the_encrypted_reasoning_the_same_boundary_can_decrypt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    openai_route: Final = respx_mock.post(_OPENAI_RESPONSES_URL).mock(
+        side_effect=[
+            httpx.Response(500, json=_OVERLOADED_UPSTREAM),
+            httpx.Response(200, json=_completed_response_body("resp_order2", "gpt-6-astra-mini", "399")),
+        ]
+    )
+
+    response = await _two_openai_orders_on_one_encryption_boundary_router().aresponses(
+        model="gpt-6-astra", input=_responses_history_with_order_1_reasoning(), store=False
+    )
+
+    assert response._hidden_params["model_id"] == "openai-order-2"
+    assert [json.loads(call.request.read())["input"] for call in openai_route.calls] == [
+        _responses_history_with_order_1_reasoning(),
+        _responses_history_with_order_1_reasoning(),
     ]
 
 

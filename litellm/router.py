@@ -313,6 +313,7 @@ from litellm.types.router import (
     ModelGroupInfo,
     OptionalPreCallChecks,
     PreRoutingStrategy,
+    RetryAttemptRecord,
     RetryPolicy,
     RouterCacheEnum,
     RouterErrors,
@@ -501,12 +502,23 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_HOP_BREADCRUMBS_ADAPTER: Final = TypeAdapter(tuple[RetryAttemptRecord, ...] | None)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 
 
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
     fallback_depth: Final = request_kwargs.get("fallback_depth")
     return isinstance(fallback_depth, int) and fallback_depth > 0
+
+
+def _deployment_that_just_failed(request_metadata: object) -> str | None:
+    try:
+        breadcrumbs: Final = _HOP_BREADCRUMBS_ADAPTER.validate_python(
+            _FALLBACK_HOP_ADAPTER.validate_python(request_metadata).get("previous_models")
+        )
+    except ValidationError:
+        return None
+    return breadcrumbs[-1]["deployment_id"] if breadcrumbs else None
 
 
 def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object] | None) -> Mapping[str, str | int]:
@@ -4248,7 +4260,7 @@ class Router:
                 hop_kwargs.get("input"),
                 hop_kwargs.get("messages"),
                 (_FALLBACK_HOP_ADAPTER.validate_python(deployment),),
-                keep_unmarked=False,
+                unmarked_origin=_deployment_that_just_failed(hop_kwargs.get(metadata_variable_name)),
             )
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
