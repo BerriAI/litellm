@@ -458,6 +458,22 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["dangerous-tool-use-2026-09-03"]
 
+    @pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
+    def test_inline_tools_forwarded(self, provider):
+        """Pi sends inline-tools-2026-09-15 whenever its tool list can change mid-conversation and
+        carries the new tool by value in a `tool_addition` system message. Anthropic documents inline-tools-2026-09-15 for the Claude API
+        (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages, fetched
+        2026-10-07); Vertex rawPredict honored it live on claude-opus-5-5 at location global on 2026-10-07
+        (200, the inline tool called) and answered 400 "Input tag 'tool_addition' found using 'type' does
+        not match any of the expected tags" without it, which is what the customer's Pi client saw
+        through the proxy while the filter dropped the header as unknown."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["inline-tools-2026-09-15"],
+            provider=provider,
+        )
+
+        assert filtered == ["inline-tools-2026-09-15"]
+
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
         for provider in [

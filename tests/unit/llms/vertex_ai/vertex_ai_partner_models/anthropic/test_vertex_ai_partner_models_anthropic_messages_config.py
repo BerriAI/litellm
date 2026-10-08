@@ -180,6 +180,44 @@ def test_no_per_message_output_config_leaves_per_turn_control_beta_out():
     assert "per-turn-control-2026-07-01" not in headers.get("anthropic-beta", "")
 
 
+def test_inline_tools_beta_reaches_the_vertex_messages_request(local_beta_headers_config):
+    """A `tool_addition` system message is only accepted under inline-tools-2026-09-15, so the
+    Vertex beta filter on the /v1/messages path must keep the header the client sent. Anthropic documents inline-tools-2026-09-15 for the Claude API
+    (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages, fetched
+    2026-10-07); Vertex rawPredict honored it live on claude-opus-5-5 at location global on 2026-10-07
+    (200, the inline tool called) and answered 400 "Input tag 'tool_addition' found using 'type' does
+    not match any of the expected tags" without it, which is what the customer's Pi client saw
+    through the proxy while the filter dropped the header as unknown."""
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+
+    messages = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "tool_addition",
+                    "tool": {
+                        "type": "tool_definition",
+                        "definition": {
+                            "name": "db_query",
+                            "description": "Run a read-only SQL query",
+                            "input_schema": {"type": "object", "properties": {"sql": {"type": "string"}}},
+                        },
+                    },
+                }
+            ],
+        },
+    ]
+
+    filtered = update_headers_with_filtered_beta(
+        headers=_validate_vertex_headers({"anthropic-beta": "inline-tools-2026-09-15"}, messages),
+        provider="vertex_ai",
+    )
+
+    assert filtered["anthropic-beta"].split(",").count("inline-tools-2026-09-15") == 1
+
+
 def test_web_search_header_not_added_without_tool():
     """Test that beta header is NOT added when web search tool is not present"""
     config = VertexAIPartnerModelsAnthropicMessagesConfig()
