@@ -24,7 +24,6 @@ from typing import Final, Literal
 import pytest
 
 import litellm
-from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 

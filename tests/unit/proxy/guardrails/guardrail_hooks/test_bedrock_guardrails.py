@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 
 
@@ -7486,121 +7487,140 @@ async def test_should_raise_guardrail_blocked_exception_null_fields():
     )
 
 
-@pytest.mark.asyncio
-async def test_during_call_masking_rewrites_pii_in_messages():
-    guardrail: Final = BedrockGuardrail(
-        guardrailIdentifier="wf0hkdb5x07f", guardrailVersion="DRAFT"
-    )
-    masked_outputs: Final = [
-        {"text": "Hello, my phone number is {PHONE}"},
-        {"text": "Hello, how can I help you today?"},
-        {"text": "I need to cancel my order"},
-        {"text": "ok, my credit card number is {CREDIT_DEBIT_CARD_NUMBER}"},
-    ]
-    mock_bedrock_response: Final = MagicMock()
-    mock_bedrock_response.status_code = 200
-    mock_bedrock_response.json.return_value = {
-        "action": "NONE",
-        "outputs": masked_outputs,
-        "assessments": [
-            {
-                "sensitiveInformationPolicy": {
-                    "piiEntities": [
-                        {"type": "PHONE", "match": "+1 412 555 1212", "action": "ANONYMIZED"},
-                        {"type": "CREDIT_DEBIT_CARD_NUMBER", "match": "1234-5678-9012-3456", "action": "ANONYMIZED"},
-                    ]
-                }
-            }
-        ],
-    }
-    mock_credentials: Final = MagicMock()
-    mock_credentials.access_key = "test-access-key"
-    mock_credentials.secret_key = "test-secret-key"
-    mock_credentials.token = None
-    request_data: Final = {
-        "model": "gpt-5.5",
-        "messages": [
-            {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"},
-            {"role": "assistant", "content": "Hello, how can I help you today?"},
-            {"role": "user", "content": "I need to cancel my order"},
-            {"role": "user", "content": "ok, my credit card number is 1234-5678-9012-3456"},
-        ],
-    }
-    with (
-        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
-        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
-        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
-    ):
-        mock_post.return_value = mock_bedrock_response
-        response: Final = await guardrail.async_moderation_hook(
-            data=dict(request_data, messages=[dict(m) for m in request_data["messages"]]),
-            user_api_key_dict=UserAPIKeyAuth(),
-            call_type="completion",
-        )
-    assert response is not None
-    assert response["messages"][0]["content"] == "Hello, my phone number is {PHONE}"
-    assert response["messages"][1]["content"] == "Hello, how can I help you today?"
-    assert response["messages"][2]["content"] == "I need to cancel my order"
-    assert (
-        response["messages"][3]["content"]
-        == "ok, my credit card number is {CREDIT_DEBIT_CARD_NUMBER}"
+_MASKING_GUARDRAIL_URL: Final = "https://bedrock-runtime.us-east-1.amazonaws.com/guardrail/wf0hkdb5x07f/version/DRAFT/apply"
+
+
+def _masking_guardrail() -> BedrockGuardrail:
+    return BedrockGuardrail(
+        guardrailIdentifier="wf0hkdb5x07f",
+        guardrailVersion="DRAFT",
+        aws_access_key_id="fake-access-key",
+        aws_secret_access_key="fake-secret-key",
+        aws_region_name="us-east-1",
     )
 
 
-@pytest.mark.asyncio
-async def test_during_call_masking_rewrites_only_pii_block_in_content_list():
-    guardrail: Final = BedrockGuardrail(
-        guardrailIdentifier="wf0hkdb5x07f", guardrailVersion="DRAFT"
-    )
-    masked_outputs: Final = [
-        {"text": "call me at {PHONE}"},
-        {"text": "unchanged block"},
-    ]
-    mock_bedrock_response: Final = MagicMock()
-    mock_bedrock_response.status_code = 200
-    mock_bedrock_response.json.return_value = {
-        "action": "NONE",
-        "outputs": masked_outputs,
-        "assessments": [
-            {
-                "sensitiveInformationPolicy": {
-                    "piiEntities": [
-                        {"type": "PHONE", "match": "+1 412 555 1212", "action": "ANONYMIZED"}
-                    ]
+def _anonymized_reply(masked_texts: tuple[str, ...], entity_types: tuple[str, ...]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "action": "GUARDRAIL_INTERVENED",
+            "outputs": [{"text": text} for text in masked_texts],
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [
+                            {"type": entity_type, "match": "redacted", "action": "ANONYMIZED"}
+                            for entity_type in entity_types
+                        ]
+                    }
                 }
-            }
-        ],
-    }
-    mock_credentials2: Final = MagicMock()
-    mock_credentials2.access_key = "test-access-key"
-    mock_credentials2.secret_key = "test-secret-key"
-    mock_credentials2.token = None
-    request_data: Final = {
-        "model": "gpt-5.5",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "call me at +1 412 555 1212"},
-                    {"type": "text", "text": "unchanged block"},
-                ],
-            },
-            {"role": "assistant", "content": "noted"},
-        ],
-    }
-    with (
-        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
-        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials2, "us-east-1")),
-        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
-    ):
-        mock_post.return_value = mock_bedrock_response
-        response: Final = await guardrail.async_moderation_hook(
-            data=request_data,
-            user_api_key_dict=UserAPIKeyAuth(),
-            call_type="completion",
+            ],
+        },
+    )
+
+
+def _sent_texts(route: respx.Route) -> tuple[str, ...]:
+    body: Final = json.loads(route.calls[0].request.content)
+    assert body["source"] == "INPUT"
+    return tuple(item["text"]["text"] for item in body["content"])
+
+
+@pytest.mark.asyncio
+async def test_during_call_masking_rewrites_pii_in_messages(
+    respx_mock: respx.MockRouter, httpx_transport: None
+) -> None:
+    guardrail: Final = _masking_guardrail()
+    route: Final = respx_mock.post(_MASKING_GUARDRAIL_URL).mock(
+        return_value=_anonymized_reply(
+            (
+                "Hello, my phone number is {PHONE}",
+                "Hello, how can I help you today?",
+                "I need to cancel my order",
+                "ok, my credit card number is {CREDIT_DEBIT_CARD_NUMBER}",
+            ),
+            ("PHONE", "CREDIT_DEBIT_CARD_NUMBER"),
         )
+    )
+
+    response: Final = await guardrail.async_moderation_hook(
+        data={
+            "model": "gpt-5.5",
+            "messages": [
+                {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"},
+                {"role": "assistant", "content": "Hello, how can I help you today?"},
+                {"role": "user", "content": "I need to cancel my order"},
+                {"role": "user", "content": "ok, my credit card number is 1234-5678-9012-3456"},
+            ],
+        },
+        user_api_key_dict=UserAPIKeyAuth(),
+        call_type="completion",
+    )
+
+    assert route.call_count == 1
+    assert _sent_texts(route) == (
+        "Hello, my phone number is +1 412 555 1212",
+        "Hello, how can I help you today?",
+        "I need to cancel my order",
+        "ok, my credit card number is 1234-5678-9012-3456",
+    )
     assert response is not None
-    content: Final = response["messages"][0]["content"]
-    assert isinstance(content, list)
-    assert content[0]["text"] == "call me at {PHONE}"
-    assert content[1]["text"] == "unchanged block"
+    assert [message["content"] for message in response["messages"]] == [
+        "Hello, my phone number is {PHONE}",
+        "Hello, how can I help you today?",
+        "I need to cancel my order",
+        "ok, my credit card number is {CREDIT_DEBIT_CARD_NUMBER}",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_during_call_masking_rewrites_only_pii_block_in_content_list(
+    respx_mock: respx.MockRouter, httpx_transport: None
+) -> None:
+    guardrail: Final = _masking_guardrail()
+    route: Final = respx_mock.post(_MASKING_GUARDRAIL_URL).mock(
+        return_value=_anonymized_reply(
+            (
+                "Hello, my phone number is {PHONE}",
+                "what time is it?",
+                "Hello, how can I help you today?",
+                "who is the president of the united states?",
+            ),
+            ("PHONE",),
+        )
+    )
+
+    response: Final = await guardrail.async_moderation_hook(
+        data={
+            "model": "gpt-5.5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Hello, my phone number is +1 412 555 1212"},
+                        {"type": "text", "text": "what time is it?"},
+                    ],
+                },
+                {"role": "assistant", "content": "Hello, how can I help you today?"},
+                {"role": "user", "content": "who is the president of the united states?"},
+            ],
+        },
+        user_api_key_dict=UserAPIKeyAuth(),
+        call_type="completion",
+    )
+
+    assert route.call_count == 1
+    assert _sent_texts(route) == (
+        "Hello, my phone number is +1 412 555 1212",
+        "what time is it?",
+        "Hello, how can I help you today?",
+        "who is the president of the united states?",
+    )
+    assert response is not None
+    messages: Final = response["messages"]
+    assert messages[0]["content"] == [
+        {"type": "text", "text": "Hello, my phone number is {PHONE}"},
+        {"type": "text", "text": "what time is it?"},
+    ]
+    assert messages[1]["content"] == "Hello, how can I help you today?"
+    assert messages[2]["content"] == "who is the president of the united states?"

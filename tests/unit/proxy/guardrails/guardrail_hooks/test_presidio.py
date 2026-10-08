@@ -8,6 +8,7 @@ import copy
 import json
 import os
 import re
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
@@ -4577,90 +4578,102 @@ async def test_presidio_language_configuration_with_per_request_override():
     assert analyze_request_default["text"] == test_text
 
 
-_PRESIDIO_ANALYZE_CARD_AND_EMAIL: Final = [
-    {
-        "entity_type": "CREDIT_CARD",
-        "start": 24,
-        "end": 43,
-        "score": 1.0,
-        "analysis_explanation": None,
-        "recognition_metadata": None,
-    },
-    {
-        "entity_type": "EMAIL_ADDRESS",
-        "start": 63,
-        "end": 79,
-        "score": 0.99,
-        "analysis_explanation": None,
-        "recognition_metadata": None,
-    },
-]
-
-_CARD_AND_EMAIL_TEXT: Final = (
-    "My credit card number is 4111-1111-1111-1111 and my email is test@example.com"
-)
+_CARD_NUMBER: Final = "4111-1111-1111-1111"
+_EMAIL: Final = "test@example.com"
+_BLOCK_CARD_MASK_EMAIL: Final = {
+    PiiEntityType.CREDIT_CARD: PiiAction.BLOCK,
+    PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
+}
 
 
-def _blocked_entities_guardrail():
-    guardrail: Final = OPTIONAL_PresidioPIIMasking(
-        mock_testing=True,
-        pii_entities_config={
-            PiiEntityType.CREDIT_CARD: PiiAction.BLOCK,
-            PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,
-        },
-        presidio_analyzer_api_base="http://localhost:5002",
-        presidio_anonymizer_api_base="http://localhost:5001",
+def _card_and_email_spans(text: str) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {
+            "entity_type": entity_type,
+            "start": text.index(value),
+            "end": text.index(value) + len(value),
+            "score": 1.0,
+            "analysis_explanation": None,
+        }
+        for entity_type, value in (("CREDIT_CARD", _CARD_NUMBER), ("EMAIL_ADDRESS", _EMAIL))
+        if value in text
     )
-    if not hasattr(guardrail, "presidio_analyzer_api_base"):
-        guardrail.validate_environment(
-            presidio_analyzer_api_base="http://localhost:5002",
-            presidio_anonymizer_api_base="http://localhost:5001",
-        )
-    return guardrail
+
+
+def _card_and_email_presidio_app(analyzed: asyncio.Queue[Mapping[str, object]]) -> web.Application:
+    async def analyze(request: web.Request) -> web.Response:
+        payload: Final = await request.json()
+        analyzed.put_nowait(payload)
+        return web.json_response([dict(span) for span in _card_and_email_spans(payload["text"])])
+
+    async def anonymize(request: web.Request) -> web.Response:
+        payload: Final = await request.json()
+        return web.json_response({"text": payload["text"], "items": []})
+
+    app: Final = web.Application()
+    app.router.add_post("/analyze", analyze)
+    app.router.add_post("/anonymize", anonymize)
+    return app
+
+
+def _drain(analyzed: asyncio.Queue[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(analyzed.get_nowait() for _ in range(analyzed.qsize()))
+
+
+def _guardrail_for(server: TestServer) -> OPTIONAL_PresidioPIIMasking:
+    return OPTIONAL_PresidioPIIMasking(
+        pii_entities_config=_BLOCK_CARD_MASK_EMAIL,
+        presidio_analyzer_api_base=str(server.make_url("/")),
+        presidio_anonymizer_api_base=str(server.make_url("/")),
+    )
 
 
 @pytest.mark.asyncio
-async def test_check_pii_raises_blocked_entity_for_card():
-    guardrail: Final = _blocked_entities_guardrail()
-    analyze_request: Final = guardrail._get_presidio_analyze_request_payload(
-        text=_CARD_AND_EMAIL_TEXT, presidio_config=None, request_data={}
-    )
-    assert "entities" in analyze_request
-    assert set(analyze_request["entities"]) == set(guardrail.pii_entities_config.keys())
+async def test_check_pii_raises_blocked_entity_for_card() -> None:
+    text: Final = f"My credit card number is {_CARD_NUMBER} and my email is {_EMAIL}"
+    analyzed: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
+    async with TestServer(_card_and_email_presidio_app(analyzed)) as server:
+        guardrail: Final = _guardrail_for(server)
+        try:
+            with pytest.raises(BlockedPiiEntityError) as excinfo:
+                await guardrail.check_pii(text=text, output_parse_pii=True, presidio_config=None, request_data={})
+        finally:
+            await guardrail._close_http_session()
 
-    guardrail._get_session_iterator = _make_mock_session_iterator(
-        _PRESIDIO_ANALYZE_CARD_AND_EMAIL
-    )
-    with pytest.raises(BlockedPiiEntityError) as excinfo:
-        await guardrail.check_pii(
-            text=_CARD_AND_EMAIL_TEXT,
-            output_parse_pii=True,
-            presidio_config=None,
-            request_data={},
-        )
+    analyze_requests: Final = _drain(analyzed)
+    assert len(analyze_requests) == 1
+    assert analyze_requests[0]["text"] == text
+    assert set(analyze_requests[0]["entities"]) == set(_BLOCK_CARD_MASK_EMAIL)
     assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
     assert excinfo.value.guardrail_name == guardrail.guardrail_name
 
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_raises_blocked_entity_for_card_message(
-    mock_user_api_key, mock_cache
-):
-    guardrail: Final = _blocked_entities_guardrail()
-    guardrail._get_session_iterator = _make_mock_session_iterator(
-        _PRESIDIO_ANALYZE_CARD_AND_EMAIL
-    )
-    data: Final = {
-        "messages": [{"role": "user", "content": _CARD_AND_EMAIL_TEXT}],
-        "metadata": {},
-    }
-    with pytest.raises(BlockedPiiEntityError) as excinfo:
-        await guardrail.async_pre_call_hook(
-            user_api_key_dict=mock_user_api_key,
-            cache=mock_cache,
-            data=data,
-            call_type="completion",
-        )
+    mock_user_api_key: UserAPIKeyAuth, mock_cache: DualCache
+) -> None:
+    user_text: Final = f"My credit card is {_CARD_NUMBER} and my email is {_EMAIL}."
+    analyzed: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
+    async with TestServer(_card_and_email_presidio_app(analyzed)) as server:
+        guardrail: Final = _guardrail_for(server)
+        try:
+            with pytest.raises(BlockedPiiEntityError) as excinfo:
+                await guardrail.async_pre_call_hook(
+                    user_api_key_dict=mock_user_api_key,
+                    cache=mock_cache,
+                    data={
+                        "messages": [
+                            {"role": "system", "content": "You are a helpful assistant."},
+                            {"role": "user", "content": user_text},
+                        ],
+                        "model": "gpt-5-mini",
+                    },
+                    call_type="completion",
+                )
+        finally:
+            await guardrail._close_http_session()
+
+    assert user_text in [payload["text"] for payload in _drain(analyzed)]
     assert excinfo.value.entity_type == PiiEntityType.CREDIT_CARD
     assert excinfo.value.guardrail_name == guardrail.guardrail_name
 
