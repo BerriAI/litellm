@@ -123,7 +123,7 @@ from litellm.types.containers.main import (
     ContainerObject,
     DeleteContainerResult,
 )
-from litellm.types.decisions import DecisionsRequest, DecisionsResponse
+from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
 from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
@@ -1486,19 +1486,16 @@ class BaseLLMHTTPHandler:
     def _prepare_decisions_request(
         self,
         model: str,
-        custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj | None,
         provider_config: BaseDecisionsConfig,
-        request: DecisionsRequest,
+        body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
     ) -> tuple[str, dict[str, str], dict[str, object]]:
         outbound_headers: Final = provider_config.validate_environment(headers=headers, model=model, api_key=api_key)
         url: Final = provider_config.get_complete_url(api_base=api_base, model=model)
-        data: Final = provider_config.transform_decisions_request(
-            model=model, request=request, custom_llm_provider=custom_llm_provider
-        )
+        data: Final = dict(body)
         if logging_obj is not None:
             logging_obj.pre_call(
                 input=data,
@@ -1514,19 +1511,19 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj | None,
         provider_config: BaseDecisionsConfig,
-        request: DecisionsRequest,
+        request: DecisionsIRRequest,
+        body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
         timeout: float | httpx.Timeout | None,
         client: HTTPHandler | None = None,
-    ) -> DecisionsResponse:
+    ) -> DecisionsIRResponse:
         url, outbound_headers, data = self._prepare_decisions_request(
             model=model,
-            custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
             provider_config=provider_config,
-            request=request,
+            body=body,
             api_base=api_base,
             api_key=api_key,
             headers=headers,
@@ -1548,19 +1545,19 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj | None,
         provider_config: BaseDecisionsConfig,
-        request: DecisionsRequest,
+        request: DecisionsIRRequest,
+        body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
         timeout: float | httpx.Timeout | None,
         client: AsyncHTTPHandler | None = None,
-    ) -> DecisionsResponse:
+    ) -> DecisionsIRResponse:
         url, outbound_headers, data = self._prepare_decisions_request(
             model=model,
-            custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
             provider_config=provider_config,
-            request=request,
+            body=body,
             api_base=api_base,
             api_key=api_key,
             headers=headers,
