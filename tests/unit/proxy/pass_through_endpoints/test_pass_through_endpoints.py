@@ -1376,6 +1376,32 @@ async def test_pass_through_request_strips_client_guardrail_information(allow_cl
     assert hooked_body["metadata"] == {"trace_id": "keep-me"}
 
 
+@pytest.mark.parametrize("metadata_key", ["litellm_metadata", "metadata"])
+def test_pass_through_logging_ignores_client_guardrail_information_sent_as_pairs(metadata_key: str):
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/openai/v1/chat/completions"
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+
+    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={
+            metadata_key: [
+                ["trace_id", "from-pairs"],
+                ["standard_logging_guardrail_information", [{"guardrail_name": "forged", "guardrail_cost": 5.0}]],
+            ],
+        },
+    )
+
+    logged_metadata: Final = kwargs["litellm_params"]["metadata"]
+    assert "standard_logging_guardrail_information" not in logged_metadata
+    assert "trace_id" not in logged_metadata
+
+
 @pytest.mark.asyncio
 async def test_create_pass_through_route_forwards_timeout():
     unique_path = "/test/path/unique/timeout"
