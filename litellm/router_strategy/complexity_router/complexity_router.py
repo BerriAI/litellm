@@ -59,7 +59,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in
 from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_ENDPOINT
+from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -1344,7 +1344,7 @@ class ComplexityRouter(CustomLogger):
                 provider=config.provider,
             )
         if config.provider == "databricks":
-            databricks: Final = DATABRICKS_DECISIONS_ENDPOINT.connection(config.api_base, config.api_key)
+            databricks: Final = DATABRICKS_DECISIONS_CONFIG.connection(config.api_base, config.api_key)
             return HttpJevClassifierClient(
                 api_key=databricks.api_key,
                 api_base=databricks.api_base,

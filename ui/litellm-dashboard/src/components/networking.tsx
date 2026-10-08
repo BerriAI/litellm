@@ -7051,6 +7051,13 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   return data;
 };
 
+export const startMoyaiQuickConnect = async (accessToken: string, moyaiUrl: string, returnTo: string) => {
+  return apiClient.post<{ connect_url: string }>("/moyai/connect/start", {
+    accessToken,
+    body: { moyai_url: moyaiUrl, return_to: returnTo },
+  });
+};
+
 export type UserBannerSeverity = "info" | "warning" | "error";
 
 export interface UserBanner {

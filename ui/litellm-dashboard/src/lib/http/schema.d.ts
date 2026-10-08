@@ -8275,6 +8275,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
+         *     - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
          *     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
@@ -8741,6 +8742,7 @@ export interface paths {
          *     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
          *     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
          *     - allowed_passthrough_routes: Optional[list] - List of allowed pass through routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through routes the key can access, without specifying the routes. If allowed_routes is specified, allowed_passthrough_routes is ignored.
+         *     - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
          *     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
@@ -9086,6 +9088,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Feedback */
+        get: operations["read_feedback_lens_feedback_get"];
+        /** Submit Feedback */
+        put: operations["submit_feedback_lens_feedback_put"];
+        post?: never;
+        /** Delete Feedback */
+        delete: operations["delete_feedback_lens_feedback_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/feedback/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Feedback Summary */
+        post: operations["feedback_summary_lens_feedback_summary_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/internal/ingestion-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ingestion Credentials */
+        get: operations["ingestion_credentials_lens_internal_ingestion_credentials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/preview/sample": {
         parameters: {
             query?: never;
@@ -9097,6 +9152,23 @@ export interface paths {
         put?: never;
         /** Preview Sample */
         post: operations["preview_sample_lens_preview_sample_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/service": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Service Connection */
+        get: operations["service_connection_lens_service_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9150,6 +9222,41 @@ export interface paths {
         /** Trace Signal Statuses */
         post: operations["trace_signal_statuses_lens_traces_signals_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/tracing/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Ingestion Keys */
+        get: operations["list_ingestion_keys_lens_tracing_keys_get"];
+        put?: never;
+        /** Create Ingestion Key */
+        post: operations["create_ingestion_key_lens_tracing_keys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/tracing/keys/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Ingestion Key */
+        delete: operations["revoke_ingestion_key_lens_tracing_keys__key_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -10866,6 +10973,40 @@ export interface paths {
          *     ```
          */
         post: operations["moderations_moderations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/moyai/connect/exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Moyai Connect Exchange */
+        post: operations["moyai_connect_exchange_moyai_connect_exchange_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/moyai/connect/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Moyai Connect Start */
+        post: operations["moyai_connect_start_moyai_connect_start_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -17220,6 +17361,7 @@ export interface paths {
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+         *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
          *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
@@ -17447,6 +17589,7 @@ export interface paths {
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+         *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
          *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
@@ -22581,6 +22724,23 @@ export interface paths {
         put?: never;
         /** Ingest Otlp Traces */
         post: operations["ingest_otlp_traces_v1_traces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Trace Agents */
+        get: operations["list_trace_agents_v1_traces_agents_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -30206,6 +30366,12 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Responses Websocket Session Limit Seconds
+             * @description Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.
+             * @default 3600
+             */
+            responses_websocket_session_limit_seconds: number;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
             /**
@@ -32400,6 +32566,56 @@ export interface components {
              */
             model: string;
         };
+        /** Feedback */
+        Feedback: {
+            /** Author */
+            author: string;
+            /** Comment */
+            comment: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Score */
+            score: number;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** FeedbackSubmission */
+        FeedbackSubmission: {
+            /**
+             * Comment
+             * @default
+             */
+            comment: string;
+            /** Score */
+            score: number;
+            /** Session Id */
+            session_id?: string | null;
+            /** Trace Id */
+            trace_id?: string | null;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+            /**
+             * User
+             * @default
+             */
+            user: string;
+        };
         /** FieldDetail */
         FieldDetail: {
             /** Field Default Value */
@@ -32879,6 +33095,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -33045,6 +33263,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -33624,6 +33844,79 @@ export interface components {
              * @constant
              */
             object: "list";
+        };
+        /** IngestionCredential */
+        IngestionCredential: {
+            /** Expires At */
+            expires_at: number | null;
+            tenant: components["schemas"]["IngestionTenant"];
+            /** Token Hash */
+            token_hash: string;
+        };
+        /** IngestionKey */
+        IngestionKey: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Expires At */
+            expires_at: number | null;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            tenant: components["schemas"]["IngestionTenant"];
+        };
+        /** IngestionKeyCreated */
+        IngestionKeyCreated: {
+            /**
+             * Active
+             * @default false
+             */
+            active: boolean;
+            /** Key */
+            key: string;
+            record: components["schemas"]["IngestionKey"];
+        };
+        /** IngestionKeyRequest */
+        IngestionKeyRequest: {
+            /** Expires At */
+            expires_at?: string | null;
+            /**
+             * Name
+             * @default Agent tracing
+             */
+            name: string;
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
+        };
+        /** IngestionSnapshot */
+        IngestionSnapshot: {
+            /** Issued At */
+            issued_at: number;
+            /** Keys */
+            keys: components["schemas"]["IngestionCredential"][];
+        };
+        /** IngestionTenant */
+        IngestionTenant: {
+            /** Api Key Hash */
+            api_key_hash: string;
+            /**
+             * Org Id
+             * @default
+             */
+            org_id: string;
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
+            /** User Id */
+            user_id: string;
         };
         /** InlineSkill */
         InlineSkill: {
@@ -35061,6 +35354,8 @@ export interface components {
             review_notes?: string | null;
             /** Reviewed At */
             reviewed_at?: string | null;
+            /** Rpm */
+            rpm?: number | null;
             /** Server Id */
             server_id: string;
             /** Server Name */
@@ -38918,6 +39213,34 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** MoyaiConnectExchangeRequest */
+        MoyaiConnectExchangeRequest: {
+            /** Code */
+            code: string;
+            /** Moyai Url */
+            moyai_url: string;
+        };
+        /** MoyaiConnectExchangeResponse */
+        MoyaiConnectExchangeResponse: {
+            /** Api Base */
+            api_base: string;
+            /** Api Key */
+            api_key: string;
+            /** Key Alias */
+            key_alias: string;
+        };
+        /** MoyaiConnectStartRequest */
+        MoyaiConnectStartRequest: {
+            /** Moyai Url */
+            moyai_url: string;
+            /** Return To */
+            return_to: string;
+        };
+        /** MoyaiConnectStartResponse */
+        MoyaiConnectStartResponse: {
+            /** Connect Url */
+            connect_url: string;
+        };
         /**
          * MutualTLSSecurityScheme
          * @description Defines a security scheme using mTLS authentication.
@@ -39124,6 +39447,8 @@ export interface components {
             per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
+            /** Rpm */
+            rpm?: number | null;
             /** Server Id */
             server_id?: string | null;
             /** Server Name */
@@ -39478,6 +39803,8 @@ export interface components {
             } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
@@ -39772,6 +40099,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -40590,6 +40919,8 @@ export interface components {
             } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
@@ -42171,6 +42502,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -44732,6 +45065,8 @@ export interface components {
             type: "slack" | "teams" | "discord" | "linear" | "github" | "jira" | "custom";
             /** Url */
             url: string;
+            /** User */
+            user?: string;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -45290,6 +45625,47 @@ export interface components {
             search_provider: string;
             /** Timeout */
             timeout?: number | null;
+        };
+        /** ServiceConnection */
+        ServiceConnection: {
+            /**
+             * Configured
+             * @default false
+             */
+            configured: boolean;
+            /** Connected */
+            connected: boolean;
+            /**
+             * Release
+             * @default
+             */
+            release: string;
+            status: components["schemas"]["ServiceStatus"];
+            /** Url */
+            url: string;
+        };
+        /** ServiceStatus */
+        ServiceStatus: {
+            /**
+             * Credentials Ready
+             * @default false
+             */
+            credentials_ready: boolean;
+            /**
+             * Protocol Version
+             * @default 0
+             */
+            protocol_version: number;
+            /**
+             * Release
+             * @default
+             */
+            release: string;
+            /**
+             * Storage Ready
+             * @default false
+             */
+            storage_ready: boolean;
         };
         /** SessionLogoutResponse */
         SessionLogoutResponse: {
@@ -47680,6 +48056,66 @@ export interface components {
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
         };
+        /**
+         * TraceAgent
+         * @description One agent seen in the caller's traces, for picking which agent's runs to look at.
+         */
+        TraceAgent: {
+            /** Failed Runs */
+            failed_runs: number;
+            /**
+             * Frameworks
+             * @default []
+             */
+            frameworks: string[];
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /** Name */
+            name: string;
+            /** Runs */
+            runs: number;
+        };
+        /** TraceAgentList */
+        TraceAgentList: {
+            /** Agents */
+            agents: components["schemas"]["TraceAgent"][];
+        };
+        /** TraceFeedback */
+        TraceFeedback: {
+            /** Feedback */
+            feedback: components["schemas"]["Feedback"][];
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
+        /** TraceFeedbackRequest */
+        TraceFeedbackRequest: {
+            /** Traces */
+            traces: components["schemas"]["TraceIdentity"][];
+        };
+        /** TraceFeedbackSummary */
+        TraceFeedbackSummary: {
+            /** Average */
+            average: number | null;
+            /** Count */
+            count: number;
+            /** Lowest */
+            lowest: number | null;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
         /** TraceFindingCount */
         TraceFindingCount: {
             /** Finding Count */
@@ -48341,6 +48777,8 @@ export interface components {
             default_estimated_output_tokens_per_model?: {
                 [key: string]: number;
             } | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -48521,6 +48959,8 @@ export interface components {
             per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
+            /** Rpm */
+            rpm?: number | null;
             /** Server Id */
             server_id: string;
             /** Server Name */
@@ -48835,6 +49275,8 @@ export interface components {
             } | null;
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
+            /** Denied Passthrough Routes */
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
@@ -50215,6 +50657,11 @@ export interface components {
         WorkerCreated: {
             /** Image */
             image: string;
+            /**
+             * Managed
+             * @default false
+             */
+            managed: boolean;
             /** Token */
             token: string;
             worker: components["schemas"]["Worker"];
@@ -50223,6 +50670,11 @@ export interface components {
         WorkerName: {
             /** Analysis Key Id */
             analysis_key_id: string;
+            /**
+             * Managed
+             * @default false
+             */
+            managed: boolean;
             /**
              * Name
              * @default Lens worker
@@ -63280,6 +63732,157 @@ export interface operations {
             };
         };
     };
+    read_feedback_lens_feedback_get: {
+        parameters: {
+            query?: {
+                trace_id?: string | null;
+                session_id?: string | null;
+                trace_ref?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceFeedback"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_feedback_lens_feedback_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackSubmission"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Feedback"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_feedback_lens_feedback_delete: {
+        parameters: {
+            query?: {
+                trace_id?: string | null;
+                session_id?: string | null;
+                trace_ref?: string;
+                user?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    feedback_summary_lens_feedback_summary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceFeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceFeedbackSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingestion_credentials_lens_internal_ingestion_credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionSnapshot"];
+                };
+            };
+        };
+    };
     preview_sample_lens_preview_sample_post: {
         parameters: {
             query?: never;
@@ -63309,6 +63912,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    service_connection_lens_service_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceConnection"];
                 };
             };
         };
@@ -63432,6 +64055,90 @@ export interface operations {
             };
         };
     };
+    list_ingestion_keys_lens_tracing_keys_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionKey"][];
+                };
+            };
+        };
+    };
+    create_ingestion_key_lens_tracing_keys_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngestionKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionKeyCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_ingestion_key_lens_tracing_keys__key_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     watch_all_lens_watch_all_post: {
         parameters: {
             query?: never;
@@ -63491,7 +64198,9 @@ export interface operations {
                 cursor?: string;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63523,7 +64232,9 @@ export interface operations {
     heartbeat_lens_worker__lens_id___job_id__heartbeat_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63555,7 +64266,9 @@ export interface operations {
     model_lens_worker__lens_id___job_id__model_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63591,7 +64304,9 @@ export interface operations {
     progress_lens_worker__lens_id___job_id__progress_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63627,7 +64342,9 @@ export interface operations {
     result_lens_worker__lens_id___job_id__result_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63663,7 +64380,9 @@ export interface operations {
     cached_reviews_lens_worker__lens_id___job_id__reviews_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63695,7 +64414,9 @@ export interface operations {
     sample_lens_worker__lens_id___job_id__sample_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -66027,6 +66748,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    moyai_connect_exchange_moyai_connect_exchange_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoyaiConnectExchangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoyaiConnectExchangeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    moyai_connect_start_moyai_connect_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoyaiConnectStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MoyaiConnectStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -81257,6 +82044,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_trace_agents_v1_traces_agents_get: {
+        parameters: {
+            query?: {
+                start_ms?: number | null;
+                end_ms?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceAgentList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

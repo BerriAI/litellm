@@ -215,16 +215,6 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gpt-4o-mini"}
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
-    def test_prompt_caching(self):
-        """
-        Works locally but CI/CD is failing this test. Temporary skip to push out a new release.
-        """
-        pass
-
 
 @pytest.mark.parametrize("model", ["o1", "o3-mini"])
 def test_o1_parallel_tool_calls(model):

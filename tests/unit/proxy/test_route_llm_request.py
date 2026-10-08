@@ -1,6 +1,7 @@
 import pytest
 
 
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -1198,6 +1199,175 @@ def test_required_present_body_param_without_router_default_still_raises() -> No
         )
 
     assert exc_info.value.param == "max_tokens"
+
+
+@pytest.mark.parametrize(
+    "route_type, data, param, default",
+    [
+        ("anthropic_messages", {"model": "claude-router-default", "messages": []}, "max_tokens", 16),
+        ("arerank", {"model": "rerank-router-default", "query": "hi"}, "documents", ["router default document"]),
+    ],
+)
+def test_required_present_body_param_uses_router_wide_default(
+    route_type: str, data: dict[str, object], param: str, default: object
+) -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": str(data["model"]),
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        default_litellm_params={param: default},
+    )
+
+    raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=router)
+
+
+@pytest.mark.parametrize(
+    "route_type, data, param",
+    [
+        ("anthropic_messages", {"model": "claude", "messages": []}, "max_tokens"),
+        ("arerank", {"model": "rerank-model", "query": "hi"}, "documents"),
+    ],
+)
+def test_required_present_body_param_with_none_router_wide_default_still_raises(
+    route_type: str, data: dict[str, object], param: str
+) -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": str(data["model"]),
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        default_litellm_params={param: None},
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=router)
+
+    assert exc_info.value.param == param
+
+
+@pytest.mark.parametrize(
+    "route_type, data, param",
+    [
+        ("asearch", {"model": "search-model"}, "query"),
+        ("acreate_eval", {"model": "eval-model"}, "data_source_config"),
+        ("acreate_run", {"model": "eval-model"}, "data_source"),
+        ("acreate_agent", {"model": "agent-model"}, "name"),
+        ("avector_store_search", {}, "query"),
+    ],
+)
+def test_required_present_body_param_ignores_router_wide_default_when_dispatch_skips_router(
+    route_type: str, data: dict[str, object], param: str
+) -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": str(data.get("model") or "any-model"),
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        default_litellm_params={param: "supplied-by-router-default"},
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type=route_type, data=data, llm_router=router)
+
+    assert exc_info.value.param == param
+
+
+def test_required_present_body_param_uses_user_config_router_defaults() -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    raise_if_required_body_param_missing(
+        route_type="anthropic_messages",
+        data={
+            "model": "claude-user-config",
+            "messages": [],
+            "user_config": {"default_litellm_params": {"max_tokens": 16}},
+        },
+        llm_router=None,
+    )
+
+
+def test_required_present_body_param_ignores_global_router_defaults_for_user_config_requests() -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-user-config",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                },
+            }
+        ],
+        default_litellm_params={"max_tokens": 16},
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "claude-user-config", "messages": [], "user_config": {}},
+            llm_router=router,
+        )
+
+    assert exc_info.value.param == "max_tokens"
+
+
+@pytest.mark.parametrize(
+    "llm_router",
+    [
+        pytest.param(MagicMock(), id="magicmock-router"),
+        pytest.param(SimpleNamespace(get_model_list=lambda **_kwargs: ()), id="router-without-defaults-attr"),
+    ],
+)
+def test_required_present_body_param_ignores_non_mapping_router_defaults(llm_router: object) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="arerank",
+            data={"model": "rerank-model", "query": "hi"},
+            llm_router=llm_router,  # pyright: ignore[reportArgumentType]  # deliberately duck-typed routers
+        )
+
+    assert exc_info.value.param == "documents"
 
 
 @pytest.mark.parametrize(

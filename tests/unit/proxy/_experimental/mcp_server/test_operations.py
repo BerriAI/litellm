@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -11,12 +12,19 @@ from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._experimental.mcp_server import operations
 from litellm.proxy._experimental.mcp_server import rest_endpoints
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    HTTPException as MCPServerManagerHTTPException,
+    ListedToolsCaller,
+)
 from litellm.proxy._experimental.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROXY_MaxParallelRequestsHandler_v3,
+)
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -284,6 +292,271 @@ def _catalog_case(method):
     return cases[method]
 
 
+def _mcp_rate_limited_proxy_logging() -> ProxyLogging:
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    return proxy_logging
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    ["tools/list", "prompts/list", "resources/list", "resources/templates/list", "prompts/get", "resources/read"],
+)
+async def test_mcp_server_rpm_limits_every_catalog_operation(operation: str) -> None:
+    from unittest.mock import MagicMock
+
+    from mcp import types
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_REQUEST
+
+    from litellm.proxy._experimental.mcp_server import catalog
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
+
+    server: Final = MCPServer(
+        server_id="catalog-rpm",
+        name="catalog",
+        server_name="catalog",
+        transport=MCPTransport.http,
+        rpm=1,
+    )
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-catalog-rpm"))
+    operation_to_manager_method: Final = {
+        "tools/list": "get_tools_from_server",
+        "prompts/list": "get_prompts_from_server",
+        "resources/list": "get_resources_from_server",
+        "resources/templates/list": "get_resource_templates_from_server",
+        "prompts/get": "get_prompt_from_server",
+        "resources/read": "read_resource_from_server",
+    }
+    upstream_results: Final = {
+        "tools/list": (
+            types.ListToolsResult(tools=[types.Tool(name="echo", inputSchema={"type": "object"})]),
+            ServerListOk(tool_count=1),
+        ),
+        "prompts/list": types.ListPromptsResult(prompts=[types.Prompt(name="catalog-prompt")]),
+        "resources/list": types.ListResourcesResult(
+            resources=[types.Resource(name="document", uri="https://example.com/document")]
+        ),
+        "resources/templates/list": types.ListResourceTemplatesResult(
+            resource_templates=[
+                types.ResourceTemplate(name="document", uri_template="https://example.com/{name}")
+            ]
+        ),
+        "prompts/get": GetPromptResult(messages=[]),
+        "resources/read": types.ReadResourceResult(contents=[]),
+    }
+    upstream: Final = AsyncMock(return_value=upstream_results[operation])
+    manager_method: Final = operation_to_manager_method[operation]
+    manager: Final = operations.global_mcp_server_manager
+    rate_limit_error: Final = ProxyRateLimitError(detail="server RPM exceeded")
+    enforce_rate_limit: Final = AsyncMock(side_effect=[None, rate_limit_error, rate_limit_error])
+    proxy_logging: Final = MagicMock(enforce_mcp_server_rate_limits=enforce_rate_limit)
+    is_protocol_listing: Final = operation.endswith("/list")
+    context: Final = prepare_context(caller, mcp_servers=[server.server_id])
+
+    async def invoke() -> object:
+        if operation == "tools/list":
+            return await GatewayOperations().execute(types.ListToolsRequest(), context)
+        if operation == "prompts/list":
+            return await GatewayOperations().execute(types.ListPromptsRequest(), context)
+        if operation == "resources/list":
+            return await GatewayOperations().execute(types.ListResourcesRequest(), context)
+        if operation == "resources/templates/list":
+            return await GatewayOperations().execute(types.ListResourceTemplatesRequest(), context)
+        if operation == "prompts/get":
+            return await operations.mcp_get_prompt(
+                name=f"{server.name}-catalog-prompt",
+                user_api_key_auth=caller,
+                mcp_servers=[server.server_id],
+            )
+        return await operations.mcp_read_resource(
+            url="https://example.com/document",
+            user_api_key_auth=caller,
+            mcp_servers=[server.server_id],
+        )
+
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch.dict(manager.registry, {server.server_id: server}),
+        patch.object(manager, manager_method, upstream),
+        patch.object(catalog, "get_filtered_server_tools", upstream),
+        patch.object(catalog, "fetch_optional_catalog_page", upstream),
+    ):
+        await invoke()
+        if is_protocol_listing:
+            with pytest.raises(MCPError) as rejected:
+                await invoke()
+            assert rejected.value.error.code == INVALID_REQUEST
+            assert rejected.value.error.message == "server RPM exceeded"
+            if operation == "tools/list":
+                with pytest.raises(ProxyRateLimitError) as rejected:
+                    await operations._get_tools_from_mcp_servers(
+                        user_api_key_auth=caller,
+                        mcp_auth_header=None,
+                        mcp_servers=[server.server_id],
+                        params=None,
+                    )
+                assert rejected.value is rate_limit_error
+                assert upstream.await_count == 1
+                assert enforce_rate_limit.await_count == 3
+        else:
+            with pytest.raises(ProxyRateLimitError):
+                await invoke()
+
+    assert upstream.await_count == 1
+    if operation != "tools/list":
+        assert enforce_rate_limit.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_tools_call_warmup_does_not_consume_mcp_server_rpm() -> None:
+    from mcp import types
+
+    server: Final = MCPServer(
+        server_id="catalog-warmup",
+        name="catalog-warmup",
+        server_name="catalog-warmup",
+        transport=MCPTransport.http,
+        rpm=1,
+    )
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-catalog-warmup"))
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+    upstream: Final = AsyncMock(
+        return_value=[types.Tool(name="echo", inputSchema={"type": "object"})]
+    )
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(operations.global_mcp_server_manager, "server_exposes_tool", return_value=False),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch.object(operations.global_mcp_server_manager, "get_tools_from_server", upstream),
+    ):
+        await operations._list_tools_before_first_call(
+            server=server,
+            tool_name="echo",
+            allowed_mcp_servers=[server],
+            user_api_key_auth=caller,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        )
+        listing: Final = await operations._get_tools_from_mcp_servers(
+            user_api_key_auth=caller,
+            mcp_auth_header=None,
+            mcp_servers=[server.server_id],
+        )
+
+    assert [tool.name for tool in listing.tools] == ["echo"]
+
+
+@pytest.mark.asyncio
+async def test_tools_call_pre_call_check_enforces_mcp_server_rpm() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    server: Final = MCPServer(
+        server_id="catalog-call",
+        name="catalog-call",
+        server_name="catalog-call",
+        transport=MCPTransport.http,
+        rpm=1,
+    )
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+    manager: Final = MCPServerManager()
+
+    await manager.pre_call_tool_check(
+        name="echo",
+        arguments={},
+        server_name=server.name,
+        user_api_key_auth=None,
+        proxy_logging_obj=proxy_logging,
+        server=server,
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await manager.pre_call_tool_check(
+            name="echo",
+            arguments={},
+            server_name=server.name,
+            user_api_key_auth=None,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+        )
+
+
+@pytest.mark.asyncio
+async def test_tools_call_pre_call_hook_rejection_does_not_enforce_mcp_server_rpm() -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    server: Final = MCPServer(
+        server_id="catalog-call-pre-hook-rejected",
+        name="catalog-call-pre-hook-rejected",
+        server_name="catalog-call-pre-hook-rejected",
+        transport=MCPTransport.http,
+        rpm=1,
+    )
+    rate_limit_error: Final = ProxyRateLimitError(detail="ordinary key rate limit")
+    proxy_logging: Final = MagicMock()
+    proxy_logging.create_mcp_request_object_from_kwargs.return_value = {}
+    proxy_logging.convert_mcp_to_llm_format.return_value = {}
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=rate_limit_error)
+    proxy_logging.enforce_mcp_server_rate_limits = AsyncMock()
+
+    with pytest.raises(ProxyRateLimitError) as rejected:
+        await MCPServerManager().pre_call_tool_check(
+            name="echo",
+            arguments={},
+            server_name=server.name,
+            user_api_key_auth=None,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+        )
+
+    assert rejected.value is rate_limit_error
+    proxy_logging.enforce_mcp_server_rate_limits.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_disallowed_tool_does_not_consume_mcp_server_rpm() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    server: Final = MCPServer(
+        server_id="catalog-call-authorization",
+        name="catalog-call-authorization",
+        server_name="catalog-call-authorization",
+        transport=MCPTransport.http,
+        allowed_tools=["allowed"],
+        rpm=1,
+    )
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+    manager: Final = MCPServerManager()
+
+    with pytest.raises(MCPServerManagerHTTPException) as denied_call:
+        await manager.pre_call_tool_check(
+            name="disallowed",
+            arguments={},
+            server_name=server.name,
+            user_api_key_auth=None,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+        )
+
+    assert denied_call.value.status_code == 403
+    await manager.pre_call_tool_check(
+        name="allowed",
+        arguments={},
+        server_name=server.name,
+        user_api_key_auth=None,
+        proxy_logging_obj=proxy_logging,
+        server=server,
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method", ["prompts/list", "prompts/get", "resources/list", "resources/templates/list", "resources/read"]
@@ -441,7 +714,7 @@ async def test_tool_listing_returns_empty_result_without_dispatch_for_unavailabl
     upstream = AsyncMock()
     with (
         patch.object(operations, "_get_allowed_mcp_servers", allowed),
-        patch.object(operations.global_mcp_server_manager, "_get_tools_from_server", upstream),
+        patch.object(operations.global_mcp_server_manager, "get_tools_from_server", upstream),
     ):
         result = await GatewayOperations().execute(ListToolsRequest(), prepare_context())
     assert result.tools == []
@@ -693,6 +966,102 @@ async def test_discovery_lists_each_capability_with_the_same_caller(available):
 
 
 @pytest.mark.asyncio
+async def test_discovery_shares_one_server_admission_across_catalog_listings() -> None:
+    from mcp import types
+
+    from litellm.proxy._experimental.mcp_server import catalog
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
+
+    admitted: Final = MCPServer(
+        server_id="discover-admitted",
+        name="discover-admitted",
+        server_name="discover-admitted",
+        transport=MCPTransport.http,
+    )
+    rejected: Final = MCPServer(
+        server_id="discover-rejected",
+        name="discover-rejected",
+        server_name="discover-rejected",
+        transport=MCPTransport.http,
+    )
+    caller: Final = UserAPIKeyAuth(api_key="sk-discovery-admission")
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+
+    async def enforce_server_rpm(_user_api_key_auth: UserAPIKeyAuth | None, server: MCPServer) -> None:
+        if server.server_id == rejected.server_id:
+            raise ProxyRateLimitError(detail="server RPM exceeded")
+
+    async def fetch_tools(server: MCPServer, **_: object) -> tuple[types.ListToolsResult, ServerListOk]:
+        tools: Final = [types.Tool(name=f"{server.server_id}-tool", inputSchema={"type": "object"})]
+        return types.ListToolsResult(tools=tools), ServerListOk(tool_count=len(tools))
+
+    async def fetch_prompts(*, server: MCPServer, **_: object) -> types.ListPromptsResult:
+        return types.ListPromptsResult(prompts=[types.Prompt(name=f"{server.server_id}-prompt")])
+
+    async def fetch_resources(*, server: MCPServer, **_: object) -> types.ListResourcesResult:
+        return types.ListResourcesResult(
+            resources=[types.Resource(name=f"{server.server_id}-resource", uri=f"test://{server.server_id}")]
+        )
+
+    async def fetch_resource_templates(*, server: MCPServer, **_: object) -> types.ListResourceTemplatesResult:
+        return types.ListResourceTemplatesResult(
+            resource_templates=[
+                types.ResourceTemplate(
+                    name=f"{server.server_id}-template",
+                    uri_template=f"test://{server.server_id}/{{name}}",
+                )
+            ]
+        )
+
+    enforcement: Final = AsyncMock(side_effect=enforce_server_rpm)
+    upstream_calls: Final = (
+        AsyncMock(side_effect=fetch_tools),
+        AsyncMock(side_effect=fetch_prompts),
+        AsyncMock(side_effect=fetch_resources),
+        AsyncMock(side_effect=fetch_resource_templates),
+    )
+    async def fetch_optional_page(
+        _context: OperationContext,
+        request: types.ListPromptsRequest | types.ListResourcesRequest | types.ListResourceTemplatesRequest,
+        server: MCPServer,
+        _allowed: Sequence[MCPServer],
+        _cursor: str | None,
+    ) -> types.ListPromptsResult | types.ListResourcesResult | types.ListResourceTemplatesResult:
+        if isinstance(request, types.ListPromptsRequest):
+            return await upstream_calls[1](server=server)
+        if isinstance(request, types.ListResourcesRequest):
+            return await upstream_calls[2](server=server)
+        return await upstream_calls[3](server=server)
+
+    optional_fetch: Final = AsyncMock(side_effect=fetch_optional_page)
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[admitted, rejected])),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch.object(proxy_logging, "enforce_mcp_server_rate_limits", enforcement),
+        patch.object(catalog, "get_filtered_server_tools", upstream_calls[0]),
+        patch.object(catalog, "fetch_optional_catalog_page", optional_fetch),
+    ):
+        result: Final = await GatewayOperations().execute(
+            types.DiscoverRequest(),
+            prepare_context(caller, mcp_servers=[admitted.server_id, rejected.server_id]),
+        )
+
+    assert enforcement.await_count == 2
+    assert {call.args[1].server_id for call in enforcement.await_args_list} == {
+        admitted.server_id,
+        rejected.server_id,
+    }
+    assert tuple(call.args[0].server_id for call in upstream_calls[0].await_args_list) == (admitted.server_id,)
+    assert optional_fetch.await_count == 3
+    assert all(call.args[2].server_id == admitted.server_id for call in optional_fetch.await_args_list)
+    assert all(upstream.await_count == 1 for upstream in upstream_calls)
+    assert result.capabilities.tools is not None
+    assert result.capabilities.prompts is not None
+    assert result.capabilities.resources is not None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
 async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(outcome):
     from mcp.types import DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
@@ -773,7 +1142,7 @@ async def test_list_mcp_tools_records_the_catalog_only_when_asked(
     upstream = [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
-        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
         patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
         patch.dict(manager.tool_name_to_mcp_server_name_mapping),
     ):

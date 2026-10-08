@@ -445,7 +445,7 @@ it("guides a first-time administrator into worker connection and lens setup", as
     expect.objectContaining({ authorization: "Bearer test" }),
   );
   expect(guide.queryByRole("button", { name: /Send your first trace/ })).not.toBeInTheDocument();
-  expect(guide.queryByRole("button", { name: /Enable tracing on the gateway/ })).not.toBeInTheDocument();
+  expect(guide.queryByRole("button", { name: /Install Lens/ })).not.toBeInTheDocument();
   expect(guide.getByRole("button", { name: /Connect a worker/ })).toHaveAttribute("aria-expanded", "true");
   expect(guide.queryByRole("button", { name: "View traces" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
@@ -589,14 +589,23 @@ it.each([false, true])(
   async (enabled) => {
     window.history.replaceState({}, "", "/lens/");
     testQueryClient.clear();
-    proxy.get.mockImplementation(async (path) =>
-      path === "/lens" ? { lenses: [], workers: [], tracing_enabled: enabled } : { data: [] },
-    );
+    proxy.get.mockImplementation(async (path) => {
+      if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: enabled };
+      if (path === "/lens/service")
+        return {
+          url: "https://traces.test",
+          connected: true,
+          status: { storage_ready: true, credentials_ready: true },
+        };
+      return { data: [] };
+    });
     const user = userEvent.setup();
     renderWithProviders(<InvestigationsView />);
     const guide = within(await screen.findByRole("region", { name: "Get Lens running" }));
-    expect(guide.getByRole("button", { name: /Send your first trace/ })).toHaveAttribute("aria-expanded", "true");
-    expect(guide.getByRole("button", { name: "Check for traces" })).toBeVisible();
+    await waitFor(() =>
+      expect(guide.getByRole("button", { name: /Send your first trace/ })).toHaveAttribute("aria-expanded", "true"),
+    );
+    expect(await guide.findByRole("button", { name: "Check for traces" })).toBeVisible();
     await user.click(guide.getByRole("button", { name: /Connect a worker/ }));
     expect(guide.getByRole("button", { name: "Connect worker" })).toBeDisabled();
     await user.click(guide.getByRole("button", { name: /Run your first investigation/ }));

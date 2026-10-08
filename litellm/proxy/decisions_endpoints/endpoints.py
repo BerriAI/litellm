@@ -87,14 +87,14 @@ async def decisions(
             model=str(data.get("model", "")),
             llm_provider="",
         )
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=bad_request_error,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
     except Exception as error:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=error,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

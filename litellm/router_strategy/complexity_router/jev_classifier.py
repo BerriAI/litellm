@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_ENDPOINT
+from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
 from litellm.llms.laya.common_utils import laya_response_model
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthrough_logging_handler import (
     TypeSafePassthroughLoggingHandler,
@@ -121,7 +121,7 @@ class HttpJevClassifierClient:
 
     def _request_url(self, model: str) -> str:
         if self._provider == "databricks":
-            return DATABRICKS_DECISIONS_ENDPOINT.endpoint_url(self._api_base, model)
+            return DATABRICKS_DECISIONS_CONFIG.get_complete_url(self._api_base, model)
         return f"{self._api_base}/v1/systemone"
 
     def _normalized_body(self, body: Mapping[str, object], requested_model: str) -> Mapping[str, object]:
@@ -129,7 +129,7 @@ class HttpJevClassifierClient:
             case "laya":
                 return MappingProxyType({**body, "model": laya_response_model(body, requested_model)})
             case "databricks":
-                return DATABRICKS_DECISIONS_ENDPOINT.classifier_response(body, requested_model)
+                return DATABRICKS_DECISIONS_CONFIG.classifier_response(body, requested_model)
             case "typesafe" | "bespoke":
                 return body
 
