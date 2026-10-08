@@ -31,7 +31,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import delete_cache_key_objects
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401
-    _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     persist_deleted_verification_tokens,
 )
 from litellm.repositories.verification_token_repository import (

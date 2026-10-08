@@ -77,7 +77,11 @@ describe("AgentTracesSection", () => {
     setupIntersectionMocking(vi.fn);
     testQueryClient.clear();
     vi.mocked(agentTraceListCall).mockReset();
-    vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/lens/service"
+        ? { url: "https://traces.test", connected: true, status: { storage_ready: true, credentials_ready: true } }
+        : { data: [] },
+    );
     vi.mocked(apiClient.post).mockImplementation(async (_path, options) => {
       const body = options?.body as { traces: { trace_id: string; trace_ref?: string }[] };
       return body.traces.map((trace) => ({ ...trace, finding_count: null }));
@@ -163,12 +167,12 @@ describe("AgentTracesSection", () => {
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Tracing is not enabled");
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
-    expect(card).toHaveTextContent("type: clickhouse");
-    expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
+    expect(card).toHaveTextContent("LITELLM_LENS_URL");
+    expect(card).toHaveTextContent("LITELLM_LENS_SERVICE_TOKEN");
     expect(screen.getByRole("button", { name: "Check setup" })).toBeEnabled();
     expect(card).not.toHaveTextContent(/langsmith/i);
-    expect(card).toHaveTextContent("ClickHouse and proxy setup");
-    expect(card).toHaveTextContent("Ask your proxy administrator");
+    expect(card).toHaveTextContent("Lens service setup");
+    expect(card).toHaveTextContent("Run the Lens service");
   });
 
   it("shows the waiting guide when tracing is on but no runs have arrived", async () => {
@@ -177,7 +181,7 @@ describe("AgentTracesSection", () => {
 
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Connect your agent");
-    expect(card).toHaveTextContent("Waiting for your first trace");
+    expect(await screen.findByText("Waiting for your first trace")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(card).not.toHaveTextContent("store: clickhouse");
   });
@@ -201,7 +205,7 @@ describe("AgentTracesSection", () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
     fireEvent.click(checkSetup);
     expect(await screen.findByRole("heading", { name: "Connect your agent" })).toBeVisible();
-    expect(screen.getByText("Waiting for your first trace")).toBeVisible();
+    expect(await screen.findByText("Waiting for your first trace")).toBeVisible();
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     fireEvent.click(screen.getByRole("button", { name: "Check for traces" }));
     expect(await screen.findAllByTestId("agent-trace-row")).toHaveLength(runs.length);
@@ -278,7 +282,7 @@ describe("AgentTracesSection", () => {
 
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Tracing is not enabled");
-    expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
+    expect(card).toHaveTextContent("LITELLM_LENS_SERVICE_TOKEN");
   });
 
   it("lists uninvestigated runs without presenting tool errors as failures", async () => {

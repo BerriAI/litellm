@@ -20,7 +20,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (  # noqa: F401
-    _check_team_member_model_access,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _check_team_member_model_access,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_key_call_model,
     can_org_access_model,
     can_project_access_model,

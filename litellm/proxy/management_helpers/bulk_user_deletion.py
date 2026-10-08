@@ -37,7 +37,7 @@ from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401
-    _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
 )
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL

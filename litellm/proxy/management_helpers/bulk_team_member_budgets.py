@@ -26,7 +26,7 @@ from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401
-    _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     member_budget_patch,
     upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
 )

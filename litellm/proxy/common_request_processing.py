@@ -121,7 +121,7 @@ from litellm.proxy.route_llm_request import (
 )
 from litellm.proxy.utils import (  # noqa: F401
     ProxyLogging,
-    _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
 )
 from litellm.router import Router

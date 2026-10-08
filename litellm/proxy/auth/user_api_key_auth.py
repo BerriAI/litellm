@@ -44,17 +44,17 @@ from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_he
 from litellm.proxy.auth.auth_checks import (  # noqa: F401
     ExperimentalUIJWTToken,
     TeamNotFoundError,
-    _cache_key_object,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _can_object_call_model,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _check_end_user_budget,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _get_user_role,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _is_user_proxy_admin,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _team_member_max_budget_alert_check,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _virtual_key_max_budget_alert_check,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _virtual_key_soft_budget_check,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _can_object_call_model,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _check_end_user_budget,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _get_user_role,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _is_user_proxy_admin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _team_member_max_budget_alert_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _virtual_key_max_budget_alert_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _virtual_key_soft_budget_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     cache_key_object,
     can_key_call_model,
     can_object_call_model,
@@ -125,10 +125,10 @@ from litellm.proxy.auth.team_grants import team_grants
 from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
-    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _safe_get_request_query_params,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_opaque_audio_pass_through_request,
     populate_request_with_path_params,
     read_raw_json_body,
@@ -140,7 +140,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
 )
 from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401
-    _realtime_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (

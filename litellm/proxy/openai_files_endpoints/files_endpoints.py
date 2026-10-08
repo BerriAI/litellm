@@ -43,7 +43,7 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
-    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     extract_nested_form_metadata,
     read_request_body,
 )
@@ -72,7 +72,7 @@ from litellm.proxy.openai_files_endpoints.batch_guardrails import (
     scan_batch_input_file,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401
-    _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,

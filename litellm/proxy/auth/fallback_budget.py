@@ -40,7 +40,7 @@ from pydantic import ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (  # noqa: F401
-    _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # the zero-cost predicate the auth-time budget checks use; no public equivalent
 )
 from litellm.router import Router

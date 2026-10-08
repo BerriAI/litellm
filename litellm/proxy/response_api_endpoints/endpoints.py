@@ -31,8 +31,8 @@ from litellm.proxy.auth.user_api_key_auth import (
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_response
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
-    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
     safe_set_request_parsed_body,
 )

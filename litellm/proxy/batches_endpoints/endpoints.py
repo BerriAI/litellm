@@ -37,7 +37,7 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.callback_utils import sanitize_openai_provider_metadata
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
-    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
@@ -46,7 +46,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401
     BATCH_CREATE_HIDDEN_PARAM,
-    _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_deployment_model_info,
     add_internal_model_credentials,
     apply_team_provider_credentials,

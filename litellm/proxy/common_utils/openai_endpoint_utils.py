@@ -8,7 +8,7 @@ from fastapi import Request
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
-    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
 

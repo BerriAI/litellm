@@ -85,10 +85,10 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401
     MCPServerManager,
-    _caller_authorization_fans_out,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _client_forwarded_authorization_headers,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _resolve_openapi_tool_auth,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _should_strip_caller_authorization,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _caller_authorization_fans_out,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _client_forwarded_authorization_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _resolve_openapi_tool_auth,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _should_strip_caller_authorization,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     caller_authorization_fans_out,
     client_forwarded_authorization_headers,
     global_mcp_server_manager,
@@ -97,14 +97,14 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa:
     should_strip_caller_authorization,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401
-    _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_byok_www_authenticate,
     redact_mcp_resource_url,
 )
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (  # noqa: F401
-    _request_auth_header,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _request_extra_headers,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _request_resolved_auth_headers,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _request_auth_header,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _request_extra_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _request_resolved_auth_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     request_auth_header,
     request_extra_headers,
     request_resolved_auth_headers,

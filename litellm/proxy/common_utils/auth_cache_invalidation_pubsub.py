@@ -8,8 +8,8 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401
     ConfigSyncPubSub,
-    _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _pubsub_capable_client,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _pubsub_capable_client,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     coordination_redis_cache,
     pubsub_capable_client,
 )

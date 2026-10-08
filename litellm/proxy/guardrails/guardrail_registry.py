@@ -38,7 +38,7 @@ from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderati
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import LakeraAIGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (  # noqa: F401
     OPTIONAL_PresidioPIIMasking,
-    _OPTIONAL_PresidioPIIMasking,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _OPTIONAL_PresidioPIIMasking,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrail,

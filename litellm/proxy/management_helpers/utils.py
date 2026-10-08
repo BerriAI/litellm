@@ -36,7 +36,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     VirtualKeyEvent,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
-    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time

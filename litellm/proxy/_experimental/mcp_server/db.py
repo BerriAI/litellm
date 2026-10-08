@@ -35,7 +35,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401
     SecretMapDecodeError,
-    _get_salt_key,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decode_secret_map,
     decrypt_value_helper,
     encrypt_secret_map,

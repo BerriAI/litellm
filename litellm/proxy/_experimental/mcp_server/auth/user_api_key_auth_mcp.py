@@ -58,12 +58,12 @@ from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_age
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
-    _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     run_centralized_common_checks,
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
-    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (

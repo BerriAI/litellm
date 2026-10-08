@@ -41,14 +41,14 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import PrismaClient
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401
-    _ALGO_AES_GCM,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _ENCRYPTION_ALGORITHM_SETTING,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _ALGO_AES_GCM,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _ENCRYPTION_ALGORITHM_SETTING,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     ALGO_AES_GCM,
     ENCRYPTION_ALGORITHM_SETTING,
     V2_GCM_PREFIX,
     SecretMapDecodeError,
-    _get_salt_key,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decode_secret_map,
     decrypt_value_helper,
     encrypt_value_helper,

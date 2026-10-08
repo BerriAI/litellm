@@ -28,7 +28,7 @@ from litellm.types.utils import (
 )
 
 from .base import (  # noqa: F401
-    _RESPONSES_API_CALL_TYPES,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _RESPONSES_API_CALL_TYPES,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH,
     RESPONSES_API_CALL_TYPES,
     AzureGuardrailBase,

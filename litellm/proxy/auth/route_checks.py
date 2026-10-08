@@ -16,7 +16,7 @@ from litellm.proxy._types import (
 )
 
 from .auth_checks_organization import (  # noqa: F401
-    _user_is_org_admin,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _user_is_org_admin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_is_org_admin,
 )
 

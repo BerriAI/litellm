@@ -54,7 +54,7 @@ from litellm.types.utils import (
 
 from .cisco_ai_defense_mcp import (  # noqa: F401
     CiscoAIDefenseMcpMixin,
-    _CiscoAIDefenseMcpMixin,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _CiscoAIDefenseMcpMixin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 
 if TYPE_CHECKING:

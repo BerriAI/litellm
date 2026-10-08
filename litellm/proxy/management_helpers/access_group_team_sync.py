@@ -21,7 +21,7 @@ from typing import Final, Protocol
 from pydantic import TypeAdapter
 
 from litellm.proxy.auth.auth_checks import (  # noqa: F401
-    _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     delete_cache_access_object,
 )
 from litellm.proxy.db.db_span import db_span

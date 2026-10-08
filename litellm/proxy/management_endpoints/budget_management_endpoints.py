@@ -23,7 +23,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401
-    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
     validate_budget_duration,
 )

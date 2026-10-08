@@ -21,7 +21,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import (  # noqa: F401
-    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
     is_invalid_virtual_key_error,
     mark_invalid_virtual_key_error,

@@ -78,7 +78,7 @@ from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, is_team_admin
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401
-    _refresh_cached_team,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _refresh_cached_team,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     append_team_models,
     refresh_cached_team,
     team_model_add,

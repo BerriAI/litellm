@@ -9,7 +9,7 @@ from typing import Optional, List, Union
 from test_openai_files_endpoints import upload_file, delete_file
 import sys
 import time
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch
 
 
 BASE_URL = "http://localhost:4000"  # Replace with your actual base URL
@@ -137,81 +137,6 @@ def test_vertex_batches_endpoint():
     )
     print("response from create batch", create_batch_response)
     pass
-
-
-@pytest.mark.skip(reason="Local only test to verify if things work well")
-@pytest.mark.asyncio
-async def test_list_batches_with_target_model_names():
-    """
-    Unit test to verify that target_model_names query parameter is properly handled
-    in the list_batches endpoint
-    """
-
-    # Test data
-    target_model_names = "gpt-5.5,gpt-5-mini"
-    expected_model = "gpt-5.5"  # Should use the first model from the comma-separated list
-
-    # Mock response for list_batches
-    mock_batch_response = {
-        "object": "list",
-        "data": [
-            {
-                "id": "batch_abc123",
-                "object": "batch",
-                "endpoint": "/v1/chat/completions",
-                "status": "validating",
-                "input_file_id": "file-abc123",
-                "completion_window": "24h",
-                "created_at": 1711471533,
-                "metadata": {},
-            }
-        ],
-        "first_id": "batch_abc123",
-        "last_id": "batch_abc123",
-        "has_more": False,
-    }
-
-    # Mock the request and FastAPI dependencies
-    mock_request = MagicMock()
-    mock_request.method = "GET"
-    mock_request.url.query = f"target_model_names={target_model_names}&limit=10"
-
-    mock_fastapi_response = MagicMock()
-    mock_user_api_key_dict = MagicMock()
-
-    # Mock _read_request_body to return our target_model_names
-    with (
-        patch(
-            "litellm.proxy.batches_endpoints.endpoints.read_request_body"
-        ) as mock_read_body,
-        patch("litellm.proxy.proxy_server.llm_router") as mock_router,
-    ):
-
-        mock_read_body.return_value = {"target_model_names": target_model_names}
-        mock_router.alist_batches = AsyncMock(return_value=mock_batch_response)
-
-        # Import and call the function directly
-        from litellm.proxy.batches_endpoints.endpoints import list_batches
-
-        response = await list_batches(
-            request=mock_request,
-            fastapi_response=mock_fastapi_response,
-            target_model_names=target_model_names,
-            limit=10,
-            user_api_key_dict=mock_user_api_key_dict,
-        )
-
-        # Verify that router.alist_batches was called with the correct model
-        mock_router.alist_batches.assert_called_once()
-        call_args = mock_router.alist_batches.call_args
-
-        # Check that the model parameter was set to the first model in the list
-        assert call_args.kwargs["model"] == expected_model
-        assert call_args.kwargs["limit"] == 10
-
-        # Verify the response structure
-        assert response["object"] == "list"
-        assert len(response["data"]) > 0
 
 
 @pytest.mark.asyncio

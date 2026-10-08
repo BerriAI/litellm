@@ -17,7 +17,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.auth_utils import (  # noqa: F401
-    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
 )
 

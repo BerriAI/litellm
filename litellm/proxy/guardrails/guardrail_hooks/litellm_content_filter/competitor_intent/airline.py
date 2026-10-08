@@ -15,9 +15,9 @@ from typing import Any, Final
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (  # noqa: F401
     BaseCompetitorIntentChecker,
-    _compile_marker,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _count_signals,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _word_boundary_match,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _compile_marker,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _count_signals,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _word_boundary_match,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     compile_marker,
     count_signals,
     word_boundary_match,

@@ -38,7 +38,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401
-    _set_object_permission,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
     set_object_permission,
 )

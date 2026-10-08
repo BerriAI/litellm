@@ -91,7 +91,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.auth.auth_utils import (  # noqa: F401
-    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
     has_user_setup_sso,
 )

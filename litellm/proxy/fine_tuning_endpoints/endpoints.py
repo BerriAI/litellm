@@ -17,7 +17,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401
-    _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_base64_encoded_unified_file_id,
     validate_managed_id_requirement,
 )

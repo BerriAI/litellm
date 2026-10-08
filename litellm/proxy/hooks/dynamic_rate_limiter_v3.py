@@ -25,7 +25,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
     RateLimitResponse,
-    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     claim_request_stash_for_data,
     get_or_create_request_stash,
 )

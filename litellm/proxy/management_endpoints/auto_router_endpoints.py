@@ -29,7 +29,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (  # noqa: F401
-    _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_key_call_resolved_model,
     virtual_key_max_budget_check,
 )

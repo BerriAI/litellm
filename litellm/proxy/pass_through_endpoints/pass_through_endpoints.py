@@ -92,8 +92,8 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
-    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
     safe_get_request_headers,
 )
@@ -109,7 +109,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401
     LiteLLMProxyRequestSetup,
-    _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above

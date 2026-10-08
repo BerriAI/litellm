@@ -61,7 +61,7 @@ from litellm.proxy._types import (  # re-exported
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management.teams.authz import is_team_admin
 from litellm.proxy.utils import (  # noqa: F401
-    _premium_user_check,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     premium_user_check,
 )
 from litellm.repositories.team_repository import TeamRepository

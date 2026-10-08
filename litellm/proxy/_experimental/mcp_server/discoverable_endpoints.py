@@ -25,14 +25,14 @@ from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     normalize_token_endpoint_auth_method,
 )
 from litellm.proxy._experimental.mcp_server.bridge_token_flow import (  # noqa: F401
-    _bridge_mint_error_response,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _bridge_mint_error_response,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _BridgeMintReady,
     _BridgeRefreshReady,
-    _extract_user_id_from_request,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _finish_bridge_mint,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _prepare_bridge_mint,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _prepare_bridge_refresh,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
-    _reload_active_user_by_id,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _extract_user_id_from_request,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _finish_bridge_mint,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _prepare_bridge_mint,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _prepare_bridge_refresh,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _reload_active_user_by_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     authorize_oauth_credential_request,
     bridge_mint_error_response,
     can_store_oauth_credential,
@@ -98,7 +98,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
-    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
 from litellm.types.llms.base import LiteLLMBaseModel

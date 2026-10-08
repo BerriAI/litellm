@@ -17,7 +17,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
-    _read_request_body,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
