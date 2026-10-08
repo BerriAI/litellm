@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -236,7 +237,7 @@ class TestGitHubCopilotAuthenticator:
             assert result == "mock-access-token"
             mock_client.post.assert_called_once()
 
-    def test_login(self, authenticator):
+    def test_login(self, authenticator, caplog):
         """Test the login process."""
         mock_device_code_data = {
             "device_code": "mock-device-code",
@@ -252,6 +253,7 @@ class TestGitHubCopilotAuthenticator:
             patch.object(
                 authenticator, "_poll_for_access_token", return_value=mock_token
             ),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
             result = authenticator._login()
             assert result == mock_token
@@ -259,6 +261,8 @@ class TestGitHubCopilotAuthenticator:
             authenticator._poll_for_access_token.assert_called_once_with(
                 "mock-device-code"
             )
+        assert "https://github.com/login/device" in caplog.text
+        assert "ABCD-EFGH" in caplog.text
 
     def test_get_api_base_from_file(self, authenticator):
         """Test retrieving the API base endpoint from a file."""

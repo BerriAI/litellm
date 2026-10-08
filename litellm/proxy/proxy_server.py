@@ -5597,6 +5597,12 @@ def _configured_db_callbacks(litellm_settings: Mapping[str, object], setting_key
     return tuple((setting_key, callback) for callback in callbacks if isinstance(callback, str))
 
 
+def _search_tool_summary_line(tool: SearchToolTypedDict) -> str:
+    litellm_params: Final = tool.get("litellm_params")
+    search_provider: Final = litellm_params.get("search_provider", "") if litellm_params else ""
+    return f"    {tool.get('search_tool_name', '')} ({search_provider})"
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -6361,10 +6367,7 @@ class ProxyConfig:
         if not search_tools_parsed:
             return None
 
-        loaded_search_tools: Final = "\n".join(
-            f"    {tool['search_tool_name']} ({tool['litellm_params']['search_provider']})"
-            for tool in search_tools_parsed
-        )
+        loaded_search_tools: Final = "\n".join(_search_tool_summary_line(tool) for tool in search_tools_parsed)
         verbose_proxy_logger.info("LiteLLM: Proxy initialized with Search Tools:\n%s", loaded_search_tools)
         return search_tools_parsed
 
