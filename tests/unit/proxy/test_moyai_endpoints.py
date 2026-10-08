@@ -97,6 +97,22 @@ async def _exchange_env(monkeypatch: pytest.MonkeyPatch):
     prisma = MagicMock()
     prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=SimpleNamespace(ui_settings={}))
     prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    claimed_nonces: set = set()
+
+    async def _config_create(*, data):
+        from prisma.errors import UniqueViolationError
+
+        param_name = data["param_name"]
+        if param_name in claimed_nonces:
+            raise UniqueViolationError({}, message="Unique constraint failed on the fields: (`param_name`)")
+        claimed_nonces.add(param_name)
+
+    nonce_create = AsyncMock(side_effect=_config_create)
+    config_table = SimpleNamespace(create=nonce_create)
+    prisma.db.litellm_config = config_table
+    prisma.writer_db.litellm_config = config_table
+
     persisted: dict = {}
 
     async def _upsert(where, data):
@@ -115,7 +131,7 @@ async def _exchange_env(monkeypatch: pytest.MonkeyPatch):
         "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
         AsyncMock(side_effect=_mint),
     )
-    return persisted, mint_calls
+    return persisted, mint_calls, nonce_create
 
 
 async def _exchange_call(code: str, moyai_url: str):
@@ -128,7 +144,7 @@ async def _exchange_call(code: str, moyai_url: str):
 async def test_exchange_happy_path_mints_key_and_saves_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy.moyai_endpoints import _sign_connect_code
 
-    persisted, mint_calls = await _exchange_env(monkeypatch)
+    persisted, mint_calls, _ = await _exchange_env(monkeypatch)
     code = _sign_connect_code("sk-master", "https://moyai.example.com", "admin-user")
 
     response = await _exchange_call(code, "https://moyai.example.com")
@@ -153,16 +169,15 @@ async def test_exchange_without_database_fails_before_nonce(monkeypatch: pytest.
     from litellm.proxy import proxy_server
     from litellm.proxy.moyai_endpoints import _sign_connect_code
 
-    await _exchange_env(monkeypatch)
+    _, _, nonce_create = await _exchange_env(monkeypatch)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    set_cache = proxy_server.user_api_key_cache.async_set_cache
     code = _sign_connect_code("sk-master", "https://moyai.example.com", "admin-user")
 
     with pytest.raises(HTTPException) as exc:
         await _exchange_call(code, "https://moyai.example.com")
     assert exc.value.status_code == 400
     assert "database" in exc.value.detail
-    set_cache.assert_not_called()
+    nonce_create.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -224,10 +239,52 @@ async def test_exchange_rejects_replayed_nonce(monkeypatch: pytest.MonkeyPatch) 
     from fastapi import HTTPException
     from litellm.proxy.moyai_endpoints import _sign_connect_code
 
-    await _exchange_env(monkeypatch)
+    _, mint_calls, _ = await _exchange_env(monkeypatch)
     code = _sign_connect_code("sk-master", "https://moyai.example.com", "admin-user")
 
     await _exchange_call(code, "https://moyai.example.com")
     with pytest.raises(HTTPException) as exc:
         await _exchange_call(code, "https://moyai.example.com")
     assert exc.value.status_code == 400
+    assert len(mint_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_exchange_concurrent_replay_claims_nonce_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from fastapi import HTTPException
+    from litellm.proxy.moyai_endpoints import _sign_connect_code
+
+    _, mint_calls, _ = await _exchange_env(monkeypatch)
+    code = _sign_connect_code("sk-master", "https://moyai.example.com", "admin-user")
+
+    results = await asyncio.gather(
+        _exchange_call(code, "https://moyai.example.com"),
+        _exchange_call(code, "https://moyai.example.com"),
+        return_exceptions=True,
+    )
+
+    successes = [r for r in results if not isinstance(r, BaseException)]
+    rejections = [r for r in results if isinstance(r, HTTPException) and r.status_code == 400]
+    assert len(successes) == 1
+    assert len(rejections) == 1
+    assert len(mint_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_exchange_replay_survives_fresh_worker_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.moyai_endpoints import _sign_connect_code
+
+    _, mint_calls, _ = await _exchange_env(monkeypatch)
+    code = _sign_connect_code("sk-master", "https://moyai.example.com", "admin-user")
+
+    await _exchange_call(code, "https://moyai.example.com")
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    with pytest.raises(HTTPException) as exc:
+        await _exchange_call(code, "https://moyai.example.com")
+    assert exc.value.status_code == 400
+    assert len(mint_calls) == 1

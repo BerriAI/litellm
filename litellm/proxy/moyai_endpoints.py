@@ -14,7 +14,7 @@ import json
 import os
 import secrets
 import time
-from typing import Final
+from typing import TYPE_CHECKING, Annotated, Final
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -28,12 +28,16 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     _ui_settings_db,
     normalize_moyai_url,
 )
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import UISettingsRepository
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
 
 _MOYAI_CODE_TTL_SECONDS: Final = 600
-_MOYAI_NONCE_CACHE_PREFIX: Final = "moyai:connect_nonce:"
+_MOYAI_NONCE_CONFIG_PREFIX: Final = "moyai_connect_nonce:"
 _MOYAI_CONNECT_EXCHANGE_ROUTE: Final = "/moyai/connect/exchange"
 
 
@@ -128,7 +132,7 @@ def _decode_connect_code(master_key: str, code: str) -> dict:
 async def moyai_connect_start(
     request: Request,
     body: MoyaiConnectStartRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> MoyaiConnectStartResponse:
     from litellm.proxy.proxy_server import master_key
 
@@ -157,6 +161,20 @@ async def moyai_connect_start(
         {"gateway_url": _gateway_url(request), "code": code, "return_to": body.return_to}
     )
     return MoyaiConnectStartResponse(connect_url=connect_url)
+
+
+async def _claim_connect_nonce(prisma_client: "PrismaClient", nonce: str, exp: int) -> None:
+    from prisma.errors import UniqueViolationError
+
+    try:
+        await ConfigRepository(prisma_client, use_writer=True).table.create(
+            data={
+                "param_name": f"{_MOYAI_NONCE_CONFIG_PREFIX}{nonce}",
+                "param_value": json.dumps({"exp": exp}),
+            }
+        )
+    except UniqueViolationError:
+        raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
 
 
 async def _moyai_key_alias(prisma_client, moyai_url: str) -> str:
@@ -201,7 +219,7 @@ async def _persist_moyai_url(prisma_client, moyai_url: str) -> None:
 )
 async def moyai_connect_exchange(request: Request, body: MoyaiConnectExchangeRequest) -> MoyaiConnectExchangeResponse:
     from litellm.proxy.management_endpoints.key_management_endpoints import generate_key_helper_fn
-    from litellm.proxy.proxy_server import llm_router, master_key, prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import llm_router, master_key, prisma_client
 
     if not master_key:
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
@@ -218,10 +236,7 @@ async def moyai_connect_exchange(request: Request, body: MoyaiConnectExchangeReq
     if prisma_client is None:
         raise HTTPException(status_code=400, detail="Moyai quick connect needs a database connected to the proxy")
 
-    nonce_key: Final = f"{_MOYAI_NONCE_CACHE_PREFIX}{payload['nonce']}"
-    if await user_api_key_cache.async_get_cache(key=nonce_key) is not None:
-        raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
-    await user_api_key_cache.async_set_cache(key=nonce_key, value=True, ttl=max(payload["exp"] - int(time.time()), 1))
+    await _claim_connect_nonce(prisma_client, payload["nonce"], payload["exp"])
 
     alias: Final = await _moyai_key_alias(prisma_client, moyai_url)
     key_response: Final = await generate_key_helper_fn(
