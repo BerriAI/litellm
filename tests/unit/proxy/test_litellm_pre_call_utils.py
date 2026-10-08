@@ -9048,6 +9048,7 @@ class TestResolveUserProviderCredentials:
         """Keys with no user_id must still hit the body check: discovery ran before the
         missing-user return, so a litellm_credential_name override is a 400."""
         import pytest
+        from fastapi import HTTPException
 
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
@@ -9069,7 +9070,7 @@ class TestResolveUserProviderCredentials:
         )
         router.get_deployment = MagicMock(return_value=None)
         data = {"model": "copilot-chat", "litellm_credential_name": "shared-cred", "secret_fields": {}}
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(HTTPException) as exc:
             await _resolve_user_provider_credentials_for_request(
                 data=data,
                 authenticated_user_id=None,
