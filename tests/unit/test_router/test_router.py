@@ -2372,7 +2372,7 @@ def test_update_settings_model_group_alias_drops_cached_group_info():
 async def test_update_settings_fallback_rule_of_every_kind_is_used_on_its_error(
     fallback_kind: str, mock_testing_param: str
 ):
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "primary",
@@ -2388,7 +2388,7 @@ async def test_update_settings_fallback_rule_of_every_kind_is_used_on_its_error(
 
     router.update_settings(**{fallback_kind: [{"primary": ["backup"]}]})
 
-    response = await router.acompletion(
+    response: Final = await router.acompletion(
         model="primary", messages=[{"role": "user", "content": "hi"}], **{mock_testing_param: True}
     )
     assert response.choices[0].message.content == "backup answered"
