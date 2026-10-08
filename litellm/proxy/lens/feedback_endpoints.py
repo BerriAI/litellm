@@ -63,9 +63,7 @@ def feedback_store(
     storage: Annotated[ClickHouseStorage | None, Depends(provide_storage)],
 ) -> FeedbackStore:
     if storage is None:
-        raise HTTPException(
-            501, "Lens feedback needs agent tracing. Set `tracing:` in general_settings and CLICKHOUSE_URL."
-        )
+        raise HTTPException(501, "Lens feedback needs agent tracing. Configure the Lens service and LITELLM_LENS_URL.")
     return ClickHouseFeedbackStore(storage)
 
 
