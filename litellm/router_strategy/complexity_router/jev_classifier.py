@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.laya.common_utils import laya_response_model
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthrough_logging_handler import (
@@ -24,10 +25,17 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthr
 )
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN, LlmProviders
+from litellm.utils import ProviderConfigManager
 
 JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
 DEFAULT_JEV_INSTRUCTIONS: Final = _DEFAULT_JEV_INSTRUCTIONS
+ClassifierProvider: TypeAlias = Literal["typesafe", "laya", "bespoke", "strands_decider", "cloudflare"]
+DecisionsClassifierProvider: TypeAlias = Literal["strands_decider", "cloudflare"]
+_DECISIONS_PROVIDERS: Final[Mapping[DecisionsClassifierProvider, LlmProviders]] = MappingProxyType(
+    {"strands_decider": LlmProviders.STRANDS_DECIDER, "cloudflare": LlmProviders.CLOUDFLARE}
+)
+_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class JevChoiceQuestion(LiteLLMBaseModel):
@@ -85,12 +93,28 @@ class HttpJevClassifierClient:
         api_key: str | None,
         api_base: str,
         http_client: AsyncHTTPHandler,
-        provider: Literal["typesafe", "laya", "bespoke"] = "typesafe",
+        provider: ClassifierProvider = "typesafe",
+        provider_config: BaseDecisionsConfig | None = None,
     ) -> None:
         self._api_key = api_key
         self._api_base = api_base.rstrip("/")
         self._http_client = http_client
-        self._provider = provider
+        self._provider: ClassifierProvider = provider
+        self._provider_config = provider_config
+
+    def _request_url(self, model: str) -> str:
+        if self._provider_config is None:
+            return f"{self._api_base}/v1/systemone"
+        return self._provider_config.get_complete_url(self._api_base, self._provider_config.canonical_model(model))
+
+    def _wire_model(self, model: str) -> str:
+        return model if self._provider_config is None else self._provider_config.request_model(model)
+
+    def _response_body(self, response: httpx.Response) -> dict[str, object]:
+        body: Final = _BODY_ADAPTER.validate_json(response.content)
+        if self._provider_config is None:
+            return body
+        return _BODY_ADAPTER.validate_python(self._provider_config.unwrap_response(body))
 
     async def evaluate(
         self,
@@ -103,20 +127,20 @@ class HttpJevClassifierClient:
             MappingProxyType({"Authorization": f"Bearer {self._api_key}"}) if self._api_key else MappingProxyType({})
         )
         response: Final = await self._http_client.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler has a dynamic post signature
-            f"{self._api_base}/v1/systemone",
-            json=request.model_dump(mode="json"),
+            self._request_url(request.model),
+            json={**request.model_dump(mode="json"), "model": self._wire_model(request.model)},
             headers=MappingProxyType({**authorization, "Content-Type": "application/json"}),  # pyright: ignore[reportArgumentType]  # HTTP headers are not mutated by AsyncHTTPHandler
             timeout=timeout_s,
         )
         response.raise_for_status()
-        body: Final = TypeAdapter(dict[str, object]).validate_json(response.content)
+        body: Final = self._response_body(response)
         normalized_body: Final = (
             MappingProxyType({**body, "model": laya_response_model(body, request.model)})
             if self._provider == "laya"
             else body
         )
         try:
-            self._log_response(request, response, request_kwargs, start_time)
+            self._log_response(request, response, body, request_kwargs, start_time)
         except Exception as exc:  # noqa: BLE001  # logging integrations must not discard a provider verdict
             verbose_router_logger.warning("JEV response logging failed (%s)", type(exc).__name__)
         return TypeAdapter(JevSystemOneResponse).validate_python(normalized_body)
@@ -125,11 +149,11 @@ class HttpJevClassifierClient:
         self,
         request: JevSystemOneRequest,
         response: httpx.Response,
+        body: Mapping[str, object],
         request_kwargs: Mapping[str, object] | None,
         start_time: datetime,
     ) -> None:
         try:
-            body: Final = TypeAdapter(dict[str, object]).validate_json(response.content)
             _ = TypeAdapter(JevUsage | None).validate_python(body.get("usage"))
         except ValidationError:
             return
@@ -202,7 +226,7 @@ class JevVerdict(NamedTuple):
     confidence: float
     model: str
     cost: float | None
-    provider: Literal["typesafe", "laya", "bespoke"] = "typesafe"
+    provider: ClassifierProvider = "typesafe"
 
 
 class _RegistryPricing(LiteLLMBaseModel):
@@ -225,8 +249,39 @@ def build_jev_request(
     return JevSystemOneRequest(state=state, model=model, questions=MappingProxyType({"tier": question}))
 
 
+def decisions_classifier_client(
+    provider: DecisionsClassifierProvider,
+    model: str,
+    api_base: str | None,
+    api_key: str | None,
+    http_client: AsyncHTTPHandler,
+) -> HttpJevClassifierClient:
+    provider_config: Final = ProviderConfigManager.get_provider_decisions_config(model, _DECISIONS_PROVIDERS[provider])
+    if provider_config is None:
+        raise ValueError(f"opensource_classifier_config.provider {provider!r} has no Decisions provider config")
+    resolved_api_base: Final = provider_config.resolve_api_base(api_base)
+    if resolved_api_base is None:
+        raise ValueError(
+            f"opensource_classifier_config.api_base or {' or '.join(provider_config.api_base_env)} is required for "
+            f"provider {provider!r}: {provider_config.missing_api_base_message(provider)}"
+        )
+    resolved_api_key: Final = api_key if api_base is not None else provider_config.resolve_api_key(api_key)
+    if resolved_api_key is None and provider_config.api_key_required:
+        raise ValueError(
+            f"opensource_classifier_config.api_key or {' or '.join(provider_config.api_key_env)} is required for "
+            f"provider {provider!r}"
+        )
+    return HttpJevClassifierClient(
+        api_key=resolved_api_key,
+        api_base=resolved_api_base,
+        http_client=http_client,
+        provider=provider,
+        provider_config=provider_config,
+    )
+
+
 def jev_classifier_cost(
-    response: JevSystemOneResponse, configured_model: str, provider: Literal["typesafe", "laya", "bespoke"] = "typesafe"
+    response: JevSystemOneResponse, configured_model: str, provider: ClassifierProvider = "typesafe"
 ) -> float | None:
     usage: Final = response.usage
     if usage is None:

@@ -7,13 +7,17 @@ import { Textarea } from "@/components/ui/textarea";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { defaultJevClassifierConfig, OSS_CLASSIFIER_MODELS } from "./jev_classifier_config";
+import { defaultJevClassifierConfig, fixedClassifierModels } from "./jev_classifier_config";
 
 const providerDescriptions = {
   jev: "Uses TypeSafe System One Choice evaluation with your configured tiers",
   laya: "Uses Laya with your configured tiers. Set LAYA_API_BASE on the gateway to connect your Laya server.",
   bespoke:
     "Uses Bespoke Nimble with your configured tiers. Set BESPOKE_API_BASE on the gateway to connect your Nimble server.",
+  strands_decider:
+    "Uses Strands Decider with your configured tiers. Set STRANDS_DECIDER_API_BASE on the gateway to connect your Strands Decider server.",
+  cloudflare:
+    "Uses Cloudflare Clef on Workers AI with your configured tiers. Set CLOUDFLARE_API_KEY and CLOUDFLARE_ACCOUNT_ID on the gateway.",
 };
 
 export default function JevClassifierConfig({
@@ -25,7 +29,7 @@ export default function JevClassifierConfig({
 }) {
   const id = useId();
   const config = value.jev_classifier_config ?? defaultJevClassifierConfig();
-  const models = config.provider && config.provider !== "jev" ? OSS_CLASSIFIER_MODELS[config.provider] : undefined;
+  const models = fixedClassifierModels(config.provider);
   const update = (patch: Partial<typeof config>) =>
     onChange({ ...value, jev_classifier_config: { ...config, ...patch } });
 

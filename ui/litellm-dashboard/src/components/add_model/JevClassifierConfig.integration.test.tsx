@@ -101,9 +101,12 @@ describe("JEV classifier editor", () => {
     ["jev", "Jev", "jev-test"],
     ["laya", "Laya", "multilingual"],
     ["bespoke", "Bespoke Nimble", "bespokelabs/Bespoke-Nimble-9B"],
+    ["strands_decider", "Strands Decider", "strands-decider-custom"],
+    ["cloudflare", "Cloudflare Clef", "clef-flash"],
   ] as const)(
     "preserves %s, custom tiers and context through save, reload and probe",
     async (provider, label, model) => {
+      const fixedModels = provider !== "jev" && provider !== "strands_decider";
       renderWithProviders(<Form />);
       expect(screen.getByLabelText("Judge model")).toBeInTheDocument();
       expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
@@ -123,7 +126,11 @@ describe("JEV classifier editor", () => {
       expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
       fireEvent.click(screen.getByRole("radio", { name: label }));
       if (provider === "bespoke") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("nimble-latest");
-      if (provider !== "jev") {
+      if (provider === "cloudflare") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("clef");
+      if (provider === "strands_decider") {
+        expect(screen.getByLabelText("Classifier Model")).toHaveValue("strands-decider-2B-hobson-v19");
+      }
+      if (fixedModels) {
         await chooseSelectOption(userEvent, screen.getByLabelText("Classifier Model"), model);
       } else {
         fireEvent.change(screen.getByLabelText("Classifier Model"), { target: { value: model } });
@@ -136,7 +143,7 @@ describe("JEV classifier editor", () => {
       fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
       expect(screen.getByRole("radio", { name: /^OSS Classifier$/ })).toBeChecked();
       expect(screen.getByRole("radio", { name: label })).toBeChecked();
-      if (provider !== "jev") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent(model);
+      if (fixedModels) expect(screen.getByLabelText("Classifier Model")).toHaveTextContent(model);
       else expect(screen.getByLabelText("Classifier Model")).toHaveValue(model);
       expect(screen.getByLabelText("Classifier Timeout (ms)")).toHaveValue(4200);
       expect(screen.getByLabelText("Context Window Size")).toHaveValue("6");

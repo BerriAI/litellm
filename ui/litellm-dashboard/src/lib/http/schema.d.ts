@@ -40360,7 +40360,7 @@ export interface components {
              * @default jev
              * @enum {string}
              */
-            provider: "jev" | "laya" | "bespoke";
+            provider: "jev" | "laya" | "bespoke" | "strands_decider" | "cloudflare";
             /**
              * Timeout Ms
              * @default 3000

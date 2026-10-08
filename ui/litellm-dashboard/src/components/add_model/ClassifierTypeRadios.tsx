@@ -55,7 +55,9 @@ const ClassifierTypeRadios: React.FC<ClassifierTypeRadiosProps> = ({ value, clas
           <RadioGroupItem value="jev" className="mt-0.5" />
           <span>
             <strong className="font-semibold">OSS Classifier</strong>{" "}
-            <span className="text-muted-foreground">uses Jev or Laya to decide the tier</span>
+            <span className="text-muted-foreground">
+              uses Jev, Laya, Bespoke Nimble, Strands Decider, or Cloudflare Clef to decide the tier
+            </span>
           </span>
         </Label>
         <SimpleTooltip content={scorerLockedReason}>

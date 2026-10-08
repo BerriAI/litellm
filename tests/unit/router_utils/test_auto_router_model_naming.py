@@ -40,6 +40,8 @@ SEMANTIC_FIELDS = frozenset({"auto_router_config", "auto_router_default_model", 
         ("jev", "jev-preview", "typesafe"),
         ("laya", "english", "laya"),
         ("bespoke", "nimble-latest", "bespoke"),
+        ("strands_decider", "strands-decider-2B-hobson-v19", "strands_decider"),
+        ("cloudflare", "clef", "cloudflare"),
     ],
 )
 def test_open_source_classifier_enumerates_its_accounting_model(

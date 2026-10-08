@@ -1,15 +1,30 @@
 import { z } from "zod";
 import type { ClassifierType } from "./classifier_types";
 
+export const OSS_CLASSIFIER_PROVIDERS = ["jev", "laya", "bespoke", "strands_decider", "cloudflare"] as const;
+export type OssClassifierProvider = (typeof OSS_CLASSIFIER_PROVIDERS)[number];
+export const isOssClassifierProvider = (value: unknown): value is OssClassifierProvider =>
+  OSS_CLASSIFIER_PROVIDERS.some((provider) => provider === value);
+
 export const OSS_CLASSIFIER_MODELS = {
   laya: ["english", "multilingual", "typed-decisions"],
   bespoke: ["nimble-latest", "nimble", "bespokelabs/Bespoke-Nimble-9B"],
+  cloudflare: ["clef", "clef-flash"],
 } as const;
+
+export const fixedClassifierModels = (provider: OssClassifierProvider | undefined): readonly string[] | undefined =>
+  provider === "laya" || provider === "bespoke" || provider === "cloudflare"
+    ? OSS_CLASSIFIER_MODELS[provider]
+    : undefined;
+
+export const defaultClassifierModel = (provider: OssClassifierProvider | undefined): string =>
+  fixedClassifierModels(provider)?.[0] ??
+  (provider === "strands_decider" ? "strands-decider-2B-hobson-v19" : "jev-latest");
 
 const jevClassifierConfigFields = {
   provider: z.preprocess(
     (value) => (value === "typesafe" ? "jev" : value),
-    z.enum(["jev", "laya", "bespoke"]).optional(),
+    z.enum(OSS_CLASSIFIER_PROVIDERS).optional(),
   ),
   model: z.string().trim().min(1).optional(),
   timeout_ms: z.number().int().positive().default(3000),
@@ -24,23 +39,15 @@ const jevClassifierConfigFields = {
 
 export const jevClassifierConfigSchema = z
   .object(jevClassifierConfigFields)
-  .transform((config) => ({
-    ...config,
-    model:
-      config.model ??
-      (config.provider && config.provider !== "jev" ? OSS_CLASSIFIER_MODELS[config.provider][0] : "jev-latest"),
-  }))
-  .refine(
-    (config) =>
-      !config.provider ||
-      config.provider === "jev" ||
-      OSS_CLASSIFIER_MODELS[config.provider].some((model) => model === config.model),
-    { error: "Select a supported classifier model", path: ["model"] },
-  );
+  .transform((config) => ({ ...config, model: config.model ?? defaultClassifierModel(config.provider) }))
+  .refine((config) => fixedClassifierModels(config.provider)?.some((model) => model === config.model) ?? true, {
+    error: "Select a supported classifier model",
+    path: ["model"],
+  });
 
 export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema>;
 
-export const defaultJevClassifierConfig = (provider: JevClassifierConfig["provider"] = "jev"): JevClassifierConfig =>
+export const defaultJevClassifierConfig = (provider: OssClassifierProvider = "jev"): JevClassifierConfig =>
   jevClassifierConfigSchema.parse({ provider });
 
 export const hydrateOssClassifier = (config: {

@@ -76,7 +76,7 @@ class _MemberOpenSourceClassifierConfig(LiteLLMBaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["jev", "laya", "bespoke"] = "jev"
+    provider: Literal["jev", "laya", "bespoke", "strands_decider", "cloudflare"] = "jev"
     model: str
     api_key: None = None
     api_base: None = None

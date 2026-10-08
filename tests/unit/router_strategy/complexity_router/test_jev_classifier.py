@@ -451,7 +451,15 @@ def test_jev_config_requires_classifier_config() -> None:
 )
 @pytest.mark.parametrize(
     ("provider", "model", "canonical_provider"),
-    [(None, "jev-latest", "jev"), ("typesafe", "jev-latest", "jev"), ("jev", "jev-latest", "jev"), ("laya", "english", "laya"), ("bespoke", "nimble-latest", "bespoke")],
+    [
+        (None, "jev-latest", "jev"),
+        ("typesafe", "jev-latest", "jev"),
+        ("jev", "jev-latest", "jev"),
+        ("laya", "english", "laya"),
+        ("bespoke", "nimble-latest", "bespoke"),
+        ("strands_decider", "strands-decider-2B-hobson-v19", "strands_decider"),
+        ("cloudflare", "clef-flash", "cloudflare"),
+    ],
 )
 def test_classifier_aliases_load_and_serialize_one_canonical_config(
     classifier_type: str, config_key: str, provider: str | None, model: str, canonical_provider: str
@@ -531,6 +539,175 @@ async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
     assert json.loads(sent.content)["model"] == model
     assert len(recorder.calls) == 1
     assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)
+
+
+@pytest.mark.parametrize(
+    ("provider", "default_model"),
+    [("strands_decider", "strands-decider-2B-hobson-v19"), ("cloudflare", "clef")],
+)
+def test_decisions_providers_default_their_own_model(provider: str, default_model: str) -> None:
+    assert JevClassifierConfig.model_validate({"provider": provider}).model == default_model
+    assert JevClassifierConfig.model_validate({"provider": provider, "model": "custom"}).model == "custom"
+
+
+def test_cloudflare_api_base_without_its_own_key_is_rejected_so_the_environment_key_stays_home() -> None:
+    with pytest.raises(ValueError, match="CLOUDFLARE_API_KEY is only sent to CLOUDFLARE_API_BASE"):
+        JevClassifierConfig.model_validate({"provider": "cloudflare", "api_base": "https://collector.invalid"})
+    paired: Final = JevClassifierConfig(provider="cloudflare", api_base="https://gateway.invalid", api_key="cf-own")
+    assert (paired.api_base, paired.api_key) == ("https://gateway.invalid", "cf-own")
+
+
+@pytest.mark.parametrize(
+    ("provider", "environment", "rejection"),
+    [
+        ("strands_decider", {}, r"api_base or STRANDS_DECIDER_API_BASE is required"),
+        ("cloudflare", {"CLOUDFLARE_API_KEY": "cf-env-key"}, r"api_base or CLOUDFLARE_API_BASE is required.*CLOUDFLARE_ACCOUNT_ID"),
+        ("cloudflare", {"CLOUDFLARE_ACCOUNT_ID": "acct"}, r"api_key or CLOUDFLARE_API_KEY is required"),
+    ],
+)
+def test_decisions_classifier_requires_its_connection_before_serving(
+    monkeypatch: pytest.MonkeyPatch, provider: str, environment: Mapping[str, str], rejection: str
+) -> None:
+    for name in ("STRANDS_DECIDER_API_BASE", "STRANDS_DECIDER_API_KEY", "CLOUDFLARE_API_BASE", "CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=rejection):
+        _ = ComplexityRouter._build_jev_client(JevClassifierConfig.model_validate({"provider": provider}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_base", "api_key", "expected_authorization"),
+    [
+        (None, None, "Bearer strands-env-key"),
+        ("https://strands.test", None, None),
+        ("https://strands.test", "strands-own-key", "Bearer strands-own-key"),
+    ],
+)
+async def test_strands_decider_routes_through_its_server_and_accounts_the_checkpoint(
+    monkeypatch: pytest.MonkeyPatch, api_base: str | None, api_key: str | None, expected_authorization: str | None
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
+    monkeypatch.setenv("STRANDS_DECIDER_API_BASE", "https://strands.test")
+    monkeypatch.setenv("STRANDS_DECIDER_API_KEY", "strands-env-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model: Final = "strands-decider-2B-hobson-v19"
+    monkeypatch.setitem(litellm.model_cost, f"strands_decider/{model}", {"input_cost_per_token": 0.001})
+    recorder: Final = _UsageRecorder(f"strands_decider/{model}")
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    router: Final = ComplexityRouter(
+        "strands-route",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {
+                "provider": "strands_decider",
+                **({"api_base": api_base} if api_base is not None else {}),
+                **({"api_key": api_key} if api_key is not None else {}),
+            },
+            "tiers": {"SIMPLE": "cheap"},
+        },
+        derive_savings_baseline=False,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("https://strands.test/v1/systemone").respond(
+            200,
+            json={
+                "model": model,
+                "answers": {"tier": _answer().model_dump()},
+                "usage": {"input_tokens": 216, "output_tokens": 3},
+                "latency_ms": 37.5,
+            },
+        )
+        outcome: Final = await router.aclassify("choose a tier")
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert outcome.cause == "jev_classifier"
+    assert outcome.jev_verdict is not None
+    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model, outcome.jev_verdict.label) == (
+        "strands_decider",
+        model,
+        "SIMPLE",
+    )
+    assert outcome.classifier_cost == pytest.approx(0.216)
+    sent: Final = route.calls.last.request
+    assert sent.headers.get("authorization") == expected_authorization
+    assert json.loads(sent.content)["model"] == model
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0]["response_cost"] == pytest.approx(0.216)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["clef", "clef-flash"])
+@pytest.mark.parametrize("api_base_env", [None, "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1"])
+async def test_cloudflare_routes_through_workers_ai_and_unwraps_the_result_envelope(
+    monkeypatch: pytest.MonkeyPatch, model: str, api_base_env: str | None
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
+    monkeypatch.setenv("CLOUDFLARE_API_KEY", "cf-env-key")
+    if api_base_env is None:
+        monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+        monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    else:
+        monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
+        monkeypatch.setenv("CLOUDFLARE_API_BASE", api_base_env)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(litellm.model_cost, f"cloudflare/{model}", {"input_cost_per_token": 0.001})
+    recorder: Final = _UsageRecorder(f"cloudflare/{model}")
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    router: Final = ComplexityRouter(
+        "clef-route",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"provider": "cloudflare", "model": model},
+            "tiers": {"SIMPLE": "cheap"},
+        },
+        derive_savings_baseline=False,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(
+            f"https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/{model}"
+        ).respond(
+            200,
+            json={
+                "result": {
+                    "model": model,
+                    "answers": {"tier": _answer().model_dump()},
+                    "usage": {"input_tokens": 147, "output_tokens": 0},
+                },
+                "success": True,
+                "errors": [],
+                "messages": [],
+            },
+        )
+        outcome: Final = await router.aclassify("choose a tier")
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert outcome.cause == "jev_classifier"
+    assert outcome.jev_verdict is not None
+    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model, outcome.jev_verdict.label) == (
+        "cloudflare",
+        model,
+        "SIMPLE",
+    )
+    assert outcome.classifier_cost == pytest.approx(0.147)
+    sent: Final = route.calls.last.request
+    assert sent.headers.get("authorization") == "Bearer cf-env-key"
+    assert json.loads(sent.content)["model"] == model
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0]["response_cost"] == pytest.approx(0.147)
+
+
+@pytest.mark.parametrize(
+    "model_key",
+    ["strands_decider/strands-decider-2B-hobson-v19", "cloudflare/clef", "cloudflare/clef-flash"],
+)
+def test_decisions_classifier_default_models_ship_evaluation_cost_map_rows(model_key: str) -> None:
+    row: Final = litellm.model_cost[model_key]
+    assert row["mode"] == "evaluation"
+    assert {"input_cost_per_token", "output_cost_per_token"} <= set(row)
 
 
 def test_jev_config_is_rejected_for_other_classifier_types() -> None:
