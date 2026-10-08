@@ -963,13 +963,13 @@ def test_map_team_model_tolerates_concurrent_deployment_removal():
         ],
     )
     source_lines, first_line = inspect.getsourcelines(Router.get_all_deployments)
-    lookup_line = first_line + next(
+    lookup_line: Final = first_line + next(
         index
         for index, line in enumerate(source_lines)
         if "model = self.model_list[idx]" in line
     )
-    paused = threading.Event()
-    resume = threading.Event()
+    paused: Final = threading.Event()
+    resume: Final = threading.Event()
 
     def trace_reader(
         frame: FrameType, event: str, _arg: object
@@ -992,8 +992,9 @@ def test_map_team_model_tolerates_concurrent_deployment_removal():
         finally:
             sys.settrace(None)
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        reader = executor.submit(resolve_model)
+    executor: Final = ThreadPoolExecutor(max_workers=1)
+    with executor:
+        reader: Final = executor.submit(resolve_model)
         try:
             assert paused.wait(timeout=10), "reader did not reach indexed lookup"
             assert router.delete_deployment("deployment-1") is not None
@@ -1001,6 +1002,67 @@ def test_map_team_model_tolerates_concurrent_deployment_removal():
             resume.set()
 
         assert reader.result(timeout=10) is None
+
+
+def test_get_all_deployments_preserves_survivor_after_concurrent_removal():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "model-a",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {"id": "deployment-a"},
+            },
+            {
+                "model_name": "model-b",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {"id": "deployment-b"},
+            },
+        ],
+    )
+    source_and_line: Final = inspect.getsourcelines(Router.get_all_deployments)
+    source_lines: Final = source_and_line[0]
+    first_line: Final = source_and_line[1]
+    lookup_line: Final = first_line + max(
+        index
+        for index, line in enumerate(source_lines)
+        if "model = self.model_list[idx]" in line
+    )
+    paused: Final = threading.Event()
+    resume: Final = threading.Event()
+
+    def trace_reader(
+        frame: FrameType, event: str, _arg: object
+    ) -> Callable[[FrameType, str, object], object] | None:
+        if (
+            frame.f_code is Router.get_all_deployments.__code__
+            and event == "line"
+            and frame.f_lineno == lookup_line
+            and not paused.is_set()
+        ):
+            paused.set()
+            if not resume.wait(timeout=10):
+                raise TimeoutError("reader was not resumed")
+        return trace_reader
+
+    def resolve_model():
+        sys.settrace(trace_reader)
+        try:
+            return router.get_all_deployments("model-b")
+        finally:
+            sys.settrace(None)
+
+    executor: Final = ThreadPoolExecutor(max_workers=1)
+    with executor:
+        reader: Final = executor.submit(resolve_model)
+        try:
+            assert paused.wait(timeout=10), "reader did not reach indexed lookup"
+            assert router.delete_deployment("deployment-a") is not None
+        finally:
+            resume.set()
+
+        result: Final = reader.result(timeout=10)
+        assert len(result) == 1
+        assert result[0]["model_info"]["id"] == "deployment-b"
 
 
 def test_team_model_has_alternatives():

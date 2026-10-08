@@ -12000,6 +12000,22 @@ class Router:
         # No match: deployment is for a different team or doesn't match the requested model
         return False
 
+    def _scan_current_deployments(
+        self,
+        model_name: str,
+        model_alias: str | None = None,
+        team_id: str | None = None,
+    ) -> list[DeploymentTypedDict]:
+        current_models: Final = tuple(self.model_list)
+        matching_models: Final = tuple(
+            model
+            for model in current_models
+            if self.should_include_deployment(model_name=model_name, model=model, team_id=team_id)
+        )
+        if model_alias is None:
+            return list(matching_models)
+        return [{**model, "model_name": model_alias} for model in matching_models]
+
     def get_all_deployments(
         self,
         model_name: str,
@@ -12026,14 +12042,16 @@ class Router:
         # O(1) lookup in team_model index when team_id is provided
         if team_id is not None:
             key: Final = (team_id, model_name)
-            indices = self.team_model_to_deployment_indices.get(key)
-            if indices is not None:
+            team_indices: Final = self.team_model_to_deployment_indices.get(key)
+            if team_indices is not None:
                 # O(k) where k = team deployments for this model_name (typically 1-10)
-                for idx in indices:
+                for idx in team_indices:
                     try:
                         model = self.model_list[idx]
                     except IndexError:
-                        continue
+                        return self._scan_current_deployments(
+                            model_name=model_name, model_alias=model_alias, team_id=team_id
+                        )
                     if not self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                         continue
                     if model_alias is not None:
@@ -12046,14 +12064,16 @@ class Router:
                     return returned_models
 
         # O(1) lookup in model_name index
-        indices = self.model_name_to_deployment_indices.get(model_name)
-        if indices is not None:
+        model_indices: Final = self.model_name_to_deployment_indices.get(model_name)
+        if model_indices is not None:
             # O(k) where k = deployments for this model_name (typically 1-10)
-            for idx in indices:
+            for idx in model_indices:
                 try:
                     model = self.model_list[idx]
                 except IndexError:
-                    continue
+                    return self._scan_current_deployments(
+                        model_name=model_name, model_alias=model_alias, team_id=team_id
+                    )
                 if self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                     if model_alias is not None:
                         # Optimized: Use shallow copy since we only modify top-level model_name
