@@ -59,16 +59,22 @@ fn is_billing_metadata_block(block: &ContentBlock) -> bool {
 }
 
 pub fn strip_billing_metadata(request: MessagesRequest) -> MessagesRequest {
-    let Some(SystemPrompt::Blocks(blocks)) = request.params.system else {
-        return request;
+    let system = match request.params.system {
+        Some(SystemPrompt::Text(text)) => {
+            (!text.starts_with(BILLING_HEADER_PREFIX)).then_some(SystemPrompt::Text(text))
+        }
+        Some(SystemPrompt::Blocks(blocks)) => {
+            let kept: Vec<ContentBlock> = blocks
+                .into_iter()
+                .filter(|block| !is_billing_metadata_block(block))
+                .collect();
+            (!kept.is_empty()).then_some(SystemPrompt::Blocks(kept))
+        }
+        None => None,
     };
-    let kept: Vec<ContentBlock> = blocks
-        .into_iter()
-        .filter(|block| !is_billing_metadata_block(block))
-        .collect();
     MessagesRequest {
         params: MessagesOptionalParams {
-            system: (!kept.is_empty()).then_some(SystemPrompt::Blocks(kept)),
+            system,
             ..request.params
         },
         ..request

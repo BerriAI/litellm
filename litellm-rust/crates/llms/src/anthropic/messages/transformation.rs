@@ -517,10 +517,15 @@ mod tests {
         json!({"system": BILLING_HEADER}),
         body(json!({"system": BILLING_HEADER}))
     )]
-    #[case::strip_keeps_a_string_system(
+    #[case::strip_drops_a_billing_string_system(
         COMPATIBLE_HOST_REQUEST_POLICY,
         json!({"system": BILLING_HEADER}),
-        body(json!({"system": BILLING_HEADER}))
+        body(json!({}))
+    )]
+    #[case::strip_keeps_a_plain_string_system(
+        PARTNER_HOST_REQUEST_POLICY,
+        json!({"system": "keep"}),
+        body(json!({"system": "keep"}))
     )]
     fn system_shape_under_billing_policy(
         #[case] policy: RequestPolicy,

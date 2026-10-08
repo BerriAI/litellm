@@ -75,7 +75,12 @@ fn with_system(system: Value) -> MessagesRequest {
     ])
 )]
 #[case::billing_only_blocks_become_absent(json!([{"type": "text", "text": BILLING_HEADER}]), Value::Null)]
-#[case::string_system_is_untouched(json!(BILLING_HEADER), json!(BILLING_HEADER))]
+#[case::billing_string_system_becomes_absent(json!(BILLING_HEADER), Value::Null)]
+#[case::plain_string_system_is_kept(json!("keep"), json!("keep"))]
+#[case::billing_prefix_mid_string_is_kept(
+    json!(format!("note: {BILLING_HEADER}")),
+    json!(format!("note: {BILLING_HEADER}"))
+)]
 #[case::billing_prefix_mid_text_is_kept(
     json!([{"type": "text", "text": format!("note: {BILLING_HEADER}")}]),
     json!([{"type": "text", "text": format!("note: {BILLING_HEADER}")}])
@@ -84,7 +89,7 @@ fn with_system(system: Value) -> MessagesRequest {
     json!([{"type": "future", "text": BILLING_HEADER}]),
     json!([{"type": "future", "text": BILLING_HEADER}])
 )]
-fn strip_billing_metadata_drops_only_billing_text_blocks(
+fn strip_billing_metadata_drops_only_billing_text(
     #[case] system: Value,
     #[case] expected_system: Value,
 ) {
