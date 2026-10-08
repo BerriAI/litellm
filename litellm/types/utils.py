@@ -4153,6 +4153,8 @@ class LlmProviders(str, Enum):
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
     STRANDS_DECIDER = "strands_decider"
+    LAYA = "laya"
+    BESPOKE = "bespoke"
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"

@@ -402,6 +402,49 @@ def test_tencent_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+@pytest.mark.parametrize(
+    ("provider", "display_name", "litellm_provider", "model_placeholder", "api_base_required", "api_key_required"),
+    (
+        ("TYPESAFE", "TypeSafe", LlmProviders.TYPESAFE.value, "typesafe/jev-latest", False, True),
+        (
+            "STRANDS_DECIDER",
+            "Strands Decider",
+            LlmProviders.STRANDS_DECIDER.value,
+            "strands_decider/strands-decider-2B-hobson-v19",
+            True,
+            False,
+        ),
+        ("LAYA", "Laya", LlmProviders.LAYA.value, "laya/english", True, False),
+        ("BESPOKE", "Bespoke Nimble", LlmProviders.BESPOKE.value, "bespoke/nimble-latest", True, False),
+    ),
+)
+def test_decisions_provider_fields(
+    provider, display_name, litellm_provider, model_placeholder, api_base_required, api_key_required
+):
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    entry = next((p for p in providers if p["provider"] == provider), None)
+    assert entry is not None, f"{provider} provider entry not found"
+
+    assert entry["provider_display_name"] == display_name
+    assert entry["litellm_provider"] == litellm_provider
+    assert entry["default_model_placeholder"] == model_placeholder
+
+    fields_by_key = {f["key"]: f for f in entry["credential_fields"]}
+
+    assert fields_by_key["api_base"]["required"] is api_base_required
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+    assert fields_by_key["api_key"]["required"] is api_key_required
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+
 ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
     {
         "a2a",
@@ -436,12 +479,10 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "sagemaker_nova",
         "scaleway",
         "stability",
-        "strands_decider",
         "synthetic",
         "tensormesh",
         "text-completion-inception",
         "transcribe",
-        "typesafe",
         "valkey",
         "xiaomi_mimo",
         "zai",

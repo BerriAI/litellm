@@ -9,8 +9,10 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.decisions.transformation import DecisionsProviderConfig
+from litellm.llms.bespoke.decisions.transformation import BESPOKE_DECISIONS_ENDPOINT
 from litellm.llms.cloudflare.decisions.transformation import CLOUDFLARE_DECISIONS_ENDPOINT
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, get_httpx_client
+from litellm.llms.laya.decisions.transformation import LAYA_DECISIONS_ENDPOINT
 from litellm.llms.openrouter.decisions.transformation import OPENROUTER_DECISIONS_ENDPOINT
 from litellm.llms.perplexity.decisions.transformation import PERPLEXITY_DECISIONS_ENDPOINT
 from litellm.llms.strands_decider.decisions.transformation import STRANDS_DECIDER_DECISIONS_ENDPOINT
@@ -31,6 +33,8 @@ DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsProviderConfig]] = MappingProxy
         "openrouter": OPENROUTER_DECISIONS_ENDPOINT,
         "cloudflare": CLOUDFLARE_DECISIONS_ENDPOINT,
         "strands_decider": STRANDS_DECIDER_DECISIONS_ENDPOINT,
+        "laya": LAYA_DECISIONS_ENDPOINT,
+        "bespoke": BESPOKE_DECISIONS_ENDPOINT,
     }
 )
 

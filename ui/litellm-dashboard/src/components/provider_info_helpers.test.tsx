@@ -174,6 +174,7 @@ describe("provider_info_helpers", () => {
     it("should map every provider to a bundled logo except the known logoless set, never a raw /ui/assets path", () => {
       const knownLogolessProviders = [
         Providers.AUTO_ROUTER,
+        Providers.BESPOKE,
         Providers.BYTEZ,
         Providers.CLARIFAI,
         Providers.Cognition,
@@ -185,6 +186,7 @@ describe("provider_info_helpers", () => {
         Providers.GALADRIEL,
         Providers.GradientAI,
         Providers.HEROKU,
+        Providers.LAYA,
         Providers.LEMONADE,
         Providers.LLAMAFILE,
         Providers.MARITALK,
@@ -195,6 +197,7 @@ describe("provider_info_helpers", () => {
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
         Providers.Sail,
+        Providers.TYPESAFE,
         Providers.WANDB,
         Providers.ZAI,
       ];
@@ -213,6 +216,12 @@ describe("provider_info_helpers", () => {
     it("should resolve the Tencent provider to its bundled logo", () => {
       const { logo } = getProviderLogoAndName("tencent");
       expect(logo).toContain("tencent");
+    });
+
+    it("should resolve the Strands Decider provider to its bundled logo", () => {
+      const { logo, displayName } = getProviderLogoAndName("strands_decider");
+      expect(displayName).toBe(Providers.STRANDS_DECIDER);
+      expect(logo).toContain("strands");
     });
   });
 
@@ -316,6 +325,15 @@ describe("provider_info_helpers", () => {
 
     it("should return a tencent/ placeholder for the Tencent provider", () => {
       expect(getPlaceholder(Providers.Tencent)).toBe("tencent/deepseek-v4-pro");
+    });
+
+    it.each([
+      [Providers.TYPESAFE, "typesafe/jev-latest"],
+      [Providers.STRANDS_DECIDER, "strands_decider/strands-decider-2B-hobson-v19"],
+      [Providers.LAYA, "laya/english"],
+      [Providers.BESPOKE, "bespoke/nimble-latest"],
+    ])("should return the %s decisions model placeholder", (provider, placeholder) => {
+      expect(getPlaceholder(provider)).toBe(placeholder);
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {

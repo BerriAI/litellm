@@ -39,6 +39,8 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from pydantic import JsonValue
 
+from litellm.decisions.main import DECISIONS_ENDPOINTS
+
 if _data_errors := data_errors():
     raise ValueError("\n".join(_data_errors))
 
@@ -272,19 +274,24 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             observed: Final = JSON_OBJECT.validate_json(
                 httpx.get(f"{gateway.upstream_url}/__observations", timeout=5, trust_env=False).content
             )
+            decisions_provider: Final = case.rates.litellm_provider
+            upstream_model: Final = case.litellm_model.removeprefix(f"{decisions_provider}/")
+            upstream_path: Final = f"/{scenario_id}" + DECISIONS_ENDPOINTS[decisions_provider].endpoint_url(
+                "https://upstream-placeholder.invalid", upstream_model
+            ).removeprefix("https://upstream-placeholder.invalid")
             decision_observations: Final = tuple(
                 value
                 for value in observed["requests"]
-                if isinstance(value, dict) and value.get("path") == f"/{scenario_id}/v1/decisions"
+                if isinstance(value, dict) and value.get("path") == upstream_path
             )
             assert decision_observations == (
                 {
-                    "path": f"/{scenario_id}/v1/decisions",
+                    "path": upstream_path,
                     "authorization": "Bearer sk-scripted-provider",
                     "method": "POST",
                     "api_key": "",
                     "body": {
-                        "model": "pplx-decider-v1-27b",
+                        "model": upstream_model,
                         "state": {"source": "cost-tracking"},
                         "questions": {
                             "is_defect": {
