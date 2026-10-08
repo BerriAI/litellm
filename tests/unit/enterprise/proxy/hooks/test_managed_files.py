@@ -2452,9 +2452,9 @@ async def test_store_batch_output_file_marks_fallback_after_four_transient_failu
     stored_object = managed_file_table.rows["unified-output"].file_object
     assert stored_object is not None
     assert stored_object.litellm_details_fallback is True
-    assert json.loads(managed_file_table.upsert_calls[0][1]["create"]["file_object"])[
-        "litellm_details_fallback"
-    ] is True
+    stored_file_object_json: Final = managed_file_table.upsert_calls[0][1]["create"]["file_object"]
+    assert isinstance(stored_file_object_json, str)
+    assert json.loads(stored_file_object_json)["litellm_details_fallback"] is True
 
 
 @pytest.mark.asyncio

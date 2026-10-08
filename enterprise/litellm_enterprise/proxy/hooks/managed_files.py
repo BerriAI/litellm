@@ -63,7 +63,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
-    _sanitize_for_log,
+    sanitize_for_log,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
@@ -212,7 +212,7 @@ def _provider_file_retrieve_credentials(
     except Exception as error:
         verbose_logger.warning(
             "Failed to retrieve credentials for provider file "
-            f"model_id={_sanitize_for_log(model_id)}: {_sanitize_for_log(error)}"
+            f"model_id={sanitize_for_log(model_id)}: {sanitize_for_log(error)}"
         )
         return None
     return cast(Mapping[str, object], credentials) if credentials else None
@@ -819,8 +819,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         except Exception as error:
             verbose_logger.warning(
                 "Failed to retrieve batch file object for "
-                f"provider_file_id={_sanitize_for_log(provider_file_id)}: "
-                f"{type(error).__name__} {_sanitize_for_log(error)}"
+                f"provider_file_id={sanitize_for_log(provider_file_id)}: "
+                f"{type(error).__name__} {sanitize_for_log(error)}"
             )
             if raise_on_failure:
                 if isinstance(error, TimeoutError) and not str(error):
@@ -1946,7 +1946,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 except Exception as error:
                     verbose_logger.warning(
                         "Failed to refresh batch file object for "
-                        f"file_id={_sanitize_for_log(file_id)}: {_sanitize_for_log(error)}"
+                        f"file_id={sanitize_for_log(file_id)}: {sanitize_for_log(error)}"
                     )
             return _public_file_object(file_object, file_id)
 
