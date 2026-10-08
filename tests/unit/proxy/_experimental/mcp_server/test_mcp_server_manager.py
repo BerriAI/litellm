@@ -19145,6 +19145,7 @@ async def test_manual_oauth_endpoints_discover_client_metadata_once(
     source: str, advertised: bool, startup: bool, respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from starlette.requests import Request
+
     from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
     from litellm.proxy._experimental.mcp_server.oauth_utils import get_cimd_client_id
 
@@ -19227,3 +19228,42 @@ async def test_optional_client_metadata_discovery_failure_preserves_manual_endpo
     assert resolved.effective_authorization_url == "https://up.example.com/authorize"
     assert resolved.effective_token_url == "https://up.example.com/token"
     assert manager.oauth_discovery_slot(resolved.server_id) is not None
+
+
+@pytest.mark.parametrize("capability", [True, False])
+@pytest.mark.parametrize("rebuild", ["same", "repointed", "fresh_discovery", "anchored"])
+def test_oauth_rebuild_retains_only_corroborated_cimd_capability(capability: bool, rebuild: str) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import carry_forward_resolved_oauth_endpoints
+
+    previous: Final = MCPServer(
+        server_id="cimd-rebuild", name="cimd_rebuild", url="https://mcp.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
+        authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
+        client_id_metadata_document_supported=capability,
+    )
+    rebuilt: Final = previous.model_copy(update={
+        "client_id_metadata_document_supported": not capability if rebuild == "fresh_discovery" else None,
+        "authorization_url": "https://changed.example.com/authorize" if rebuild == "repointed" else previous.authorization_url,
+        "token_url": None,
+        "issuer": "https://idp.example.com" if rebuild == "anchored" else None,
+        "issuer_is_anchored": rebuild == "anchored",
+    })
+    carry_forward_resolved_oauth_endpoints(rebuilt, previous)
+    expected: Final = not capability if rebuild == "fresh_discovery" else None if rebuild in ("repointed", "anchored") else capability
+    assert rebuilt.client_id_metadata_document_supported is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["authorization_url", "token_url"])
+async def test_repeated_stale_discovery_uses_current_callers_endpoint(endpoint: str) -> None:
+    manager: Final = MCPServerManager()
+    original: Final = MCPServer(
+        server_id="partial-replacement", name="replacement", url="https://old.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+    )
+    replacement: Final = original.model_copy(update={endpoint: "https://new.example.com/oauth"})
+    manager.registry[original.server_id] = replacement
+    resolved: Final = await manager._rejoin_oauth_metadata_discovery(
+        original, needed_endpoint=lambda server: getattr(server, endpoint), retry_stale=False,
+    )
+    assert resolved is replacement

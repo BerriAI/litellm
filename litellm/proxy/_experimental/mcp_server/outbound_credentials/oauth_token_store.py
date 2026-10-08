@@ -42,6 +42,8 @@ class OAuthToken:
     refresh_token: str | None = None
     scopes: tuple[str, ...] = ()
     identity_binding_proof: str | None = None
+    # The refresh grant remains bound to its original public identity across replicas.
+    cimd_client_id: str | None = None
 
     def __repr__(self) -> str:
         has_refresh: Final = self.refresh_token is not None

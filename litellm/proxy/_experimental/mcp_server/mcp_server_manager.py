@@ -872,6 +872,8 @@ def carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serve
     may_carry: Final = _endpoints_corroborate_authorization_url(
         previous_server.authorization_url, new_server.authorization_url
     )
+    if may_carry and new_server.client_id_metadata_document_supported is None:
+        new_server.client_id_metadata_document_supported = previous_server.client_id_metadata_document_supported
     if may_carry and new_server.issuer is None:
         new_server.issuer = previous_server.issuer
         new_server.authorization_response_iss_parameter_supported = (  # rebind-ok: publish on the existing rebuild object
@@ -2320,7 +2322,11 @@ class MCPServerManager:
                 server, needed_endpoint=needed_endpoint, _retry_stale=False
             )
         current: Final = self._registered_server(server)
-        if not oauth_endpoints_unresolved(current, include_client_metadata=False) or current.is_client_forwarded_token:
+        if (
+            not oauth_endpoints_unresolved(current, include_client_metadata=False)
+            or current.is_client_forwarded_token
+            or (needed_endpoint is not None and needed_endpoint(current))
+        ):
             return current
         raise HTTPException(status_code=503, detail="OAuth metadata discovery changed repeatedly; retry shortly")
 

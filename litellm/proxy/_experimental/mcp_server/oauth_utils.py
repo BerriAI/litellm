@@ -787,6 +787,7 @@ def build_upstream_oauth2_token_request(
     auth_method: object,
     client_id: str | None,
     client_secret: str | None,
+    cimd_client_id: str | None = None,
 ) -> TokenEndpointClientAuth:
     """Client auth plus the RFC 8707 ``resource`` for one upstream plain-OAuth2 token request.
 
@@ -796,11 +797,11 @@ def build_upstream_oauth2_token_request(
     authenticate as the caller's own client rather than the server's; ``resource`` always comes from
     the server, so no leg can choose or forget it.
     """
-    cimd_client_id: Final = get_cimd_client_id(mcp_server)
+    selected_cimd_id: Final = cimd_client_id or get_cimd_client_id(mcp_server)
     client_auth: Final = build_token_endpoint_client_auth(
-        auth_method=None if cimd_client_id else normalize_token_endpoint_auth_method(auth_method),
-        client_id=cimd_client_id or client_id,
-        client_secret=None if cimd_client_id else client_secret,
+        auth_method=None if selected_cimd_id else normalize_token_endpoint_auth_method(auth_method),
+        client_id=selected_cimd_id or client_id,
+        client_secret=None if selected_cimd_id else client_secret,
     )
     resource: Final = resolve_upstream_resource(mcp_server)
     if not resource:

@@ -52,7 +52,7 @@ def _endpoint(body, sink=None):
 
 def _recording_persist(sink):
     async def persist(
-        user_id, server_id, access_token, refresh_token, expires_in, scopes
+        user_id, server_id, access_token, refresh_token, expires_in, scopes, cimd_client_id=None
     ):
         sink.append(
             (user_id, server_id, access_token, refresh_token, expires_in, scopes)
@@ -368,3 +368,40 @@ async def test_cimd_refresh_on_fresh_replica_preserves_user_and_client_identity(
     ]
     assert persisted == [("alice", "srv", "new-at", "old-rt", 3600, None)]
     assert server.client_id is None
+
+
+@pytest.mark.asyncio
+async def test_saved_cimd_identity_refreshes_without_discovery(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.v2_token_store import V2PerUserTokenStore
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    identity = "https://gateway.example.com/oauth/client-metadata.json"
+    stored = {"access_token": "old", "refresh_token": "old-rt", "cimd_client_id": identity}
+
+    async def read_credential(user_id, server_id):
+        assert (user_id, server_id) == ("alice", "srv")
+        return stored
+
+    async def persist(user_id, server_id, access_token, refresh_token, expires_in, scopes, **metadata):
+        assert (user_id, server_id, access_token) == ("alice", "srv", "new")
+        assert metadata["cimd_client_id"] == identity
+
+    async def post(url, form, headers):
+        assert url == "https://idp.example.com/token"
+        assert form["client_id"] == identity
+        assert "client_secret" not in form
+        assert "Authorization" not in headers
+        return {"access_token": "new", "refresh_token": "rotated"}
+
+    server = MCPServer(
+        server_id="srv", name="srv", transport="http", auth_type="oauth2", oauth2_flow="authorization_code",
+        authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
+    )
+    token = await V2PerUserTokenStore(read_credential).fetch("alice", "srv")
+    assert token is not None
+    refreshed = await AuthorizationCodeRefresher(lambda _: server, post, persist).refresh("alice", "srv", token)
+    assert refreshed is not None
+    assert refreshed.access_token == "new"
+    assert refreshed.refresh_token == "rotated"
+    assert refreshed.cimd_client_id == identity

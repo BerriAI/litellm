@@ -23,7 +23,6 @@ if TYPE_CHECKING:
     from respx import MockRouter
 
     from litellm.proxy.auth.handle_jwt import JWTHandler
-
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -12569,10 +12568,12 @@ async def test_oauth_write_denial_does_not_erase_identity_binding(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("admin_only", [False, True])
+@pytest.mark.parametrize("cimd", [False, True])
 async def test_signed_oauth_callback_honors_credential_write_policy(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,
     admin_only: bool,
+    cimd: bool,
 ) -> None:
     import httpx
     import litellm
@@ -12587,7 +12588,8 @@ async def test_signed_oauth_callback_honors_credential_write_policy(
 
     server: Final = MCPServer(
         server_id="signed-server", name="signed-server", transport=MCPTransport.http,
-        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code", client_id="client",
+        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code", client_id=None if cimd else "client",
+        client_id_metadata_document_supported=cimd,
         token_url="https://upstream.example.test/token",
     )
     monkeypatch.setattr(proxy_server, "general_settings", {
@@ -12595,6 +12597,7 @@ async def test_signed_oauth_callback_honors_credential_write_policy(
         "admin_only_routes": [f"/v1/mcp/server/{server.server_id}/oauth-user-credential"] if admin_only else [],
     })
     monkeypatch.setenv("LITELLM_SALT_KEY", "signed-oauth-test-salt")
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
     manager: Final = MagicMock()
     manager.get_allowed_mcp_servers = AsyncMock(return_value=[server.server_id])
     manager.invalidate_user_oauth_token_cache = AsyncMock()
@@ -12630,6 +12633,16 @@ async def test_signed_oauth_callback_honors_credential_write_policy(
         assert table.upsert.call_args.kwargs["where"]["user_id_server_id"] == {
             "user_id": "jwt-owner", "server_id": server.server_id,
         }
+
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+        payload: Final = json.loads(decrypt_value_helper(
+            table.upsert.call_args.kwargs["data"]["create"]["credential_b64"], "credential_b64"
+        ))
+        if cimd:
+            assert payload["cimd_client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
+        else:
+            assert "cimd_client_id" not in payload
 
 
 @pytest.mark.asyncio
@@ -13419,6 +13432,7 @@ async def test_cimd_registration_returns_https_identity_without_dcr(monkeypatch,
 @pytest.mark.asyncio
 async def test_cimd_authorization_uses_metadata_identity_and_s256(monkeypatch):
     from urllib.parse import parse_qs, urlparse
+
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
@@ -13440,6 +13454,7 @@ async def test_cimd_authorization_uses_metadata_identity_and_s256(monkeypatch):
 @pytest.mark.asyncio
 async def test_cimd_authorization_rejects_missing_pkce(monkeypatch):
     from fastapi import HTTPException
+
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
@@ -13469,6 +13484,7 @@ def test_cimd_refresh_request_uses_same_identity_without_caller_secret(monkeypat
 @pytest.mark.asyncio
 async def test_cimd_without_stable_https_origin_reports_actionable_error(monkeypatch, base, respx_mock):
     from fastapi import HTTPException
+
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
@@ -13522,6 +13538,7 @@ def test_cimd_preserves_existing_identity_and_other_auth_modes(monkeypatch, upda
 async def test_cimd_document_is_public_and_binds_configured_origin(monkeypatch):
     import httpx
     from fastapi import FastAPI
+
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com/proxy")
@@ -13541,6 +13558,7 @@ async def test_cimd_document_is_public_and_binds_configured_origin(monkeypatch):
 @pytest.mark.parametrize("base", [None, "https://[invalid"])
 async def test_cimd_document_is_unavailable_without_configured_https_origin(monkeypatch, base):
     from fastapi import HTTPException
+
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
@@ -13583,8 +13601,9 @@ async def test_optional_cimd_discovery_preserves_the_callers_configured_endpoint
     monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter", flow: str
 ) -> None:
     from urllib.parse import parse_qs
-    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
     monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "0")
