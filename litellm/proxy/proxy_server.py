@@ -1690,7 +1690,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
     from litellm.proxy.model_offerings import ModelOfferingsManager
     from litellm.proxy.offering_router import OfferingAccessGuard
 
-    offerings_path: Final = TypeAdapter(str | None).validate_python(
+    offerings_path: Final = TypeAdapter[str | None](str | None).validate_python(
         cast(object, general_settings.get("model_offerings_path")),  # cast-ok: validate untyped config
         strict=True,
     )
@@ -1709,7 +1709,11 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             raise ValueError("Initial external offering configuration is invalid")
         llm_router = offerings_manager.router  # rebind-ok: publish the process-wide router used by native proxy routes
     offerings_guard: Final = (
-        OfferingAccessGuard(offerings_manager.router, general_settings) if offerings_manager is not None else None
+        OfferingAccessGuard(
+            offerings_manager.router, TypeAdapter(Mapping[str, object]).validate_python(general_settings)
+        )
+        if offerings_manager is not None
+        else None
     )
     if offerings_guard is not None:
         litellm.logging_callback_manager.add_litellm_callback(offerings_guard)

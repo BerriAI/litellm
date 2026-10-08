@@ -2699,13 +2699,16 @@ class Router:
                 deployment["litellm_params"], kwargs
             )
             request_defaults: Final = model_request_defaults(
-                deployment.get("model_info", {}), selected_params, kwargs, "completion"
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(selected_params),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+                "completion",
             )
             litellm_params: Final = deployment_params_with_request_defaults(
                 {key: value for key, value in selected_params.items() if key != "silent_model"},
                 request_defaults,
                 deployment.get("model_info", {}),
-                kwargs,
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
             )
             silent_model: Final = selected_params.get("silent_model")
 
@@ -3877,13 +3880,16 @@ class Router:
                 deployment["litellm_params"], kwargs
             )
             request_defaults: Final = model_request_defaults(
-                deployment.get("model_info", {}), selected_params, kwargs, "completion"
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(selected_params),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+                "completion",
             )
             litellm_params: Final = deployment_params_with_request_defaults(
                 {key: value for key, value in selected_params.items() if key != "silent_model"},
                 request_defaults,
                 deployment.get("model_info", {}),
-                kwargs,
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
             )
             silent_model: Final = selected_params.get("silent_model")
 
@@ -5457,14 +5463,17 @@ class Router:
 
             request_defaults: Final = model_request_defaults(
                 deployment.get("model_info", {}),
-                deployment["litellm_params"],
-                kwargs,
+                _MODEL_INFO_ADAPTER.validate_python(deployment["litellm_params"]),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
                 getattr(original_generic_function, "__name__", ""),
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
             data: Final = deployment_params_with_request_defaults(
-                deployment["litellm_params"], request_defaults, deployment.get("model_info", {}), kwargs
+                _MODEL_INFO_ADAPTER.validate_python(deployment["litellm_params"]),
+                request_defaults,
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
             )
             model_name: Final = data["model"]
             self.total_calls[model_name] += 1
@@ -6146,12 +6155,18 @@ class Router:
                 request_kwargs=kwargs,
             )
             request_defaults: Final = model_request_defaults(
-                deployment.get("model_info", {}), deployment["litellm_params"], kwargs, handler_name
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(deployment["litellm_params"]),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
+                handler_name,
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="generic_api_call")
 
             data: Final = deployment_params_with_request_defaults(
-                deployment["litellm_params"], request_defaults, deployment.get("model_info", {}), kwargs
+                _MODEL_INFO_ADAPTER.validate_python(deployment["litellm_params"]),
+                request_defaults,
+                deployment.get("model_info", {}),
+                _MODEL_INFO_ADAPTER.validate_python(kwargs),
             )
             model_name: Final = data["model"]
 
@@ -10813,15 +10828,21 @@ class Router:
         if not indices:
             return None
 
-        deployments: Final = tuple(self.model_list[index] for index in indices)
+        deployments: Final = tuple(_MODEL_INFO_ADAPTER.validate_python(self.model_list[index]) for index in indices)
         model_infos: Final = tuple(
             MappingProxyType(
                 {
-                    **self.get_discovered_model_info((deployment.get("model_info") or MappingProxyType({})).get("id")),
+                    **self.get_discovered_model_info(
+                        _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or MappingProxyType({})).get(
+                            "id"
+                        )
+                    ),
                     **MappingProxyType(
                         {
                             k: v
-                            for k, v in (deployment.get("model_info") or MappingProxyType({})).items()
+                            for k, v in _MODEL_INFO_ADAPTER.validate_python(
+                                deployment.get("model_info") or MappingProxyType({})
+                            ).items()
                             if v is not None
                         }
                     ),
@@ -10829,7 +10850,10 @@ class Router:
             )
             for deployment in deployments
         )
-        params: Final = tuple(deployment.get("litellm_params") or MappingProxyType({}) for deployment in deployments)
+        params: Final = tuple(
+            _MODEL_INFO_ADAPTER.validate_python(deployment.get("litellm_params") or MappingProxyType({}))
+            for deployment in deployments
+        )
         # base_model resolution mirrors get_router_model_info: unset or blank means the
         # deployment's own model name is the cost-map key.
         cost_map_keys: Final = tuple(
@@ -10848,14 +10872,19 @@ class Router:
             max_output_tokens=self._widest_configured_limit(model_infos, "max_output_tokens"),
             deployments=tuple(
                 ModelListingDeployment(
-                    cost_map_key=(
-                        model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
-                    ),
+                    cost_map_key=self._model_listing_cost_map_key(model_info, litellm_params),
                     model_info=model_info,
                 )
                 for model_info, litellm_params in zip(model_infos, params)
             ),
         )
+
+    @staticmethod
+    def _model_listing_cost_map_key(
+        model_info: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> str | None:
+        key: Final = model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
+        return key if isinstance(key, str) and key else None
 
     @staticmethod
     def _widest_configured_limit(model_infos: Sequence[Mapping[str, object]], field: str) -> int | None:

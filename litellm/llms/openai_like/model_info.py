@@ -2,7 +2,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Annotated, Final, TypeAlias
+from typing import Annotated, Final, TypeAlias, cast  # noqa: TID251  # typed native cache and HTTP boundaries
 
 import httpx
 from pydantic import BeforeValidator, ConfigDict, ValidationError, ValidationInfo, field_validator
@@ -10,7 +10,12 @@ from pydantic import BeforeValidator, ConfigDict, ValidationError, ValidationInf
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
+from litellm.types.proxy.model_inventory import (
+    ModelInventoryCache,
+    ModelInventoryHTTPClient,
+    SupplierInventoryUnavailable,
+    SupplierModelInventory,
+)
 from litellm.types.proxy.model_metadata import GatewayModelMetadata
 from litellm.utils import add_path_to_api_base
 
@@ -207,17 +212,19 @@ async def get_openai_compatible_model_inventory(
     cache: InMemoryCache,
     force_refresh: bool = False,
 ) -> SupplierModelInventory | SupplierInventoryUnavailable:
+    inventory_cache: Final = cast(ModelInventoryCache, cache)  # cast-ok: native cache implements this protocol
+    inventory_client: Final = cast(ModelInventoryHTTPClient, client)  # cast-ok: native HTTP handler implements get
     url: Final = add_path_to_api_base(api_base, "/v1/models")
     cache_key: Final = (
         "upstream_model_info:"
         + hashlib.sha256(json.dumps((provider, url, sorted(headers.items()))).encode()).hexdigest()
     )
-    cached: Final[object] = cache.get_cache(cache_key)
+    cached: Final[object] = inventory_cache.get_cache(cache_key)
     if not force_refresh and isinstance(cached, (SupplierModelInventory, SupplierInventoryUnavailable)):
         return cached
 
     try:
-        response: Final = await client.get(
+        response: Final = await inventory_client.get(
             url=url,
             headers=dict(headers),
             timeout=httpx.Timeout(5.0),
@@ -233,23 +240,23 @@ async def get_openai_compatible_model_inventory(
             or len(frozenset(ids)) != len(ids)
         ):
             unavailable: Final = SupplierInventoryUnavailable("malformed")
-            cache.set_cache(cache_key, unavailable, ttl=60)
+            inventory_cache.set_cache(cache_key, unavailable, ttl=60)
             return unavailable
     except httpx.HTTPStatusError:
         http_failure: Final = SupplierInventoryUnavailable("http")
-        cache.set_cache(cache_key, http_failure, ttl=60)
+        inventory_cache.set_cache(cache_key, http_failure, ttl=60)
         return http_failure
     except ValidationError:
         malformed: Final = SupplierInventoryUnavailable("malformed")
-        cache.set_cache(cache_key, malformed, ttl=60)
+        inventory_cache.set_cache(cache_key, malformed, ttl=60)
         return malformed
     except Exception:  # noqa: BLE001  # optional upstream discovery must not interrupt proxy refresh
         transport: Final = SupplierInventoryUnavailable("transport")
-        cache.set_cache(cache_key, transport, ttl=60)
+        inventory_cache.set_cache(cache_key, transport, ttl=60)
         return transport
 
     inventory: Final = SupplierModelInventory(
         MappingProxyType({card.id: card.token_limits(provider) for card in models.data})
     )
-    cache.set_cache(cache_key, inventory, ttl=MODEL_INFO_REFRESH_SECONDS)
+    inventory_cache.set_cache(cache_key, inventory, ttl=MODEL_INFO_REFRESH_SECONDS)
     return inventory

@@ -349,7 +349,7 @@ class TeamModelNameTranslator:
     @staticmethod
     def resolve_public_name(
         model_id: str,
-        available_models: list[str],
+        available_models: Sequence[str],
         llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> str:

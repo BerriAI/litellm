@@ -2,6 +2,7 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # native Router dynamic attribute dispatch
 
 from pydantic import TypeAdapter
@@ -110,30 +111,49 @@ class OfferingAccessGuard(CustomLogger):
     def __init__(self, router: OfferingRouterView, general_settings: Mapping[str, object] | None = None) -> None:
         super().__init__()
         self.router = router
-        self.general_settings = general_settings if general_settings is not None else {}
+        self.general_settings: Mapping[str, object] = (
+            general_settings if general_settings is not None else MappingProxyType({})
+        )
 
     def _offering_name(self, name: str, auth: UserAPIKeyAuth) -> str:
         snapshot: Final = self.router.serving_snapshot()
+        auth_metadata: Final = _METADATA_ADAPTER.validate_python(auth.model_dump())
         caller_target: Final = (
             alias_target(
                 name,
-                caller_alias_maps(auth.aliases, auth.team_model_aliases, auth.team_id, auth.team_id),
+                caller_alias_maps(
+                    _METADATA_ADAPTER.validate_python(auth_metadata.get("aliases") or MappingProxyType({})),
+                    _METADATA_ADAPTER.validate_python(auth_metadata.get("team_model_aliases") or MappingProxyType({})),
+                    auth.team_id,
+                    auth.team_id,
+                ),
                 snapshot.available_models | frozenset(snapshot.unavailable_models),
             )
             or name
         )
         target: Final = resolve_model_group_alias(snapshot.router.model_group_alias, caller_target) or caller_target
-        names: Final = [
-            row["model_name"]
-            for row in (snapshot.router.get_model_list() or [])
-            if isinstance(row.get("model_name"), str)
-            and (
-                auth.user_role == LitellmUserRoles.PROXY_ADMIN
-                or not isinstance(row.get("model_info"), Mapping)
-                or row["model_info"].get("team_id") in (None, auth.team_id)
-            )
-        ]
+        rows: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(
+            snapshot.router.get_model_list() or ()
+        )
+        names: Final = tuple(name for name in (self._visible_model_name(row, auth) for row in rows) if name is not None)
         return TeamModelNameTranslator.resolve_public_name(target, names, snapshot.router, self.general_settings)
+
+    @staticmethod
+    def _visible_model_name(row: Mapping[str, object], auth: UserAPIKeyAuth) -> str | None:
+        name: Final = row.get("model_name")
+        if not isinstance(name, str):
+            return None
+        raw_model_info: Final = row.get("model_info")
+        model_info: Final[Mapping[str, object]] = (
+            _METADATA_ADAPTER.validate_python(raw_model_info)
+            if isinstance(raw_model_info, Mapping)
+            else MappingProxyType({})
+        )
+        return (
+            name
+            if auth.user_role == LitellmUserRoles.PROXY_ADMIN or model_info.get("team_id") in (None, auth.team_id)
+            else None
+        )
 
     async def async_filter_listed_models(
         self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
@@ -207,8 +227,10 @@ class OfferingAccessGuard(CustomLogger):
             kwargs.get("litellm_metadata") or kwargs.get("metadata") or {}
         )
         raw_model_info: Final = metadata.get("model_info")
-        model_info: Final = (
-            _METADATA_ADAPTER.validate_python(raw_model_info) if isinstance(raw_model_info, Mapping) else {}
+        model_info: Final[Mapping[str, object]] = (
+            _METADATA_ADAPTER.validate_python(raw_model_info)
+            if isinstance(raw_model_info, Mapping)
+            else MappingProxyType({})
         )
         deployment_id: Final = model_info.get("id")
         snapshot: Final = self.router.serving_snapshot()

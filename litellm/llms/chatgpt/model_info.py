@@ -3,7 +3,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # typed native cache and HTTP boundaries
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator
@@ -11,7 +11,12 @@ from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, fie
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
-from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
+from litellm.types.proxy.model_inventory import (
+    ModelInventoryCache,
+    ModelInventoryHTTPClient,
+    SupplierInventoryUnavailable,
+    SupplierModelInventory,
+)
 from litellm.types.proxy.model_metadata import GatewayModelMetadata
 
 from .authenticator import Authenticator
@@ -169,6 +174,8 @@ async def get_chatgpt_model_inventory(
     authenticator: Authenticator | None = None,
     force_refresh: bool = False,
 ) -> SupplierModelInventory | SupplierInventoryUnavailable:
+    inventory_cache: Final = cast(ModelInventoryCache, cache)  # cast-ok: native cache implements this protocol
+    inventory_client: Final = cast(ModelInventoryHTTPClient, client)  # cast-ok: native HTTP handler implements get
     auth: Final = authenticator if authenticator is not None else Authenticator()
     try:
         trusted_base: Final = chatgpt_model_inventory_api_base(api_base, authenticator=auth)
@@ -189,10 +196,10 @@ async def get_chatgpt_model_inventory(
         cache_key: Final = (
             "chatgpt_model_info:" + hashlib.sha256(json.dumps((url, sorted(headers.items()))).encode()).hexdigest()
         )
-        cached: Final[object] = cache.get_cache(cache_key)
+        cached: Final[object] = inventory_cache.get_cache(cache_key)
         if not force_refresh and isinstance(cached, SupplierModelInventory):
             return cached
-        response: Final = await client.get(
+        response: Final = await inventory_client.get(
             url=url,
             headers=headers,
             timeout=httpx.Timeout(5.0),
@@ -211,7 +218,7 @@ async def get_chatgpt_model_inventory(
         inventory: Final = SupplierModelInventory(
             MappingProxyType({card.slug: card.metadata() for card in catalog.models}), credential_scope
         )
-        cache.set_cache(cache_key, inventory, ttl=MODEL_INFO_REFRESH_SECONDS)
+        inventory_cache.set_cache(cache_key, inventory, ttl=MODEL_INFO_REFRESH_SECONDS)
     except httpx.HTTPStatusError:
         return SupplierInventoryUnavailable("http", credential_scope)
     except ValidationError:

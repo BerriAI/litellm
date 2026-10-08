@@ -78,7 +78,8 @@ async def get_deployment_model_metadata(
     client: AsyncHTTPHandler,
     cache: InMemoryCache,
 ) -> Mapping[str, object]:
-    if params.get("use_clientside_credentials") or "*" in params.model:
+    metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(params.model_dump())
+    if metadata.get("use_clientside_credentials") or "*" in params.model:
         return _EMPTY_METADATA
     connection: Final = (
         (params.model.removeprefix("chatgpt/"), "chatgpt", None, params.api_base)
@@ -89,7 +90,7 @@ async def get_deployment_model_metadata(
     if provider != "chatgpt" and provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
         return _EMPTY_METADATA
     api_key: Final = params.api_key or dynamic_api_key
-    headers: Final = _HEADERS.validate_python(params.get("extra_headers") or params.get("headers") or {})
+    headers: Final = _HEADERS.validate_python(metadata.get("extra_headers") or metadata.get("headers") or {})
     inventory: Final = await get_provider_model_inventory(
         provider=provider,
         api_base=api_base,
