@@ -625,22 +625,17 @@ class MCPRequestHandler:
                         bearer_presented=False,
                     )
 
-            # Leak-defense (single chokepoint): a gateway admission credential (session bearer or bridge
-            # envelope) is NEVER a valid upstream token. Scrub it from EVERY egress context so no
-            # client-forwarded, OBO, or passthrough path can send it upstream for replay. Anchored to the
-            # credential SHAPE, so a legitimate upstream/passthrough token is forwarded unchanged.
+            # Scrub gateway-shaped credentials and the exact LiteLLM credential that admitted this request.
             raw_headers = dict(headers)
-            admitted_credential: Final = (
-                strip_auth_scheme(litellm_api_key, "Bearer")
-                if validated_user_api_key_auth.api_key is not None
-                else None
+            admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+                litellm_api_key, validated_user_api_key_auth
             )
             (
                 oauth2_headers,
                 raw_headers,
                 mcp_auth_header,
                 mcp_server_auth_headers,
-            ) = MCPRequestHandler._scrub_gateway_admission_credentials(
+            ) = MCPRequestHandler.scrub_gateway_admission_credentials(
                 admitted=is_mcp_admitted_user_subject(validated_user_api_key_auth),
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
@@ -673,18 +668,18 @@ class MCPRequestHandler:
         return bool(
             stripped_value
             and admitted_credential
-            and secrets.compare_digest(stripped_value, admitted_credential)
+            and secrets.compare_digest(stripped_value.encode(), admitted_credential.encode())
         )
 
     @staticmethod
-    def _scrub_gateway_admission_credentials(
+    def scrub_gateway_admission_credentials(
         admitted: bool,
         oauth2_headers: dict[str, str] | None,
         raw_headers: dict[str, str],
         mcp_auth_header: str | None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         *,
-        admitted_credential: str | None = None,
+        admitted_credential: str | None,
     ) -> tuple[dict[str, str] | None, dict[str, str], str | None, dict[str, dict[str, str]] | None]:
         """Remove gateway-shaped credentials and the caller's admitted credential from EVERY egress
         header context: top-level ``Authorization`` (oauth2 + raw), the deprecated ``x-mcp-auth``, and
@@ -706,8 +701,7 @@ class MCPRequestHandler:
         raw_headers = {
             k: v
             for k, v in raw_headers.items()
-            if k.lower() == "x-litellm-api-key"
-            or not ((admitted and k.lower() == "authorization") or cred(v))
+            if k.lower() == "x-litellm-api-key" or not ((admitted and k.lower() == "authorization") or cred(v))
         }
 
         # 3. Deprecated x-mcp-auth value.
@@ -724,7 +718,7 @@ class MCPRequestHandler:
 
         return oauth2_headers, raw_headers, mcp_auth_header, mcp_server_auth_headers
 
-    scrub_gateway_admission_credentials = _scrub_gateway_admission_credentials
+    _scrub_gateway_admission_credentials = scrub_gateway_admission_credentials
 
     @staticmethod
     def extract_target_server_names_from_path(path: str) -> list[str]:
@@ -1581,6 +1575,16 @@ class MCPRequestHandler:
             return auth_header
 
         return None
+
+    @staticmethod
+    def caller_admission_credential(
+        litellm_api_key: str | None,
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> str | None:
+        if litellm_api_key is None or user_api_key_auth.api_key is None:
+            return None
+        admitted_credential: Final = strip_auth_scheme(litellm_api_key, "Bearer")
+        return admitted_credential if admitted_credential.strip() else None
 
     @staticmethod
     def safe_get_headers_from_scope(scope: Scope) -> Headers:

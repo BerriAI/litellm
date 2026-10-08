@@ -9472,7 +9472,7 @@ class TestSessionBearerEgressScrub:
         Authorization: a session bearer placed in x-mcp-auth OR a per-server x-mcp-{alias}-authorization
         header is stripped too (the High-severity gap: those were forwarded upstream before)."""
         sess = "Bearer llm_session_abc"
-        oauth2, raw, mcp_auth, per_server = MCPRequestHandler._scrub_gateway_admission_credentials(
+        oauth2, raw, mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=False,
             oauth2_headers={"Authorization": sess},
             raw_headers={
@@ -9482,6 +9482,7 @@ class TestSessionBearerEgressScrub:
             },
             mcp_auth_header="llm_session_xyz",
             mcp_server_auth_headers={"github": {"Authorization": "llm_session_ghi"}},
+            admitted_credential=None,
         )
         assert oauth2 is None
         assert "authorization" not in {k.lower() for k in raw}
@@ -9492,12 +9493,13 @@ class TestSessionBearerEgressScrub:
     async def test_scrub_keeps_real_upstream_tokens(self):
         """A legitimate upstream token is never session-/envelope-shaped, so every context is forwarded
         unchanged — guards against over-stripping a real credential the caller meant for the upstream."""
-        oauth2, raw, mcp_auth, per_server = MCPRequestHandler._scrub_gateway_admission_credentials(
+        oauth2, raw, mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=False,
             oauth2_headers={"Authorization": "Bearer real-upstream-xyz"},
             raw_headers={"authorization": "Bearer real-upstream-xyz", "x-mcp-github-authorization": "Bearer gh_real"},
             mcp_auth_header="some-api-key-123",
             mcp_server_auth_headers={"github": {"Authorization": "Bearer gh_real"}},
+            admitted_credential=None,
         )
         assert oauth2 == {"Authorization": "Bearer real-upstream-xyz"}
         assert raw["authorization"] == "Bearer real-upstream-xyz"
@@ -9507,12 +9509,13 @@ class TestSessionBearerEgressScrub:
     async def test_scrub_admitted_drops_authorization_but_keeps_injected_upstream_token(self):
         """An admitted subject's top-level Authorization is dropped unconditionally, while the real
         upstream token the bridge arm INJECTS into a per-server header (not gateway-shaped) survives."""
-        oauth2, raw, mcp_auth, per_server = MCPRequestHandler._scrub_gateway_admission_credentials(
+        oauth2, raw, mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=True,
             oauth2_headers={"Authorization": "Bearer llm_session_abc"},
             raw_headers={"authorization": "Bearer llm_session_abc"},
             mcp_auth_header=None,
             mcp_server_auth_headers={"github": {"Authorization": "Bearer gh_injected_upstream"}},
+            admitted_credential=None,
         )
         assert oauth2 is None
         assert "authorization" not in {k.lower() for k in raw}
@@ -9548,7 +9551,7 @@ class TestSessionBearerEgressScrub:
             }
         }
 
-        oauth2, raw, mcp_auth, per_server = MCPRequestHandler._scrub_gateway_admission_credentials(
+        oauth2, raw, mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=False,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
@@ -9576,9 +9579,22 @@ class TestSessionBearerEgressScrub:
         else:
             assert per_server == {"echo_srv": {"Authorization": upstream_token}}
 
+    async def test_scrub_keeps_non_ascii_per_server_token(self) -> None:
+        upstream_token: Final = "Bearer t\u00f6ken"
+        _oauth2, _raw, _mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            admitted_credential="sk-caller-admission-key-123",
+            oauth2_headers=None,
+            raw_headers={},
+            mcp_auth_header=None,
+            mcp_server_auth_headers={"echo_srv": {"Authorization": upstream_token}},
+        )
+
+        assert per_server == {"echo_srv": {"Authorization": upstream_token}}
+
     async def test_scrub_keeps_caller_key_when_admission_credential_is_missing(self) -> None:
         caller_key: Final = "Bearer sk-caller-admission-key-123"
-        oauth2, raw, mcp_auth, per_server = MCPRequestHandler._scrub_gateway_admission_credentials(
+        oauth2, raw, mcp_auth, per_server = MCPRequestHandler.scrub_gateway_admission_credentials(
             admitted=False,
             oauth2_headers={"Authorization": caller_key},
             raw_headers={"x-litellm-api-key": caller_key, "authorization": caller_key},
