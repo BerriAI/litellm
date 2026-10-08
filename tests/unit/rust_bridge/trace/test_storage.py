@@ -6,7 +6,7 @@ from types import ModuleType
 from typing import Final, TypeVar
 
 import pytest
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 from litellm.constants import TRACE_RESPONSE_INLINE_PARSE_BYTES
 from litellm.rust_bridge import loader
@@ -175,3 +175,4 @@ async def test_invalid_raw_responses_fail_without_leaking_the_body() -> None:
     with pytest.raises(RuntimeError, match="invalid response") as failure:
         await storage.get_span("trace", "span", {"all_teams": 1, "user_id": "", "team_ids": ()})
     assert "secret-body" not in str(failure.value)
+    assert isinstance(failure.value.__cause__, ValidationError)
