@@ -167,8 +167,8 @@ async def test_anthropic_messages_count_tokens_endpoint():
     # Patch the _read_request_body function
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
     async def mock_token_counter(request, call_endpoint=False):
@@ -207,7 +207,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
 
     finally:
         # Restore original functions
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
 
 
@@ -241,8 +241,8 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
     # Patch the _read_request_body function
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
     async def mock_token_counter(request, call_endpoint=True):
@@ -281,7 +281,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
 
     finally:
         # Restore original functions
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
 
 
@@ -381,8 +381,8 @@ async def test_anthropic_endpoint_error_handling():
 
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     try:
         # Should raise HTTPException for missing model
@@ -395,7 +395,7 @@ async def test_anthropic_endpoint_error_handling():
         print("✅ Error handling test passed!")
 
     finally:
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
 
 
 @pytest.mark.asyncio
@@ -1111,8 +1111,8 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
 
     mock_user_api_key_dict = MagicMock()
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     original_token_counter = proxy_server.token_counter
 
@@ -1140,7 +1140,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         assert detail["error"]["type"] == "invalid_request_error"
         assert detail["error"]["message"] == "Input is too long for requested model."
     finally:
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
 
 
@@ -1163,8 +1163,8 @@ async def test_anthropic_endpoint_403_permission_error_format():
 
     mock_user_api_key_dict = MagicMock()
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     original_token_counter = proxy_server.token_counter
 
@@ -1190,7 +1190,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         assert detail["error"]["type"] == "permission_error"
         assert detail["error"]["message"] == "Bearer Token has expired"
     finally:
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
 
 
@@ -1213,8 +1213,8 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
 
     mock_user_api_key_dict = MagicMock()
 
-    original_read_request_body = anthropic_endpoints._read_request_body
-    anthropic_endpoints._read_request_body = mock_read_request_body
+    original_read_request_body = anthropic_endpoints.read_request_body
+    anthropic_endpoints.read_request_body = mock_read_request_body
 
     original_token_counter = proxy_server.token_counter
 
@@ -1240,5 +1240,5 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         assert detail["error"]["type"] == "rate_limit_error"
         assert detail["error"]["message"] == "Rate limit exceeded"
     finally:
-        anthropic_endpoints._read_request_body = original_read_request_body
+        anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter

@@ -15,9 +15,9 @@ const AGENTS = [
 const COPIED_RESET_MS = 1500;
 
 const markdown: Components = {
-  h1: ({ children }) => <h1 className="mb-4 border-b border-border pb-2 text-base font-semibold">{children}</h1>,
+  h1: ({ children }) => <p className="mb-4 border-b border-border pb-2 text-base font-semibold">{children}</p>,
   h2: ({ children }) => (
-    <h2 className="mt-5 mb-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{children}</h2>
+    <h3 className="mt-5 mb-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{children}</h3>
   ),
   p: ({ children }) => <p className="text-sm leading-6">{children}</p>,
   ol: ({ children }) => (
@@ -51,7 +51,7 @@ export function IssueBrief({ title, brief }: { title: string; brief: IssueBrief 
             className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs font-medium hover:bg-muted"
           >
             {copied === agent.name ? (
-              <Check className="size-3.5 text-emerald-600" />
+              <Check className="size-3.5 text-success" />
             ) : (
               <img src={agent.logo} alt="" aria-hidden className="size-3.5" />
             )}

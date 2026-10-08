@@ -442,8 +442,8 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
     judges_content = {
         "_OPTIONAL_PromptInjectionDetection",
         "_PROXY_AzureContentSafety",
-        "_ENTERPRISE_BannedKeywords",
-        "_ENTERPRISE_BlockedUserList",
+        "ENTERPRISE_BannedKeywords",
+        "ENTERPRISE_BlockedUserList",
     }
     counts_or_shapes_the_request = {
         "_PROXY_MaxParallelRequestsHandler_v3",
@@ -462,10 +462,10 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
 
     registered = dict(PROXY_HOOKS)
     for name, cls in (
-        ("banned_keywords", _load("enterprise.enterprise_hooks.banned_keywords", "_ENTERPRISE_BannedKeywords")),
-        ("blocked_user_check", _load("enterprise.enterprise_hooks.blocked_user_list", "_ENTERPRISE_BlockedUserList")),
-        ("detect_prompt_injection", _load("litellm.proxy.hooks.prompt_injection_detection", "_OPTIONAL_PromptInjectionDetection")),
-        ("azure_content_safety", _load("litellm.proxy.hooks.azure_content_safety", "_PROXY_AzureContentSafety")),
+        ("banned_keywords", _load("enterprise.enterprise_hooks.banned_keywords", "ENTERPRISE_BannedKeywords")),
+        ("blocked_user_check", _load("enterprise.enterprise_hooks.blocked_user_list", "ENTERPRISE_BlockedUserList")),
+        ("detect_prompt_injection", _load("litellm.proxy.hooks.prompt_injection_detection", "OPTIONAL_PromptInjectionDetection")),
+        ("azure_content_safety", _load("litellm.proxy.hooks.azure_content_safety", "PROXY_AzureContentSafety")),
     ):
         if cls is not None:
             registered[name] = cls

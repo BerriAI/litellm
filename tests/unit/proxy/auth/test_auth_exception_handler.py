@@ -68,7 +68,7 @@ async def test_handle_authentication_error_db_unavailable_connectivity(db_error)
         "litellm.proxy.proxy_server.general_settings",
         {"allow_requests_on_db_unavailable": True},
     ):
-        result = await handler._handle_authentication_error(
+        result = await handler.handle_authentication_error(
             db_error,
             mock_request,
             {},
@@ -113,7 +113,7 @@ async def test_handle_authentication_error_permanent_fault_gets_no_fallback_iden
         {"allow_requests_on_db_unavailable": True},
     ):
         with pytest.raises(ProxyException) as exc_info:
-            await handler._handle_authentication_error(
+            await handler.handle_authentication_error(
                 prisma_error,
                 mock_request,
                 {},
@@ -148,7 +148,7 @@ async def test_handle_authentication_error_permanent_fault_503_is_not_worded_as_
         "litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}
     ):
         with pytest.raises(ProxyException) as exc_info:
-            await handler._handle_authentication_error(prisma_error, MagicMock(), {}, "/test", None, "test-key")
+            await handler.handle_authentication_error(prisma_error, MagicMock(), {}, "/test", None, "test-key")
 
     assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
     assert exc_info.value.type == ProxyErrorTypes.no_db_connection
@@ -176,7 +176,7 @@ async def test_handle_authentication_error_transport_error_raised_over_a_permane
         "litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}
     ):
         with pytest.raises(ProxyException) as exc_info:
-            await handler._handle_authentication_error(transport_over_fault, MagicMock(), {}, "/test", None, "k")
+            await handler.handle_authentication_error(transport_over_fault, MagicMock(), {}, "/test", None, "k")
 
     assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
     assert "temporarily unreachable" not in exc_info.value.message
@@ -202,7 +202,7 @@ async def test_handle_authentication_error_transient_outage_503_keeps_retry_word
         "litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}
     ):
         with pytest.raises(ProxyException) as exc_info:
-            await handler._handle_authentication_error(db_error, MagicMock(), {}, "/test", None, "test-key")
+            await handler.handle_authentication_error(db_error, MagicMock(), {}, "/test", None, "test-key")
 
     assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
     assert exc_info.value.message == (
@@ -249,7 +249,7 @@ async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
         {"allow_requests_on_db_unavailable": True},
     ):
         with pytest.raises(ProxyException):
-            await handler._handle_authentication_error(
+            await handler.handle_authentication_error(
                 prisma_error,
                 mock_request,
                 {},
@@ -300,7 +300,7 @@ async def test_handle_authentication_error_db_infra_error_returns_503(db_error):
         ),
     ):
         with pytest.raises(ProxyException) as exc_info:
-            await handler._handle_authentication_error(
+            await handler.handle_authentication_error(
                 db_error,
                 MagicMock(),
                 {},
@@ -357,7 +357,7 @@ async def test_handle_authentication_error_prisma_engine_teardown_returns_503():
         ),
     ):
         with pytest.raises(ProxyException) as exc_info:
-            await handler._handle_authentication_error(
+            await handler.handle_authentication_error(
                 teardown_error,
                 MagicMock(),
                 {},
@@ -407,7 +407,7 @@ async def test_handle_authentication_error_genuine_auth_failure_stays_401(auth_e
         ),
     ):
         with pytest.raises(ProxyException) as exc_info:
-            await handler._handle_authentication_error(
+            await handler.handle_authentication_error(
                 auth_error,
                 MagicMock(),
                 {},
@@ -438,7 +438,7 @@ async def test_handle_authentication_error_budget_exceeded():
     )
 
     with pytest.raises(ProxyException) as exc_info:
-        await handler._handle_authentication_error(
+        await handler.handle_authentication_error(
             budget_error,
             mock_request,
             mock_request_data,
@@ -476,7 +476,7 @@ async def test_route_passed_to_post_call_failure_hook():
             {"allow_requests_on_db_unavailable": False},
         ):
             try:
-                await handler._handle_authentication_error(
+                await handler.handle_authentication_error(
                     PrismaError(),
                     mock_request,
                     mock_request_data,
@@ -507,7 +507,7 @@ async def test_dynamic_route_normalized_on_auth_failure():
         ),
         pytest.raises(ProxyException),
     ):
-        await handler._handle_authentication_error(
+        await handler.handle_authentication_error(
             HTTPException(status_code=401, detail="Authentication Error, Invalid proxy server token passed"),
             MagicMock(),
             {},
@@ -567,7 +567,7 @@ async def test_resolved_identity_exported_on_auth_failure():
         ),
     ):
         with pytest.raises(ProxyException):
-            await handler._handle_authentication_error(
+            await handler.handle_authentication_error(
                 expired_key_error,
                 MagicMock(),
                 {"model": "gpt-4o"},
@@ -666,7 +666,7 @@ async def test_expired_key_error_log_names_the_key_owner(
         verbose_proxy_logger.propagate = True
         try:
             with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
-                await handler._handle_authentication_error(
+                await handler.handle_authentication_error(
                     expired_key_error,
                     MagicMock(),
                     {"model": "gpt-4o"},
@@ -709,7 +709,7 @@ async def test_auth_failure_without_resolved_identity_still_logs():
         ),
     ):
         with pytest.raises(ProxyException):
-            await handler._handle_authentication_error(
+            await handler.handle_authentication_error(
                 ProxyException(
                     message="Invalid API key",
                     type=ProxyErrorTypes.auth_error,
@@ -1066,7 +1066,7 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
                 raise auth_error
             except (ProxyException, ValueError, HTTPException) as caught:
                 with caplog.at_level(expect_level, logger="LiteLLM Proxy"), pytest.raises((ProxyException, HTTPException)):
-                    await handler._handle_authentication_error(
+                    await handler.handle_authentication_error(
                         caught,
                         MagicMock(),
                         {},
@@ -1139,7 +1139,7 @@ async def test_handle_authentication_error_keeps_internal_message_on_model_acces
         caplog.at_level("WARNING", logger="LiteLLM Proxy"),
         pytest.raises(ModelAccessDeniedProxyException) as exc_info,
     ):
-        await handler._handle_authentication_error(denial, MagicMock(), {}, "/v1/chat/completions", None, "sk-bad-key")
+        await handler.handle_authentication_error(denial, MagicMock(), {}, "/v1/chat/completions", None, "sk-bad-key")
 
     assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
     assert "internal-models" not in str(exc_info.value.message)

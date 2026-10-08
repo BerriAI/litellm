@@ -5,6 +5,8 @@ export type Lens = components["schemas"]["Lens"];
 export type Settings = components["schemas"]["LensSettings"];
 
 export type LensList = components["schemas"]["LensList"];
+export type SignalConfig = components["schemas"]["SignalConfig"];
+export type Signal = NonNullable<SignalConfig["signals"]>[number];
 
 export type Finding = components["schemas"]["Finding"];
 
@@ -32,3 +34,27 @@ export type ActivitySelection = Pick<Settings, "source"> &
   >;
 
 export type Worker = LensList["workers"][number];
+
+export type Review = components["schemas"]["Review"];
+
+export type InFlight = components["schemas"]["InFlight"];
+
+export type Activity = components["schemas"]["Activity"];
+
+export type ToolCount = components["schemas"]["ToolCount"];
+
+export type ReviewVerdict = components["schemas"]["ReviewVerdict"];
+
+export interface RunWindow {
+  agent_name?: string;
+  start?: string;
+  end?: string;
+  lookback_hours?: number;
+}
+
+export interface AnalysisModelInfo {
+  model_group: string;
+  providers: string[];
+  mode?: string | null;
+  supported_openai_params?: string[] | null;
+}

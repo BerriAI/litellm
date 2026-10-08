@@ -23,10 +23,12 @@ from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.secret_redaction import (
-    _python_redact_string,
-    _python_redact_structured_value,
+    python_redact_string,
+    python_redact_structured_value,
     redact_internal_details,
-    redact_string,
+)
+from litellm.litellm_core_utils.secret_redaction import (
+    redact_string as redact_secret_string,
 )
 from litellm.rust_bridge import diagnostics
 
@@ -52,7 +54,7 @@ def _sanitize_correlation_id(value: str) -> str:
     pass through credential redaction.
     """
     stripped: Final = "".join(ch for ch in value if ch.isprintable())
-    return _redact_string(stripped)[:_MAX_CORRELATION_ID_LENGTH]
+    return redact_string(stripped)[:_MAX_CORRELATION_ID_LENGTH]
 
 
 def set_session_id(session_id: str) -> "contextvars.Token[str]":
@@ -71,10 +73,13 @@ if set_verbose is True:
 _ENABLE_SECRET_REDACTION: Final = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 
 
-def _redact_string(value: str) -> str:
+def redact_string(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
-    return redact_string(value)
+    return redact_secret_string(value)
+
+
+_redact_string = redact_string
 
 
 _REDACTED_RECORD_ATTR: Final = "litellm_redacted"
@@ -114,7 +119,7 @@ def redact_secrets(value: str) -> str:
     """
     if not _ENABLE_SECRET_REDACTION:
         return value
-    return _redact_string(value)
+    return redact_string(value)
 
 
 def redact_internal_details_from_client_message(value: str) -> str:
@@ -165,7 +170,7 @@ _REDACTION_PLACEHOLDER: Final = "REDACTED"
 def _hides_a_credential(value: str) -> bool:
     """Whether *value* only looks clean until it is percent-decoded."""
     decoded: Final = unquote(value)
-    return _python_redact_string(decoded) != decoded
+    return python_redact_string(decoded) != decoded
 
 
 def _drop_encoded_credential(scrubbed: str) -> str:
@@ -193,10 +198,10 @@ def _scrub_access_arg(value: str) -> str:
     pattern and would then be logged raw.
     """
     if len(value) <= _MAX_SCRUBBED_ACCESS_ARG:
-        return _drop_encoded_credential(_python_redact_string(value))
+        return _drop_encoded_credential(python_redact_string(value))
     head: Final = value[:_MAX_SCRUBBED_ACCESS_ARG]
     kept: Final = head[: max(head.rfind("?"), head.rfind("&"))] if "?" in head else head
-    scrubbed: Final = _drop_encoded_credential(_python_redact_string(kept))
+    scrubbed: Final = _drop_encoded_credential(python_redact_string(kept))
     return f"{scrubbed}... ({len(value) - len(kept)} more chars truncated) ..."
 
 
@@ -383,14 +388,14 @@ def _python_process_diagnostic(
 ) -> tuple[str, str | None, str | None, tuple[str, ...], bool]:
     def process_text(text: str) -> str:
         collapsed: Final = _collapse_base64_runs(text, base64_limit) if base64_limit > 0 else text
-        scrubbed: Final = _python_redact_string(collapsed) if redact else collapsed
+        scrubbed: Final = python_redact_string(collapsed) if redact else collapsed
         return _truncate_for_stdout_log(scrubbed, text_limit) if 0 < text_limit < len(scrubbed) else scrubbed
 
     processed_message: Final = process_text(message)
     processed_exception: Final = process_text(exception) if exception is not None else None
-    processed_stack: Final = _python_redact_string(stack) if redact and stack is not None else stack
+    processed_stack: Final = python_redact_string(stack) if redact and stack is not None else stack
     processed_leaves: Final = tuple(
-        _python_redact_structured_value(key, text) if redact else text for key, text in leaves
+        python_redact_structured_value(key, text) if redact else text for key, text in leaves
     )
     changed: Final = (
         processed_message != message
@@ -472,7 +477,7 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
         record.stack_info = processed_stack  # rebind-ok: the Filter interface mutates the record
     processed_values: Final = iter(processed_leaves[: len(extra_leaves)])
     for key, original, prepared in extras:
-        replacement: Final = _sort_processed_sets(original, _replace_string_leaves(prepared, processed_values))
+        replacement = _sort_processed_sets(original, _replace_string_leaves(prepared, processed_values))
         if not _scrubbing_changed_nothing(replacement, original):
             setattr(record, key, replacement)
     raw_color_changed: Final = (
@@ -489,12 +494,12 @@ def _redact_json_record(value: object) -> object:
     leaves: Final = tuple(_string_leaves(None, prepared))
     candidate: Final = diagnostics.run(
         lambda native: native.process_diagnostic("", None, None, leaves, (True, 0, 0))[3],
-        lambda: tuple(_python_redact_structured_value(key, text) for key, text in leaves),
+        lambda: tuple(python_redact_structured_value(key, text) for key, text in leaves),
     )
     replacements: Final = (
         candidate
         if len(candidate) == len(leaves)
-        else tuple(_python_redact_structured_value(key, text) for key, text in leaves)
+        else tuple(python_redact_structured_value(key, text) for key, text in leaves)
     )
     return _sort_processed_sets(value, _replace_string_leaves(prepared, iter(replacements)))
 
@@ -791,7 +796,7 @@ class CorrelationPlainFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         rendered: Final = super().format(record)
-        formatted: Final = rendered if _is_redacted(record) else _redact_string(rendered)
+        formatted: Final = rendered if _is_redacted(record) else redact_string(rendered)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -1050,7 +1055,7 @@ def _get_uvicorn_json_log_config():
     return log_config
 
 
-def _turn_on_json():
+def turn_on_json() -> None:
     """
     Turn on JSON logging
 
@@ -1064,10 +1069,16 @@ def _turn_on_json():
     _setup_json_exception_handlers(JsonFormatter())
 
 
-def _turn_on_debug():
+_turn_on_json = turn_on_json
+
+
+def turn_on_debug() -> None:
     verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
     verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
     verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
+
+
+_turn_on_debug = turn_on_debug
 
 
 def _disable_debugging():
@@ -1093,8 +1104,11 @@ def print_verbose(print_statement):
         pass
 
 
-def _is_debugging_on() -> bool:
+def is_debugging_on() -> bool:
     """
     Returns True if debugging is on
     """
     return verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True
+
+
+_is_debugging_on = is_debugging_on

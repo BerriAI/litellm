@@ -8,7 +8,7 @@ import threading
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from concurrent.futures import Future
 from typing import (
-    Any,
+    Final,
     TypeVar,
 )
 
@@ -186,7 +186,7 @@ class Session:
 
     def history(
         self,
-    ) -> list[dict[str, Any]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
+    ) -> list[dict[str, object]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
         return run_sync(self._inner.history(), "history")
 
     @property
@@ -417,24 +417,24 @@ def agent(
     Prefix the model with `litellm_proxy/` to route every model call through your
     LiteLLM AI Gateway.
     """
-    kwargs: dict[str, Any] = {  # mutable-ok: forwarded as **kwargs to _run/_stream
-        "sandbox": sandbox,
-        "model": model,
-        "api_key": api_key,
-        "api_base": api_base,
-        "instructions": instructions,
-        "tools": tools,
-        "skills": skills,
-        "disable_tools": disable_tools,
-        "permissions": permissions,
-        "on_approval": on_approval,
-        "output": output,
-        "max_turns": max_turns,
-        "timeout": timeout,
-        "metadata": metadata,
-        "options": options,
-        "install": install,
-    }
-    if stream:
-        return _stream(harness, prompt, **kwargs)
-    return _run(harness, prompt, **kwargs)
+    call: Final = _stream if stream else _run
+    return call(
+        harness,
+        prompt,
+        sandbox=sandbox,
+        model=model,
+        api_key=api_key,
+        api_base=api_base,
+        instructions=instructions,
+        tools=tools,
+        skills=skills,
+        disable_tools=disable_tools,
+        permissions=permissions,
+        on_approval=on_approval,
+        output=output,
+        max_turns=max_turns,
+        timeout=timeout,
+        metadata=metadata,
+        options=options,
+        install=install,
+    )

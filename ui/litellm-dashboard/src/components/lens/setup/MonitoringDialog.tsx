@@ -15,7 +15,7 @@ import { DurationInput } from "@/components/shared/DurationInput";
 import { type Settings } from "../model/types";
 
 const monitoringSchema = z.object({
-  interval_minutes: z.number().int().min(1).max(10080),
+  interval_minutes: z.number().int().min(1),
 });
 
 export function MonitoringDialog({
@@ -62,13 +62,7 @@ export function MonitoringDialog({
           control={control}
           name="interval_minutes"
           render={({ field }) => (
-            <DurationInput
-              label="Check every"
-              value={field.value}
-              onChange={field.onChange}
-              base="minutes"
-              max={10080}
-            />
+            <DurationInput label="Check every" value={field.value} onChange={field.onChange} base="minutes" />
           )}
         />
         {formState.errors.interval_minutes?.message && (
@@ -80,7 +74,7 @@ export function MonitoringDialog({
           Each investigation looks back over the saved time range. The interval starts after the previous run finishes.
         </p>
         {!ready && (
-          <p role="status" className="text-sm text-amber-700">
+          <p role="status" className="text-sm text-warning">
             Reconnect the worker before enabling monitoring.
           </p>
         )}

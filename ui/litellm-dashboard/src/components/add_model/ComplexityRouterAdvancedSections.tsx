@@ -3,8 +3,15 @@ import { ChevronRight } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Separator } from "@/components/ui/separator";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
-import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+import {
+  effectiveClassifierType,
+  heuristicTuningType,
+  usesClassifierContext,
+  usesLlmClassifier,
+  type ComplexityRouterConfigValue,
+} from "./ComplexityRouterConfig";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
+import CacheAwareRoutingConfig from "./CacheAwareRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import ForecastClassifierConfig from "./ForecastClassifierConfig";
 import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
@@ -18,7 +25,6 @@ import CompressionControls from "./CompressionControls";
 import PlanModeOverrideControls from "./PlanModeOverrideControls";
 import { AffinityControls } from "./AffinityControls";
 import { ModalityRoutingControls } from "./ModalityRoutingControls";
-import HeuristicKeywordOverrides from "./HeuristicKeywordOverrides";
 import HousekeepingRoutingControls from "./HousekeepingRoutingControls";
 import ReminderMarkers from "./ReminderMarkers";
 import type { AutoRouterCompressionState } from "./buildAutoRouterCompression";
@@ -79,6 +85,18 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
   tierRows,
   customTierSet,
 }) => {
+  const classifierType = effectiveClassifierType(value);
+  const classificationProps = {
+    advancedOnly: true,
+    value,
+    onChange,
+    modelOptions,
+    effortOptionsByModel: classifierEffortOptionsByModel,
+    customTechnicalKeywords,
+    onCustomTechnicalKeywordsChange,
+    showValidationErrors,
+    defaultModel,
+  };
   const sections = [
     ...(forecast
       ? [
@@ -97,33 +115,21 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
           },
         ]
       : []),
-    ...(!forecast
+    ...(!forecast && (usesClassifierContext(classifierType) || classifierType === "custom")
       ? [
           {
             key: "classifier",
             label: <strong className="text-foreground font-semibold">Classification Method</strong>,
-            children: (
-              <ClassificationMethodConfig
-                advancedOnly
-                value={value}
-                onChange={onChange}
-                modelOptions={modelOptions}
-                effortOptionsByModel={classifierEffortOptionsByModel}
-                customTechnicalKeywords={customTechnicalKeywords}
-                onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
-                showValidationErrors={showValidationErrors}
-                defaultModel={defaultModel}
-              />
-            ),
+            children: <ClassificationMethodConfig {...classificationProps} section="classifier" />,
           },
         ]
       : []),
-    ...(!forecast
+    ...(heuristicTuningType(value)
       ? [
           {
-            key: "keyword-overrides",
-            label: <strong className="text-foreground font-semibold">Heuristic Keyword Overrides</strong>,
-            children: <HeuristicKeywordOverrides value={value} onChange={onChange} />,
+            key: "heuristic",
+            label: <strong className="text-foreground font-semibold">Heuristic tuning</strong>,
+            children: <ClassificationMethodConfig {...classificationProps} section="heuristic" />,
           },
         ]
       : []),
@@ -140,6 +146,11 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
       key: "affinity",
       label: <strong className="text-foreground font-semibold">Affinity</strong>,
       children: <AffinityControls value={value} onChange={onChange} />,
+    },
+    {
+      key: "cache-aware",
+      label: <strong className="text-foreground font-semibold">Cache-aware routing</strong>,
+      children: <CacheAwareRoutingConfig value={value} onChange={onChange} />,
     },
     {
       key: "modality",
@@ -240,7 +251,9 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
   ];
 
   const groups = [
-    { label: "Classifier tuning", keys: ["classifier", "keyword-overrides", "reminder-markers"] },
+    { label: "Heuristic tuning", keys: ["heuristic"] },
+    { label: usesLlmClassifier(classifierType) ? "LLM tuning" : "Classifier tuning", keys: ["classifier"] },
+    { label: "Request preprocessing", keys: ["reminder-markers"] },
     {
       label: "Routing rules and recovery",
       keys: [
@@ -253,9 +266,9 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
         "keyword-semantic",
       ],
     },
-    { label: "Sessions and efficiency", keys: ["affinity", "adaptive", "compression"] },
+    { label: "Sessions and efficiency", keys: ["affinity", "adaptive", "cache-aware", "compression"] },
     { label: "Compatibility", keys: ["response"] },
-  ];
+  ].filter((group) => sections.some(({ key }) => group.keys.includes(key)));
   const [openGroups, setOpenGroups] = React.useState<string[]>(() =>
     showValidationErrors ? groups.map((group) => group.label) : [],
   );
@@ -266,6 +279,11 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
   }
   return (
     <div>
+      {["llm", "heuristic_first", "hybrid"].includes(classifierType) && (
+        <div className="px-4 py-3">
+          <ClassificationMethodConfig {...classificationProps} section="selection" />
+        </div>
+      )}
       {groups.map((group) => (
         <Collapsible
           key={group.label}
@@ -290,7 +308,7 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
               )
               .map(({ key, label, children }) => (
                 <section key={key} className="space-y-3">
-                  {key !== "classifier" && <h4>{label}</h4>}
+                  {key !== "classifier" && key !== "heuristic" && <h4>{label}</h4>}
                   {children}
                 </section>
               ))}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { Controller, useFormContext, useWatch } from "react-hook-form";
 import {
   Combobox,
@@ -11,30 +11,14 @@ import {
   ComboboxEmpty,
 } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
-import type { Sample } from "../../model/types";
 import type { InvestigationInput } from "../investigationSchema";
+import type { ScopeOptions } from "../useMatchingActivity";
 
 import { MetadataFilters } from "./MetadataFilters";
+
 const selectClass = "h-9 w-full rounded-md border border-input bg-background px-3 text-sm";
-export function ScopeFields({
-  nameField,
-  names,
-  agentsLoading,
-  agentsError,
-  retryAgents,
-  attributes,
-  keys,
-  id,
-}: {
-  nameField?: ReactNode;
-  names: string[];
-  agentsLoading: boolean;
-  agentsError: boolean;
-  retryAgents: () => void;
-  attributes: NonNullable<Sample["executions"][number]["metadata"]>;
-  keys: string[];
-  id: string;
-}) {
+
+export function ScopeFields({ names, agentsLoading, agentsError, retryAgents, attributes, keys }: ScopeOptions) {
   const { control, register, setValue } = useFormContext<InvestigationInput>();
   const selection = useWatch({ control, name: "selection" });
   const filters = selection.filters ?? [];
@@ -46,7 +30,6 @@ export function ScopeFields({
   const nameLabel = selection.source === "requests" ? "Model group (optional)" : "Agent (optional)";
   return (
     <>
-      {nameField}
       <label className="grid gap-2 text-sm font-medium">
         {nameLabel}
         <Controller
@@ -121,7 +104,7 @@ export function ScopeFields({
           <p className="text-xs leading-5 text-muted-foreground">
             Match any recorded metadata, such as a user ID, environment, or tag. All conditions must match.
           </p>
-          <MetadataFilters attributes={attributes} keys={keys} id={id} />
+          <MetadataFilters attributes={attributes} keys={keys} />
           <label className="grid gap-2 text-sm">
             Team ID (optional)
             <Input {...register("selection.team_id")} placeholder="All accessible teams" />

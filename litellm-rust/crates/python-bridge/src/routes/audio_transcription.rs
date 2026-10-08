@@ -1,14 +1,13 @@
 use crate::execution::{run_async, run_sync};
-use litellm_core::audio_transcription::{
+use litellm_inference_transcription::{
     AudioTranscriptionRoute, Error, types::AudioTranscriptionRequest,
 };
-use litellm_host_python::from_py_argument;
-use pyo3::{prelude::*, types::PyDict};
+use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::{
     errors::route_error_to_pyerr,
-    marshal::{RouteOptions, extra_headers_argument, optional_params_argument, optional_timeout},
+    marshal::{RouteOptions, optional_object_field, required_field, value_route_options},
 };
 
 async fn execute(
@@ -41,81 +40,38 @@ async fn execute(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one parameter per Python keyword"
-)]
-pub(crate) fn transcription(
-    py: Python<'_>,
-    model: String,
-    #[pyo3(from_py_with = from_py_argument)] audio: Value,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    #[pyo3(from_py_with = extra_headers_argument)] extra_headers: Option<Map<String, Value>>,
-    #[pyo3(from_py_with = optional_params_argument)] optional_params: Option<Map<String, Value>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Py<PyAny>> {
-    let options = RouteOptions {
-        model,
-        api_key,
-        api_base,
-        custom_llm_provider,
-        extra_headers,
-        timeout: optional_timeout(timeout_seconds),
-    };
-    let http = crate::http::provider_client(py, &PyDict::new(py), false)?;
+pub(crate) fn transcription(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let call = super::NativeCall::extract(&call)?;
+    let audio: Value =
+        litellm_host_python::from_py_argument(&required_field(&call.bound, "audio")?)?;
+    let options = value_route_options(&call.bound)?;
+    let optional_params =
+        optional_object_field(&call.bound, "optional_params")?.unwrap_or_default();
+    let http = crate::http::provider_client(py, &call.kwargs, false)?;
     let secrets = crate::secrets::source(py)?;
     run_sync(
         py,
-        execute(
-            http,
-            secrets,
-            audio,
-            optional_params.unwrap_or_default(),
-            options,
-        ),
+        execute(http, secrets, audio, optional_params, options),
         route_error_to_pyerr,
     )
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one parameter per Python keyword"
-)]
 pub(crate) fn atranscription<'py>(
     py: Python<'py>,
-    model: String,
-    #[pyo3(from_py_with = from_py_argument)] audio: Value,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    #[pyo3(from_py_with = extra_headers_argument)] extra_headers: Option<Map<String, Value>>,
-    #[pyo3(from_py_with = optional_params_argument)] optional_params: Option<Map<String, Value>>,
-    timeout_seconds: Option<f64>,
+    call: Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let options = RouteOptions {
-        model,
-        api_key,
-        api_base,
-        custom_llm_provider,
-        extra_headers,
-        timeout: optional_timeout(timeout_seconds),
-    };
-    let http = crate::http::provider_client(py, &PyDict::new(py), true)?;
+    let call = super::NativeCall::extract(&call)?;
+    let audio: Value =
+        litellm_host_python::from_py_argument(&required_field(&call.bound, "audio")?)?;
+    let options = value_route_options(&call.bound)?;
+    let optional_params =
+        optional_object_field(&call.bound, "optional_params")?.unwrap_or_default();
+    let http = crate::http::provider_client(py, &call.kwargs, true)?;
     let secrets = crate::secrets::source(py)?;
     run_async(
         py,
-        execute(
-            http,
-            secrets,
-            audio,
-            optional_params.unwrap_or_default(),
-            options,
-        ),
+        execute(http, secrets, audio, optional_params, options),
         route_error_to_pyerr,
     )
 }

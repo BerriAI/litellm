@@ -28,6 +28,12 @@ use crate::{Error, NormalizedFieldDefinition, query_access::ReaderLimits};
     "trace_spend_sql",
     "unmatched_spans_name",
     "unmatched_spans_sql",
+    "trace_summary_name",
+    "trace_summary_sql",
+    "failed_spans_name",
+    "failed_spans_sql",
+    "metadata_filter_name",
+    "metadata_filter_sql",
     "missing_spend",
     "partial_spend",
     "time_window",
@@ -60,7 +66,7 @@ impl QueryGuide<'_> {
         ])
     }
 
-    pub fn examples(&self) -> Result<[Example; 9], Error> {
+    pub fn examples(&self) -> Result<[Example; 12], Error> {
         Ok([
             Example {
                 name: render(&self.as_recent_spans_name())?,
@@ -97,6 +103,18 @@ impl QueryGuide<'_> {
             Example {
                 name: render(&self.as_unmatched_spans_name())?,
                 sql: render(&self.as_unmatched_spans_sql())?,
+            },
+            Example {
+                name: render(&self.as_trace_summary_name())?,
+                sql: render(&self.as_trace_summary_sql())?,
+            },
+            Example {
+                name: render(&self.as_failed_spans_name())?,
+                sql: render(&self.as_failed_spans_sql())?,
+            },
+            Example {
+                name: render(&self.as_metadata_filter_name())?,
+                sql: render(&self.as_metadata_filter_sql())?,
             },
         ])
     }
